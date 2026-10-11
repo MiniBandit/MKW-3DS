@@ -47,6 +47,9 @@ window and press Return.
 **Windows:** double-click `Build MKW CIA.bat`, drag your disc image into the
 window and press Enter. *(New: please report how it goes.)*
 
+**Linux:** run in a terminal `."/Build MKW CIA.sh"`, drag your disc image into
+the window and press Enter.
+
 The first build takes about 30–60 minutes. Your CIA is saved to
 `build/release/mkw-3ds.cia`. If a build stops partway, run it again: finished
 steps are skipped. If it fails, share `build-cia-log.txt` when asking for help.
