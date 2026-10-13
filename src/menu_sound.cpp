@@ -125,7 +125,8 @@ void MenuSound::input(const MenuState& before, const MenuState& after, const UiI
   // SE_UI_BTN_OK unless the page set another. MainMenu (80831af8): SE_UI_TITLE_OUT.
   // Title (80609c28) and its press-A pages: SE_UI_BTN_OK.
   if (before.page == UiPage::Strap || before.page == UiPage::Intro) return;
-  ui(before.page == UiPage::MainMenu ? id::SE_UI_TITLE_OUT : id::SE_UI_BTN_OK);
+  ui(before.page == UiPage::MainMenu ? id::SE_UI_TITLE_OUT :
+     before.page == UiPage::Confirm ? id::SE_UI_RACE_OK : id::SE_UI_BTN_OK);
   const auto voice=voice_.input(before,after,key);
   if(voice!=MenuVoice::None){
    // Retail menu voice player (80864038): stop the preceding player voice

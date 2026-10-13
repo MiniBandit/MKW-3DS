@@ -178,7 +178,7 @@ def _local_module(name):
         f=ROOT/d/(name+'.py')
         if f.is_file():return f
     return None
-def step_fingerprint(cmd):
+def step_fingerprint(cmd,windows_npm=False):
     commands=cmd if cmd and isinstance(cmd[0],list) else [cmd]
     # Only checked-in sources count: build/export_*.mjs are generated bundles
     # (machine-specific), represented by the tools/*.ts they are built from.
@@ -204,6 +204,9 @@ def step_fingerprint(cmd):
                 m=_local_module(name)
                 if m:queue.append(m)
     if exporters:files|={*(ROOT/'tools').glob('*.ts'),ROOT/'tools/bundle_cooker.mjs'}
+    # npm is 'npm.cmd' on Windows: the same step, so it must not change the
+    # fingerprint (0.5.0 and 0.5.1 let it: see legacy_windows_fingerprint).
+    commands=[[('npm.cmd' if windows_npm else 'npm') if a in ('npm','npm.cmd') else a for a in c] for c in commands]
     digest=hashlib.sha256(json.dumps(commands).encode())
     for f in sorted(files,key=lambda f:f.relative_to(ROOT).as_posix()):
         digest.update(f.relative_to(ROOT).as_posix().encode()+b'\0'+f.read_bytes().replace(b'\r\n',b'\n'))
@@ -214,11 +217,16 @@ def step_fingerprint(cmd):
 # (tools/build.py -> MKW_CONTENT) and the builder writes it to the SD folder
 # (content.txt), so code and game files from different builders don't mix.
 PACKAGE_SCRIPTS=('tools/package_sd.py','tools/package_standalone.py')
-def content_fingerprint():
+def content_fingerprint(windows_npm=False):
     digest=hashlib.sha256()
-    for name,cmd,_ in COOK_STEPS:digest.update(f'{name}\0{step_fingerprint(cmd)}\n'.encode())
+    for name,cmd,_ in COOK_STEPS:digest.update(f'{name}\0{step_fingerprint(cmd,windows_npm)}\n'.encode())
     for script in PACKAGE_SCRIPTS:digest.update((ROOT/script).read_bytes().replace(b'\r\n',b'\n'))
     return digest.hexdigest()[:32]
+
+def legacy_windows_fingerprint():
+    """The stamp Windows builders of 0.5.0 and 0.5.1 wrote: the same recipe, but
+    with npm.cmd in the first step. Games accept it as well as the real one."""
+    return content_fingerprint(True)
 
 def stamp_done(stamp,name,fingerprint):
     if not stamp.is_file():return False

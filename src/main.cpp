@@ -391,7 +391,7 @@ static bool contentMatches(const char *root)
     readContent(root, found);
     char common[64];
     snprintf(common, sizeof common, "%sRace/Common.szs", root);
-    return !strcmp(found, MKW_CONTENT) && exists(common);
+    return (!strcmp(found, MKW_CONTENT) || !strcmp(found, MKW_CONTENT_WINDOWS_LEGACY)) && exists(common);
 }
 static bool sdContentReady()
 {
@@ -404,16 +404,15 @@ static bool sdContentReady()
     printf("\n  Mario Kart Wii 3DS\n\n");
     if (!found[0])
     {
-        printf("  This is a code update, not the whole game.\n\n");
+        printf("  This is a code update, not the whole game.\n  It needs a game built with v0.5.0 or newer.\n\n");
         printf("  You build the game yourself, on your\n  computer, from your own Mario Kart Wii\n  disc. It can't be downloaded.\n\n");
         printf("  Builder and instructions:\n  %s\n\n", ProjectUrl);
-        printf("  Already built it? Copy build/release/\n  sd-card/3ds to the root of your SD card,\n  or install the full CIA you built.\n");
+        printf("  Built with v0.5.0 or newer? Copy\n  build/release/sd-card/3ds to the root\n  of your SD card, or install your full CIA.\n");
     }
     else
     {
-        printf("  Your game files are from a different\n  builder version than this update.\n\n");
-        printf("  Run the latest builder again (it only redoes\n  what changed), then copy\n  build/release/sd-card/3ds to your SD card.\n\n");
-        printf("  Installed a newer full CIA? Install the\n  latest quick update too, or delete the old\n  update in FBI (Titles).\n\n");
+        printf("  Your game files are from an older (or a\n  different) builder than this update needs.\n  Quick updates need v0.5.0 or newer.\n\n");
+        printf("  Download the latest builder and build the\n  game again, then copy build/release/\n  sd-card/3ds to your SD card.\n\n");
         printf("  Help: %s\n", ProjectUrl);
     }
     printf("\n  Press any button to exit.");
@@ -466,8 +465,12 @@ int main()
     struct AssetMount
     {
         bool mounted = R_SUCCEEDED(romfsInit());
+        // menu.pak and race.pak stay open for the session; with them in the CIA's
+        // RomFS, the C library would close them at exit after the RomFS device is
+        // gone (a data abort in _close_r on every exit, 0.5.0).
         ~AssetMount()
         {
+            mkw::pack::close();
             if (mounted)
                 romfsExit();
         }

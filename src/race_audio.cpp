@@ -616,7 +616,7 @@ struct RaceAudioLayer::Impl {
  }
  // KartActor::PlayMTSounds (80702a20): drift slip on the surface, MT sparks.
  void playMT(Engine& e, KartAudio& k, const RaceAudioKart& in) {
-  if (!k.onGround) return;
+  if (in.finished || !k.onGround) return;
   if (bit(in.status, DriftAuto)) k.driftState = 1;
   if (k.driftState && owner) owner->driftFrames.fetch_add(1, std::memory_order_relaxed);
   if (!(in.moveFlags & 4)) {
@@ -697,7 +697,7 @@ struct RaceAudioLayer::Impl {
   if (c & cue::Boost) playDash(e, k, sid::Dash);
   if (c & cue::BoostRamp) playDash(e, k, sid::DashJ);
   if (c & (cue::JumpPad | cue::JumpPadMushroom)) playJumpPad(e, k, c & cue::JumpPadMushroom);
-  if (c & cue::Hop) startLimited(e, k, sid::MiniJump);
+  if (!in.finished && (c & cue::Hop)) startLimited(e, k, sid::MiniJump);
   if ((c & cue::Cannon) && k.local) startLimited(e, k, frame.course == 0xd ? sid::RbwStarRingMove : sid::CannonMove);
   if (c & cue::BushWall) startLimited(e, k, sid::ColShigemi);
   if (c & cue::Horn) playHorn(e, k, in);
@@ -790,14 +790,14 @@ struct RaceAudioLayer::Impl {
    for (u32 id = sid::Dash; id <= sid::LDashJ; ++id) if (Slot* s = limitedWith(e, k, id)) e.stop(s->h, 10);
   updateKcl(k, in);
   k.onGround = bit(w, AnyWheelCollision);
-  k.driftState = in.driftState;
+  k.driftState = in.finished ? 0 : in.driftState;
   k.bumpFrames = s8(std::min(k.bumpFrames + 1, 0x7e));
   k.bullet = bit(w, Bullet);
   if (k.bullet) holdLimited(e, k, sid::KillerFly);
   if (k.killerOffPending && !limitedWith(e, k, sid::KillerOff)) { k.killerOffPending = false; k.actor.userParam &= ~0x400u; }
   if (k.muted || k.bullet) return;
   k.ssmtRoad = false;
-  if (k.onGround && bit(w, ChargingSSMT)) {
+  if (!in.finished && k.onGround && bit(w, ChargingSSMT)) {
    k.ssmtRoad = true;
    u32 id = driftSound(k);
    if (id == sid::SlipBoard) id = sid::SlipSand;

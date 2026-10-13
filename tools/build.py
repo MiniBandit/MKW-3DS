@@ -15,8 +15,8 @@ def main():
  # DVLE 0: scene shader; DVLE 1: NW4R EF particles (src/effect.v.pica).
  subprocess.run([str(tool('picasso')),'-o',str(out/'mkw.shbin'),str(ROOT/'src/mkw.v.pica'),str(ROOT/'src/effect.v.pica')],check=True)
  # The content stamp the update CIA checks against the SD card's content.txt.
- sys.path.insert(0,str(ROOT/'tools/release'));from build_cia import content_fingerprint
- stamp='#pragma once\n// Converted game files this code expects (tools/release/build_cia.py).\n#define MKW_CONTENT "'+content_fingerprint()+'"\n'
+ sys.path.insert(0,str(ROOT/'tools/release'));from build_cia import content_fingerprint,legacy_windows_fingerprint
+ stamp='#pragma once\n// Converted game files this code expects (tools/release/build_cia.py).\n#define MKW_CONTENT "'+content_fingerprint()+'"\n// Written by Windows builders of 0.5.0 and 0.5.1 (npm.cmd in the recipe): also accepted.\n#define MKW_CONTENT_WINDOWS_LEGACY "'+legacy_windows_fingerprint()+'"\n'
  # Shown on the lower screen at start-up, so a console shows which update it runs.
  stamp+='#define MKW_VERSION "'+(ROOT/'tools/release/VERSION').read_text().strip()+'"\n'
  # Shown once on the lower screen after an update (tools/release/WHATS_NEW.txt):

@@ -4,7 +4,7 @@
     "author": "MiniBandit",
     "url": "https://raw.githubusercontent.com/MiniBandit/MKW-3DS/main/mkw-3ds.unistore",
     "file": "mkw-3ds.unistore",
-    "description": "Code updates for the Mario Kart Wii 3DS port. These are NOT the game: build it yourself from your own disc first (https://github.com/MiniBandit/MKW-3DS), then update here.",
+    "description": "Code updates for the Mario Kart Wii 3DS port. NOT the game: you must build it yourself from your own disc first, with builder v0.5.0 or newer (https://github.com/MiniBandit/MKW-3DS). Older builds cannot use these updates.",
     "version": 4,
     "revision": 1
   },
@@ -16,7 +16,7 @@
         "version": "latest",
         "category": ["game"],
         "console": ["3DS"],
-        "description": "Installs the newest code update over the game you built. It is not the whole game: installed on its own, nothing appears on the HOME Menu. Build the game from your own disc first (https://github.com/MiniBandit/MKW-3DS).",
+        "description": "Installs the newest code update over the game you built. REQUIRES a game built with v0.5.0 or newer; with an older build, rebuild with the latest builder instead. It is not the whole game: installed on its own, nothing appears on the HOME Menu.",
         "license": "MIT (this continuation; see NOTICE)"
       },
       "Install the latest update": [
