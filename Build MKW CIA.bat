@@ -5,16 +5,28 @@ setlocal
 cd /d "%~dp0"
 
 set "PY="
-where py >nul 2>nul
-if not errorlevel 1 (
-    set "PY=py -3.14"
-    %PY% -c "import sys" >nul 2>nul || set "PY=py -3.13"
-    %PY% -c "import sys" >nul 2>nul || set "PY=py -3.12"
-    %PY% -c "import sys" >nul 2>nul || set "PY=py -3.11"
-)
-if not defined PY where python >nul 2>nul && set "PY=python"
-if not defined PY goto :nopython
-%PY% -c "import sys; sys.exit(not ((3, 11) <= sys.version_info[:2] < (3, 15)))" || goto :nopython
+where py >nul 2>nul || goto :python_path
+set "PY=py -3.14"
+call :checkpython
+if not errorlevel 1 goto :python_ready
+set "PY=py -3.13"
+call :checkpython
+if not errorlevel 1 goto :python_ready
+set "PY=py -3.12"
+call :checkpython
+if not errorlevel 1 goto :python_ready
+set "PY=py -3.11"
+call :checkpython
+if not errorlevel 1 goto :python_ready
+goto :nopython
+
+:python_path
+where python >nul 2>nul || goto :nopython
+set "PY=python"
+call :checkpython
+if errorlevel 1 goto :nopython
+
+:python_ready
 where git >nul 2>nul || (echo Git is needed: https://git-scm.com/download/win & goto :end)
 where node >nul 2>nul || (echo Node.js LTS is needed: https://nodejs.org & goto :end)
 
@@ -43,6 +55,9 @@ goto :end
 :nopython
 echo Python 3.11 through 3.14 is needed; Python 3.15 is not supported yet: https://www.python.org/downloads/ (tick "Add python.exe to PATH")
 goto :end
+:checkpython
+%PY% -c "import sys; sys.exit(not ((3, 11) <= sys.version_info[:2] < (3, 15)))" >nul 2>nul
+exit /b %errorlevel%
 :nodisc
 echo No disc image at: "%disc%"
 :end
