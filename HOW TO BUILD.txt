@@ -13,7 +13,8 @@ WHAT YOU NEED
 - These free tools, installed once:
     Xcode command line tools   (Mac only) in Terminal: xcode-select --install
     Git                        https://git-scm.com (Windows: Git for Windows)
-    Python 3.11 or newer       https://www.python.org/downloads/
+    Python 3.11 through 3.14   https://www.python.org/downloads/
+                               Python 3.15 is not supported yet.
     Node.js (LTS)              https://nodejs.org
     devkitPro, 3DS tools       https://devkitpro.org/wiki/Getting_Started
                                Mac: then in Terminal: sudo dkp-pacman -S 3ds-dev

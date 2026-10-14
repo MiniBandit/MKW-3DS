@@ -5,10 +5,16 @@ setlocal
 cd /d "%~dp0"
 
 set "PY="
-where py >nul 2>nul && set "PY=py -3"
+where py >nul 2>nul
+if not errorlevel 1 (
+    set "PY=py -3.14"
+    %PY% -c "import sys" >nul 2>nul || set "PY=py -3.13"
+    %PY% -c "import sys" >nul 2>nul || set "PY=py -3.12"
+    %PY% -c "import sys" >nul 2>nul || set "PY=py -3.11"
+)
 if not defined PY where python >nul 2>nul && set "PY=python"
 if not defined PY goto :nopython
-%PY% -c "import sys; sys.exit(sys.version_info < (3, 11))" || goto :nopython
+%PY% -c "import sys; sys.exit(not ((3, 11) <= sys.version_info[:2] < (3, 15)))" || goto :nopython
 where git >nul 2>nul || (echo Git is needed: https://git-scm.com/download/win & goto :end)
 where node >nul 2>nul || (echo Node.js LTS is needed: https://nodejs.org & goto :end)
 
@@ -19,9 +25,11 @@ set "disc=%disc:"=%"
 if not exist "%disc%" goto :nodisc
 
 if not exist "vendor\gclib" (%PY% tools\bootstrap.py || goto :end)
-if not exist ".venv\Scripts\python.exe" (
-    %PY% -m venv .venv || goto :end
+if not exist ".venv\Scripts\python.exe" (%PY% -m venv .venv || goto :end)
+".venv\Scripts\python.exe" -c "import sys; sys.exit(not ((3, 11) <= sys.version_info[:2] < (3, 15)))" || (echo The existing .venv uses an unsupported Python version. Delete .venv and rerun with Python 3.11 through 3.14. & goto :end)
+if not exist ".venv\mkw-dependencies-installed" (
     ".venv\Scripts\python.exe" -m pip install -r requirements.txt || goto :end
+    type nul > ".venv\mkw-dependencies-installed"
 )
 rem Show the build and keep a copy in build-cia-log.txt. UTF-8 text on Windows too.
 set "PYTHONUTF8=1"
@@ -33,7 +41,7 @@ echo Log: "%CD%\build-cia-log.txt"
 goto :end
 
 :nopython
-echo Python 3.11 or newer is needed: https://www.python.org/downloads/ (tick "Add python.exe to PATH")
+echo Python 3.11 through 3.14 is needed; Python 3.15 is not supported yet: https://www.python.org/downloads/ (tick "Add python.exe to PATH")
 goto :end
 :nodisc
 echo No disc image at: "%disc%"

@@ -35,7 +35,7 @@ Prix award ceremony. Not yet: Mirror, online play.
   Convert RVZ or NKit dumps to ISO in Dolphin first.
 - About **15 GB** of free space and an internet connection
 - [devkitPro](https://devkitpro.org/wiki/Getting_Started) with the 3DS tools (`3ds-dev`)
-- [Python 3.11+](https://www.python.org/downloads/) and [Node.js LTS](https://nodejs.org)
+- [Python 3.11–3.14](https://www.python.org/downloads/) and [Node.js LTS](https://nodejs.org) (Python 3.15 is not supported yet)
 - [Git](https://git-scm.com)
 - macOS: Xcode command line tools (`xcode-select --install`)
 
