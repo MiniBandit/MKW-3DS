@@ -578,7 +578,7 @@ def main():
    save('button_switch'+suffix+'_'+str(i),combined,extension)
  maps=[]
  # Catalog order differs from cup order. Resolve via the runtime archive names.
- archives=re.findall(r'"Race/Course/([^"]+)\.szs"',(ROOT/'include/mkw/course_catalog.hpp').read_text())
+ archives=re.findall(r'"Race/Course/([^"]+)\.szs"',(ROOT/'include/mkw/course_catalog.hpp').read_text())[:32]
  for i,archive in enumerate(archives):
   path=ROOT/'assets/courses'/archive/'map_model.brres';source(path)
   temp=ROOT/'build/menu-maps'/archive;temp.mkdir(parents=True,exist_ok=True)

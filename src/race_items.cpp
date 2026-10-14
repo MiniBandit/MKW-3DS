@@ -166,7 +166,7 @@ bool RaceItems::strike(unsigned player,int action,unsigned owner,Vec3 direction,
         action==KartAction::Launch||action==KartAction::LaunchSpin?ItemEffect::Launch:
         action==KartAction::StarHit||action==KartAction::Knockback||action==KartAction::BulletHit?ItemEffect::Knockback:
         action==KartAction::MegaCrush?ItemEffect::Crush:action==KartAction::Pow?ItemEffect::Pow:ItemEffect::Spin;
-    events_.push_back({effect,uint8_t(player),0,direction,int8_t(action)});
+    events_.push_back({effect,uint8_t(player),0,direction,int8_t(action),1.f,uint8_t(owner<MaxRacers?owner:0xff)});
     return true;
 }
 bool RaceItems::shrink(unsigned player,uint16_t frames,bool spinShrink,bool cloud){

@@ -110,7 +110,7 @@ enum class ItemEffect : uint8_t { Mushroom, Spin, Launch, Explosion, Shrink, Cru
 // position in `direction` and its model scale. PowStomp carries the stomp in `frames` and
 // action 1 for a target, 0 for the user. Bolt (KartEffect +0x4c / +0x50 reset) has frames 0
 // for a Lightning bolt and 1 for the Thunder Cloud's strike.
-struct ItemEvent { ItemEffect effect; uint8_t player; uint16_t frames=0; Vec3 direction{}; int8_t action=-1; float scale=1; };
+struct ItemEvent { ItemEffect effect; uint8_t player; uint16_t frames=0; Vec3 direction{}; int8_t action=-1; float scale=1; uint8_t source=0xff; };
 struct ItemSurface { Vec3 correction{}, floorNormal{}, wallNormal{}; bool kill=false; bool cannon=false; };
 // Sound cues: where retail item objects and holders call Audio::ItemActor, the
 // holder's KartActor or its CharacterActor (docs/AUDIO_SOURCE.md "Items").

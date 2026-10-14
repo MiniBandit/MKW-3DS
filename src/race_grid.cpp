@@ -103,6 +103,8 @@ void RaceGrid::configure(Kinoko::System::RaceConfig& config,unsigned localChoice
     static_assert(GarageChoices.size()%VehiclesPerDriver==0&&driverCount>=Capacity);
     count_=std::clamp(count,1u,Capacity);localChoice%=GarageChoices.size();
     auto& scenario=config.raceScenario();scenario.playerCount=count_;
+    const unsigned course=unsigned(scenario.course);
+    battleArena_=course>=32&&course<42;
     const unsigned localDriver=localChoice/VehiclesPerDriver;
     for(unsigned i=0;i<Capacity;++i){auto& p=scenario.players[i];
         if(i>=count_){p.type=Kinoko::System::RaceConfig::Player::Type::None;continue;}
@@ -135,6 +137,15 @@ bool RaceGrid::reset(){
     // The chosen engine class, Normal CPUs. Difficulty selection is not exposed yet.
     const unsigned engineClass=std::min<unsigned>(config->raceScenario().engineClass,2);
     speedParamReady_=readCpuSpeedParam(params,paramSize,unsigned(config->raceScenario().course),engineClass,1,speedParam_);
+    if (battleArena_ && !ok) {
+        speedParamReady_=false;
+        for(unsigned i=0;i<count_;++i)ranks_[i]=i+1;
+        CpuAi::Setup setup;
+        setup.route=nullptr;
+        setup.count=count_;
+        ai_.reset(setup);
+        return true;
+    }
     // Distance adapter: a permitted native ENPT circuit scales checkpoint lap
     // completion. Retail uses mean CKPT circuit length; branched-path parity remains pending.
     lapDistance_=0;std::vector<bool> visited(route_.size(),false);unsigned point=0;
@@ -166,6 +177,22 @@ void RaceGrid::beforeStep(uint16_t bulletPlayers){
     auto* manager=System::RaceManager::Instance();auto* objects=Kart::KartObjectManager::Instance();
     if(!manager||!objects)return;
     const bool racing=manager->isStageReached(System::RaceManager::Stage::Race);
+    if (battleArena_ && !route_.size()) {
+        auto* local=objects->object(0);
+        const Vec3 target=native(local->pos());
+        for(unsigned i=1;i<count_;++i){
+            auto* kart=objects->object(i);
+            auto* pad=System::KPadDirector::Instance()->hostController(i);
+            const Vec3 pos=native(kart->pos());
+            const Vec3 forward=native(kart->bodyFront());
+            const Vec3 offset{target.x-pos.x,0.f,target.z-pos.z};
+            const float steer=steeringTo(forward,offset);
+            const unsigned buttons=1u;
+            const int stick=std::clamp(int(std::lround(steer*7.f)), -7, 7);
+            pad->setInputsRawStick(buttons,unsigned(stick+7),7,System::Trick::None);
+        }
+        return;
+    }
     float leaderCompletion=manager->player(0).raceCompletion();
     for(unsigned j=1;j<count_;++j)leaderCompletion=std::max(leaderCompletion,manager->player(j).raceCompletion());
     // Retail Enemy::AI drives every CPU outside a Bullet (and player zero for QA).
