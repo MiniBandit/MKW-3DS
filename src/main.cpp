@@ -2639,15 +2639,10 @@ int main()
                     return K::System::Trick::Right;
                 return K::System::Trick::Up;
             };
-            // R off a ramp (Mario Kart 7): a press shortly before or on a trick
-            // ramp's lip (Kinoko's Trickable window) tricks instead of hopping.
+            // R on a trick ramp replaces the hop while Kinoko marks its
+            // trickable window; holding R early still works when the window opens.
             // X/Y still trick and wheelie anywhere. QA owns X/Y.
-            static unsigned rampTrickFrames = 0;
-            if (down & KEY_R)
-                rampTrickFrames = 8;
-            else if (rampTrickFrames)
-                --rampTrickFrames;
-            const bool rampTrick = fullRace && rampTrickFrames && (held & KEY_R) &&
+            const bool rampTrick = fullRace && (held & KEY_R) &&
                                    K::Kart::KartObjectManager::Instance()->object(0)->status().onBit(K::Kart::eStatus::Trickable);
             if (trick == K::System::Trick::None)
             {
@@ -3058,6 +3053,7 @@ int main()
                 signals.wheelie = kart->status().onBit(K::Kart::eStatus::Wheelie);
                 signals.airborne = kart->status().offBit(K::Kart::eStatus::TouchingGround);
                 signals.hopping = kart->status().onBit(K::Kart::eStatus::Hop);
+                signals.inCannon = kart->status().onBit(K::Kart::eStatus::InCannon);
                 signals.steering = kart->inputs()->currentState().stick.x;
                 signals.speed = kart->move()->speed();
                 signals.drift = kart->status().onBit(K::Kart::eStatus::DriftManual, K::Kart::eStatus::DriftAuto);
