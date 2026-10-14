@@ -21,6 +21,9 @@ struct RenderQuality {
     float objectLowDistance=7000.f;
     // Retail stencil shadow volumes; bloom blur rounds (horizontal + vertical).
     bool shadowVolumes=true;
+    // Full-screen bloom: an offscreen scene pass, blur passes and a composite
+    // each frame, plus about 1 MB of VRAM. Off in reduced quality.
+    bool bloom=true;
     unsigned bloomBlurRounds=2;
     // Item boxes below this ratio draw without their sparkle pass.
     float boxSparkleRatio=0;
@@ -41,8 +44,8 @@ struct RenderQuality {
     void setReduced(bool on){
         *this=RenderQuality{};
         if(!on)return;
-        reduced=true;minScreenRatio=.015f;objectLowDistance=4000.f;
-        shadowVolumes=false;bloomBlurRounds=1;boxSparkleRatio=.04f;particleBudget=96;kartEffectScreens=2;animationStep=4;vramCourseTextures=true;
+        reduced=true;minScreenRatio=.015f;objectLowDistance=500.f;
+        shadowVolumes=false;bloom=false;bloomBlurRounds=0;boxSparkleRatio=.04f;particleBudget=48;kartEffectScreens=3;animationStep=4;vramCourseTextures=true;
     }
 #ifdef MKW_RENDER_QUALITY_C3D
     // True when bounds b placed by transform t are too small to draw from camera.

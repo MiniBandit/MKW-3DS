@@ -291,7 +291,7 @@ void Renderer::releaseBottom(){
     }
 }
 bool Renderer::reserveBloom(){
-    if(!deviceReady_)return false;
+    if(!deviceReady_||!renderQuality().bloom)return false;
     if(sceneTarget_)return true;
     drain();
     return initBloomTargets();
@@ -1481,7 +1481,7 @@ void Renderer::textNow(const char* text,float x,float y,float size,uint32_t rgba
 // Every modified vertex/texture range is explicitly flushed by its writer.
 // Citro3D may flush the command list without redundantly flushing the LINEAR heap.
 void Renderer::requestBloomNow(const CourseBloom& settings){
-    bloomRequested_=settings.enabled();bloomSettings_=&settings;
+    bloomRequested_=renderQuality().bloom&&settings.enabled();bloomSettings_=&settings;
 }
 bool Renderer::initBloomTargets(){
     if(sceneTarget_)return true;

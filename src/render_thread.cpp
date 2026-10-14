@@ -18,6 +18,7 @@
 // reusing every buffer the left eye wrote. Immediate frames in stereo (menus)
 // record the same way and are drawn on their own thread at end().
 #include "mkw/renderer.hpp"
+#include "mkw/render_quality.hpp"
 #include "mkw/menu_ui.hpp"
 #include "mkw/race_effects.hpp"
 #include "mkw/nw4r_ef_draw.hpp"
@@ -389,6 +390,7 @@ void Renderer::setRetailFog(const RetailFog& fog){
     else retailFogNow(fog);
 }
 void Renderer::requestBloom(const CourseBloom& settings){
+    if(!renderQuality().bloom)return;
     if(!recording()){requestBloomNow(settings);return;}
     // Bloom's VRAM targets (unless reserved at load) and LINEAR vertices:
     // create them here, once, with the render thread idle.

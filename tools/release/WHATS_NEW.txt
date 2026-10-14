@@ -4,3 +4,4 @@ Fixed: crash when closing the game
 Fixed: race-start sound on OK, and no
   hop/drift sounds after finishing
   (DarthMDev)
+New o3DS optimizations by Codiak540

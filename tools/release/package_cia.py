@@ -71,7 +71,7 @@ def package(cci=False,version='0.1.0',output=None,update=False):
         try:
             run(makerom,'-f','cci' if cci else 'cia','-target','t','-exefslogo','-elf',elf,'-rsf',RSF,
                 '-icon',art/'icon.icn','-banner',art/'banner.bnr','-ver',version_number(version,update),
-                f'-DAPP_ROMFS={stage}','-DAPP_CATEGORY=Application','-DAPP_REMASTER=0','-o',temporary)
+                '-DAPP_CATEGORY=Application','-DAPP_REMASTER=0','-o',temporary)
             temporary.replace(target)
         finally:temporary.unlink(missing_ok=True)
     receipt={'file':str(target),'format':'cci' if cci else 'cia','sha256':digest(target),'bytes':target.stat().st_size,
