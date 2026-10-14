@@ -304,7 +304,7 @@ struct VoiceAudio {
  int slipFrames = 0; bool inSlip = false;   // +0x6d8, +0x6f8
  int overtakeCooldown = 0;              // +0x6dc
  int finishFrames = 0; bool finishDone = false;   // +0x6d4, +0x6f9
- bool echoNext = false, fellInWater = false;      // +0x6fe, +0x700
+ bool echoNext = false, fellInWater = false, wasWheelie = false; // +0x6fe, +0x700
  u32 actionCount = 0; u16 airtime = 0, airtimeBefore = 0;   // action and driver-airtime trackers
  bool wasStar = false, wasMega = false, wasSlipBoost = false;
  Rng rng;
@@ -1151,10 +1151,12 @@ struct RaceAudioLayer::Impl {
    if (v.slipFrames < 0x3c) { if (v.slipFrames == 0x1e) voicePlay(e, i, 0x1c); ++v.slipFrames; }
    v.inSlip = true;
   }
-  if (c & cue::Wheelie) {                                           // fn_1_354FDC from StartWheelie
+  const bool wheelie = bit(w, Wheelie);
+  if ((c & cue::Wheelie) || (wheelie && !v.wasWheelie)) {           // fn_1_354FDC from StartWheelie
    const int t = bit(w, Wheelie) ? 0xf : 0x10;
    if (v.pendingType == -1 || voicePriority(v, v.pendingType, t)) { v.pendingType = t; v.pendingDelay = t == 0xf ? 10 : 0x14; }
   }
+  v.wasWheelie = wheelie;
   // fn_1_354D84 from Kart::Status::UpdateCollisions: landing (local racer), by
   // the driver's airtime two model updates back.
   if (bit(w, GroundStart) && v.local) landingVoice(e, i);

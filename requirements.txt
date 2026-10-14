@@ -1,3 +1,4 @@
+# Python 3.11–3.14: gclib's imagequant dependency has no Python 3.15 wheels yet.
 numpy==2.5.3
 Pillow==12.3.0
 pycryptodome==3.23.0

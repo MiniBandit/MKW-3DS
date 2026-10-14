@@ -370,6 +370,11 @@ def main():
         return
     (a.output / 'textures').mkdir(parents=True, exist_ok=True)
     catalog = courses()
+    # Battle arenas are appended to the runtime course catalog, but have no
+    # lap checkpoints and are not part of the 32-course race-map atlas.
+    if len(catalog) < 32:
+        raise SystemExit(f'Expected at least 32 race courses, found {len(catalog)}')
+    catalog = catalog[:32]
     wanted = [int(i) for i in a.courses.split(',')] if a.courses else list(range(len(catalog)))
     manifest_path = a.output / 'race-map.json'
     manifest = json.loads(manifest_path.read_text()) if manifest_path.exists() else {'version': 1, 'courses': []}

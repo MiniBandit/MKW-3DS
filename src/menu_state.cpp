@@ -114,7 +114,8 @@ unsigned MenuState::engineClassMovie(unsigned slot)const{
 bool MenuState::supportsRace()const{
  // Browsing a retail menu does not silently change the chosen race rules or
  // substitute a different character/machine when that runtime is unavailable.
- return raceMode(selection.mode)&&(selection.mode!=UiMode::GrandPrix||raceEngineClass(selection.engineClass))&&!selection.teams&&raceDriver(selection.driver)&&raceVehicle(selection.vehicle)&&selection.course<32;
+ const bool courseReady=selection.mode==UiMode::Battle?selection.battleStage<10&&!selection.coinRunners:selection.course<32;
+ return raceMode(selection.mode)&&(selection.mode!=UiMode::GrandPrix||raceEngineClass(selection.engineClass))&&!selection.teams&&raceDriver(selection.driver)&&raceVehicle(selection.vehicle)&&courseReady;
 }
 
 void MenuState::advance(unsigned ticks){age+=ticks;focusAge+=ticks;uiFocusAdvance(*this,ticks);}
@@ -206,7 +207,9 @@ UiAction MenuState::input(UiInput key){
  case UiPage::VSMode:
   if(cursor==1){unavailable=true;break;} // Team VS has no race runtime.
   selection.teams=false;enter(UiPage::Character);break;
- case UiPage::BattleMode:selection.coinRunners=cursor==1;enter(UiPage::Character);break;
+ case UiPage::BattleMode:
+  if(cursor==1){unavailable=true;break;} // Coin Runners needs coin collection and round scoring.
+  selection.coinRunners=false;enter(UiPage::Character);break;
  case UiPage::Character:
   // Includes the two Mii outfits, which also need Mii data.
   if(!raceDriver(characterDriver(cursor))){unavailable=true;break;}

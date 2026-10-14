@@ -683,6 +683,8 @@ void drawPillar(ObjectDraw& d,Visual& v){
 bool hidden(const Visual& v,int course){
     // Effects, sound sources and triggered splashes have no idle model; item
     // boxes are race items. Coconut Mall keeps its validated palm/escalator path.
+    // The Factory line also owns its moving conveyor bricks, which are scenery.
+    if(static_cast<ObjectId>(v.geo->id())==ObjectId::ItemboxLine)return false;
     static const char* names[]={"itembox","pocha","pochaYogan","pochaMori","f_itembox","s_itembox","sin_itembox","w_itembox"};
     for(const char* n:names)if(named(v,n))return true;
     if(course==5&&(named(v,"PalmTree")||named(v,"escalator")||named(v,"escalator_group")))return true;

@@ -11,7 +11,7 @@ struct DriverSignals {
     float speed=0;    // Signed forward speed, not the magnitude of velocity.
     int driftDirection=0; // Kinoko hopStickX convention: +1 left, -1 right.
     bool drift=false,boost=false,trick=false,hit=false,finished=false;
-    bool bike=false,wheelie=false,airborne=false,hopping=false;
+    bool bike=false,wheelie=false,airborne=false,hopping=false,inCannon=false;
     bool accelerating=false,braking=false,countdown=false;
     int trickVariant=-1; // Optional authored sjump_a/b/c selection, 0..2.
     int finishType=0; // 0 first, 1 good (2nd..5th), 2 bad (6th..12th).
@@ -69,12 +69,12 @@ public:
         } else steering_=std::clamp(steering_,-steeringEnvelope_,steeringEnvelope_);
         steering_=std::clamp(steering_,-1.0f,1.0f);
 
-        // A drift hop is already present in the vehicle's physics pose. Playing
-        // the full takeoff/landing body clips on every hop adds a second lurch.
+        // Cannon launch uses the takeoff clip; ordinary airborne transitions
+        // use the sustained jump pose instead.
         if(s.bike&&s.airborne&&!previous_.airborne){
             jumpAirborne_=!s.hopping;
-            if(jumpAirborne_&&!s.trick)startOneShot(JumpStart);
         }
+        if(s.inCannon&&!previous_.inCannon)startOneShot(JumpStart);
         if(s.bike&&!s.airborne&&previous_.airborne&&!s.trick){
             if(airTrick_)startOneShot(BikeTrickEnd);
             else if(jumpAirborne_&&(oneShot_==Count||oneShot_==JumpStart))startOneShot(JumpEnd);

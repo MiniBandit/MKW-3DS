@@ -60,6 +60,6 @@ private:
     std::array<unsigned,Capacity> choices_{},ranks_{},laps_{};
     std::array<bool,Capacity> finished_{};
     CpuSpeedParam speedParam_{};bool speedParamReady_=false;float lapDistance_=0;
-    unsigned count_=1;
+    unsigned count_=1;bool battleArena_=false;
 };
 }

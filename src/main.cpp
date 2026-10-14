@@ -11,6 +11,7 @@
 #include <mkw/garage.hpp>
 #include <mkw/vehicle_animation.hpp>
 #include <mkw/race_grid.hpp>
+#include <mkw/balloon_battle.hpp>
 #include <mkw/race_intro.hpp>
 #include <mkw/race_camera.hpp>
 #include <mkw/race_chase_camera.hpp>
@@ -115,6 +116,9 @@ using mkw::CourseCount;
 using mkw::Courses;
 static unsigned courseChoice = 0, driverChoice = 0, vehicleChoice = 0;
 static bool fullRace = false, automaticDrift = false;
+static bool balloonBattleMode = false;
+static unsigned battleTicks = 0;
+static mkw::BalloonBattle balloonBattle;
 // Kinoko engine class: 0 = 50cc, 1 = 100cc, 2 = 150cc (Grand Prix choice; VS and Time Trials race 150cc).
 static unsigned engineClass = 2;
 // Time Trials: one racer, no item boxes, a Triple Mushroom at the start, and
@@ -1222,7 +1226,7 @@ int main()
         return ok ? 0 : 4;
     }
     auto applySelection = [&]()
-    {timeTrial=menu.selection.mode==mkw::UiMode::TimeTrials;newRecord=false;if(timeTrial)loadBestTimes();courseChoice=menu.selection.course;driverChoice=menu.selection.driver;vehicleChoice=menu.selection.vehicle;automaticDrift=menu.selection.automatic;
+    {timeTrial=menu.selection.mode==mkw::UiMode::TimeTrials;balloonBattleMode=menu.selection.mode==mkw::UiMode::Battle&&!menu.selection.coinRunners;newRecord=false;if(timeTrial)loadBestTimes();courseChoice=balloonBattleMode?CourseCount-10+menu.selection.battleStage:menu.selection.course;driverChoice=menu.selection.driver;vehicleChoice=menu.selection.vehicle;automaticDrift=menu.selection.automatic;
         engineClass=menu.selection.mode==mkw::UiMode::GrandPrix&&menu.selection.engineClass==mkw::UiEngineClass::CC50?0:menu.selection.mode==mkw::UiMode::GrandPrix&&menu.selection.engineClass==mkw::UiEngineClass::CC100?1:2; };
     if (fullRace)
     {
@@ -1243,7 +1247,16 @@ int main()
         menu.raceStarted();
         raceLoadStart = svcGetSystemTick();
     }
-    bool dataReady = exists("Race/Common.szs") && courseAvailable(courseChoice);
+    std::unique_ptr<mkw::Model> battleBalloonModel;
+    bool battleAssetsReady = true;
+    if (balloonBattleMode)
+    {
+        battleBalloonModel = std::make_unique<mkw::Model>();
+        battleAssetsReady = battleBalloonModel->load("models/battle_balloon_red.gmdl");
+        if (!battleAssetsReady)
+            report("FAIL Balloon Battle balloon model absent");
+    }
+    bool dataReady = exists("Race/Common.szs") && courseAvailable(courseChoice) && battleAssetsReady;
     if (dataReady && (kQa && exists("sdmc:/3ds/mkw-3ds/trace-test.txt")))
     {
         // Invoke upstream's complete per-frame KRKG comparison, not just final position.
@@ -1367,6 +1380,8 @@ int main()
     bool nextRaceQueued = false;
     auto startVsRace = [&](bool restart)
     {
+        if (balloonBattleMode)
+            return;
         if (restart)
             return;
         if (vsSet.next && vsSet.race < mkw::RaceResultsFlow::VSRaces && vsSet.driver == driverChoice)
@@ -1450,7 +1465,7 @@ int main()
         for (unsigned i = 0; i < n; ++i)
             order[i] = i;
         std::stable_sort(order.begin(), order.begin() + n, [&](unsigned a, unsigned b)
-                         { return raceGrid.rank(a) < raceGrid.rank(b); });
+                         { return balloonBattleMode ? balloonBattle.rank(a) < balloonBattle.rank(b) : raceGrid.rank(a) < raceGrid.rank(b); });
         std::array<mkw::RaceResultEntry, 12> rows{};
         int length = kQa ? snprintf(line, sizeof line, "results race %u/%u:", vsSet.race, mkw::RaceResultsFlow::VSRaces) : 0;
         for (unsigned p = 0; p < n; ++p)
@@ -1460,15 +1475,16 @@ int main()
             r.racer = uint8_t(i);
             r.character = uint8_t(scenario.players[i].character);
             r.human = i == 0;
-            r.previous = vsSet.points[i];
-            r.gain = timeTrial ? 0 : uint16_t(mkw::RaceResultsFlow::points(n, p + 1));
-            vsSet.points[i] = uint16_t(std::min(99999u, unsigned(r.previous) + r.gain));
+            r.previous = balloonBattleMode ? uint16_t(balloonBattle.score(i)) : vsSet.points[i];
+            r.gain = balloonBattleMode||timeTrial ? 0 : uint16_t(mkw::RaceResultsFlow::points(n, p + 1));
+            if (!balloonBattleMode)
+                vsSet.points[i] = uint16_t(std::min(99999u, unsigned(r.previous) + r.gain));
             if (kQa && length > 0 && size_t(length) < sizeof line)
                 length += snprintf(line + length, sizeof line - size_t(length), " %u:%u+%u", i, unsigned(r.previous), unsigned(r.gain));
         }
         report(line);
         // Time Trials: Next returns to the course choice; no set to finish.
-        results.fill(rows.data(), n, !timeTrial && vsSet.race >= mkw::RaceResultsFlow::VSRaces);
+        results.fill(rows.data(), n, balloonBattleMode||(!timeTrial && vsSet.race >= mkw::RaceResultsFlow::VSRaces));
     };
     auto startIntro = [&]()
     {
@@ -1769,6 +1785,8 @@ int main()
     {
         if (!fullRace)
             return;
+        battleTicks = 0;
+        balloonBattle.reset(raceGrid.count());
         if (!raceGrid.reset())
         {
             trackLoadFailed = true;
@@ -1802,6 +1820,8 @@ int main()
     // first, so the course's first bloom request (below) still finds its room.
     auto loadBottomScreen = [&]()
     {
+        if (balloonBattleMode)
+            return;
         const auto *bloom = mkw::courseBloom(Courses[courseChoice].archive);
         if (!effectsTest && bloom && bloom->enabled())
             renderer.reserveBloom();
@@ -1907,6 +1927,8 @@ int main()
     // memory as a first launch, with nothing half-built left behind.
     releaseRace = [&]()
     {
+        mkw::jobWorker().finishAll();
+        renderer.waitForGpu();
         raceGraphicsSuspended = false;
         opponents.reset();
         raceHud.reset();
@@ -2639,15 +2661,10 @@ int main()
                     return K::System::Trick::Right;
                 return K::System::Trick::Up;
             };
-            // R off a ramp (Mario Kart 7): a press shortly before or on a trick
-            // ramp's lip (Kinoko's Trickable window) tricks instead of hopping.
+            // R on a trick ramp replaces the hop while Kinoko marks its
+            // trickable window; holding R early still works when the window opens.
             // X/Y still trick and wheelie anywhere. QA owns X/Y.
-            static unsigned rampTrickFrames = 0;
-            if (down & KEY_R)
-                rampTrickFrames = 8;
-            else if (rampTrickFrames)
-                --rampTrickFrames;
-            const bool rampTrick = fullRace && rampTrickFrames && (held & KEY_R) &&
+            const bool rampTrick = fullRace && (held & KEY_R) &&
                                    K::Kart::KartObjectManager::Instance()->object(0)->status().onBit(K::Kart::eStatus::Trickable);
             if (trick == K::System::Trick::None)
             {
@@ -2827,6 +2844,9 @@ int main()
                     // Item blasts shake the camera of a nearby racer (OnKill -> RMCU 0x8059e034).
                     for (const auto &e : raceItems->events())
                     {
+                        if (balloonBattleMode && !results.active() && e.action >= 0 &&
+                            (e.effect != mkw::ItemEffect::PowStomp || e.action == 1))
+                            balloonBattle.loseBalloon(e.player, e.source);
                         if (e.effect == mkw::ItemEffect::Explosion && e.action < 0)
                             cameraShake.blast(e.direction, vec(kart->pos()));
                         // POW stomps shake the user's and the targets' cameras (0x807d9b10 -> 0x8058a778).
@@ -2852,9 +2872,14 @@ int main()
                         chaseCamera.init(*kart);
                     chaseCamera.calc(*kart);
                     fillCameraInput(cameraInput);
+                    if (balloonBattleMode)
+                        cameraInput.finished = battleTicks >= mkw::BalloonBattle::DurationTicks;
                     cameraDirector->step(cameraInput);
                     // Race-flow events for presentation subscribers (audio).
                     const unsigned stage = unsigned(race->stage());
+                    if (balloonBattleMode && stage >= 2 && !results.active() && battleTicks < mkw::BalloonBattle::DurationTicks)
+                        ++battleTicks;
+                    const bool finished = balloonBattleMode ? (battleTicks >= mkw::BalloonBattle::DurationTicks) : cameraInput.finished;
                     if (flow.preview && !intro.active())
                         raceEvents.emit(mkw::RaceEvent::PreviewEnd, physicsSteps);
                     if (flow.stage == 0 && stage >= 1)
@@ -2865,9 +2890,9 @@ int main()
                         raceEvents.emit(mkw::RaceEvent::Fall, physicsSteps, cameraInput.oobRequest);
                     if (respawnStart)
                         raceEvents.emit(mkw::RaceEvent::Respawn, physicsSteps);
-                    if (cameraInput.finished && !flow.finished)
+                    if (finished && !flow.finished)
                     {
-                        raceEvents.emit(mkw::RaceEvent::Finish, physicsSteps, int(raceGrid.rank()));
+                        raceEvents.emit(mkw::RaceEvent::Finish, physicsSteps, int(balloonBattleMode ? balloonBattle.rank(0) : raceGrid.rank()));
                         results.finish();
                         if (timeTrial && courseChoice < bestTimes.size())
                         {
@@ -2918,7 +2943,7 @@ int main()
                     flow.preview = intro.active();
                     flow.fall = cameraInput.beforeRespawn;
                     flow.respawn = cameraInput.inRespawn;
-                    flow.finished = cameraInput.finished;
+                    flow.finished = finished;
                     const auto view = cameraDirector->view();
                     raceHud.stepWorld(*raceItems, mkw::normalized(view.eye - view.target, {0, 0, 1}), stage >= 1);
                     // QA heartbeat: a freeze shows as the last line written.
@@ -3058,6 +3083,7 @@ int main()
                 signals.wheelie = kart->status().onBit(K::Kart::eStatus::Wheelie);
                 signals.airborne = kart->status().offBit(K::Kart::eStatus::TouchingGround);
                 signals.hopping = kart->status().onBit(K::Kart::eStatus::Hop);
+                signals.inCannon = kart->status().onBit(K::Kart::eStatus::InCannon);
                 signals.steering = kart->inputs()->currentState().stick.x;
                 signals.speed = kart->move()->speed();
                 signals.drift = kart->status().onBit(K::Kart::eStatus::DriftManual, K::Kart::eStatus::DriftAuto);
@@ -3446,13 +3472,14 @@ int main()
                     raceEffects.step();
                     {
                         mkw::Vec3 eye, target;
+                        float sceneFov = intro.active() ? intro.fov() : cameraDirector->view().fov;
                         presentationCamera(eye, target);
                         raceEffects.setCamera(eye, target, {0, 1, 0});
                         // The clip manager (0x80783344) after the camera: each racer's sphere on
                         // the presented camera, full vertical fovy, the top screen's aspect.
                         if (fullRace)
                         {
-                            const auto clipCamera = mkw::EffectClipCamera::lookAt(eye, target, intro.active() ? intro.fov() : cameraDirector->view().fov, mkw::display::Aspect);
+                            const auto clipCamera = mkw::EffectClipCamera::lookAt(eye, target, sceneFov, mkw::display::Aspect);
                             const unsigned racers = std::min<unsigned>(raceGrid.count(), mkw::KartFxSlots::MaxRacers);
                             for (unsigned i = 0; i < racers; ++i)
                                 kartFxLod.clip[i] = clipCamera.clip(vec(K::Kart::KartObjectManager::Instance()->object(i)->pos()));
@@ -3486,7 +3513,7 @@ int main()
             renderer.animationFrame = physicsSteps;
             const auto raceView = cameraDirector->view();
             renderer.setFov(intro.active() ? intro.fov() : fullRace ? raceView.fov
-                                                                    : cameraKart->param()->camera().fov + boostFov);
+                               : cameraKart->param()->camera().fov + boostFov);
             if (fullRace)
             {
                 auto *race = K::System::RaceManager::Instance();
@@ -3727,6 +3754,17 @@ int main()
                             drawSkinned(accessoryAnimations[i].get(), *accessories[i], vehicleAnimation.accessory(name, accessoryAnimations[i] && accessoryAnimations[i]->handleDriveClip() >= 0, instance));
                     }
             }
+            if (balloonBattleMode && battleBalloonModel)
+            {
+                const unsigned racers = std::min<unsigned>(raceGrid.count(), mkw::BalloonBattle::MaxRacers);
+                for (unsigned racer = 0; racer < racers; ++racer)
+                {
+                    const auto *kart = K::Kart::KartObjectManager::Instance()->object(racer);
+                    const mkw::Vec3 position = vec(kart->pos());
+                    for (unsigned balloon = 0; balloon < balloonBattle.balloons(racer); ++balloon)
+                        renderer.drawCameraFacing(*battleBalloonModel, position, 260.f + 42.f * balloon, float(int(balloon) - 1) * 30.f, .55f);
+                }
+            }
             renderer.additiveColor = 0;
             profiler->mark(Profile::Player);
             renderer.setCourseLighting(true);
@@ -3745,7 +3783,16 @@ int main()
             if (fullRace && !intro.active())
             {
                 auto *race = K::System::RaceManager::Instance();
-                raceHud.drawOverlay(renderer, *raceItems, unsigned(race->stage()), race->timer(), raceGrid.rank(), raceGrid.lap(), raceGrid.finished(), physicsSteps, results.finishFrame(), results.hudSlide());
+                raceHud.drawOverlay(renderer, *raceItems, unsigned(race->stage()), race->timer(), balloonBattleMode ? balloonBattle.rank(0) : raceGrid.rank(), raceGrid.lap(), balloonBattleMode ? battleTicks >= mkw::BalloonBattle::DurationTicks : raceGrid.finished(), physicsSteps, results.finishFrame(), results.hudSlide());
+                if (balloonBattleMode && !results.hudGone())
+                {
+                    char status[40], timer[16];
+                    const unsigned seconds = battleTicks >= mkw::BalloonBattle::DurationTicks ? 0 : (mkw::BalloonBattle::DurationTicks - battleTicks) / 60u;
+                    snprintf(status, sizeof status, "BALLOONS %u  SCORE %u", balloonBattle.balloons(0), balloonBattle.score(0));
+                    snprintf(timer, sizeof timer, "TIME %u:%02u", seconds / 60, seconds % 60);
+                    renderer.drawScreenText(status, 12, 14, 1.f, 0xffffffffu);
+                    renderer.drawScreenText(timer, 12, 28, 1.f, 0xffffffffu);
+                }
                 if (timeTrial && courseChoice < bestTimes.size() && !results.hudGone())
                 {
                     // Best time under the lap counter; NEW RECORD! once beaten.

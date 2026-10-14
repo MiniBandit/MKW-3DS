@@ -36,6 +36,16 @@ inline constexpr CourseChoice Courses[]={
     {"DS Peach Gardens",Kinoko::Course::DS_Peach_Gardens,"Race/Course/old_garden_ds.szs","models/course_22.list","models/course_22_sky.list","Lightning",true,true},
     {"GCN DK Mountain",Kinoko::Course::GCN_DK_Mountain,"Race/Course/old_donkey_gc.szs","models/course_19.list","models/course_19_sky.list","Lightning",true,true},
     {"N64 Bowser's Castle",Kinoko::Course::N64_Bowsers_Castle,"Race/Course/old_koopa_64.szs","models/course_28.list","models/course_28_sky.list","Lightning",true,true},
+    {"Block Plaza",Kinoko::Course::Block_Plaza,"Race/Course/block_battle.szs","models/course_33.list","","Arena",true,false},
+    {"Delfino Pier",Kinoko::Course::Delfino_Pier,"Race/Course/venice_battle.szs","models/course_32.list","","Arena",true,false},
+    {"Funky Stadium",Kinoko::Course::Funky_Stadium,"Race/Course/skate_battle.szs","models/course_35.list","","Arena",true,false},
+    {"Chain Chomp Wheel",Kinoko::Course::Chain_Chomp_Roulette,"Race/Course/casino_battle.szs","models/course_34.list","","Arena",true,false},
+    {"Thwomp Desert",Kinoko::Course::Thwomp_Desert,"Race/Course/sand_battle.szs","models/course_36.list","","Arena",true,false},
+    {"SNES Battle Course 4",Kinoko::Course::SNES_Battle_Course_4,"Race/Course/old_battle4_sfc.szs","models/course_39.list","","Arena",true,false},
+    {"GBA Battle Course 3",Kinoko::Course::GBA_Battle_Course_3,"Race/Course/old_battle3_gba.szs","models/course_40.list","","Arena",true,false},
+    {"N64 Skyscraper",Kinoko::Course::N64_Skyscraper,"Race/Course/old_matenro_64.szs","models/course_41.list","","Arena",true,false},
+    {"GCN Cookie Land",Kinoko::Course::GCN_Cookie_Land,"Race/Course/old_CookieLand_gc.szs","models/course_37.list","","Arena",true,false},
+    {"DS Twilight House",Kinoko::Course::DS_Twilight_House,"Race/Course/old_House_ds.szs","models/course_38.list","","Arena",true,false},
 };
 inline constexpr unsigned CourseCount=sizeof(Courses)/sizeof(Courses[0]);
 } // namespace mkw
