@@ -105,7 +105,7 @@ def stage_tools():
     for need in (dkp/'devkitARM',dkp/'libctru',tool('tex3ds')):
         if not need.exists():raise SystemExit(f'Missing {need}: install devkitPro 3ds-dev (https://devkitpro.org/wiki/Getting_Started)')
     missing=[m for m in ('numpy','PIL','Crypto') if not __import__('importlib.util').util.find_spec(m)]
-    if missing:raise SystemExit('Missing Python packages '+', '.join(missing)+': pip install -r requirements.txt')
+    if missing:raise SystemExit(f'Missing Python packages {", ".join(missing)} in {sys.executable}: run "{sys.executable}" -m pip install -r requirements.txt')
     if not shutil.which('node'):raise SystemExit('Missing Node.js (https://nodejs.org), used by the model exporters')
 
 def stage_sources():
