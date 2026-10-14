@@ -98,6 +98,8 @@ def shared_checkout():
     return [d for d in ('data','assets','sd-card') if (ROOT/d).is_symlink()]
 
 def stage_tools():
+    if not ((3,11) <= sys.version_info[:2] < (3,15)):
+        raise SystemExit(f'Python 3.11 through 3.14 is required; running {sys.version.split()[0]} at {sys.executable}.')
     from bootstrap_tools import tools
     makerom,bannertool=tools();log('makerom',makerom);log('bannertool',bannertool)
     from devkitpro import tool, root as devkitpro_root
@@ -150,10 +152,12 @@ def check_game_code(disc):
     from verify_menu_retail import EXPECTED_HASH
     rel=ROOT/'build/itembox-retail.rel'
     def ok():return rel.is_file() and hashlib.sha256(rel.read_bytes()).hexdigest()==EXPECTED_HASH
-    if ok() or not disc:return
+    if ok():return
+    if not disc:
+        raise SystemExit('Missing or unsupported build/itembox-retail.rel. Rerun the builder with an unmodified Mario Kart Wii USA (RMCE01) disc image to extract and verify rel/StaticR.rel.')
     rel.unlink(missing_ok=True)
     run([sys.executable,'tools/extract_disc.py',disc,'data/extracted','--file','rel/StaticR.rel','--to',rel])
-    if not ok():raise SystemExit('The game code on this disc (rel/StaticR.rel) is modified. Patched images (Wiimmfi, mods, translations) do not work: use a clean dump of your disc.')
+    if not ok():raise SystemExit('The extracted game code (rel/StaticR.rel) does not match the audited USA revision. Use an unmodified Mario Kart Wii USA (RMCE01) disc image; Python version is not the cause of this check.')
 
 def scrub_appledouble():
     """Delete macOS '._' metadata files from the cooked trees. macOS writes
