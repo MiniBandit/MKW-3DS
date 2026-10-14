@@ -1,6 +1,7 @@
 #!/bin/bash
 # macOS: double-click, then drag your Mario Kart Wii (USA) ISO or WBFS into the window.
 # Works from the top of the builder folder or from tools/release.
+set -o pipefail
 cd "$(dirname "$0")" || exit 1
 [ -f tools/release/build_cia.py ] || cd ../.. || exit 1
 PYTHON=python3
@@ -24,5 +25,5 @@ if [ ! -f .venv/mkw-dependencies-installed ]; then
     .venv/bin/python -m pip install -r requirements.txt || exit 1
     touch .venv/mkw-dependencies-installed
 fi
-PYTHONUNBUFFERED=1 .venv/bin/python tools/release/build_cia.py "$disc" 2>&1 | tee build-cia-log.txt
+PYTHONUNBUFFERED=1 .venv/bin/python tools/release/build_cia.py "$disc" 2>&1 | tee build-cia-log.txt || { status=$?; echo "Build failed. See build-cia-log.txt for details."; exit "$status"; }
 echo "Log: $(pwd)/build-cia-log.txt"

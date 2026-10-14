@@ -1,6 +1,6 @@
 @echo off
 rem Windows: double-click, then drag your Mario Kart Wii (USA) ISO or WBFS into this window.
-rem Needs devkitPro (3DS tools), Python 3.11+, Node.js LTS and Git; see README.md.
+rem Needs devkitPro (3DS tools), Python 3.11-3.14, Node.js LTS and Git; see README.md.
 setlocal
 cd /d "%~dp0"
 
@@ -48,7 +48,8 @@ set "PYTHONUTF8=1"
 set "MKW_DISC=%disc%"
 rem Windows PowerShell's Tee-Object writes UTF-16, so each line goes to the log as UTF-8 instead.
 set "PYTHONUNBUFFERED=1"
-powershell -NoProfile -ExecutionPolicy Bypass -Command "Set-Content -Path 'build-cia-log.txt' -Value $null -Encoding UTF8; & '.venv\Scripts\python.exe' 'tools\release\build_cia.py' $env:MKW_DISC 2>&1 | ForEach-Object { $line=$_.ToString(); $line; Add-Content -Path 'build-cia-log.txt' -Value $line -Encoding UTF8 }"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Set-Content -Path 'build-cia-log.txt' -Value $null -Encoding UTF8; & '.venv\Scripts\python.exe' 'tools\release\build_cia.py' $env:MKW_DISC 2>&1 | ForEach-Object { $line=$_.ToString(); $line; Add-Content -Path 'build-cia-log.txt' -Value $line -Encoding UTF8 }; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }"
+if errorlevel 1 (echo Build failed. See build-cia-log.txt for details. & goto :end)
 echo Log: "%CD%\build-cia-log.txt"
 goto :end
 
