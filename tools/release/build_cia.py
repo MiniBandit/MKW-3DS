@@ -24,6 +24,7 @@ SD='sd-card/3ds/mkw-3ds'
 DISC_MANIFEST=json.loads((HERE/'usa-disc.json').read_text())
 MENU_ARCHIVES=['MenuSingle','MenuSingle_U','MenuOther','MenuOther_U','Title','Title_U','Award','Award_U','Globe']
 COURSE_OVERLAY_IDS=['1','5','7','8','10','15','19','27','29','31']
+COURSE_OBJECT_OUTPUTS=[SD+f'/models/course_{course_id:02d}_visuals.list' for course_id in range(32)]
 
 # (name, command, outputs that mean the step is done). {py} is this Python,
 # {disc} the disc image, {jobs} the worker count. Order is dependency order.
@@ -43,7 +44,7 @@ COOK_STEPS=[
  ('Coconut Mall sky export',['node','build/export_brres.mjs','assets/coconut-mall/vrcorn_model.brres','assets/cooked-coconut-sky'],['assets/cooked-coconut-sky/model.json']),
  ('Coconut Mall sky',['{py}','tools/cook_model.py','assets/cooked-coconut-sky',SD,'--prefix','coconut_sky'],[SD+'/models/coconut_sky.list']),
  ('race courses and arenas',['{py}','tools/import_courses.py','--jobs','{jobs}'],[SD+'/models/course-catalog.json']),
- ('course objects',['{py}','tools/cook_course_objects.py','--jobs','{jobs}'],[SD+'/models/course_08_visuals.list']),
+ ('course objects',['{py}','tools/cook_course_objects.py','--jobs','{jobs}'],COURSE_OBJECT_OUTPUTS),
  ('Coconut Mall escalators and palms',['{py}','tools/cook_coconut_objects.py'],[SD+'/models/coconut_escalator_000.gmdl',SD+'/models/coconut_palm_000.gmdl']),
  ('course lighting',['{py}','tools/lighting/recook_courses.py','--jobs','{jobs}','--no-pack'],[]),
  ('course material overlay',['{py}','tools/cook_course_overlay.py','--ids',*COURSE_OVERLAY_IDS,'--objects'],['build/course-materials/models']),
@@ -97,6 +98,20 @@ def shared_checkout():
     """Development trees link data/, assets/ and sd-card/ to a shared checkout."""
     return [d for d in ('data','assets','sd-card') if (ROOT/d).is_symlink()]
 
+def missing_outputs(root, outputs):
+    """Return outputs that are missing, empty files, or empty directories."""
+    missing=[]
+    for output in outputs:
+        path=root/output
+        if path.is_file():
+            if path.stat().st_size==0:missing.append(output)
+        elif path.is_dir():
+            if not any(p.is_file() and p.stat().st_size>0 for p in path.rglob('*')):
+                missing.append(output)
+        else:
+            missing.append(output)
+    return missing
+
 def stage_tools():
     if not ((3,11) <= sys.version_info[:2] < (3,15)):
         raise SystemExit(f'Python 3.11 through 3.14 is required; running {sys.version.split()[0]} at {sys.executable}.')
@@ -117,6 +132,7 @@ def stage_sources():
 def stage_disc(disc):
     if disc and not Path(disc).is_file():raise SystemExit(f'No disc image at: {disc}')
     receipt=ROOT/'data/extracted/extraction-receipt.json'
+    shared_data=(ROOT/'data').is_symlink() or (ROOT/'data/extracted').is_symlink()
     # An extraction that failed the check (a Europe disc, a modified or NKit
     # dump) is replaced when a different image is given, e.g. the USA ISO.
     # A verified one is kept: later steps read it even if the ISO has moved.
@@ -125,9 +141,11 @@ def stage_disc(disc):
         got={f['name']:f['sha256'] for f in old.get('files',[])}
         verified=all(old['identity'].get(k)==v for k,v in DISC_MANIFEST['identity'].items()) and all(got.get(n)==h for n,h in DISC_MANIFEST['files'].items())
         if not verified and (old['identity'].get('source')!=str(disc) or old['identity'].get('source_bytes')!=Path(disc).stat().st_size):
+            if shared_data:raise SystemExit('The shared data directory contains an unsupported disc extraction. Build from a fresh clone to avoid replacing shared data.')
             log('replacing the previous, unsupported disc extraction')
             shutil.rmtree(ROOT/'data/extracted')
     if not receipt.is_file():
+        if shared_data:raise SystemExit('The shared data directory has no verified disc extraction. Build from a fresh clone to avoid writing to shared data.')
         if not disc:raise SystemExit('Give the path to your Mario Kart Wii (USA) ISO or WBFS')
         # NKit images mark themselves "NKIT" at 0x200; their trimmed data fails the checks.
         with open(disc,'rb') as f:f.seek(0x200);nkit=f.read(4)==b'NKIT'
@@ -290,12 +308,16 @@ def stage_cook(disc,jobs,force,check=False):
     rerun=force
     for name,cmd,outputs in COOK_STEPS:
         stamp=stamps/(name.replace(' ','-')+'.done');fingerprint=step_fingerprint(cmd)
-        present=bool(outputs) and all((ROOT/o).exists() for o in outputs)
+        missing=missing_outputs(ROOT,outputs)
+        present=bool(outputs) and not missing
         # A fresh tree trusts only success stamps (a failed step can leave its
         # outputs half written) and, once a step runs, re-runs every later step.
         # Development trees, cooked by hand, are judged by their outputs; so are
         # the Node packages, which a development tree links from elsewhere.
-        done=(present if shared or name=='Node packages' else stamp_done(stamp,name,fingerprint)) and not rerun
+        if not outputs:
+            done=stamp_done(stamp,name,fingerprint) and not rerun
+        else:
+            done=(present and (shared or name=='Node packages' or stamp_done(stamp,name,fingerprint))) and not rerun
         if done:log('cooked:',name);continue
         # The course lighting re-cook rewrites files in place: no output of its own.
         if shared and not outputs:log('cooked (development tree, assumed):',name);continue
@@ -308,6 +330,8 @@ def stage_cook(disc,jobs,force,check=False):
         log(f'step {[n for n,*_ in COOK_STEPS].index(name)+1}/{len(COOK_STEPS)}: {name}')
         for c in commands:
             scrub_appledouble();add_case_aliases();run([str(a).replace('{py}',sys.executable).replace('{disc}',str(disc)).replace('{jobs}',str(step_jobs(name,jobs))) for a in c])
+        missing=missing_outputs(ROOT,outputs)
+        if missing:raise SystemExit(f"Cook step '{name}' did not produce valid outputs: {', '.join(missing)}")
         stamp.write_text(f'fingerprint {fingerprint}\n{time.monotonic()-start:.0f} s\n')
         for path in PRUNE_AFTER.get(name,()):shutil.rmtree(ROOT/path,ignore_errors=True)
 
