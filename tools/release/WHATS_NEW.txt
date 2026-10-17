@@ -1,1 +1,1 @@
-Added Docker install option, by sgrontflix
+Added Docker build option, by sgrontflix
