@@ -1,6 +1,1 @@
-Fixed: quick updates on Windows builds
-  (game files were wrongly refused)
-Fixed: crash when closing the game
-Fixed: race-start sound on OK, and no
-  hop/drift sounds after finishing
-  (DarthMDev)
+Added Docker install option, by sgrontflix
