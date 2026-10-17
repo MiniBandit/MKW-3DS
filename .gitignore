@@ -11,3 +11,5 @@ vendor/
 __pycache__/
 .toolchain/
 build-cia-log.txt
+mkw-rom/*
+!mkw-rom/.gitkeep
