@@ -5,18 +5,16 @@
 #include <cstdio>
 namespace mkw {
 // Optional physical-device/emulator evidence. Marker is on writable SD even
-// for ROMFS builds; package allowlists never install it. Batched I/O keeps
+// for ROMFS builds and release CIAs; package allowlists never install it. Batched I/O keeps
 // diagnostics out of every frame's hot path. Keep this object off the ARM stack.
 class RuntimeProfile {
 public:
  enum Stage {Simulation,UiPrepare,Wait,Course,Scenery,Opponents,Items,Player,Effects,Hud,Bottom,Submit,StageCount};
  RuntimeProfile(){
-#ifndef MKW_RELEASE
   if(FILE* marker=std::fopen("sdmc:/3ds/mkw-3ds/performance.txt","r")){
    std::fclose(marker);file_=std::fopen("sdmc:/3ds/mkw-3ds/performance.csv","w");
    if(file_)std::fputs("course,frame,rendered,physics_ticks,interval_ms,simulation_ms,ui_prepare_ms,wait_ms,course_ms,scenery_ms,opponents_ms,items_ms,player_ms,effects_ms,hud_ms,bottom_ms,submit_ms,previous_gpu_queue_ms,draws,triangles,culled_triangles,culled_submeshes,flush_calls,flush_bytes,pose_evaluations,pose_reuses,skinned_vertices,linear_free,command_usage,render_thread_ms,render_begin_wait_ms,record_wait_ms,worker_ms\n",file_);
   }
-#endif
  }
  ~RuntimeProfile(){flush();if(file_)std::fclose(file_);}
  void begin(unsigned course,unsigned frame,unsigned ticks,float interval){
@@ -44,12 +42,9 @@ private:
   }
   std::fflush(file_);count_=0;
  }
- // Release builds (MKW_RELEASE) never profile; the compiler drops the rest.
-#ifdef MKW_RELEASE
- bool on()const{return false;}
-#else
+ // Profiling is on only when performance.txt exists on the SD card, release builds
+ // included: without it file_ stays null and every call returns immediately.
  bool on()const{return file_!=nullptr;}
-#endif
  FILE* file_=nullptr;std::array<Row,120> rows_{};Row row_{};unsigned count_=0,startTicks_=0;uint64_t stamp_=0;
 };
 }

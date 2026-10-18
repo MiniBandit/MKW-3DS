@@ -234,21 +234,44 @@ def step_fingerprint(cmd,windows_npm=False):
         digest.update(f.relative_to(ROOT).as_posix().encode()+b'\0'+f.read_bytes().replace(b'\r\n',b'\n'))
     return digest.hexdigest()
 
-# The content stamp: every conversion step's fingerprint plus the packaging
-# scripts that lay out the SD folder. The update CIA is compiled with it
-# (tools/build.py -> MKW_CONTENT) and the builder writes it to the SD folder
-# (content.txt), so code and game files from different builders don't mix.
+# The content stamp says which converted game files a build has: the update CIA
+# is compiled with it (tools/build.py -> MKW_CONTENT), the builder writes it to
+# the SD folder (content.txt), and the game refuses files with another stamp.
+# It is a number kept by hand (tools/release/content_stamp.txt) and changes only
+# when the converted files themselves change, so edits to the cook tools that
+# leave their output as it was (a guard, a message, a refactor) never make
+# players rebuild. recipe_fingerprint() hashes every conversion step and the
+# packaging scripts; check_content_stamp() tells a maintainer when that recipe
+# differs from the one last reviewed, to decide: output unchanged (record the
+# new recipe) or changed (new stamp, and a rebuild release).
 PACKAGE_SCRIPTS=('tools/package_sd.py','tools/package_standalone.py')
-def content_fingerprint(windows_npm=False):
+STAMP_FILE=Path(__file__).with_name('content_stamp.txt')
+
+def recipe_fingerprint(windows_npm=False):
     digest=hashlib.sha256()
     for name,cmd,_ in COOK_STEPS:digest.update(f'{name}\0{step_fingerprint(cmd,windows_npm)}\n'.encode())
     for script in PACKAGE_SCRIPTS:digest.update((ROOT/script).read_bytes().replace(b'\r\n',b'\n'))
     return digest.hexdigest()[:32]
 
+def _stamp_values():
+    values=dict(line.split(None,1) for line in STAMP_FILE.read_text().splitlines() if line.strip() and not line.startswith('#'))
+    return {k:v.strip() for k,v in values.items()}
+
+def content_fingerprint():
+    return _stamp_values()['stamp']
+
 def legacy_windows_fingerprint():
-    """The stamp Windows builders of 0.5.0 and 0.5.1 wrote: the same recipe, but
-    with npm.cmd in the first step. Games accept it as well as the real one."""
-    return content_fingerprint(True)
+    """The stamp Windows builders of 0.5.0 and 0.5.1 wrote (npm.cmd was part of
+    the recipe then). Games accept it as well as the real one."""
+    return _stamp_values()['windows_legacy']
+
+def check_content_stamp():
+    """(True, '') when the cook recipe is the one last reviewed against the stamp."""
+    reviewed=_stamp_values()['recipe'];now=recipe_fingerprint()
+    if now==reviewed:return True,''
+    return False,(f'The cook recipe changed ({reviewed} -> {now}) since the content stamp '
+        f'{content_fingerprint()} was last reviewed. If the converted files are unchanged, set "recipe {now}" in '
+        f'tools/release/content_stamp.txt. If they changed, set a new "stamp": every player then has to rebuild.')
 
 def stamp_done(stamp,name,fingerprint):
     if not stamp.is_file():return False

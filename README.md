@@ -100,6 +100,13 @@ The QR codes always fetch the newest update. If an update ever needs newer game
 files, the game tells you on start-up: download the latest builder, build again
 and copy `build/release/sd-card/3ds` to your SD card again.
 
+## Performance log (for testers)
+
+To record how the game runs on your 3DS (useful on Old 3DS), create an empty
+file named `performance.txt` in `sd:/3ds/mkw-3ds/`, play a race, then send the
+`performance.csv` the game writes in the same folder. Delete `performance.txt`
+to switch it off. Nothing is recorded without that file.
+
 ## Controls
 
 | Button | Action |
