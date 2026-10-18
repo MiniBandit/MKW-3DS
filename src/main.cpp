@@ -3084,6 +3084,13 @@ int main()
             }
             circlePosition pad;
             hidCircleRead(&pad);
+            // A released Circle Pad often rests 10-15 units off centre on the side it
+            // was pushed to; read that as neutral (3DS hardware, no Wii equivalent).
+            constexpr int CirclePadDeadZone = 20;
+            if (std::abs(pad.dx) < CirclePadDeadZone)
+                pad.dx = 0;
+            if (std::abs(pad.dy) < CirclePadDeadZone)
+                pad.dy = 0;
             // QA autoplay owns every input: a stray host controller (Azahar's UDP
             // input server) must not steer the scripted race.
             if (autoplay)
