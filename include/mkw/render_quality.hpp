@@ -38,11 +38,15 @@ struct RenderQuality {
     // after the race's VRAM users have loaded, leaving vramReserve bytes free.
     bool vramCourseTextures=false;
     static constexpr std::size_t vramReserve=1024*1024;
+    // Old 3DS course-object detail distance and particle limit: lowered from
+    // 4000 and 96 following Codiak540's Old 3DS tests (PR #40). He ran 150 units
+    // and 16 particles; these are the cautious values until performance logs
+    // from other Old 3DS consoles show how far to go.
     void setReduced(bool on){
         *this=RenderQuality{};
         if(!on)return;
-        reduced=true;minScreenRatio=.015f;objectLowDistance=4000.f;
-        shadowVolumes=false;bloomBlurRounds=1;boxSparkleRatio=.04f;particleBudget=96;kartEffectScreens=2;animationStep=4;vramCourseTextures=true;
+        reduced=true;minScreenRatio=.015f;objectLowDistance=1500.f;
+        shadowVolumes=false;bloomBlurRounds=1;boxSparkleRatio=.04f;particleBudget=48;kartEffectScreens=2;animationStep=4;vramCourseTextures=true;
     }
 #ifdef MKW_RENDER_QUALITY_C3D
     // True when bounds b placed by transform t are too small to draw from camera.

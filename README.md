@@ -133,6 +133,7 @@ Please test changes on an emulator (Azahar) or real hardware before submitting.
 - **MiniBandit**: this continuation
 - **Epic0522**: graphics upgrades: lighting, kart shadows, water, effects and menu highlights
 - **DarthMDev**: Old 3DS drawing performance fix
+- **Codiak540**: Old 3DS performance testing and optimisation research (course-object detail distance, particle limit, performance log idea)
 - [Kinoko](https://github.com/vabold/Kinoko) by vabold (MIT): Mario Kart Wii physics
 - [noclip.website](https://github.com/magcius/noclip.website) (MIT): BRRES model reading
 - [gclib](https://github.com/LagoLunatic/gclib) by LagoLunatic (MIT): disc and texture tools
