@@ -55,6 +55,8 @@ private:
  UiPage incoming_=UiPage::Strap;
  bool back_=false,section_=false,skipEnter_=false,skipExit_=false;
  bool hasUnderlay_=false,openingModal_=false,closingModal_=false,holding_=false;
+ // NoGhosts' OK: the popup's exit, then a section fade (see begin()).
+ bool fadeAfterExit_=false;
  float elapsed_=-1,exitHold_=0,outDelay_=0,inDelay_=0;
  float underlayHoldFrame_=-1;
  const char* underlaySelectedControl_="";

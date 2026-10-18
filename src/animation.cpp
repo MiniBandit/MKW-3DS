@@ -17,8 +17,15 @@ namespace mkw {
 // the ordinary heap keeps its Old 3DS headroom (main.cpp), and spill to the
 // heap once LINEAR would drop under the reserve later race loads need: eleven
 // bike riders' banks (100cc Grand Prix) are about 5.5 MiB more than karts'.
+// The reserve covers the opponents' models that load after the banks and the
+// race sound scene planned after the graphics (RaceSound::planScene: resident
+// waves ~2.7 MiB incl. the player's voices, the wave cache up to 640 KiB, the
+// stream rings, above its 2 MiB graphics reserve). With the retail CPU line-up
+// draw (race_grid.cpp: random characters and vehicles, banks ~14 MiB instead of
+// the old fixed karts' ~11 MiB) a 3 MiB reserve left the sound ~2.4 MiB: the
+// voice group was demoted, the wave cache got 0 bytes and BNK_VCL_SE failed.
 static uint8_t* allocateBank(size_t size,bool& linear){
-    constexpr size_t LinearReserve=3u<<20;
+    constexpr size_t LinearReserve=(15u<<20)/2;
     linear=linearSpaceFree()>size+LinearReserve;
     if(linear)if(void* p=linearAlloc(size))return static_cast<uint8_t*>(p);
     linear=false;return static_cast<uint8_t*>(std::aligned_alloc(16,(size+15)&~size_t(15)));
@@ -234,10 +241,27 @@ void DriverAnimation::applyHair(const Clip& primary,unsigned tick){
 }
 bool DriverAnimation::apply(Model& model,int clip,float frame,unsigned tick,int expression,float expressionFrame,const ClipFrustum* frustum){
     if(!ready||clip<0||unsigned(clip)>=count_)return true;
+    if(lastClip_!=clip){hasPreviousPose_=lastClip_>=0;previousPalette_=palette_;transitionTick_=tick;lastClip_=clip;}
+    const float blend=hasPreviousPose_?std::clamp(float(tick-transitionTick_+1)/6.f,0.f,1.f):1.f;
+    return applyPose(model,clip,frame,tick,expression,expressionFrame,frustum,blend);
+}
+bool DriverAnimation::apply(Model& model,int clip,float frame,const ClipBlend& from,unsigned tick,int expression,float expressionFrame,const ClipFrustum* frustum){
+    if(!ready||clip<0||unsigned(clip)>=count_)return true;
+    lastClip_=clip;hasPreviousPose_=false;
+    float blend=1;
+    if(from.clip>=0&&unsigned(from.clip)<count_&&from.weight<1){
+        // The outgoing clip at its own frame becomes the blend's first pose.
+        const auto& p=clips_[from.clip];
+        const float f=p.loop?std::fmod(std::max(from.frame,0.f),float(p.count)):std::clamp(from.frame,0.f,float(p.count-1));
+        const unsigned a=unsigned(f),b=a+1<p.count?a+1:(p.loop?0:a);
+        evaluate(p,a,b,f-a,tick,1.f);previousPalette_=palette_;
+        blend=std::clamp(from.weight,0.f,1.f);
+    }
+    return applyPose(model,clip,frame,tick,expression,expressionFrame,frustum,blend);
+}
+bool DriverAnimation::applyPose(Model& model,int clip,float frame,unsigned tick,int expression,float expressionFrame,const ClipFrustum* frustum,float blend){
     auto sample=[](const Clip& c,float t){return c.loop?std::fmod(std::max(t,0.f),float(c.count)):std::clamp(t,0.f,float(c.count-1));};
     const auto& c=clips_[clip];frame=sample(c,frame);unsigned a=unsigned(frame),b=a+1<c.count?a+1:(c.loop?0:a);float t=frame-a;
-    if(lastClip_!=clip){hasPreviousPose_=lastClip_>=0;previousPalette_=palette_;transitionTick_=tick;lastClip_=clip;}
-    float blend=hasPreviousPose_?std::clamp(float(tick-transitionTick_+1)/6.f,0.f,1.f):1.f;
     const float faceFrame=expression>=0&&unsigned(expression)<faceCount_?sample(faces_[expression],expressionFrame):0.f;
     auto poseVisible=[&](){
         if(!frustum)return true;

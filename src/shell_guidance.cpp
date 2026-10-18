@@ -36,9 +36,11 @@ int RaceItems::blueTarget(const ItemActor& a)const{
 int RaceItems::redTarget(const ItemActor& a,bool ranked)const{
     // 298d88: nearest XZ within 4000, forward cone (sin=.95), signed
     // floor-normal height [-1500,1000], source rank and protection filters.
+    // No finish filter: acquisition (0x807B3BAC -> 0x807B381C) also locks onto
+    // racers who have crossed the line.
     int result=-1;float best=16000000.f;unsigned ownerRank=rank(unsigned(a.owner));
     for(unsigned i=0;i<count_;++i){const auto& r=racers_[i];unsigned candidateRank=rank(i);
-        if(int(i)==a.owner||r.finished||missing(r))continue;
+        if(int(i)==a.owner||missing(r))continue;
         if(ranked&&ownerRank<=candidateRank){if(ownerRank!=1||candidateRank>3||(candidateRank==1&&count_>1))continue;}
         if(candidateRank!=1&&(r.shellTargetProtected||r.controlLocked||r.inCannon||invincible(i)||hud_[i].mega))continue;
         Vec3 d=r.position-a.position;float xz=shellXZ2(d);if(xz>best)continue;
@@ -73,7 +75,7 @@ void RaceItems::launchShell(ItemActor& a,unsigned player){
     if(blue){a.target=int8_t(target);s.ownerLed=target==a.owner;if(target>=0){s.lastTarget=racers_[target].position;s.leaderMask|=uint16_t(1u<<target);}if(!s.hasRoute){a.travelSpeed=85+(forward?speed:-speed);a.velocity=a.flightDirection*a.travelSpeed;s.approachSpeed=length(a.velocity);}}
 }
 void RaceItems::shellTerrain(ItemActor& a,ItemWorldQuery query,bool blue,bool route,bool approach){
-    auto& s=a.guidance;ItemSurface surface=query?query(a.previous,a.position,a.terrainRadius):ItemSurface{};
+    auto& s=a.guidance;ItemSurface surface=query?query(a.previous,a.position,a.terrainRadius,a.kind==ItemKind::BlueShell?BlueShellKclMask:ItemKclMask):ItemSurface{};
     // 29a558 / 29b494: cannon KCL destroys ordinary shells; object ID 5
     // (Spiny) is explicitly exempt. It follows the authored airborne route.
     if(surface.cannon&&!blue){a.active=false;return;}
@@ -213,12 +215,15 @@ void RaceItems::updateShell(ItemActor& a,ItemWorldQuery query){
             if(a.target<0||unsigned(a.target)>=count_){a.active=false;return;}
             const auto& r=racers_[a.target];
             if(missing(r))s.targetLive=false;if(s.targetLive)s.lastTarget=r.position;
-            Vec3 up=normalized(r.up,{0,1,0}),right=normalized(cross(up,r.forward),{1,0,0});
+            // fn_1_2A3C28 (0x807B3FDC) / fn_1_2A407C (0x807B4430) copy the target's
+            // KartMove +0x74 (vel1Dir, its direction of travel) into +0x284 every
+            // update; the orbit's side axis is vel1Dir x KartMove +0x38 (smoothedUp).
             if(s.phase==2||s.phase==3){
                 s.approachSpeed=shellMoveToward(s.approachSpeed,130,8);
                 if(s.phase==3){s.height-=7.5f;s.orbitStep=uint16_t(s.orbitStep+35);s.orbitRadius-=s.orbitAngle<0x8000?4:8;s.orbitAngle+=s.orbitStep;}
-                s.orbitOffset=(right*sinAngle(s.orbitAngle)+up*cosAngle(s.orbitAngle))*s.orbitRadius;
-                Vec3 d=s.lastTarget+up*300+s.orbitOffset-a.position;
+                // A horizontal circle about the point 300 (0x808A60B0) ahead of the leader.
+                s.orbitOffset=(cross(r.moveDir,r.smoothedUp)*cosAngle(s.orbitAngle)+r.moveDir*sinAngle(s.orbitAngle))*s.orbitRadius;
+                Vec3 d=s.lastTarget+r.moveDir*300+s.orbitOffset-a.position;
                 bool cannonOrbit=s.phase==3&&r.inCannon&&shellCourse_!=29;
                 Vec3 desired=d*(s.phase==2||cannonOrbit?.5f:.3f);
                 if(s.phase==2&&a.velocity.x*desired.x+a.velocity.z*desired.z<0){
@@ -228,18 +233,27 @@ void RaceItems::updateShell(ItemActor& a,ItemWorldQuery query){
                 desired=shellLimit(desired,cannonOrbit?600.f:s.approachSpeed);
                 float response=s.phase==2?.125f:.5f;if(!s.hasRoute&&a.age<30)response*=float(a.age)/30;
                 a.velocity=lerp(a.velocity,desired,response);a.position+=a.velocity;
-                if(query){auto surface=query(a.previous,a.position,a.terrainRadius);a.position.y+=surface.correction.y;}
+                if(query){auto surface=query(a.previous,a.position,a.terrainRadius,BlueShellKclMask);a.position.y+=surface.correction.y;}
                 if(s.phase==2&&shellXZ2(d)<640000)s.pending=3;
                 if(s.phase==3&&s.orbitAngle>=0x11f40)s.pending=4;
             }else{
                 s.height+=s.phase==4?3:-70;
-                float response=r.inCannon&&shellCourse_!=29?.5f:s.phase==4?s.amplitude:(s.dodge?.25f:.7f);
-                Vec3 destination=s.lastTarget+up*210+Vec3{0,s.height,0};a.velocity=(destination-a.position)*response;a.position+=a.velocity;
-                // 296f80 moves with the old response, updates it, then
-                // detects a dodge for the next tick (150cc response floor .25).
+                // fn_1_29D854 (0x807ADC08): the dodge response floor by engine class
+                // (RaceConfig +0xB6C): .22 at 100cc, .25 at 150cc, .2 otherwise (.15
+                // online, bss 61DB, which an offline port never sets).
+                const float dodgeFloor=engineClass_==1?.22f:engineClass_==2?.25f:.2f;
+                float response=r.inCannon&&shellCourse_!=29?.5f:s.phase==4?s.amplitude:(s.dodge?dodgeFloor:.7f);
+                // States 4/5 (0x807ADC5C / 0x807ADFA4): 210 (0x808A60C8) ahead of the
+                // leader along its direction of travel, plus the height.
+                Vec3 destination=s.lastTarget+r.moveDir*210+Vec3{0,s.height,0};a.velocity=(destination-a.position)*response;a.position+=a.velocity;
+                // 0x807ADC5C moves with the old response, updates it, then detects a
+                // dodge for the next tick.
                 if(s.phase==4){
-                    s.amplitude=s.dodge?std::max(.25f,s.amplitude-.05f):std::min(.7f,s.amplitude+.005f);
-                    if(s.ticks>8&&(r.mushroomBoost||(r.inCannon&&shellCourse_==29)))s.dodge=true;
+                    if(s.dodge)s.amplitude=std::max(dodgeFloor,s.amplitude-.05f);
+                    else if(s.amplitude<.7f)s.amplitude+=.005f;
+                    // The target's ItemHolderPlayer +0x238: set only for the update in
+                    // which it activated a Mushroom (use, Golden use or a dropped one).
+                    if(s.ticks>8&&(mushroomPulse_[unsigned(a.target)]||(r.inCannon&&shellCourse_==29)))s.dodge=true;
                     if(s.ticks>24)s.pending=5;
                 }
                 if(s.phase==5){
@@ -247,7 +261,7 @@ void RaceItems::updateShell(ItemActor& a,ItemWorldQuery query){
                     const auto prop=itemProperties(unsigned(a.kind));
                     a.terrainRadius=prop.terrain*s.stretch;
                     bool impact=s.height<(r.inCannon?-900.f:-100.f);
-                    if(query){auto surface=query(a.previous,a.position,a.terrainRadius);a.position+=surface.correction;impact=impact||length(surface.floorNormal)>.1f||length(surface.wallNormal)>.1f;}
+                    if(query){auto surface=query(a.previous,a.position,a.terrainRadius,BlueShellKclMask);a.position+=surface.correction;impact=impact||length(surface.floorNormal)>.1f||length(surface.wallNormal)>.1f;}
                     if(impact){explode(a);return;}
                     // fn_28F9D0: the model stretches toward 1.5 tall while its sides follow
                     // 2*scale-height; the kart sphere registered at the dive's start

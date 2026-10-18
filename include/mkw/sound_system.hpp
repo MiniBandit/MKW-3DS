@@ -19,7 +19,7 @@ struct SoundCommand {
   PlayerVolume, StopPlayer, PausePlayer, MasterVolume, Ambient, StopAll, Layer, Prepare, StartPrepared
  };
  Type type = Start;
- std::uint8_t pad = 0;
+ std::int8_t variable = -1; // Start: local sequence variable set to `value` before the first tick
  std::uint16_t slot = 0;
  std::uint32_t seq = 0;    // set by SoundSystem::post
  std::uint32_t id = 0;     // sound id / player id / variable index / track mask
@@ -73,6 +73,8 @@ public:
  void post(const SoundCommand& command);
  // Convenience wrappers.
  void play(std::uint32_t id, std::uint16_t slot = 0) { SoundCommand c; c.type = SoundCommand::Start; c.id = id; c.slot = slot; post(c); }
+ // StartSound then SeqSoundHandle::WriteVariable(index, value), as one command.
+ void play(std::uint32_t id, int variable, std::int16_t value, std::uint16_t slot = 0) { SoundCommand c; c.type = SoundCommand::Start; c.id = id; c.slot = slot; c.variable = std::int8_t(variable); c.value = value; post(c); }
  void hold(std::uint32_t id, std::uint16_t slot) { SoundCommand c; c.type = SoundCommand::Hold; c.id = id; c.slot = slot; post(c); }
  void stopSlot(std::uint16_t slot, int frames) { SoundCommand c; c.type = SoundCommand::Stop; c.slot = slot; c.frames = frames; post(c); }
  // Slots below 32: whether the slot's sound (started, prepared or held) is
@@ -90,7 +92,10 @@ public:
 
  struct Stats { std::uint32_t voices = 0, sounds = 0, dropped = 0, underruns = 0, missing = 0, failed = 0; float audioMs = 0, audioPeakMs = 0; std::uint32_t frames = 0;
   std::uint32_t cacheBytes = 0, cacheUsed = 0, cacheLoads = 0, cacheEvictions = 0;
-  std::uint32_t lastMissingSound = 0xFFFFFFFFu, lastMissingFile = 0xFFFFFFFFu, lastMissingWave = 0xFFFFFFFFu; };
+  std::uint32_t lastMissingSound = 0xFFFFFFFFu, lastMissingFile = 0xFFFFFFFFu, lastMissingWave = 0xFFFFFFFFu;
+  std::uint32_t notesDropped = 0, lastDroppedSound = 0xFFFFFFFFu;
+  std::uint32_t failedAlloc = 0, failedWait = 0, lastFailedAlloc = 0xFFFFFFFFu, lastFailedWait = 0xFFFFFFFFu;
+  snd::FullPlayer firstFull[2]{}, lastFull{}; };  // QA: who held a full player at a failed start
  Stats stats() const;
  struct Impl;
 private:

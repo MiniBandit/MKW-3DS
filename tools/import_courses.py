@@ -9,8 +9,10 @@ from pathlib import Path
 from course_catalog import ROOT,courses
 sys.path.insert(0,str(ROOT/'vendor/gclib'))
 from unpack_szs import unpack
-from cook_model import cook
+from cook_model import cook,t3x_bytes,COURSE_TEXELS,LARGE_TEXELS
 OUT=ROOT/'sd-card/3ds/mkw-3ds'
+# Course + sky texture bytes above this are flagged (receipt and log).
+TEXTURE_BUDGET=1536*1024
 def digest(p):return hashlib.sha256(p.read_bytes()).hexdigest()
 def write(p,data):p.parent.mkdir(parents=True,exist_ok=True);p.write_text(json.dumps(data,indent=2)+'\n')
 def kmp_database(path):
@@ -89,7 +91,10 @@ def import_one(c,force=False):
                 if label in ('course','sky'):export_env['MKW_COURSE_MATERIALS']='1'
                 with (exported/'export.log').open('w') as log:
                     subprocess.run(['node',str(ROOT/'build/export_brres.mjs'),str(folder/resource),str(exported)],env=export_env,stdout=log,stderr=subprocess.STDOUT,check=True)
-                cook(exported,OUT,prefix,256)
+                # Course and sky: texel budgets and retail mip levels (cook_model.py);
+                # the minimap model is not drawn and keeps the 256 px cap.
+                if label=='map':cook(exported,OUT,prefix,256)
+                else:cook(exported,OUT,prefix,texel_budget=LARGE_TEXELS if label=='sky' else COURSE_TEXELS,brres=[folder/resource])
             model_list=f'models/{prefix}.list'
             if not (OUT/model_list).is_file():raise ValueError('Missing cooked model list '+model_list)
             parts=(OUT/model_list).read_text().split()
@@ -108,9 +113,13 @@ def import_one(c,force=False):
             receipt['object_models']=len(report)
         receipt['limitations']+=['Rough course/sky import; course materials without a runtime equivalent use documented fallbacks (docs/COURSE_IMPORT.md)','Retail course lighting: GX channels, EGG light textures and fog per docs/COURSE_LIGHTING.md; shadows remain unsupported','Fog, indirect effects, cameras, audio and non-linear animations are not fully implemented','Race availability requires native host smoke check; complete-lap and hardware performance parity are unverified']
         if c['kind']=='arena':receipt['limitations'].append('Asset import only: Balloon Battle and Coin Runners are not implemented')
+        # GPU bytes of the course and sky textures, flagged above TEXTURE_BUDGET.
+        receipt['texture_bytes']=sum(t3x_bytes(OUT/'textures'/(t['name']+'.t3x')) for v in receipt['visuals'] if v['kind']!='map' for t in v['textures'])
+        if receipt['texture_bytes']>TEXTURE_BUDGET:receipt['limitations'].append(f"Course and sky textures {receipt['texture_bytes']/1024:.0f} KiB exceed the {TEXTURE_BUDGET//1024} KiB budget")
         receipt['status']='imported'
     except Exception as e:receipt['error']=str(e)
-    write(receipt_path,receipt);print(c['id'],c['name'],receipt['status'],receipt.get('error',''),flush=True);return receipt
+    budget=f"textures {receipt['texture_bytes']/1024:.0f} KiB"+(' OVER BUDGET' if receipt['texture_bytes']>TEXTURE_BUDGET else '') if 'texture_bytes' in receipt else ''
+    write(receipt_path,receipt);print(c['id'],c['name'],receipt['status'],receipt.get('error',''),budget,flush=True);return receipt
 
 def publish(receipts):
     # The runtime catalog remains small; verbose extraction evidence is separate.

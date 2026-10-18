@@ -23,6 +23,7 @@ public:
   unsigned mode = 1;          // RaceConfig game mode: 0 GP, 1 VS, 2 TT, 3 battle
   unsigned lapCount = 3;
   unsigned engineClass = 2;   // 0 50cc, 1 100cc, 2 150cc
+  bool mirror = false;        // Mirror mode (mirror sound triggers)
   bool preview = false;       // the course preview plays first (retail intro section)
   unsigned racers = 0;
   std::uint32_t graphicsReserve = 2048u * 1024;
@@ -46,9 +47,11 @@ public:
  // `actors` (karts, camera) goes to the audio thread's RaceAudioLayer; its
  // sound cues are cleared once the audio thread has the frame.
  void step(const Frame& frame, RaceAudioFrame* actors = nullptr);
- void previewEnded();          // the course preview finished or was skipped
+ void previewLeave();          // the Demo section's fade-out started (preview over or skipped)
+ void previewEnded();          // the race section entered after that fade
  void pause(bool paused);      // RaceRSARPlayer::Pause / Resume
  void quit();                  // RaceRSARPlayer::Stop: the race is left
+ void fadeOut();               // the scene fade-out started: RaceRSARPlayer::Stop's 20-frame fades
  bool active() const { return active_; }
  // QA: called with a line on every race state change and countdown/lap sound.
  void setTrace(void (*trace)(const char* line, void* context), void* context) { trace_ = trace; traceContext_ = context; }
@@ -92,7 +95,7 @@ private:
  Setup setup_{};
  Budget budget_{};
  Bgm bgm_;
- bool active_ = false, paused_ = false;
+ bool active_ = false, paused_ = false, leaving_ = false;
  int state_ = 0;               // RaceMgr+0x40
  int countdown_ = 0;           // RaceHUD countdown index (0..4)
  int maxLap_ = 1;              // Raceinfo maxLap of the local player

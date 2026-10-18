@@ -63,7 +63,7 @@ unsigned RaceIntro::frames()const{
 void RaceIntro::start(){
  stop();
  if(opening_<0)return;
- active_=true;shots_=0;begin(opening_);
+ active_=true;finished_=false;shots_=0;begin(opening_);
  // Nothing is shown before the first tick positions the camera; start from
  // the authored placement so an early frame is never undefined.
  const auto& c=cameras_[current_];
@@ -71,7 +71,7 @@ void RaceIntro::start(){
  target_=c.viewStart;appliedFov_=c.fovStart;
 }
 
-void RaceIntro::stop(){rail_.reset();active_=false;current_=-1;}
+void RaceIntro::stop(){rail_.reset();active_=finished_=false;current_=-1;}
 
 // Director camera switch (PAL 0x805AD924) and the shot's state init.
 void RaceIntro::begin(int index){
@@ -94,7 +94,7 @@ void RaceIntro::begin(int index){
 }
 
 void RaceIntro::step(){
- if(!active_)return;
+ if(!active_||finished_)return;
  const auto& c=cameras_[current_];
  // Shot position. Type 5 (0x805ADCB0): velocity is the route points' first
  // setting, lerped by segment progress, then the rail advances. Type 4
@@ -129,11 +129,12 @@ void RaceIntro::step(){
   target_=c.viewStart+viewOffset_;
  }
  // Director (0x805AD5C8): each shot lasts `time` frames, then `next` starts;
- // the last shot ends the preview. A malformed loop still ends.
+ // after the last shot the view holds (DemoSection fades the section out).
+ // A malformed loop still ends.
  elapsed_+=1.f;
  if(c.time<=elapsed_){
   if(c.next<cameras_.size()&&++shots_<64)begin(c.next);
-  else stop();
+  else finished_=true;
  }
 }
 }

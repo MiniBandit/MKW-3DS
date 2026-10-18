@@ -118,10 +118,24 @@ bool MenuState::supportsRace()const{
  return raceMode(selection.mode)&&(selection.mode!=UiMode::GrandPrix||raceEngineClass(selection.engineClass))&&!selection.teams&&raceDriver(selection.driver)&&raceVehicle(selection.vehicle)&&courseReady;
 }
 
-void MenuState::advance(unsigned ticks){age+=ticks;focusAge+=ticks;uiFocusAdvance(*this,ticks);}
+UiInput UiDirectionRepeat::step(bool up,bool down,bool left,bool right,unsigned frames){
+ // fn_1_DF4E4's mask: up 1 (else down 2), right 4 (else left 8). The count
+ // restarts only from or to no direction; fn_1_DF6BC fires at 0 and 15+15k.
+ const unsigned mask=(up?1u:down?2u:0u)|(right?4u:left?8u:0u);
+ auto repeats=[](unsigned held){return held<15?0u:(held-15)/15+1;};
+ const bool press=mask&&!mask_;const unsigned before=held_;
+ held_=mask&&mask_?held_+frames:0;mask_=mask;
+ UiInput key;
+ if(mask&&(press||repeats(held_)>repeats(before))){key.up=mask&1;key.down=mask&2;key.right=mask&4;key.left=mask&8;}
+ return key;
+}
+
+void MenuState::advance(unsigned ticks){age+=ticks;focusAge+=ticks;sectionAge+=ticks;uiFocusAdvance(*this,ticks);}
 
 void MenuState::enter(UiPage next){
  normalize(selection);
+ // Leaving the race (results, pause) is a section change: a new MenuBG.
+ if(retainsRaceAssets())sectionAge=0;
  page=next;age=focusAge=0;unavailable=false;cursor=0;
  switch(page){
  case UiPage::License:cursor=selection.license;break;
@@ -138,7 +152,7 @@ void MenuState::enter(UiPage next){
  case UiPage::Course:cursor=selection.course%4;break;
  case UiPage::BattleCup:cursor=selection.battleStage/5;break;
  case UiPage::BattleStage:cursor=selection.battleStage%5;break;
- case UiPage::Ghost:cursor=2;break; // No loaded ghosts: the solo option is usable.
+ case UiPage::Ghost:cursor=ghostTimes[selection.course%ghostTimes.size()]?0:2;break; // Race This Ghost, or Solo when none
  case UiPage::QuitConfirm:cursor=1;break;
  default:break;
  }
@@ -164,8 +178,11 @@ UiAction MenuState::input(UiInput key){
   case UiPage::Course:enter(UiPage::Cup);break;
   case UiPage::BattleStage:enter(UiPage::BattleCup);break;
   case UiPage::Ghost:enter(UiPage::Course);break;
+  // ConfirmPage's back (PAL 0x805C22B8, result 1): TimeAttackBackPage_onRefocus
+  // (0x80639260) replaces itself with page 0x6F, RaceCourseSelectPage.
+  case UiPage::NoGhosts:enter(UiPage::Course);break;
   case UiPage::Confirm:case UiPage::Error:
-   enter(selection.mode==UiMode::GrandPrix?UiPage::Cup:selection.mode==UiMode::Battle?UiPage::BattleStage:selection.mode==UiMode::TimeTrials?UiPage::Ghost:UiPage::Course);break;
+   enter(selection.mode==UiMode::GrandPrix?UiPage::Cup:selection.mode==UiMode::Battle?UiPage::BattleStage:selection.mode==UiMode::TimeTrials?ghostPage():UiPage::Course);break;
   case UiPage::QuitConfirm:enter(UiPage::Pause);cursor=2;break;
   default:break;
   }
@@ -222,8 +239,19 @@ UiAction MenuState::input(UiInput key){
   // A Grand Prix selects the whole cup. VS and Time Trials select a course.
   if(selection.course/4!=cursor||selection.mode==UiMode::GrandPrix)selection.course=cursor*4;
   enter(selection.mode==UiMode::GrandPrix?UiPage::Confirm:UiPage::Course);break;
- case UiPage::Course:selection.course=selection.course/4*4+cursor;enter(selection.mode==UiMode::TimeTrials?UiPage::Ghost:UiPage::Confirm);break;
- case UiPage::Ghost:if(cursor==2)enter(UiPage::Confirm);else unavailable=true;break;
+ case UiPage::Course:selection.course=selection.course/4*4+cursor;enter(selection.mode==UiMode::TimeTrials?ghostPage():UiPage::Confirm);break;
+ // ConfirmPage's OK (PAL 0x805C21C0, result 0): TimeAttackBackPage_onRefocus
+ // (0x80639260) sets up a solo run and changes section at once; there is no
+ // race confirmation page on this path.
+ case UiPage::NoGhosts:
+  selection.ghostChoice=2;
+  if(supportsRace())return UiAction::StartRace;
+  unavailable=true;break;
+ case UiPage::Ghost:
+  // Racing or watching a ghost needs one for the course.
+  if(cursor==2||ghostTimes[selection.course%ghostTimes.size()]){selection.ghostChoice=cursor;enter(UiPage::Confirm);}
+  else unavailable=true;
+  break;
  case UiPage::BattleCup:
   if(selection.battleStage/5!=cursor)selection.battleStage=cursor*5;
   enter(UiPage::BattleStage);break;
@@ -244,7 +272,7 @@ UiAction MenuState::input(UiInput key){
   if(cursor==0&&!finalRace)enter(selection.mode==UiMode::Battle?UiPage::BattleCup:UiPage::Cup);
   else enter(UiPage::MainMenu);
   break;
- case UiPage::Error:enter(selection.mode==UiMode::GrandPrix?UiPage::Cup:selection.mode==UiMode::Battle?UiPage::BattleStage:selection.mode==UiMode::TimeTrials?UiPage::Ghost:UiPage::Course);break;
+ case UiPage::Error:enter(selection.mode==UiMode::GrandPrix?UiPage::Cup:selection.mode==UiMode::Battle?UiPage::BattleStage:selection.mode==UiMode::TimeTrials?ghostPage():UiPage::Course);break;
  default:break;
  }
  return UiAction::None;

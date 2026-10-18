@@ -136,10 +136,11 @@ std::printf("Missing model: %s\n",path);
 #endif
 return false;}
     uint32_t h[6];
-    if(!f.read(h,sizeof h)||std::memcmp(h,"GMDL",4)||(h[1]!=3&&h[1]!=4&&h[1]!=5)||!h[2]||h[2]>65535||h[3]>3000000||h[4]>2048||h[5]>512) return false;
+    if(!f.read(h,sizeof h)||std::memcmp(h,"GMDL",4)||h[1]<3||h[1]>6||!h[2]||h[2]>65535||h[3]>3000000||h[4]>2048||h[5]>512) return false;
     vertexCount=h[2];indexCount=h[3]; submeshes.resize(h[4]);
-    // v3 records end at animationFrames; v4 adds the retail lighting state.
-    const size_t record=h[1]==5?sizeof(Submesh):h[1]==4?offsetof(Submesh,menuReflection):offsetof(Submesh,lighting);
+    // v3 records end at animationFrames; v4 adds the retail lighting state,
+    // v5 the menu reflection, v6 the GX sampler state.
+    const size_t record=h[1]==6?sizeof(Submesh):h[1]==5?offsetof(Submesh,sampler):h[1]==4?offsetof(Submesh,menuReflection):offsetof(Submesh,lighting);
     for(auto& s:submeshes)if(!f.read(&s,record))return false;
     for(const auto& s:submeshes) if(s.first>indexCount||s.count>indexCount-s.first||s.count%3||s.texture< -1||s.texture>=static_cast<int32_t>(h[5])||s.secondary< -1||s.secondary>=static_cast<int32_t>(h[5]))return false;
     for(const auto& s:submeshes){
@@ -236,6 +237,10 @@ bool Renderer::init(){
     tintLoc_=shaderInstanceGetUniformLocation(program_.vertexShader,"tint");
     uv1RowLoc_[0]=shaderInstanceGetUniformLocation(program_.vertexShader,"uv1Row0");
     uv1RowLoc_[1]=shaderInstanceGetUniformLocation(program_.vertexShader,"uv1Row1");
+    static const char* projRows[]={"projRow0","projRow1","projRow2"};
+    for(int i=0;i<3;++i)projRowLoc_[i]=shaderInstanceGetUniformLocation(program_.vertexShader,projRows[i]);
+    projectedUv0Loc_=shaderInstanceGetUniformLocation(program_.vertexShader,"projectedUv0");
+    if(projRowLoc_[0]<0||projRowLoc_[1]<0||projRowLoc_[2]<0||projectedUv0Loc_<0)return fail();
     if(projectionLoc_<0||modelViewLoc_<0||lightLoc_<0||uvScrollLoc_<0||envRowLoc_[0]<0||envRowLoc_[1]<0||envRowLoc_[2]<0||envParamLoc_<0||
        uv1RowLoc_[0]<0||uv1RowLoc_[1]<0)return fail();
     if(uvRowLoc_[0]<0||uvRowLoc_[1]<0||uvRowLoc_[2]<0||uvRowLoc_[3]<0||tintLoc_<0)return fail();
@@ -296,6 +301,12 @@ bool Renderer::reserveBloom(){
     drain();
     return initBloomTargets();
 }
+// A 2D VRAM texture with mip levels 1..levels after its base level.
+static bool initVramTexture(C3D_Tex& texture,unsigned width,unsigned height,GPU_TEXCOLOR format,unsigned levels){
+    C3D_TexInitParams p{};
+    p.width=uint16_t(width);p.height=uint16_t(height);p.maxLevel=levels;p.format=format;p.type=GPU_TEX_2D;p.onVram=true;
+    return C3D_TexInitWithParams(&texture,nullptr,p);
+}
 bool Renderer::loadVramTexture(Texture& texture,const char* path,GPU_TEXTURE_WRAP_PARAM wrap){
     texture.reset();
     if(!ready_||!text_)return false;
@@ -314,12 +325,14 @@ bool Renderer::loadVramTexture(Texture& texture,const char* path,GPU_TEXTURE_WRA
     // 12-byte subtexture records; a 4-byte compression header (0x00 = none).
     uint8_t header[5]{},sub[12]{},compression[4]{};
     bool ok=read(header,5)&&(header[0]|header[1]<<8)==1&&read(sub,12)&&read(compression,4)&&compression[0]==0;
-    const unsigned width=8u<<(header[2]&7),height=8u<<((header[2]>>3)&7),format=header[3];
+    const unsigned width=8u<<(header[2]&7),height=8u<<((header[2]>>3)&7),format=header[3],levels=header[4];
     const std::size_t bytes=std::size_t(compression[1])|std::size_t(compression[2])<<8|std::size_t(compression[3])<<16;
-    ok=ok&&!(header[2]&0x40)&&header[4]==0&&width<=1024&&height<=1024&&(format==GPU_ETC1||format==GPU_RGBA8)&&
-        bytes==C3D_TexCalcTotalSize(format==GPU_ETC1?width*height/2:width*height*4,0);
+    // Bits per texel: ETC1 4, LA4 8 (GX IA4's texels), RGBA5551 16 (GX RGB5A3's), RGBA8 32.
+    const unsigned bits=format==GPU_ETC1?4:format==GPU_LA4?8:format==GPU_RGBA5551?16:format==GPU_RGBA8?32:0;
+    ok=ok&&!(header[2]&0x40)&&width<=1024&&height<=1024&&bits&&
+        int(levels)<=C3D_TexCalcMaxLevel(width,height)&&bytes==C3D_TexCalcTotalSize(width*height*bits/8,levels);
     // VRAM only: a failure leaves the texture empty and never falls back to LINEAR.
-    ok=ok&&C3D_TexInitVRAM(&texture.gpu,uint16_t(width),uint16_t(height),GPU_TEXCOLOR(format));
+    ok=ok&&initVramTexture(texture.gpu,width,height,GPU_TEXCOLOR(format),levels);
     if(!ok){texture.gpu={};if(f)std::fclose(f);return false;}
     uint8_t* staging=reinterpret_cast<uint8_t*>(text_);
     for(std::size_t done=0;ok&&done<bytes;){
@@ -334,6 +347,7 @@ bool Renderer::loadVramTexture(Texture& texture,const char* path,GPU_TEXTURE_WRA
     if(f)std::fclose(f);
     if(!ok){C3D_TexDelete(&texture.gpu);texture.gpu={};return false;}
     C3D_TexSetFilter(&texture.gpu,GPU_LINEAR,GPU_LINEAR);
+    if(levels)C3D_TexSetFilterMipmap(&texture.gpu,GPU_LINEAR);
     C3D_TexSetWrap(&texture.gpu,wrap,wrap);
     texture.ready=true;
     return true;
@@ -341,11 +355,12 @@ bool Renderer::loadVramTexture(Texture& texture,const char* path,GPU_TEXTURE_WRA
 bool Renderer::moveToVram(Texture& texture,std::size_t reserve){
     auto& t=texture.gpu;
     const u32 at=reinterpret_cast<u32>(t.data);
-    if(!texture.ready||!t.data||(at>=OS_VRAM_VADDR&&at<OS_VRAM_VADDR+OS_VRAM_SIZE)||t.maxLevel)return false;
-    const std::size_t bytes=C3D_TexCalcTotalSize(t.size,0);
+    if(!texture.ready||!t.data||(at>=OS_VRAM_VADDR&&at<OS_VRAM_VADDR+OS_VRAM_SIZE))return false;
+    // Mip levels follow the base level contiguously (C3D_TexInitWithParams).
+    const std::size_t bytes=C3D_TexCalcTotalSize(t.size,t.maxLevel);
     if(vramSpaceFree()<bytes+reserve)return false;
     C3D_Tex moved{};
-    if(!C3D_TexInitVRAM(&moved,t.width,t.height,t.fmt))return false;
+    if(!initVramTexture(moved,t.width,t.height,t.fmt,t.maxLevel))return false;
     // The LINEAR copy was flushed when it was loaded; the copy engine reads it.
     C3D_SyncTextureCopy(static_cast<u32*>(t.data),0,static_cast<u32*>(moved.data),0,u32(bytes),8);
     moved.param=t.param;moved.border=t.border;moved.lodParam=t.lodParam;
@@ -592,7 +607,39 @@ static bool sameMaterial(const Submesh& a,const Submesh& b){
     return a.flags==b.flags&&a.lighting==b.lighting&&a.constant==b.constant&&a.add==b.add&&a.ambient==b.ambient&&
            (a.animationFrames>>16)==(b.animationFrames>>16)&&a.texture==b.texture&&a.secondary==b.secondary&&
            a.menuReflection==b.menuReflection&&a.reflectionConstant==b.reflectionConstant&&a.reflectionAdd==b.reflectionAdd&&
-           !std::memcmp(a.reflectionUv,b.reflectionUv,sizeof a.reflectionUv);
+           !std::memcmp(a.reflectionUv,b.reflectionUv,sizeof a.reflectionUv)&&a.sampler==b.sampler;
+}
+// Authored GX LOD biases reach -4; the PICA computes LOD at 400x240. Clamp
+// to this range until it is tuned on hardware.
+constexpr float LodBiasMin=-1.5f,LodBiasMax=0.f;
+// GMDL v6 sampler state (Submesh::sampler) of one texture unit. 0 keeps the
+// loader's state: linear, and linear between mip levels when there are any.
+static void setSampler(C3D_Tex* texture,uint32_t unit){
+    const unsigned filter=unit&7u;
+    float bias=std::clamp(int8_t(unit>>8)/32.f,LodBiasMin,LodBiasMax);
+    // GX NEAR/LINEAR never leave level 0: bias the LOD below every level.
+    if((filter==1||filter==2)&&texture->maxLevel)bias=-16.f;
+    // filter-1 is GX NEAR, LINEAR, NEAR_MIP_NEAR, LIN_MIP_NEAR, NEAR_MIP_LIN, LIN_MIP_LIN.
+    C3D_TexSetFilter(texture,GPU_LINEAR,filter&1?GPU_NEAREST:GPU_LINEAR);
+    C3D_TexSetFilterMipmap(texture,filter==3||filter==4?GPU_NEAREST:GPU_LINEAR);
+    C3D_TexSetLodBias(texture,filter?bias:0.f);
+}
+// Submesh::sampler bit 3: unit 0 is a GX projection-mapped texgen.
+constexpr uint32_t SamplerProjected=1u<<3;
+// Its (s*q, t*q, q) rows on the eye position. GX maps the camera's screen to
+// s=0.5+0.5x, t=0.5-0.5y (t down; nw4r projection texture matrix), applies the
+// texture SRT uv (s'=uv0*s+uv1*t+uv2, t'=uv3*s+uv4*t+uv5) and divides by q per
+// pixel; PICA's t runs up (1-t'). The tilted projections hold screen x in row 1
+// and screen y in row 0 (mirror mode negates row 1, and the glow with it).
+static void projectedRows(const C3D_Mtx& projection,float horizontalSign,const float uv[6],C3D_FVec rows[3]){
+    static const float verticalSign=[]{C3D_Mtx t;Mtx_PerspTilt(&t,C3D_AngleFromDegrees(90.f),1.f,1.f,2.f,false);return t.r[0].y<0?-1.f:1.f;}();
+    const C3D_FVec &x=projection.r[1],&y=projection.r[0],&q=projection.r[3];
+    for(int c=0;c<4;++c){
+        const float s=.5f*(horizontalSign*x.c[c]+q.c[c]),t=.5f*(q.c[c]-verticalSign*y.c[c]);
+        rows[0].c[c]=uv[0]*s+uv[1]*t+uv[2]*q.c[c];
+        rows[1].c[c]=q.c[c]-(uv[3]*s+uv[4]*t+uv[5]*q.c[c]);
+        rows[2].c[c]=q.c[c];
+    }
 }
 void Renderer::resetMaterialUniforms(){
     if(uvDirty_){
@@ -631,7 +678,7 @@ void Renderer::drawNow(const Model& model,const Vertex* vertices,const C3D_Mtx& 
         C3D_Mtx clip;Mtx_Multiply(&clip,&projection_,&mv);float rows[16];
         for(unsigned r=0;r<4;++r)for(unsigned c=0;c<4;++c)rows[r*4+c]=clip.r[r].c[3-c];
         frustum=ClipFrustum(rows);
-        if(partCull&&courseLighting_&&(partTiny=renderQuality().minScreenRatio)>0){
+        if(partCull&&courseLighting_&&(partTiny=renderQuality().minRatio())>0){
             C3D_Mtx inverse=mv;
             if(Mtx_Inverse(&inverse)!=0.f)eye={inverse.r[0].w,inverse.r[1].w,inverse.r[2].w};else partTiny=0;
         }
@@ -767,6 +814,17 @@ void Renderer::drawNow(const Model& model,const Vertex* vertices,const C3D_Mtx& 
                 C3D_TexEnvOpRgb(e1,GPU_TEVOP_RGB_SRC_COLOR,GPU_TEVOP_RGB_ONE_MINUS_SRC_COLOR,GPU_TEVOP_RGB_SRC_COLOR);
                 C3D_TexEnvFunc(e1,C3D_RGB,GPU_MULTIPLY_ADD);
             }
+            if(!(s.flags&1)&&((s.animationFrames>>16)&255)==3){
+                // GX sea (ef_sea): stage 0 leaves P = lerp(X, Y, projected glow);
+                // GX stage 1 adds lerp(Z, P, wave): P*(1+T1) + Z*(1-T1), Z the
+                // reflection constant. The first sum saturates only where the
+                // GX result does (the second term is never negative).
+                C3D_TexEnvSrc(e1,C3D_RGB,GPU_PREVIOUS,GPU_TEXTURE1,GPU_PREVIOUS);C3D_TexEnvFunc(e1,C3D_RGB,GPU_MULTIPLY_ADD);
+                auto* e2=C3D_GetTexEnv(2);C3D_TexEnvColor(e2,s.reflectionConstant);
+                C3D_TexEnvSrc(e2,C3D_RGB,GPU_CONSTANT,GPU_TEXTURE1,GPU_PREVIOUS);
+                C3D_TexEnvOpRgb(e2,GPU_TEVOP_RGB_SRC_COLOR,GPU_TEVOP_RGB_ONE_MINUS_SRC_COLOR,GPU_TEVOP_RGB_SRC_COLOR);
+                C3D_TexEnvFunc(e2,C3D_RGB,GPU_MULTIPLY_ADD);
+            }
             if(s.menuReflection){
                 // GX: clamp(albedo*rasC + C1), then + reflection*APREV
                 // (APREV = albedo alpha * authored konst) or * konst RGB.
@@ -849,7 +907,7 @@ void Renderer::drawNow(const Model& model,const Vertex* vertices,const C3D_Mtx& 
                           ambient*(courseLighting_?1.25f:1.f),1.f);
         }
         // Imported GX triangles wind clockwise relative to their outward normals.
-        C3D_CullFace((s.flags&4)||backdrop?GPU_CULL_NONE:GPU_CULL_FRONT_CCW);
+        C3D_CullFace((s.flags&4)||backdrop?GPU_CULL_NONE:faceCull(GPU_CULL_FRONT_CCW));
         const bool sourceState=s.flags&(1u<<31),blended=s.flags&2;
         const GPU_TESTFUNC alphaComparisons[]={GPU_NEVER,GPU_LESS,GPU_EQUAL,GPU_LEQUAL,GPU_GREATER,GPU_NOTEQUAL,GPU_GEQUAL,GPU_ALWAYS};
         const uint8_t alphaReferences[]={0,128,165,255};
@@ -868,15 +926,39 @@ void Renderer::drawNow(const Model& model,const Vertex* vertices,const C3D_Mtx& 
         const bool depthTest=!backdrop&&(!sourceState||(s.flags&(1u<<23)));
         const bool depthWrite=!backdrop&&(sourceState?bool(s.flags&(1u<<24)):!blended);
         C3D_DepthTest(depthTest,GPU_GEQUAL,depthWrite?GPU_WRITE_ALL:GPU_WRITE_COLOR);
+        if(execAlpha_<=0.f){
+            // A Time Trial ghost's first pass: only the depth its opaque materials
+            // write (retail's ghost depth capture, EGG 0x802218EC), no colour.
+            C3D_DepthTest(depthTest,GPU_GEQUAL,depthWrite?GPU_WRITE_DEPTH:GPU_WRITEMASK(0));
+        }else if(execAlpha_<1.f){
+            // A Time Trial ghost: one constant opacity for the whole model, over
+            // the depth its first pass left. Framebuffer alpha (bloom) is kept.
+            C3D_BlendingColor(uint32_t(std::lround(std::clamp(execAlpha_,0.f,1.f)*255.f))<<24);
+            C3D_AlphaBlend(GPU_BLEND_ADD,GPU_BLEND_ADD,GPU_CONSTANT_ALPHA,GPU_ONE_MINUS_CONSTANT_ALPHA,GPU_ZERO,GPU_ONE);
+            C3D_DepthTest(depthTest,GPU_GEQUAL,GPU_WRITE_COLOR);
+        }
         const bool swap=o&&(o->flags&SubmeshOverride::Texture);
         const int32_t primaryIndex=swap&&o->texture[0]>=0&&size_t(o->texture[0])<model.textures.size()?o->texture[0]:s.texture;
         const int32_t secondaryIndex=swap&&o->texture[1]>=0&&size_t(o->texture[1])<model.textures.size()?o->texture[1]:s.secondary;
         auto* texture=primaryIndex>=0?&model.textures[primaryIndex]->gpu:&white_;
         const GPU_TEXTURE_WRAP_PARAM wraps[]={GPU_CLAMP_TO_EDGE,GPU_REPEAT,GPU_MIRRORED_REPEAT,GPU_CLAMP_TO_EDGE};
         C3D_TexSetWrap(texture,wraps[(s.flags>>8)&3],wraps[(s.flags>>10)&3]);
+        setSampler(texture,s.sampler&0xffffu);
+        // A projection-mapped unit 0 samples a projection-mode copy at the
+        // coordinates the shader derives from the eye position (projRow0..2).
+        const bool projected=s.sampler&SamplerProjected;
+        if(projected){
+            C3D_FVec rows[3];projectedRows(projection_,horizontalSign_,s.reflectionUv,rows);
+            for(int r=0;r<3;++r)C3D_FVUnifSet(GPU_VERTEX_SHADER,projRowLoc_[r],rows[r].x,rows[r].y,rows[r].z,rows[r].w);
+            projectedTexture_=*texture;
+            projectedTexture_.param=(projectedTexture_.param&~GPU_TEXTURE_MODE(7))|GPU_TEXTURE_MODE(GPU_TEX_PROJECTION);
+            texture=&projectedTexture_;
+        }
+        if(projected!=projectedUv0_){C3D_BoolUnifSet(GPU_VERTEX_SHADER,projectedUv0Loc_,projected);projectedUv0_=projected;}
         C3D_TexBind(0,texture);
         auto* secondary=secondaryIndex>=0?&model.textures[secondaryIndex]->gpu:&white_;
         C3D_TexSetWrap(secondary,wraps[(s.flags>>16)&3],wraps[(s.flags>>18)&3]);
+        setSampler(secondary,s.sampler>>16);
         C3D_TexBind(1,secondary);
         // Retail course lighting: fog stage, light textures (after the generic setup).
         retailEnvironment=retail&&retailCombiners(s,mv,backdrop,additiveColor||(o&&(o->flags&SubmeshOverride::Add)),
@@ -924,11 +1006,17 @@ void Renderer::drawNow(const Model& model,const Vertex* vertices,const C3D_Mtx& 
     if(pendingEnd)retailEndSubmesh();
     // Later draws (sprites, sparks, other models) expect identity UV rows/tint.
     resetMaterialUniforms();
+    if(projectedUv0_){C3D_BoolUnifSet(GPU_VERTEX_SHADER,projectedUv0Loc_,false);projectedUv0_=false;}
     if(skinPalette_)C3D_BoolUnifSet(GPU_VERTEX_SHADER,skinnedLoc_,false);
     if(litSkin){
         AttrInfo_Init(attr);AttrInfo_AddLoader(attr,0,GPU_FLOAT,3);AttrInfo_AddLoader(attr,1,GPU_FLOAT,3);AttrInfo_AddLoader(attr,2,GPU_FLOAT,4);AttrInfo_AddLoader(attr,3,GPU_UNSIGNED_BYTE,4);
         C3D_BoolUnifSet(GPU_VERTEX_SHADER,skinnedNormalsLoc_,false);
     }
+}
+GPU_CULLMODE Renderer::faceCull(GPU_CULLMODE mode) const{
+    const bool mirrored=(projection_.r[1].x<0)!=(horizontalSign_<0);
+    if(mode==GPU_CULL_NONE||!mirrored)return mode;
+    return mode==GPU_CULL_FRONT_CCW?GPU_CULL_BACK_CCW:GPU_CULL_FRONT_CCW;
 }
 void Renderer::shadowVolumesNow(const ShadowVolume* volumes,unsigned count,float darkness){
     flushSprites();
@@ -941,7 +1029,7 @@ void Renderer::shadowVolumesNow(const ShadowVolume* volumes,unsigned count,float
     C3D_FVUnifSet(GPU_VERTEX_SHADER,lightLoc_,1,1,1,1);C3D_FVUnifSet(GPU_VERTEX_SHADER,uvScrollLoc_,0,0,0,0);
     C3D_AlphaTest(false,GPU_ALWAYS,0);
     auto drawAll=[&](GPU_CULLMODE cull){
-        C3D_CullFace(cull);
+        C3D_CullFace(faceCull(cull));
         for(unsigned i=0;i<count;++i){
             const auto& v=volumes[i];if(!v.model||!v.model->indexCount)continue;
             C3D_Mtx mv;Mtx_Multiply(&mv,&view_,&v.transform);C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER,modelViewLoc_,&mv);
@@ -1242,7 +1330,7 @@ void Renderer::effectListNow(const RaceEffects& effects,const ef::DrawList& list
         else C3D_AlphaTest(true,alphaTest(d.acmpComp1),b.alphaRef1);
         // GX front faces wind clockwise here, as for models (GX_CULL_BACK keeps them under
         // GPU_CULL_FRONT_CCW): GX_CULL_FRONT (1) is GPU_CULL_BACK_CCW, GX_CULL_BACK (2) the other.
-        C3D_CullFace(b.cull==1?GPU_CULL_BACK_CCW:b.cull==2?GPU_CULL_FRONT_CCW:GPU_CULL_NONE);
+        C3D_CullFace(faceCull(b.cull==1?GPU_CULL_BACK_CCW:b.cull==2?GPU_CULL_FRONT_CCW:GPU_CULL_NONE));
         C3D_DrawArrays(GPU_TRIANGLES,int(b.first),int(count));
         stats_.triangles+=count/3;++stats_.drawCalls;
     }
@@ -1396,7 +1484,7 @@ void Renderer::fontSpriteNow(const Texture& texture,float x,float y,float width,
     auto* buf=C3D_GetBufInfo();BufInfo_Init(buf);BufInfo_Add(buf,vertices,sizeof(Vertex),4,0x3210);
     C3D_DrawArrays(GPU_TRIANGLES,0,6);stats_.triangles+=2;++stats_.drawCalls;
 }
-void Renderer::materialQuadsNow(const Texture* texture,const MaterialQuad* quads,unsigned count,uint32_t color0,uint32_t color1,int wrapS,int wrapT){
+void Renderer::materialQuadsNow(const Texture* texture,const MaterialQuad* quads,unsigned count,uint32_t color0,uint32_t color1,int wrapS,int wrapT,int alphaRef){
     if(!count||spriteCount_>=spriteCapacity_)return;
     count=std::min(count,unsigned(spriteCapacity_-spriteCount_));
     flushSprites();
@@ -1431,7 +1519,7 @@ void Renderer::materialQuadsNow(const Texture* texture,const MaterialQuad* quads
     }else{
         C3D_TexEnvColor(e0,gpuColor(color1));C3D_TexEnvSrc(e0,C3D_Both,GPU_CONSTANT,GPU_PRIMARY_COLOR);C3D_TexEnvFunc(e0,C3D_Both,GPU_MODULATE);
     }
-    C3D_CullFace(GPU_CULL_NONE);C3D_AlphaTest(false,GPU_ALWAYS,0);
+    C3D_CullFace(GPU_CULL_NONE);C3D_AlphaTest(alphaRef>=0,GPU_GEQUAL,alphaRef>=0?alphaRef:0);
     C3D_DepthTest(false,GPU_ALWAYS,GPU_WRITE_COLOR);
     C3D_AlphaBlend(GPU_BLEND_ADD,GPU_BLEND_ADD,GPU_SRC_ALPHA,GPU_ONE_MINUS_SRC_ALPHA,GPU_ONE,GPU_ONE_MINUS_SRC_ALPHA);
     auto* buf=C3D_GetBufInfo();BufInfo_Init(buf);BufInfo_Add(buf,spriteBase_,sizeof(Vertex),4,0x3210);

@@ -120,7 +120,7 @@ function lighting(material:any){
  let mode=0,secondaryMap=-1,secondaryCoord=0,primaryCoord=stages[0]?.texCoordId??0,primaryMap=stages[0]?.texMap??0;
  let vertexColor:number[]|undefined,vertexTint:number[]|undefined,colorLerp=false,environmentMetal=false,constantLerp=false,primaryTextureName:string|undefined;
  let constantRegister=-1,vertexColorRegister=-1,additiveRegister=-1,additiveFactor=[0,0,0],unlit=false;
- let reflection:any=null,textureAlphaAdd=false,skyScreenBlend=false;
+ let reflection:any=null,textureAlphaAdd=false,skyScreenBlend=false,projectedGlow:any=null;
  // Raster remap applied after the course light bake (colour*scale+offset), and
  // whether that bake applies: equations that never read the raster colour skip it.
  let raster:{scale:number[],offset:number[]}|undefined,bake=true;
@@ -207,6 +207,25 @@ function lighting(material:any){
      constantTextures.set(material.name,{[p.texMap]:glow[3]});
      approximate('projected glow averaged over its window, indirect warp omitted'+(grey(z)?'':', layer colour averaged to grey'));return true;
     }
+   }
+  }
+  // Sea (ef_sea, ef_lake): P + lerp(Z,P,T) with P=lerp(X,Y,G), G a glow projected
+  // from the camera (GX POS texgen, projection map) and T the wave layer. Unit 0
+  // samples G in PICA projection mode through the glow's texture SRT (GMDL v6
+  // sampler bit 3, the reflection uv); stage 0 is the colour lerp (X the constant,
+  // Y an unlit vertex colour), then P*(1+T) + Z*(1-T) (tools/cook_model.py).
+  if(cs.length===2&&cs.every(plain)){
+   const [p,q]=cs,ap=args(p),aq=args(q),gen=material.gxMaterial.texGens?.[p.texCoordId],srt=material.texSrts?.[p.texCoordId];
+   const identity=(m:any)=>m&&[...Array(16).keys()].every(i=>m[i]===(i%5===0?1:0));
+   const projected=gen&&gen.type===GX.TexGenType.MTX3x4&&gen.source===GX.TexGenSrc.POS&&srt?.mapMode===2&&srt.refCamera>=0&&identity(srt.effectMtx);
+   const x=k(p,ap[0]),y=k(p,ap[1]),z=k(q,aq[0]);
+   if(projected&&x&&y&&z&&ap[2]===8&&ap[3]===15&&aq[1]===0&&aq[2]===8&&aq[3]===0&&p.colorScale===0&&q.colorScale===0&&
+      p.texMap<material.samplers.length&&q.texMap<material.samplers.length){
+    const m=srt.srtMtx,pack=(c:any)=>[c.r,c.g,c.b,c.a].reduce((v:number,n:number,i:number)=>v|(Math.round(Math.max(0,Math.min(1,n))*255)<<(8*i)),0)>>>0;
+    use(p,true);use(q,false);colorLerp=true;unlit=true;bake=false;scale=0;constant=x;vertexColor=[y.r,y.g,y.b];
+    projectedGlow={constant:pack(z),uv:[m[0],m[4],m[12],m[1],m[5],m[13]]};
+    if(stages.some((s:any)=>s.indTexMatrix!==0))approximate('indirect wave warp omitted');
+    return true;
    }
   }
   if(cs.length>2||!cs.every(plain))return false;
@@ -502,7 +521,7 @@ function lighting(material:any){
  // equation matching above would pick e.g. a shell's specular map.
  if(firstSampler){primaryMap=0;primaryCoord=0;primaryTextureName=undefined;}
  const packed=([constant.r,constant.g,constant.b,constant.a].reduce((v,c,i)=>v|(Math.round(Math.max(0,Math.min(1,c))*255)<<(8*i)),0))>>>0;
- return {mode,secondaryMap,secondaryCoord,primaryMap,primaryCoord,primaryTextureName,constant:packed,scale,firstScale,vertexColor,vertexTint,colorLerp,environmentMetal,constantLerp,constantRegister,vertexColorRegister,additiveRegister,additiveFactor,unlit,raster,bake,reflection,textureAlphaAdd,skyScreenBlend};
+ return {mode,secondaryMap,secondaryCoord,primaryMap,primaryCoord,primaryTextureName,constant:packed,scale,firstScale,vertexColor,vertexTint,colorLerp,environmentMetal,constantLerp,constantRegister,vertexColorRegister,additiveRegister,additiveFactor,unlit,raster,bake,reflection,textureAlphaAdd,skyScreenBlend,projectedGlow};
 }
 const bankShapes:BankShape[]=[];
 for(const model of archive.mdl0){
@@ -596,7 +615,7 @@ for(const model of archive.mdl0){
    if(light.raster)for(let c=0;c<3;c++)color[c]=Math.round(Math.max(0,Math.min(255,color[c]*light.raster.scale[c]+light.raster.offset[c]*255)));
    vertices.push([...p,...n,...sampleUV(light.primaryCoord,0),...sampleUV(light.secondaryCoord,1),...color]);
   }
-  shapes.push({name:shape.name,material:material.name,sourceMaterial:material,constantTextures:constantTextures.get(material.name),primaryMap:light.primaryMap,secondaryMap:light.secondaryMap,texture,secondary,constant:light.constant,lightingMode:light.mode,uvVelocity,animationFrames,flags,vertices,tevStages:material.gxMaterial.tevStages.length,reflection:light.reflection,textureAlphaAdd:light.textureAlphaAdd,skyScreenBlend:light.skyScreenBlend,retail:retail?{word:retail.word,ambient:retail.ambient,add:retail.add}:null});
+  shapes.push({name:shape.name,material:material.name,sourceMaterial:material,constantTextures:constantTextures.get(material.name),primaryMap:light.primaryMap,secondaryMap:light.secondaryMap,texture,secondary,constant:light.constant,lightingMode:light.mode,uvVelocity,animationFrames,flags,vertices,tevStages:material.gxMaterial.tevStages.length,reflection:light.reflection,textureAlphaAdd:light.textureAlphaAdd,skyScreenBlend:light.skyScreenBlend,projectedGlow:light.projectedGlow,retail:retail?{word:retail.word,ambient:retail.ambient,add:retail.add}:null});
   if(objectBank&&sampleFrame===sampleFrames[0]){
    const alphaStage=material.gxMaterial.tevStages.find((s:any)=>[s.alphaInA,s.alphaInB,s.alphaInC,s.alphaInD].some((v:number)=>v>=1&&v<=3));
    const alphaRegister=alphaStage?[alphaStage.alphaInA,alphaStage.alphaInB,alphaStage.alphaInC,alphaStage.alphaInD].find((v:number)=>v>=1&&v<=3):-1;

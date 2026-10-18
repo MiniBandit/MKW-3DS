@@ -1,4 +1,5 @@
 #pragma once
+#include <mkw/color_fader.hpp>
 #include <mkw/math.hpp>
 #include <cstddef>
 #include <cstdint>
@@ -25,11 +26,12 @@ public:
  void start();
  // One 60 Hz tick, in step with the race simulation.
  void step();
- // Ends the preview early (A or START).
- void skip(){stop();}
  // Drops the rail before Kinoko's scene (and its RailManager) changes.
  void stop();
  bool active()const{return active_;}
+ // The last shot has run out (director +0xC8, CameraManager +0x24): the view
+ // holds its final frame until the Demo section fades out.
+ bool finished()const{return finished_;}
  Vec3 eye()const{return eye_;}
  Vec3 target()const{return target_;}
  // FOV as last written to the camera (a switch's fovStart applies next tick).
@@ -45,9 +47,47 @@ private:
  void begin(int index);
  std::vector<Camera> cameras_;
  int opening_=-1,current_=-1;unsigned shots_=0;
- bool active_=false;
+ bool active_=false,finished_=false;
  float elapsed_=0,fov_=60,appliedFov_=60,viewDistance_=0;
  Vec3 eye_,target_,viewOffset_;
  std::unique_ptr<Kinoko::Field::RailInterpolator> rail_;
+};
+
+// The Demo section around the preview (findings/intro.md). The scene enters
+// with a 20-frame ColorFader fade-in (fn_1_A128 0x8051A4DC). RaceInfo_update
+// (0x805331B4) counts the Demo's frames; once the fade is clear, the
+// director's end or a skip asks for the race section, and from the 61st frame
+// a new OK press (UI bit 0: A, never START) sets the skip. The request starts
+// the fade to black with RaceRSARPlayer::Stop; on its 22nd frame the scene is
+// rebuilt as the race section, which fades in again. Time Trials and Restart
+// (cameraMode 0) enter the race section directly.
+class DemoSection {
+public:
+ enum class Event {None,Leave,EnterRace};
+ // Scene enter: `demo` for the Demo section, otherwise the race section.
+ void enter(bool demo){demo_=demo;leaving_=skip_=false;frame_=fade_=0;}
+ // One 60 Hz frame, before the director's step (RaceInfo runs first):
+ // `done` is RaceIntro::finished(), `ok` a new OK press this frame.
+ Event step(bool done,bool ok){
+  if(leaving_){
+   if(++fade_<unsigned(ColorFadeOutLastFrame))return Event::None;
+   demo_=leaving_=false;fade_=0;return Event::EnterRace;
+  }
+  if(demo_){
+   ++frame_;
+   if(fade_>=unsigned(ColorFadeInLastFrame)){
+    if(done||skip_){leaving_=true;fade_=0;return Event::Leave;}
+    if(frame_>60&&ok)skip_=true;
+   }
+  }
+  if(fade_<unsigned(ColorFadeInLastFrame))++fade_;
+  return Event::None;
+ }
+ // The Demo section is shown (its card, camera and held grid).
+ bool demo()const{return demo_;}
+ // Scene fader opacity over the whole top screen.
+ float black()const{return colorFaderOpacity(float(fade_),!leaving_);}
+private:
+ bool demo_=false,leaving_=false,skip_=false;unsigned frame_=0,fade_=0;
 };
 }

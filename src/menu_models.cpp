@@ -34,6 +34,8 @@ namespace mkw
             case UiPage::BattleCup:
             case UiPage::BattleStage:
             case UiPage::Ghost:
+            case UiPage::NoGhosts:
+            case UiPage::TimeAttackBack:
             case UiPage::Confirm:
                 return true;
             default:
@@ -60,6 +62,8 @@ namespace mkw
             case UiPage::BattleCup:
             case UiPage::BattleStage:
             case UiPage::Ghost:
+            case UiPage::NoGhosts:
+            case UiPage::TimeAttackBack:
             case UiPage::Confirm:
                 return int(state.selection.mode);
             default:
@@ -323,11 +327,25 @@ namespace mkw
         choose(Driver, shownMachine_ >= 0 ? shownMachine_ / 12 : w.driver, shownDriver_);
         if (auto *driver = shownDriver_ >= 0 ? find(Driver, shownDriver_) : nullptr; driver && driver->animation)
         {
-            const int clip = driver->animation->find(shownMachine_ >= 0 ? seatedClip(unsigned(shownMachine_ / 12), unsigned(shownMachine_ % 12)) : "sel_wait");
+            // DriverModel states (fn_1_31F7C4, PAL 8082fb78): 0 plays the
+            // "sel_wait" set, 1 the "sel_gut" set (names built by fn_1_321868:
+            // prefix "sel", "_", "wait"/"gut"); seated states use the
+            // vehicle's "-wait" clip.
+            const bool gut = shownMachine_ < 0 && driverConfirm_;
+            const char *name = shownMachine_ >= 0 ? seatedClip(unsigned(shownMachine_ / 12), unsigned(shownMachine_ % 12)) : gut ? "sel_gut" : "sel_wait";
+            int clip = driver->animation->find(name);
+            if (gut && clip < 0)
+                clip = driver->animation->find(name = "sel_wait");
             if (clip != driverClip_)
             {
-                driver->animation->clearPoseTransition();
+                // State 1 starts with fn_1_472D0, a blended change from the
+                // running wait pose (kept as apply()'s pose transition); the
+                // other changes replace the pose outright.
+                if (!gut)
+                    driver->animation->clearPoseTransition();
                 driverFrame_ = 0;
+                if (shownMachine_ < 0)
+                    driverFace_ = driver->animation->face(name);
             }
             driverClip_ = clip;
         }
@@ -412,6 +430,50 @@ namespace mkw
         entries_.clear();
         shownDriver_ = shownBackground_ = shownMachine_ = -1;
         driverClip_ = driverFace_ = backgroundClip_ = -1;
+        driverConfirm_ = false;
+        // MenuModelManager init (fn_1_8DE48, PAL 8059e1fc) -> fn_1_322BE4.
+        kartTicks_ = kartCount_ = 0;
+        kartRotation_ = 0;
+        kartShown_ = -1;
+        kartVehiclePage_ = false;
+    }
+    void MenuModels::turnKart(const MenuState &state, const UiTransitionView &motion)
+    {
+        // KartModelMgr calc (fn_1_322C58, PAL 8083300c) runs the kart update
+        // (fn_1_3223A8, 8083275c) and then counts +0x50 = (+0x50 + 1) % 720,
+        // once a frame on every page.
+        unsigned ticks = kartTicks_;
+        kartTicks_ = 0;
+        const bool vehicle = state.page == UiPage::Vehicle;
+        if (vehicle && !kartVehiclePage_)
+        {
+            // VehicleSelectPage_onActivate (80845510) -> fn_1_322BE4 (80832f98):
+            // count and every kart's rotation 0. The activation frame's update
+            // keeps 0 and counts 1; state.age frames of the page followed it.
+            kartCount_ = 1;
+            kartRotation_ = 0;
+            kartShown_ = shownMachine_;
+            ticks = std::min(ticks, state.age);
+        }
+        kartVehiclePage_ = vehicle;
+        if (shownMachine_ != kartShown_)
+        {
+            // A kart not on show copies the count each frame, so the one the
+            // cursor reaches starts at the previous frame's count.
+            kartRotation_ = vehicle ? float((kartCount_ + 719) % 720) : 0.f;
+            kartShown_ = shownMachine_;
+        }
+        // The shown kart turns toward the count while its driver is in state 2
+        // (VehicleModelControl initSelf/calcSelf 805f3c8c/805f3cf8) and toward
+        // 0 from state 3: the Vehicle OK (fn_1_336868, 80846c1c), kept by every
+        // later page. B leaves state 2. motion.elapsed + 1 frames follow the OK.
+        const bool confirmed = vehicle && motion.active && !motion.entering && !motion.back && *motion.selectedControl;
+        const unsigned after = confirmed ? std::min(ticks, unsigned(std::max(0.f, motion.elapsed + 1.f))) : 0;
+        for (unsigned i = 0; i < ticks; ++i)
+        {
+            kartRotation_ = uiKartTurn(kartRotation_, vehicle && i < ticks - after ? kartCount_ : 0);
+            kartCount_ = (kartCount_ + 1) % 720;
+        }
     }
     void MenuModels::begin(Renderer &renderer)
     {
@@ -429,6 +491,10 @@ namespace mkw
     }
     void MenuModels::draw(Renderer &renderer, const MenuState &state, const UiTransitionView &motion)
     {
+        // A confirmed character keeps its sel_gut until the page has left;
+        // B (back) never confirms. Read by the next update().
+        driverConfirm_ = state.page == UiPage::Character && motion.active && !motion.entering && !motion.back && *motion.selectedControl;
+        turnKart(state, motion);
         if (auto *background = shownBackground_ >= 0 ? find(Background, shownBackground_) : nullptr; background && background->resident())
         {
             // BackModelMgr::Update's original rates (USA808d5f18) continue across
@@ -470,6 +536,14 @@ namespace mkw
         auto *driver = shownDriver_ >= 0 ? find(Driver, shownDriver_) : nullptr;
         if (!driver || !driver->resident())
             return;
+        // The OK press's own frame already shows the change (update() ran first).
+        if (driverConfirm_ && shownMachine_ < 0 && driver->animation)
+            if (const int gut = driver->animation->find("sel_gut"); gut >= 0 && gut != driverClip_)
+            {
+                driverClip_ = gut;
+                driverFrame_ = 0;
+                driverFace_ = driver->animation->face("sel_gut");
+            }
         {
             const auto t0 = svcGetSystemTick();
             if (driver->animation)
@@ -496,7 +570,7 @@ namespace mkw
             // EyeZ1000 plus modelZ-15 is the native eyeZ15/modelZ-1000 pair.
             Mtx_Translate(&matrix, 0.f, -185.f, -15.f, true);
             // Retail Update builds Euler Y=(90+rotation)*2*pi/720.
-            Mtx_RotateY(&matrix, 3.14159265359f / 4.f, true);
+            Mtx_RotateY(&matrix, uiKartYaw(kartRotation_), true);
             Mtx_Scale(&matrix, scale, scale, scale);
             renderer.drawAtScreen(*machine->model, matrix, x, y, 1.f, 2.f * 400.f / 832.f * placement.scale, 2.f * display::MenuScaleY * placement.scale);
             const auto &seat = MenuSeats[driverId][choice];

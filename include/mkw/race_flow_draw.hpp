@@ -16,6 +16,9 @@ struct FlowBatch {int texture;uint8_t wrapS,wrapT;uint32_t color0,color1;const F
 using FlowSink=void(*)(const FlowBatch&,void* context);
 // A drawn pane's screen rectangle and depth (Section::Draw LEQUAL depth).
 struct FlowOccluder {float x0,y0,x1,y1,z;};
+// The course preview's title card (DemoPage_onInit, PAL 0x80855200): the
+// course name and the cup line (text and FlowDemoTextures icon index).
+struct FlowDemoCard {const char* course=nullptr;char cup[64]{};int8_t icon=-1;bool cupVisible=true;};
 
 // The result boards and end-of-race buttons as material batches, independent
 // of the 3DS renderer (src/race_flow_ui.cpp submits them; host tools can
@@ -26,6 +29,9 @@ public:
  void reset();
  void step(const RaceResultsFlow& flow); // one 60 Hz tick
  void draw(const RaceResultsFlow& flow,FlowSink sink,void* context);
+ // The static title card; batch textures index FlowDemoTextures' font (0) and
+ // FlowDemoIconSlot for the card's icon.
+ void drawDemo(const FlowDemoCard& card,FlowSink sink,void* context);
  static constexpr unsigned MaxQuads=192; // one pane across all rows (names: ~11 glyphs x 12)
 private:
  struct Batch {std::array<FlowQuad,MaxQuads> quads;unsigned count=0;FlowQuad* add(){return count<MaxQuads?&quads[count++]:nullptr;}};

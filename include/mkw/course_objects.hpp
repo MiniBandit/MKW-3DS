@@ -1,8 +1,15 @@
 #pragma once
 #include "mkw/renderer.hpp"
+#include <functional>
 #include <memory>
 #include <vector>
 namespace mkw {
+class RaceEffects;
+// Retail course-explosion particles, once per simulation step after it: the
+// rk_bombHei burst on the first explosion step of each GBA Shy Guy Beach
+// cannonball (PAL 0x806D15A8) and Bowser's Castle fireball (PAL 0x807719E8).
+// bombHei is RaceEffects::find("rk_bombHei"). Presentation only.
+void courseExplosionEffects(RaceEffects& effects,int bombHei);
 // Course-object presentation. Original per-MDL0 models and animation banks
 // (tools/cook_course_objects.py) are drawn from Kinoko's live object state, or
 // for placements Kinoko does not simulate, from their retail presentation
@@ -27,6 +34,9 @@ public:
     // Sky-pass objects (suns, Rainbow Road's Earth glow): drawn after the sky,
     // before the course, so walls and scenery cover them.
     void drawSky(Renderer& renderer,unsigned tick,Vec3 camera);
+    // Draws an object's Bob-omb blast (RaceHud::drawBombBlast); without one the
+    // plain bomb_core mesh stands in.
+    void setBlastDrawer(std::function<void(Renderer&,const C3D_Mtx&,unsigned)> drawer);
     // GPU-idle pause: keep controllers/physics links while releasing all meshes.
     void suspendGraphics();
     bool resumeGraphics();

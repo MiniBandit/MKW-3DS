@@ -73,7 +73,10 @@ struct ItemRacer {
     bool bike=false;
     Vec3 velocity{};
     bool haveVelocity=false;
-    bool shellTargetUnavailable=false,shellAcquireUnavailable=false,shellTargetProtected=false,mushroomBoost=false;
+    bool shellTargetUnavailable=false,shellAcquireUnavailable=false,shellTargetProtected=false;
+    /// KartMove +0x74 (vel1Dir, the direction of travel) and +0x38 (smoothedUp), which the
+    /// Blue Shell aims and orbits by (0x807B3FDC / 0x807B4430).
+    Vec3 moveDir{0,0,1},smoothedUp{0,1,0};
     /// Retail fn_1_2AD3B4 (0x807aed08): status 47 (ZipperTrick) or 54 (TrickRot), which
     /// slows a pursuing Red's turn onto the racer's back axis.
     bool trickRotating=false;
@@ -85,7 +88,17 @@ struct ItemRacer {
     /// state bits 91 Bullet, 71 Shocked, 80 Crushed).
     uint16_t star=0, mega=0;
     bool bullet=false, shocked=false, crushed=false, inAction=false;
+    /// The held items' wheelie lift (fn_1_281AA8 0x80791E5C): status 29 (Wheelie), the last
+    /// wheel's position (getWheelPos 0x8059031C, index getWheelCount - 1), and RaceManager
+    /// +0x20 == 60, the frame fn_1_285210 (0x807955C4) records that wheel's resting place.
+    bool wheelie=false, wheelieReferenceFrame=false;
+    Vec3 rearWheel{};
 };
+
+/// One course object an item sphere touches: the item's GeoHitTableItem response (0 none,
+/// 1 bounce, 2 destroy) after the object's own callbacks, and the push-out (hit depth) that
+/// moves the item off it.
+struct ItemObjectHit { Vec3 depth{}; int16_t response=0; };
 
 /// The kart side of the item system. Natively this is the Kinoko kart (KartAction, KartMove);
 /// host tests substitute item_kart_model.hpp.
@@ -124,5 +137,12 @@ public:
     /// Fine contact stage of RMCU ItemObj_checkPlayerCollision: the item's sphere against the
     /// racer's object collision hull.
     virtual bool touches(unsigned player, Vec3 center, float radius) const = 0;
+    /// Item vs course objects (PAL fn_1_31AA08 0x8082ADBC: ObjectDirector's item search):
+    /// retail object type, owner (12 none), the item sphere and velocity, held (tethered).
+    /// The objects react through their own callbacks; returns the hits written. Host models
+    /// have no course objects.
+    virtual unsigned objectContacts(unsigned /*type*/, unsigned /*owner*/, Vec3 /*position*/,
+            Vec3 /*velocity*/, float /*radius*/, bool /*held*/, ItemObjectHit * /*hits*/,
+            unsigned /*max*/) { return 0; }
 };
 }

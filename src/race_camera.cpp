@@ -1,4 +1,5 @@
 #include <mkw/race_camera.hpp>
+#include <egg/math/Quat.hh>
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -259,8 +260,10 @@ void RaceCameraDirector::reset(const StartPanParam& pan,Vec3 startPos,Vec3 start
  auto_={};
  // RaceCamera::Init: OpeningPan::Init sets the target height to 100, OnRespawn
  // evaluates the target once (easing it), then Init sets 100 again.
- targetHeight_=100;computeTarget(first,true);targetHeight_=100;
+ halfPipeDrop_=halfPipeLift_=slopeOffset_=0;
+ targetHeight_=100;computeTarget(first,true,first.kartPos);targetHeight_=100;
  eye_=first.chaseEye;
+ fov_=first.cameraFov;resetUp();
  // OpeningPan::Init (PAL 0x805A70A0): start frame (makeRT) x BCP SRT, last
  // point at the camera; stop-at-end rail at t=0; FOV 55.
  panCount_=std::min(pan.count,16u);panTension_=pan.tension;
@@ -275,25 +278,89 @@ void RaceCameraDirector::reset(const StartPanParam& pan,Vec3 startPos,Vec3 start
 // fn_1_92948 (PAL 0x805A2CFC): target = pivot + (0, offset, 0). The offset
 // eases (0.2) toward the intro-eased target height (0.05 per frame from 100
 // before the countdown) less the vertical camera distance, plus 130 x the
-// slope of the smoothed forward eased at 0.03. OnRespawn evaluates it with
-// rates (1, 0, 1). Explosion and zipper offsets are not ported.
-void RaceCameraDirector::computeTarget(const RaceCameraInput& in,bool snap){
+// slope of the smoothed forward eased at 0.03, plus the half-pipe drop (+0x10c,
+// to -100 at 0.03). The half-pipe lift (+0x110, to 100 x +0x118 while falling)
+// is added along the up vector (0x805A40D0). During an explosion (flag 1) the
+// offset instead drops 10 a frame to -50. OnRespawn evaluates it with rates
+// (1, 0, 1). The flag 2 it sets has no reader in the camera module.
+void RaceCameraDirector::computeTarget(const RaceCameraInput& in,bool snap,Vec3 pivot){
  if(flags_&FlagRise)return; // StopCameraMovAndRotation holds the target.
  if(in.stage<1)targetHeight_+=.05f*(in.targetPosY-targetHeight_);
- if(snap)slopeOffset_=0;
- else slopeOffset_+=.03f*(130.f*std::fabs(in.kartForward.y)-slopeOffset_);
- const float wanted=targetHeight_-in.cameraDistY+slopeOffset_;
- targetOffset_=snap?wanted:targetOffset_+.2f*(wanted-targetOffset_);
- target_=in.chasePivot+Vec3{0,targetOffset_,0};
+ const float base=targetHeight_-in.cameraDistY;
+ const float rate=snap?1.f:.03f,ease=snap?1.f:.2f;
+ const float slope=snap?0.f:130.f*std::fabs(in.kartForward.y);
+ float drop=0,lift=0;
+ if(in.halfPipe){drop=-100.f;if(in.falling)lift=100.f*in.halfPipeEase;}
+ halfPipeDrop_+=rate*(drop-halfPipeDrop_);
+ halfPipeLift_+=rate*(lift-halfPipeLift_);
+ if(!in.explosion){
+  slopeOffset_+=(slope-slopeOffset_)*rate;
+  targetOffset_+=ease*((halfPipeDrop_+(base+slopeOffset_))-targetOffset_);
+ }else{
+  targetOffset_-=10.f;
+  if(targetOffset_<-50.f)targetOffset_=-50.f;
+ }
+ target_=pivot+Vec3{0,targetOffset_,0};
 }
 
-void RaceCameraDirector::step(const RaceCameraInput& in){
- if(in.previewActive){wasBeforeRespawn_=in.beforeRespawn;wasInRespawn_=in.inRespawn;return;}
+void RaceCameraDirector::resetUp(){smUp_=prevUp_=upSm_={0,1,0};upT_=1;upQ_={1,0,0,0};}
+
+// fn_1_93D1C (PAL 0x805A40D0): the up vector. In the chase view a smoothed
+// target (half-pipe normals, else world up) tilts the side axis; the result is
+// eased while it points up (0.02 more each frame up to 1) and slerped from the
+// last up otherwise. The chase target is then lifted along it (+0x110).
+void RaceCameraDirector::calcUp(const RaceCameraInput& in,bool chase,float rate){
+ using V=Kinoko::EGG::Vector3f;
+ using Q=Kinoko::EGG::Quatf;
+ auto e=[](Vec3 v){return V(v.x,v.y,v.z);};
+ auto m=[](const V& v){return Vec3{v.x,v.y,v.z};};
+ V dir=e(view_.target-view_.eye);dir.normalise();
+ V side;
+ if(chase){
+  const V t=e(in.upTarget);V s=e(smUp_);
+  s.x=s.x+(t.x-s.x)*rate;s.y=s.y+(t.y-s.y)*rate;s.z=s.z+(t.z-s.z)*rate;
+  smUp_=m(s);side=s.cross(dir);
+ }else side=V::ey.cross(dir);
+ // The KMP camera's roll (AutoCameraMover +0x14) is never set by the race movers.
+ side.normalise();
+ V up=dir.cross(side);
+ Q q(upQ_[0],upQ_[1],upQ_[2],upQ_[3]);
+ const Q ident(1.f,0.f,0.f,0.f);
+ const V prev=e(prevUp_);
+ Q rot;rot.makeVectorRotation(prev,up);
+ V eased=e(upSm_);
+ if(up.y>=.15f){
+  q=q.slerpTo(ident,upT_);
+  eased.x+=(up.x-eased.x)*upT_;eased.y+=(up.y-eased.y)*upT_;eased.z+=(up.z-eased.z)*upT_;
+  upT_=std::min(1.f,upT_+.02f);
+ }else{
+  q=ident.slerpTo(rot,rate);
+  eased=q.rotateVector(prev);
+  upT_=rate;
+ }
+ if(chase)up=eased;
+ up.normalise();
+ upSm_=m(eased);prevUp_=m(up);upQ_={q.w,q.v.x,q.v.y,q.v.z};
+ if(chase)view_.target=view_.target+m(up)*halfPipeLift_;
+ view_.up=m(up);view_.side=m(side);
+}
+
+// GBA Shy Guy Beach (course 0x1f): the eye stays above the water (0x80892354).
+void RaceCameraDirector::clampGbaShyGuyBeach(const RaceCameraInput& in){
+ if(in.course==31&&view_.eye.y<3050.f)view_.eye.y=3050.f;
+}
+
+bool RaceCameraDirector::beginStep(const RaceCameraInput& in){
+ if(in.previewActive){wasBeforeRespawn_=in.beforeRespawn;wasInRespawn_=in.inRespawn;return false;}
  // UpdateCameraOnRespawn (PAL 0x80590E28): RaceCamera::OnRespawn re-seats the
  // camera behind the kart and clears every request.
  if(in.inRespawn&&!wasInRespawn_){
   flags_=0;riseEye_=riseTarget_=0;oobFrames_=-1;
-  computeTarget(in,true);eye_=in.chaseEye;
+  halfPipeDrop_=slopeOffset_=0;
+  computeTarget(in,true,in.kartPos);eye_=in.chaseEye;
+  // OnRespawn resets the up smoothing; its one rate-1 evaluation leaves the
+  // same state for the next update (eased rate 1, quaternion identity).
+  resetUp();
  }
  // Out of bounds: the request issued with the activation (KartCollide hook).
  if(in.beforeRespawn&&!wasBeforeRespawn_){flags_|=in.oobRequest&(FlagHold|FlagRise|FlagOobHit);oobFrames_=0;}
@@ -304,17 +371,40 @@ void RaceCameraDirector::step(const RaceCameraInput& in){
  if(wipe_>=0&&++wipe_>int(WipeFrames))wipe_=-1;
  if(in.beforeRespawn&&oobFrames_==int(WipeStart)&&wipe_<0)wipe_=0;
  // RaceCamera::Update (PAL 0x805A21D0).
- computeTarget(in,false);
- if(!(flags_&FlagHold))eye_=in.chaseEye;
- else if(flags_&(FlagRise|0x100)){
+ computeTarget(in,false,in.chasePivot);
+ return true;
+}
+
+// Update after the chase orbit: the eye follows the forward state unless an
+// out-of-bounds request holds it (rising for 0x110); while held its x/z still
+// follow when the forward state pitches over a floor or pushed off a wall.
+void RaceCameraDirector::holdEye(const RaceCameraInput& in){
+ if(!(flags_&FlagHold)){eye_=in.chaseEye;return;}
+ if(flags_&(FlagRise|0x100)){
   const float e=riseEye_+.04f*(800.f-riseEye_);eye_.y+=e-riseEye_;riseEye_=e;
   const float t=riseTarget_+.04f*(in.targetPosY-riseTarget_);target_.y-=t-riseTarget_;riseTarget_=t;
  }
- view_={eye_,target_,in.cameraFov+in.boostFov};
+ if(in.holdFollow){eye_.x=in.chaseEye.x;eye_.z=in.chaseEye.z;}
+}
+
+// Update after the chase collision: the shown eye (the backward state's while
+// looking back, with its target offset), the FOV, the GBA Shy Guy Beach clamp,
+// the KMP camera mover, the start pan and the up vector.
+void RaceCameraDirector::endStep(const RaceCameraInput& in){
+ view_.eye=in.lookBack?in.chaseBackEye:eye_;
+ view_.target=in.lookBack?target_+in.lookBackTarget:target_;
  // The KMP camera mover after the goal (Update: flag 4 needs no OOB hit).
  if(in.finished&&course_&&!(flags_&FlagOobHit))flags_|=FlagAuto;else flags_&=uint16_t(~FlagAuto);
+ // The FOV eases toward the entry's FOV plus the boost add: 0.1 while a boost
+ // adds, else 0.03 (0x80892308 / 0x80892338).
+ if(!(flags_&FlagAuto))fov_+=(in.boostFov>0.f?.1f:.03f)*((in.boostFov+in.cameraFov)-fov_);
+ view_.fov=fov_;
+ clampGbaShyGuyBeach(in);
  stepPan(in);
- if(flags_&FlagAuto)stepAuto(in);
+ if(flags_&FlagAuto){stepAuto(in);clampGbaShyGuyBeach(in);}
+ // Update passes 0.1; only the chase view's targets change it.
+ const bool chase=!(flags_&FlagAuto)&&!(panFlags_&2);
+ calcUp(in,chase,chase?in.upRate:.1f);
 }
 
 // OpeningPan::Calc (PAL 0x805A7358).
@@ -471,14 +561,22 @@ void RaceCameraDirector::stepAuto(const RaceCameraInput& in){
   a.fov=std::clamp(a.fov+.01f*sign*float(c.fovSpeed),low,high);
  }else a.fov=c.fovStart;
  view_.fov=a.fov;
- // fn_1_9A954 for held goal, KartFollow and kart-path cameras: the distance
- // relaxes to its target (0.05 within twice it, else snaps; at least 300)
- // and the pitch offset decays. The KCL push-back that raises them near
- // walls is presentation-forbidden here and not ported.
+ // fn_1_9A954 (PAL 0x805AAD08) for held goal, KartFollow and kart-path cameras:
+ // a radius-65 sphere swept from the last eye pushes the eye out of the course
+ // KCL (the read-only query of RaceChaseCamera); a wall within 300 raises the
+ // pitch offset 0.5 a frame up to 60. The distance then relaxes to its target
+ // (0.05 within twice it, else snaps; at least 300) and the pitch decays.
  if(a.suppress||a.type==3||a.type==6){
+  Vec3 push;bool wall=false;
+  if(in.spherePush&&in.spherePush(65.f,view_.eye,a.prevEye,push,wall)){
+   view_.eye=view_.eye+push;
+   a.dist=length(view_.eye-view_.target);
+   if(wall&&a.dist<300.f){a.pitch+=.5f;if(a.pitch>60.f)a.pitch=60.f;}
+  }
   a.pitch+=.03f*(0.f-a.pitch);
   a.dist=a.dist<=2.f*a.distTarget?a.dist+.05f*(a.distTarget-a.dist):a.distTarget;
   if(a.dist<300.f)a.dist=300.f;
+  a.prevEye=view_.eye;
  }
 }
 }

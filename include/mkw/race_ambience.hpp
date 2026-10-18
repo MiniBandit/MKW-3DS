@@ -37,6 +37,7 @@ struct AmbienceOp {
   GlobalVolume, // its volume to `value` over `frames`
   GlobalFadeIn, // it fades in over `frames`
   OneShot,      // fn_1_1ED62C (806f8a78): the zone one-shot handle; `var` >= 0 also sets seq variable 0
+  GlobalStopIf, // PAL fn_1_1EC9C0 (0x806FCD74): the global handle stops over `frames` if it holds `id`
  };
  Kind kind = Play;
  std::uint16_t id = 0, frames = 0;

@@ -8,6 +8,9 @@
 #include <game/field/ObjectDirector.hh>
 #include <game/field/ObjectDrivableDirector.hh>
 #include <game/field/obj/ObjectEscalator.hh>
+#include <game/field/obj/ObjectHeyhoBall.hh>
+#include <game/field/obj/ObjectKoopaBall.hh>
+#include <mkw/race_effects.hpp>
 #include <game/system/CourseMap.hh>
 #include <game/system/RaceManager.hh>
 #include <egg/math/Matrix.hh>
@@ -128,6 +131,10 @@ bool ObjectAssets::load(int course){
                     if(!m->litNormals&&m->bank->gpuSkin(*m->model)){m->gpuSkin=true;m->cpuSkin=false;}
                     else if(!m->litNormals)m->bank->shareSkinnedPositions();
                     else m->bank->shareSkinnedVertices();
+                    // Its first instance copy now, while LINEAR is free: a model posed
+                    // procedurally every frame (the Maple Treeway net) found none
+                    // mid-race under SkinReserve and was never drawn.
+                    if(m->cpuSkin)if(auto fresh=cloneModel(*m->model)){m->skins.push_back(std::move(fresh));m->skinKeys.push_back({-2,-1.f});}
                 }
             }
             if(m->bank->shapeCount()==m->model->submeshes.size())m->overrides.resize(m->model->submeshes.size());
@@ -145,6 +152,7 @@ bool ObjectAssets::load(int course){
 void ObjectAssets::beginFrame(){for(auto& m:models)m->skinUsed=0;}
 
 struct CourseObjects::Impl {
+    std::function<void(Renderer&,const C3D_Mtx&,unsigned)> blastDrawer;
     std::unique_ptr<Model> palm;
     std::array<std::unique_ptr<Model>,6> escalators;
     std::vector<Vertex> escalatorBase;
@@ -328,6 +336,7 @@ void CourseObjects::Impl::replay(Renderer& renderer,const ObjectDrawList& list){
     for(const auto& r:list.records){
         if(r.kind==ObjectDrawRecord::Plain){renderer.draw(*r.target,r.transform);continue;}
         if(r.kind==ObjectDrawRecord::Explosion){
+            if(blastDrawer){blastDrawer(renderer,r.transform,unsigned(std::max(r.frame,0.f)));continue;}
             assets.explosionBank->apply(*assets.explosion,0,r.frame,tick);
             renderer.draw(*assets.explosion,r.transform);continue;
         }
@@ -378,6 +387,7 @@ bool CourseObjects::Impl::ready(){
     if(!linked)link();
     return true;
 }
+void CourseObjects::setBlastDrawer(std::function<void(Renderer&,const C3D_Mtx&,unsigned)> drawer){impl_->blastDrawer=std::move(drawer);}
 void CourseObjects::drawSky(Renderer& renderer,unsigned tick,Vec3 camera){
     auto& d=*impl_;
     if(!d.recorded){d.begin(renderer,tick,camera);d.recordSky();d.recordObjects();}
@@ -484,5 +494,34 @@ std::vector<CourseObjects::ReviewTarget> CourseObjects::reviewTargets(){
         if(reviewBounds(i,t.center,t.radius))out.push_back(t);
     }
     return out;
+}
+void courseExplosionEffects(RaceEffects& effects,int bombHei){
+    const auto* director=K::Field::ObjectDirector::Instance();
+    if(!director||!effects.ready||bombHei<0)return;
+    for(const auto* obj:director->objects()){
+        if(!obj)continue;
+        if(obj->id()==K::Field::ObjectId::HeyhoBallGBA){
+            // Effect update PAL 0x806D15A8: frame 0 of the explode state fires
+            // rk_bombHei at m_initPos (Kinoko pos + 50 Y while exploding), with
+            // no rotation and scale 1500/900.
+            const auto& b=*static_cast<const K::Field::ObjectHeyhoBall*>(obj);
+            if(b.stateId()!=3||b.stateFrame()!=0)continue;
+            EffectFrame f;f.origin={b.pos().x,b.pos().y+50.f,b.pos().z};f.scale=1500.f/900.f;
+            effects.burst(bombHei,f);
+        }else if(obj->id()==K::Field::ObjectId::KoopaBall){
+            // PAL 0x807719E8, called by calcTangible 0x80770F4C on the step the
+            // ball starts exploding: rk_bombHei on the ball's transform at scale
+            // 2.0 (0x808CF3F4). Kinoko sets the explode timer to the clip length then.
+            const auto& b=*static_cast<const K::Field::ObjectKoopaBall*>(obj);
+            if(b.state()!=2||b.explodeTimer()!=int(b.explodeFrames()))continue;
+            const auto& t=b.transform();
+            EffectFrame f;f.origin={t[0,3],t[1,3],t[2,3]};
+            f.x=normalized(Vec3{t[0,0],t[1,0],t[2,0]},{1,0,0});
+            f.y=normalized(Vec3{t[0,1],t[1,1],t[2,1]},{0,1,0});
+            f.z=normalized(Vec3{t[0,2],t[1,2],t[2,2]},{0,0,1});
+            f.scale=2.f;
+            effects.burst(bombHei,f);
+        }
+    }
 }
 }

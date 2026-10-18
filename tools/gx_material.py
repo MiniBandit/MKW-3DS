@@ -156,8 +156,8 @@ def material_state(shape):
 # uv velocity x4, animationFrames) and v4, which appends the retail course
 # lighting word, the material ambient register and the constant added by a
 # light-texture albedo stage (include/mkw/retail_lighting.hpp).
-GMDL_SUBMESH = {3: '<IIiIiI4fI', 4: '<IIiIiI4fIIII', 5: '<IIiIiI4fIIII3I6f'}
-GMDL_SUBMESH_BYTES = {3: 44, 4: 56, 5: 92}
+GMDL_SUBMESH = {3: '<IIiIiI4fI', 4: '<IIiIiI4fIIII', 5: '<IIiIiI4fIIII3I6f', 6: '<IIiIiI4fIIII3I6fI'}
+GMDL_SUBMESH_BYTES = {3: 44, 4: 56, 5: 92, 6: 96}
 RETAIL_LIGHT_SETS = 8
 
 

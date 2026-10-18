@@ -17,11 +17,11 @@ banks and textures stay the shared tree's).
 import argparse,contextlib,hashlib,io,json,os,shutil,subprocess
 from pathlib import Path
 from course_catalog import ROOT,courses
-from cook_model import cook
+from cook_model import cook,COURSE_TEXELS,LARGE_TEXELS
 SD=ROOT/'sd-card/3ds/mkw-3ds'
 def digest(p):return hashlib.sha256(p.read_bytes()).hexdigest()
 
-def recook(source,args,env,prefix,output,texture_prefix=None,preserve_vertices=False):
+def recook(source,args,env,prefix,output,texture_prefix=None,preserve_vertices=False,texel_budget=None,brres=()):
     """Export one model and cook it as its original tool does, then copy every
     part that differs from the shared tree into the overlay. Returns the
     changed part names and the cook receipt."""
@@ -34,7 +34,7 @@ def recook(source,args,env,prefix,output,texture_prefix=None,preserve_vertices=F
     # Textures are unchanged by construction: skip encoding, keep the audit.
     with contextlib.redirect_stdout(io.StringIO()):
         parts=cook(exported,work,prefix,256,preserve_vertices=preserve_vertices,texture_prefix=texture_prefix,
-                   encoded_textures={f'{texture_prefix or prefix}_{i:03d}' for i in range(len(sources))})
+                   encoded_textures={f'{texture_prefix or prefix}_{i:03d}' for i in range(len(sources))},texel_budget=texel_budget,brres=brres)
     if (work/'models'/f'{prefix}.list').read_text()!=(SD/'models'/f'{prefix}.list').read_text():raise ValueError('Part layout changed: '+prefix)
     changed=[]
     for part in parts:
@@ -56,7 +56,8 @@ def overlay_course(c,output):
         if digest(folder/resource)!=receipt['resources'][resource]['sha256']:raise ValueError(f"Unpacked {resource} changed: {c['name']}")
         # Same export settings as tools/import_courses.py: retail lighting state and course TEV rules.
         env={'MKW_FREEZE_NONLINEAR_UV':'1','MKW_COURSE_MATERIALS':'1','MKW_RETAIL_LIGHTING':'1','MKW_RETAIL_SKY':'1' if label=='sky' else '0'}
-        names,detail=recook(folder/resource,[],env,c['prefix']+('_sky' if label=='sky' else ''),output)
+        names,detail=recook(folder/resource,[],env,c['prefix']+('_sky' if label=='sky' else ''),output,
+                            texel_budget=LARGE_TEXELS if label=='sky' else COURSE_TEXELS,brres=[folder/resource])
         changed+=names
         visuals[label]={**visuals[label],'parts':detail['parts'],'lighting':detail.get('lighting'),'limitations':detail['limitations']}
     updated=[visuals[v['kind']] for v in receipt['visuals']]
@@ -81,7 +82,8 @@ def overlay_objects(c,output):
                  'MKW_TEXTURE_SOURCES':os.pathsep.join(str(folder/n) for n in ('course_model.brres','vrcorn_model.brres') if (folder/n).is_file())}
             for (res,pattern),regex in CLIP_EXCLUDE.items():
                 if res==resource and pattern==model:env['MKW_OBJECT_CLIP_EXCLUDE']=regex
-            names,_=recook(archive,[model],env,stem,output,texture_prefix=f"obj{c['id']:02d}_{safe(resource)}",preserve_vertices=True)
+            names,_=recook(archive,[model],env,stem,output,texture_prefix=f"obj{c['id']:02d}_{safe(resource)}",preserve_vertices=True,
+                           texel_budget=COURSE_TEXELS,brres=[archive,*(folder/n for n in ('course_model.brres','vrcorn_model.brres') if (folder/n).is_file())])
             changed+=names
     (output.parent/(output.name+'-bank.dobj')).unlink(missing_ok=True)
     return changed

@@ -15,9 +15,14 @@ public:
  // transition blocks input: terminal OK actions keep the logical page.
  void input(const MenuState& before, const MenuState& after, const UiInput& key, UiAction action);
  // Every menu frame (60 Hz): the page on screen drives sections and layers.
- void frame(const MenuState& visual, bool revealed);
+ // steps: 60 Hz game frames since the last call; fades and the audio thread's
+ // per-frame updates advance once per step (retail calls once per frame).
+ void frame(const MenuState& visual, bool revealed, unsigned steps);
  // The race takes over (RaceRSARPlayer); menus resume with frame().
  void leave();
+ // A section change's screen fade-out has started (MenuRSARPlayer::Stop,
+ // PAL 0x80715C3C, runs on the same frame): music and voices fade over 20 frames.
+ void fadeOut();
  // The engine was torn down: reload groups/BGM even on the same page.
  void resetAfterEngineRestart(){*this=MenuSound{};}
  // Retail EGG::AudioTrack: a value that moves linearly to a target over frames.
@@ -39,7 +44,9 @@ private:
  std::uint32_t bgm_ = 0xFFFFFFFF;
  std::uint16_t slot_ = 1;            // alternates 1/2 like SinglePlayer's two handles
  Track volume_, stems_[4]; float postedVolume_ = -1;
+ Track popup_;                       // ValuesMgr track 5: the "Not available" duck
  bool unavailable_ = false;
+ bool confirmPopup_ = false;         // the no-ghost ConfirmPage is on screen
  MenuVoice voice_;
 };
 }

@@ -912,7 +912,9 @@ inline constexpr std::array<std::array<float,6>,300> FakeBoxInnerSRT{{
     {{2.000000000f,0.000000000f,-2.493334055f,0.000000000f,2.000000000f,1.493333936f}},
 }};
 // Submeshes, GMDL texture indices and mat_boxout's static sparkle matrices (GX rows).
-struct ItemBoxLayout {unsigned inner,question,outer;int innerTexture,questionTexture,shell,noise,mask;float noiseSRT[6],maskSRT[6];unsigned innerWeight;unsigned char questionLow[3],questionHigh[3];unsigned questionAlpha;};
-inline constexpr ItemBoxLayout ItemBoxMaterials{0,1,2,7,5,4,0,3,{0.439999998f,0.000000000f,0.000000000f,0.000000000f,0.439999998f,0.560000002f},{1.000000000f,0.000000000f,0.000000000f,0.000000000f,1.000000000f,0.000000000f},171,{0,140,210},{205,255,255},165};
-inline constexpr ItemBoxLayout FakeBoxMaterials{0,1,2,4,5,3,0,2,{0.439999998f,0.000000000f,0.000000000f,0.000000000f,0.439999998f,0.560000002f},{0.707106769f,0.707106769f,-0.207106784f,-0.707106769f,0.707106769f,0.500000000f},255,{62,0,66},{255,146,167},128};
+// rainbowTexture (-1: none) is mat_boxin's layer lerped in by A0, with its EnvCamera SRT. The mask
+// texture holds sparkleGroups dot masks in R, G, B; sparkleOffset is each group's indirect noise offset (GX s, t).
+struct ItemBoxLayout {unsigned inner,question,outer;int innerTexture,questionTexture,shell,noise,mask;float noiseSRT[6],maskSRT[6];unsigned innerWeight;unsigned char questionLow[3],questionHigh[3];unsigned questionAlpha;int rainbowTexture;float rainbowSRT[6];unsigned sparkleGroups;float sparkleOffset[3][2];};
+inline constexpr ItemBoxLayout ItemBoxMaterials{0,1,2,7,5,4,0,3,{0.439999998f,0.000000000f,0.000000000f,0.000000000f,0.439999998f,0.560000002f},{1.000000000f,0.000000000f,0.000000000f,0.000000000f,1.000000000f,0.000000000f},171,{0,140,210},{205,255,255},165,-1,{1.000000000f,0.000000000f,0.000000000f,0.000000000f,1.000000000f,0.000000000f},3,{{0.018745422f,0.018745422f},{0.029680252f,0.029680252f},{0.070295334f,0.070295334f}}};
+inline constexpr ItemBoxLayout FakeBoxMaterials{0,1,2,6,5,3,0,2,{0.439999998f,0.000000000f,0.000000000f,0.000000000f,0.439999998f,0.560000002f},{0.707106769f,0.707106769f,-0.207106784f,-0.707106769f,0.707106769f,0.500000000f},255,{62,0,66},{255,146,167},128,8,{1.000000000f,0.000000000f,0.000000000f,0.000000000f,1.000000000f,0.000000000f},3,{{-0.061873139f,-0.061873139f},{-0.000019206f,-0.000019206f},{0.060957050f,0.060957050f}}};
 }

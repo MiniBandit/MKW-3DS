@@ -1,25 +1,33 @@
 #!/usr/bin/env python3
-"""Cook the race bottom screen (docs/BOTTOM_SCREEN.md): 32 course maps and one UI atlas.
+"""Cook the race bottom screen (src/race_bottom_screen.cpp): retail Mario Kart
+Wii's minimap of every course and arena, and the screen's UI atlas.
 
-Course maps: tools/race_map_bake.py renders each race course top-down from its
-cooked GMDL parts and textures (build/course-materials first), removing roofs
-over the road with the course KCL, then tex3ds encodes it as ETC1 (at most
-1024x1024, 512 KB). One map is resident at a time, in VRAM.
+Minimap. Retail draws no map model per frame: Map2DRenderer_createInstance (PAL
+0x807DF908, called by RaceScene_createSubsystems) renders the course's
+map_model.brres once into a 220x220 capture (Map2DRenderer_init 0x807DFBA4,
+Map2DRenderer_render 0x807E0028), and CtrlRace2DMap (0x807EA27C) shows that
+capture on its race_null pane. This tool makes the same capture from the same
+model: build/export_brres.mjs (tools/export_brres.ts) reads map_model.brres and
+bake() rasterises it with Map2DRenderer's frame, camera, depth test, culling,
+EFB and copy formats. Races copy GX IA4, which PICA LA4 holds unchanged (4-bit
+intensity, 4-bit alpha); battle modes (game modes 3, 9, 10) copy RGB5A3, held
+by RGBA5551 because every capture alpha is 0 or 255.
 
-UI atlas (RGBA8): retail Wii art for the map icons (st_*_32x32 faces, the
-local player's searchlight), the leaderboard (result-board rows, 1st..12th in
-the result font, faces, item icons) and the timer (CtrlRaceTime's digits,
-separators and TIME label), plus Mario Kart 7's bottom-screen map markers
-for items on the course, read from the user's own MK7 dump (tools/mk7_assets.py).
+UI atlas (RGBA8): the map icons' retail art at its own resolution (st_*_32x32
+faces, tt_map_chara_searchlight, tt_start_line_22), the standings rows (result
+board bars, 1st..12th in the result font, faces, item icons) and the timer
+(CtrlRaceTime's digits, separators and TIME label at the size the bottom screen
+draws them, so their texels map 1:1 to its pixels).
 
 Outputs: build/race-map/textures/*.t3x (a packaging overlay), build/race-map/
-race-map.json (sources, hashes, per-course statistics) and the generated
+race-map.json (sources, hashes, frames, bake statistics) and the generated
 include/mkw/race_map_assets.hpp. The shared sd-card is never written.
 """
 import argparse
 import concurrent.futures
 import hashlib
 import json
+import math
 import re
 import struct
 import subprocess
@@ -43,25 +51,12 @@ RESULT = UI / 'Race/result'
 FACES = ['mario', 'baby_peach', 'waluigi', 'koopa', 'baby_daisy', 'karon', 'baby_mario', 'luigi',
          'kinopio', 'donky', 'yoshi', 'wario', 'baby_luigi', 'kinopico', 'noko', 'daisy', 'peach',
          'catherine', 'didy', 'teresa', 'koopa_jr', 'hone_koopa', 'fuky', 'roseta']
-# MK7 /UI/race.szs map markers used for MKW's items on the course.
-MK7_MARKERS = ['map_banana_r90.bclim', 'map_bomb_hei_r90.bclim', 'map_kame_g_r90.bclim', 'map_kame_r_r90.bclim',
-               'map_kame_wing_r90.bclim', 'map_exp_r_r90.bclim', 'map_exp_b_r90.bclim', 'map_start.bclim']
-# The release ships these eight markers as lossless PNGs (exported with
-# --export-mk7-markers), so a build without a Mario Kart 7 dump packs the
-# same atlas.
-MK7_SHIPPED = ROOT / 'tools/release/mk7_markers'
-
-
-def marker_key(name):
-    return name.split('.')[0].replace('_r90', '')
-
-
-def mk7_markers(cci):
-    """{bclim name: un-rotated RGBA array}, from the MK7 dump when present."""
-    if cci and Path(cci).is_file():
-        from mk7_assets import race_textures
-        return race_textures(cci, MK7_MARKERS)
-    return {n: np.asarray(Image.open(MK7_SHIPPED / (marker_key(n) + '.png')).convert('RGBA')) for n in MK7_MARKERS}
+# Map2DRenderer_init: an EGG::CapTexture of 0xdc x 0xdc texels, in a 256x256 PICA texture.
+CAPTURE = 220
+TEXTURE = 256
+# The bottom screen draws CtrlRaceTime at this scale of its layout units: its
+# 32-unit digits are 20 px, so the timer (y 0..20) sits above the 220 px map.
+TIMER_SCALE = 0.625
 
 
 def digest(path):
@@ -69,61 +64,208 @@ def digest(path):
 
 
 def courses():
+    """Every catalog row (include/mkw/course_catalog.hpp), in catalog order."""
     text = (ROOT / 'include/mkw/course_catalog.hpp').read_text()
-    rows = re.findall(r'\{"([^"]+)",Kinoko::Course::(\w+),"(Race/Course/([^"]+)\.szs)","models/([^"]+)\.list"', text)
-    return [dict(name=n, id=i, archive=a, key=k, models=m) for n, i, a, k, m in rows]
+    rows = re.findall(r'\{"([^"]+)",Kinoko::Course::(\w+),"(Race/Course/([^"]+)\.szs)","models/[^"]+\.list","[^"]*","(\w+)"', text)
+    return [dict(name=n, id=i, archive=a, key=k, arena=cup == 'Arena') for n, i, a, k, cup in rows]
 
 
-def route_length(kmp):
-    """Lap length along the checkpoint midpoints, in KMP order."""
-    mids = [((r['left'][0] + r['right'][0]) / 2, (r['left'][1] + r['right'][1]) / 2) for r in kmp['CKPT']['records']]
-    return sum(np.hypot(mids[i][0] - mids[i - 1][0], mids[i][1] - mids[i - 1][1]) for i in range(len(mids)))
-
-
-# The detailed view's scale, world units per bottom-screen pixel. Mario Kart 7's
-# map shows its roads 45-70 px wide (docs/BOTTOM_SCREEN.md); Wii roads are about
-# 2,700-4,500 units wide and karts are the same size on every course, so 64 serves
-# every map whose texels allow it. Long courses widen the view instead of
-# magnifying their texture more than about 1.2x.
-UNITS_PER_PIXEL = 64.0
-MAX_UNITS_PER_PIXEL = 110.0
-OVERVIEW = 256
-
-
-def cook_course(index, course, out):
-    import race_map_bake as rb
-    from import_courses import kmp_database
+def course_folder(course, data, work):
+    """The course's unpacked archive: assets/courses, else unpacked from data."""
     folder = ROOT / 'assets/courses' / course['key']
-    kcl = rb.kcl_triangles(folder / 'course.kcl')
+    if (folder / 'map_model.brres').is_file() and (folder / 'course.kmp').is_file():
+        return folder
+    out = work / 'courses' / course['key']
+    if not (out / 'map_model.brres').is_file():
+        from unpack_szs import unpack
+        unpack(data / course['archive'], out)
+    return out
+
+
+def node_translations(brres):
+    """Local translation (ResNodeData +0x38) of every node of every MDL0, by name:
+    what Map2DRenderer_init reads for posLD and posRU (ResMdl node lookup 0x8004E2A0)."""
+    data = Path(brres).read_bytes()
+
+    def dictionary(offset):
+        count = struct.unpack_from('>I', data, offset + 4)[0]
+        out = []
+        for i in range(1, count + 1):
+            name, target = struct.unpack_from('>ii', data, offset + 16 + 16 * i)
+            out.append((data[offset + name:data.index(b'\0', offset + name)].decode('latin1'), offset + target))
+        return out
+    nodes = {}
+    for group, at in dictionary(struct.unpack_from('>H', data, 12)[0] + 8):
+        if group != '3DModels(NW4R)':
+            continue
+        for _, mdl in dictionary(at):
+            if data[mdl:mdl + 4] != b'MDL0' or struct.unpack_from('>I', data, mdl + 8)[0] != 11:
+                raise ValueError(f'{brres}: expected an MDL0 version 11')
+            for name, node in dictionary(mdl + struct.unpack_from('>i', data, mdl + 0x10 + 4)[0]):
+                nodes[name] = list(struct.unpack_from('>3f', data, node + 0x38))
+    return nodes
+
+
+def frame(ld, rd):
+    """Map2DRenderer_render 0x807E0028: the world square the capture covers,
+    (x0, z0, x1, z1) as fn_1_2D0530 0x807E08E4 reads them (+0x90, +0x98, +0x9C,
+    +0xA4): the longer of the bones' two extents, centred on their midpoint."""
+    f = np.float32
+    ld = [f(v) for v in ld]
+    ru = [f(v) for v in rd]
+    w = f(220)  # DAT_808a7780
+    across, down = w / (ru[0] - ld[0]), w / (ld[2] - ru[2])
+    if down <= across:
+        z0, z1 = ld[2], ru[2]
+        centre, half = (ld[0] + ru[0]) * f(.5), ((w * (ld[2] - ru[2])) / w) * f(.5)
+        x0, x1 = centre - half, centre + half
+    else:
+        x0, x1 = ld[0], ru[0]
+        centre, half = (ld[2] + ru[2]) * f(.5), ((w * (ru[0] - ld[0])) / w) * f(.5)
+        z0, z1 = centre + half, centre - half
+    return float(x0), float(z0), float(x1), float(z1)
+
+
+def bake(model, square):
+    """The capture: Map2DRenderer_render's EFB, before the copy.
+
+    * Clear quad (255,255,255,0) (DAT_808a7774) over the whole capture.
+    * No KMP AREA of type 5 (fn_1_2D01C8 0x807E057C's cut-outs, fn_1_66AC
+      0x80516A60's bounds) exists on any retail track; cook_course checks it.
+    * The model, scaled (s, 0.006, s) and seen from 300 units above its
+      centre, looking down with -Z up (up = -ez, 0x802A4148) through a 440x440
+      orthographic projection: x right, z down, the higher surface wins (z
+      compare LEQUAL), the material's cull mode applies.
+    * Map materials are unlit vertex colour (GX channel source VERTEX, one TEV
+      stage RASC/RASA), so a pixel is the interpolated vertex colour and alpha.
+    """
+    x0, z0, x1, z1 = square
+    image = np.zeros((CAPTURE, CAPTURE, 4))
+    image[..., :3] = 255
+    height = np.full((CAPTURE, CAPTURE), -np.inf)
+    centres = np.arange(CAPTURE) + .5
+    stats = {'triangles': 0, 'culled': 0, 'drawn': 0}
+    for m in model['models']:
+        for shape in m['shapes']:
+            gx = shape['sourceMaterial']['gxMaterial']
+            stage = gx['tevStages']
+            channel = gx['lightChannels'][0]
+            if (shape['texture'] != -1 or len(stage) != 1 or stage[0]['colorInA'] != 10 or stage[0]['colorInD'] != 15
+                    or stage[0]['alphaInA'] != 5 or stage[0]['alphaInD'] != 7 or channel['colorChannel']['lightingEnabled']
+                    or channel['colorChannel']['matColorSource'] != 1 or channel['alphaChannel']['matColorSource'] != 1
+                    or shape['sourceMaterial']['translucent']):
+                raise ValueError('Map material is not unlit vertex colour: ' + shape['material'])
+            cull = gx['cullMode']
+            v = np.asarray(shape['vertices'], dtype=np.float64)
+            screen = np.stack([(v[:, 0] - x0) / (x1 - x0) * CAPTURE, (v[:, 2] - z1) / (z0 - z1) * CAPTURE], -1)
+            for t in range(0, len(v), 3):
+                stats['triangles'] += 1
+                a, b, c = v[t:t + 3, :3]
+                # GX front faces are clockwise on screen: seen from above, the
+                # vertex order's right-handed normal points down. GX_CULL_BACK (2)
+                # drops the others, GX_CULL_FRONT (1) these, GX_CULL_ALL (3) both.
+                # (The map meshes carry no normals; nearly every triangle is front.)
+                front = np.cross(b - a, c - a)[1] < 0
+                if cull == 3 or (cull == 2 and not front) or (cull == 1 and front):
+                    stats['culled'] += 1
+                    continue
+                p = screen[t:t + 3]
+                area = (p[1, 0] - p[0, 0]) * (p[2, 1] - p[0, 1]) - (p[1, 1] - p[0, 1]) * (p[2, 0] - p[0, 0])
+                if area == 0:
+                    continue
+                order = [0, 1, 2] if area > 0 else [0, 2, 1]
+                q = p[order]
+                left, right = max(0, int(math.floor(q[:, 0].min()))), min(CAPTURE, int(math.ceil(q[:, 0].max())) + 1)
+                top, bottom = max(0, int(math.floor(q[:, 1].min()))), min(CAPTURE, int(math.ceil(q[:, 1].max())) + 1)
+                if left >= right or top >= bottom:
+                    continue
+                px, py = np.meshgrid(centres[left:right], centres[top:bottom])
+                weights = []
+                inside = np.ones(px.shape, bool)
+                for i in range(3):
+                    s, e = q[(i + 1) % 3], q[(i + 2) % 3]
+                    w = (e[0] - s[0]) * (py - s[1]) - (e[1] - s[1]) * (px - s[0])
+                    # Top-left rule (y down): a pixel centre on a shared edge belongs to one triangle.
+                    edge_top_left = (e[1] == s[1] and e[0] < s[0]) or e[1] < s[1]
+                    inside &= (w > 0) | ((w == 0) & edge_top_left)
+                    weights.append(w)
+                if not inside.any():
+                    continue
+                total = abs(area)
+                bary = [weights[i] / total for i in range(3)]
+                vertex = v[t:t + 3][order]
+                h = sum(bary[i] * vertex[i, 1] for i in range(3))
+                rgba = sum(bary[i][..., None] * vertex[i, 10:14] for i in range(3))
+                region = height[top:bottom, left:right]
+                passed = inside & (h >= region)
+                if not passed.any():
+                    continue
+                region[passed] = h[passed]
+                image[top:bottom, left:right][passed] = np.clip(np.rint(rgba[passed]), 0, 255)
+                stats['drawn'] += 1
+    # The EFB keeps 6 bits per channel (RGBA6_Z24: the capture copies alpha).
+    six = np.floor(image).astype(np.int32) >> 2
+    return ((six << 2) | (six >> 4)).astype(np.float64), stats
+
+
+def copy_ia4(efb):
+    """EFB copy to GX_TF_IA4: intensity 0.257R+0.504G+0.098B+16, alpha, 4 bits each
+    (floor(v*255/16), as Dolphin's encoder), expanded to 8 bits as GX samples them."""
+    y = efb[..., 0] * .257 + efb[..., 1] * .504 + efb[..., 2] * .098 + 16
+    i4, a4 = np.floor(y / 16).astype(np.int32), np.floor(efb[..., 3] / 16).astype(np.int32)
+    out = np.empty(efb.shape[:2] + (4,), np.uint8)
+    out[..., 0] = out[..., 1] = out[..., 2] = i4 * 17
+    out[..., 3] = a4 * 17
+    return out
+
+
+def copy_rgb5a3(efb):
+    """EFB copy to GX_TF_RGB5A3: RGB555 where alpha > 224, else RGB444 + A3."""
+    opaque = efb[..., 3] > 224
+    out = np.empty(efb.shape[:2] + (4,), np.uint8)
+    five = np.floor(efb[..., :3] / 8).astype(np.int32)
+    four = np.floor(efb[..., :3] / 16).astype(np.int32)
+    three = np.floor(efb[..., 3] / 32).astype(np.int32)
+    out[..., :3] = np.where(opaque[..., None], (five << 3) | (five >> 2), four * 17)
+    out[..., 3] = np.where(opaque, 255, (three << 5) | (three << 2) | (three >> 1))
+    return out
+
+
+def cook_course(index, course, out, data, exporter):
+    from import_courses import kmp_database
+    folder = course_folder(course, data, out)
     kmp = kmp_database(folder / 'course.kmp')
-    frame, size = rb.course_frame(kmp)
-    image, stats = rb.bake(course['key'], course['models'], course['archive'], frame, size)
-    png = out / 'textures' / f'race_map_{index:02d}.png'
-    image.save(png)
-    subprocess.run([TEX3DS, '-f', 'etc1', '-q', 'high', '-z', 'none', '-o', str(png.with_suffix('.t3x')), str(png)],
-                   check=True, stdout=subprocess.DEVNULL)
-    # The tap-to-toggle overview shows the whole frame: a separately filtered small copy.
-    small = (OVERVIEW, OVERVIEW * size[1] // size[0]) if size[0] >= size[1] else (OVERVIEW * size[0] // size[1], OVERVIEW)
-    overview = out / 'textures' / f'race_map_{index:02d}_overview.png'
-    image.resize(small, Image.Resampling.LANCZOS).save(overview)
-    subprocess.run([TEX3DS, '-f', 'etc1', '-q', 'high', '-z', 'none', '-o', str(overview.with_suffix('.t3x')), str(overview)],
-                   check=True, stdout=subprocess.DEVNULL)
-    texel = (frame[2] - frame[0]) / size[0]
-    view = min(max(UNITS_PER_PIXEL, 0.85 * texel), MAX_UNITS_PER_PIXEL)
-    width = rb.road_width(kcl, route_length(kmp))
-    # The start line: KMP checkpoint 0, cut to the road it crosses.
-    start = kmp['CKPT']['records'][0]
-    start_left, start_right = rb.road_span(kcl, start['left'], start['right'], kmp['KTPT']['records'][0]['position'])
-    parts = (rb.SD / f"models/{course['models']}.list").read_text().split()
-    return {'index': index, 'name': course['name'], 'archive': course['archive'],
-            'texture': f'textures/race_map_{index:02d}.t3x', 'frame': list(frame), 'size': list(size),
-            'roadWidth': width, 'unitsPerPixel': view, 'overview': f'textures/race_map_{index:02d}_overview.t3x', 'overviewSize': list(small),
-            'startLeft': [float(v) for v in start_left], 'startRight': [float(v) for v in start_right],
-            'startCheckpoint': [list(start['left']), list(start['right'])],
-            't3xBytes': png.with_suffix('.t3x').stat().st_size + overview.with_suffix('.t3x').stat().st_size, 'stats': stats,
-            'sources': {p.relative_to(ROOT).as_posix(): digest(p) for p in
-                        [folder / 'course.kcl', folder / 'course.kmp'] +
-                        [rb.course_path(f'models/{n}.gmdl') for n in parts]}}
+    areas = [r for r in kmp.get('AREA', {}).get('records', []) if bytes.fromhex(r['raw_hex'])[1] == 5]
+    if areas:
+        raise ValueError(f"{course['name']}: KMP AREA type 5 (minimap control) is not supported")
+    bones = node_translations(folder / 'map_model.brres')
+    if 'posLD' not in bones or 'posRU' not in bones:
+        raise ValueError(f"{course['name']}: map_model.brres has no posLD/posRU")
+    work = out / 'exports' / course['key']
+    work.mkdir(parents=True, exist_ok=True)
+    subprocess.run(['node', str(exporter), str(folder / 'map_model.brres'), str(work)], check=True,
+                   stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
+    model = json.loads((work / 'model.json').read_text())
+    square = frame(bones['posLD'], bones['posRU'])
+    efb, stats = bake(model, square)
+    # Battle modes (gameMode 3, 9, 10: Map2DRenderer_init) copy RGB5A3; races IA4.
+    encode = copy_rgb5a3 if course['arena'] else copy_ia4
+    # Outside the capture: the clear colour, never sampled (the bottom screen
+    # draws the capture's texels 1:1).
+    texture = np.empty((TEXTURE, TEXTURE, 4), np.uint8)
+    texture[...] = encode(np.array([[[255., 255., 255., 0.]]]))[0, 0]
+    texture[:CAPTURE, :CAPTURE] = encode(efb)
+    name = f'race_minimap_{index:02d}'
+    png = out / 'textures' / (name + '.png')
+    Image.fromarray(texture, 'RGBA').save(png)
+    fmt = 'rgba5551' if course['arena'] else 'la4'
+    subprocess.run([TEX3DS, '-f', fmt, '-z', 'none', '-o', str(png.with_suffix('.t3x')), str(png)], check=True, stdout=subprocess.DEVNULL)
+    start = kmp['KTPT']['records'][0]
+    return {'index': index, 'name': course['name'], 'archive': course['archive'], 'arena': course['arena'],
+            'texture': f'textures/{name}.t3x', 'format': fmt, 'posLD': bones['posLD'], 'posRU': bones['posRU'],
+            'square': list(square), 'start': [start['position'][0], start['position'][2], start['rotation'][1]],
+            't3xBytes': png.with_suffix('.t3x').stat().st_size, 'stats': stats,
+            'sources': {p.relative_to(p.parents[2]).as_posix(): digest(p) for p in [folder / 'map_model.brres', folder / 'course.kmp']}}
 
 
 def resize(image, scale_or_size):
@@ -236,7 +378,7 @@ def pack(images, width, padding=1):
     return atlas, rects
 
 
-def cook_atlas(out, cci, manifest):
+def cook_atlas(out, manifest):
     from cook_race_items import decode_tpl, ICONS
     sources = []
 
@@ -245,21 +387,26 @@ def cook_atlas(out, cci, manifest):
         return decode_tpl(path)
     images = {}
     for i, name in enumerate(FACES):
-        images[('face', i)] = resize(tpl(GAME / f'timg/st_{name}_32x32.tpl'), (28, 28))
-    # Item icons appear only in the standings rows (17 px).
+        face = tpl(GAME / f'timg/st_{name}_32x32.tpl')
+        # The map icons sample the retail 32x32 texels; the standings rows draw 17 px faces.
+        images[('face', i)] = face.convert('RGBA')
+        images[('rowface', i)] = resize(face, (28, 28))
     for kind, name in ICONS.items():
         images[('item', kind)] = resize(tpl(GAME / f'timg/{name}.tpl'), (20, 20))
     # Slot 19 (no ItemKind): two Triple Mushrooms left, as the item window shows them.
     images[('item', 19)] = resize(tpl(GAME / 'timg/tt_item_kinoko_2.tpl'), (20, 20))
-    images[('fake', 0)] = resize(tpl(GAME / 'timg/tt_item_dummybox.tpl'), (16, 16))
+    # CtrlRaceTime panes at TIMER_SCALE: 32-unit digits, TIME 240x40 at pane scale 0.7.
+    digit = round(32 * TIMER_SCALE)
     for d in range(10):
-        images[('digit', d)] = resize(tpl(GAME_U / f'timg/tt_d_number_3d_{d:02d}.tpl'), (24, 24))
+        images[('digit', d)] = resize(tpl(GAME_U / f'timg/tt_d_number_3d_{d:02d}.tpl'), (digit, digit))
     for key, name in (('dot', 'tt_d_number_3d_coron'), ('colon', 'tt_d_number_3d_coron_00')):
-        images[('sep', key)] = resize(tpl(GAME_U / f'timg/{name}.tpl'), (24, 24))
-    images[('label', 'time')] = resize(tpl(GAME_U / 'timg/tt_time_E.tpl'), (120, 20))
-    images[('light', 0)] = resize(tpl(GAME / 'timg/tt_map_chara_searchlight.tpl'), (30, 32))
-    for name, array in mk7_markers(cci).items():
-        images[('mk7', marker_key(name))] = Image.fromarray(array, 'RGBA')
+        images[('sep', key)] = resize(tpl(GAME_U / f'timg/{name}.tpl'), (digit, digit))
+    images[('label', 'time')] = resize(tpl(GAME_U / 'timg/tt_time_E.tpl'), (round(240 * .7 * TIMER_SCALE), round(40 * .7 * TIMER_SCALE)))
+    # The light pane's colour is its material's (C0 = C1 = yellow): keep only the texture's alpha.
+    light = np.asarray(tpl(GAME / 'timg/tt_map_chara_searchlight.tpl').convert('RGBA')).copy()
+    light[..., :3] = 255
+    images[('light', 0)] = Image.fromarray(light, 'RGBA')
+    images[('start', 0)] = tpl(GAME / 'timg/tt_start_line_22.tpl').convert('RGBA')
     # Twelve standings rows fill the lower screen's 240 px: 19 px bars, 1 px apart.
     rows = {key: compact_bar(bar, 78) for key, bar in result_rows(19).items()}
     images[('row', 'player')] = rows['player']
@@ -277,12 +424,11 @@ def cook_atlas(out, cci, manifest):
         if packed:
             break
     atlas, rects = packed
-    png = out / 'textures/race_bottom_ui.png'
+    png = out / 'textures/race_minimap_ui.png'
     atlas.save(png)
     subprocess.run([TEX3DS, '-f', 'rgba8', '-z', 'none', '-o', str(png.with_suffix('.t3x')), str(png)], check=True, stdout=subprocess.DEVNULL)
-    manifest['atlas'] = {'texture': 'textures/race_bottom_ui.t3x', 'size': list(atlas.size),
+    manifest['atlas'] = {'texture': 'textures/race_minimap_ui.t3x', 'size': list(atlas.size),
                          't3xBytes': png.with_suffix('.t3x').stat().st_size, 'ordinals': texts,
-                         'mk7Source': {'cci' if cci and Path(cci).is_file() else 'shipped': str(cci) if cci and Path(cci).is_file() else MK7_SHIPPED.relative_to(ROOT).as_posix(), 'archive': '/UI/race.szs', 'markers': MK7_MARKERS},
                          'sources': {Path(p).relative_to(ROOT).as_posix(): digest(p) for p in sorted(set(sources))}}
     return atlas.size, rects
 
@@ -302,50 +448,57 @@ def timer_layout():
     return out, path
 
 
-def write_header(manifest, atlas_size, rects, timer, timer_source):
+def write_header(manifest, atlas_size, rects, timer):
     def rect(key):
         x, y, w, h = rects[key]
         return f'{{{x},{y},{w},{h}}}'
-    lines = ['// Generated by tools/cook_race_map.py; see docs/BOTTOM_SCREEN.md.', '#pragma once', '#include <array>',
+    lines = ['// Generated by tools/cook_race_map.py: retail Mario Kart Wii\'s minimap and the race',
+             '// bottom screen\'s UI atlas (src/race_bottom_screen.cpp).', '#pragma once', '#include <array>',
              '#include <cstdint>', 'namespace mkw {',
-             '// One course map: an ETC1 texture covering the world rectangle [x0,x1] x [z0,z1]',
-             '// (+x right, -z up: the retail minimap orientation), the detailed view scale',
-             '// (world units per bottom-screen pixel) and the start line (CKPT 0 cut to its road, XZ).',
-             'struct RaceMapCourse {const char* texture;const char* overview;float x0,z0,x1,z1;uint16_t width,height,overviewWidth,overviewHeight;float unitsPerPixel;float startLeft[2],startRight[2];};',
+             '// Map2DRenderer\'s capture (Map2DRenderer_init PAL 0x807DFBA4: 220x220 texels) at the',
+             '// top-left of a 256x256 texture: LA4 for races (GX IA4), RGBA5551 for arenas',
+             '// (GX RGB5A3, battle modes).',
+             f'inline constexpr unsigned RaceMapCapture={CAPTURE},RaceMapTextureSize={TEXTURE};',
+             '// One course\'s capture and the world square it covers (Map2DRenderer_render',
+             '// 0x807E0028): u = (x-x0)/(x1-x0), v = (z-z0)/(z1-z0) (fn_1_2D0530 0x807E08E4), z0',
+             '// the posLD side (the bottom); and its start line, KTPT 0 (CtrlRace2DMap_load',
+             '// 0x807EA27C): position XZ and yaw (degrees).',
+             'struct RaceMapCourse {const char* texture;float x0,z0,x1,z1;float startX,startZ,startYaw;};',
              f'inline constexpr std::array<RaceMapCourse,{len(manifest["courses"])}> RaceMapCourses{{{{']
     for c in manifest['courses']:
-        f = c['frame']
-        lines.append(f'    {{"{c["texture"]}","{c["overview"]}",{f[0]:.3f}f,{f[1]:.3f}f,{f[2]:.3f}f,{f[3]:.3f}f,{c["size"][0]},{c["size"][1]},'
-                     f'{c["overviewSize"][0]},{c["overviewSize"][1]},'
-                     f'{c["unitsPerPixel"]:.4f}f,{{{c["startLeft"][0]:.3f}f,{c["startLeft"][1]:.3f}f}},'
-                     f'{{{c["startRight"][0]:.3f}f,{c["startRight"][1]:.3f}f}}}}, // {c["name"]}')
+        x0, z0, x1, z1 = c['square']
+        sx, sz, yaw = c['start']
+        lines.append(f'    {{"{c["texture"]}",{x0:.3f}f,{z0:.3f}f,{x1:.3f}f,{z1:.3f}f,{sx:.3f}f,{sz:.3f}f,{yaw:.3f}f}}, // {c["name"]}')
     lines += ['}};',
               '// The bottom-screen UI atlas (RGBA8, VRAM): pixel rectangles x,y,w,h.',
               'struct RaceMapRect {uint16_t x,y,w,h;};',
               f'inline constexpr const char* RaceMapAtlasTexture="{manifest["atlas"]["texture"]}";',
               f'inline constexpr uint16_t RaceMapAtlasSize[2]={{{atlas_size[0]},{atlas_size[1]}}};',
-              '// st_*_32x32 by retail character id (Kinoko Character 0..23).',
+              '// st_*_32x32 by retail character id (Kinoko Character 0..23): the map icons\' 32x32',
+              '// texels, and 28x28 copies for the standings rows.',
               'inline constexpr std::array<RaceMapRect,24> RaceMapFaces{{' + ','.join(rect(('face', i)) for i in range(24)) + '}};',
+              'inline constexpr std::array<RaceMapRect,24> RaceMapRowFaces{{' + ','.join(rect(('rowface', i)) for i in range(24)) + '}};',
               '// Item window icons (tools/cook_race_items.py ICONS) by ItemKind; 19 = two Triple Mushrooms left (kinoko_2).',
               'inline constexpr std::array<RaceMapRect,21> RaceMapItems{{' +
               ','.join(rect(('item', k)) if ('item', k) in rects else '{0,0,0,0}' for k in range(21)) + '}};',
+              '// CtrlRaceTime\'s art at RaceTimerScale: one atlas texel per bottom-screen pixel.',
               'inline constexpr std::array<RaceMapRect,10> RaceMapDigits{{' + ','.join(rect(('digit', d)) for d in range(10)) + '}};',
               f'inline constexpr RaceMapRect RaceMapColon{rect(("sep", "colon"))},RaceMapDot{rect(("sep", "dot"))};',
               f'inline constexpr RaceMapRect RaceMapTimeLabel{rect(("label", "time"))};',
+              '// tt_map_chara_searchlight (60x64, its alpha; the light pane\'s material is yellow)',
+              '// and tt_start_line_22 (22x4), retail texels.',
               f'inline constexpr RaceMapRect RaceMapSearchlight{rect(("light", 0))};',
-              f'inline constexpr RaceMapRect RaceMapFakeBox{rect(("fake", 0))};',
+              f'inline constexpr RaceMapRect RaceMapStartLine{rect(("start", 0))};',
               f'inline constexpr RaceMapRect RaceMapWhite{rect(("white", 0))};',
               f'inline constexpr RaceMapRect RaceMapRowPlayer{rect(("row", "player"))},RaceMapRowOther{rect(("row", "other"))};',
               '// 1st..12th (Race.bmg 0x515..0x520), result board font.',
               'inline constexpr std::array<RaceMapRect,12> RaceMapOrdinals{{' + ','.join(rect(('ordinal', i)) for i in range(12)) + '}};',
-              '// Mario Kart 7 bottom-screen map markers (/UI/race.szs).',
-              'enum class Mk7Marker : uint8_t {Banana,Bobomb,GreenShell,RedShell,SpinyShell,BlastRed,BlastBlue,StartLine,Count};',
-              'inline constexpr std::array<RaceMapRect,8> RaceMapMk7{{' +
-              ','.join(rect(('mk7', n.split('.')[0].replace('_r90', ''))) for n in MK7_MARKERS) + '}};',
               '// CtrlRaceTime (Race_U game_image_number.brlyt): pane centre (layout units,',
               '// y up) relative to race_null, and drawn size. Digits: race_null and time_01 the',
               '// minutes, time_02..03 the seconds, time_04..06 the milliseconds (CtrlRaceTime_refresh',
-              '// USA 0x807ED9C0); coron01 = coron_00 (between minutes and seconds), coron00 = coron.',
+              '// PAL 0x807F84C0, time_number.brctr groups Group_00..06); coron01 = coron_00',
+              '// (between minutes and seconds), coron00 = coron. Drawn at RaceTimerScale.',
+              f'inline constexpr float RaceTimerScale={TIMER_SCALE}f;',
               'struct RaceTimerPane {float x,y,w,h;};',
               f'inline constexpr std::array<RaceTimerPane,{len(timer)}> RaceTimerPanes{{{{' +
               ','.join(f'{{{x:.3f}f,{y:.3f}f,{w:.3f}f,{h:.3f}f}}' for _, x, y, w, h in timer) + '}};',
@@ -354,47 +507,31 @@ def write_header(manifest, atlas_size, rects, timer, timer_source):
 
 
 def main():
-    from mk7_assets import DEFAULT_CCI
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--output', type=Path, default=ROOT / 'build/race-map')
-    p.add_argument('--mk7-cci', type=Path, default=DEFAULT_CCI)
+    p.add_argument('--exporter', type=Path, default=ROOT / 'build/export_brres.mjs',
+                   help='the bundled tools/export_brres.ts (node tools/bundle_cooker.mjs)')
+    p.add_argument('--data', type=Path, default=ROOT / 'data/extracted',
+                   help='extracted disc files, for courses without an assets/courses folder')
     p.add_argument('--jobs', type=int, default=6)
-    p.add_argument('--courses', type=str, default='', help='comma-separated catalog indices (default all)')
-    p.add_argument('--export-mk7-markers', action='store_true', help='write the eight markers from the MK7 dump to tools/release/mk7_markers and exit')
     a = p.parse_args()
-    if a.export_mk7_markers:
-        from mk7_assets import race_textures
-        MK7_SHIPPED.mkdir(parents=True, exist_ok=True)
-        for name, array in race_textures(a.mk7_cci, MK7_MARKERS).items():
-            Image.fromarray(array, 'RGBA').save(MK7_SHIPPED / (marker_key(name) + '.png'))
-        return
     (a.output / 'textures').mkdir(parents=True, exist_ok=True)
     catalog = courses()
-    # Battle arenas are appended to the runtime course catalog, but have no
-    # lap checkpoints and are not part of the 32-course race-map atlas.
-    if len(catalog) < 32:
-        raise SystemExit(f'Expected at least 32 race courses, found {len(catalog)}')
-    catalog = catalog[:32]
-    wanted = [int(i) for i in a.courses.split(',')] if a.courses else list(range(len(catalog)))
-    manifest_path = a.output / 'race-map.json'
-    manifest = json.loads(manifest_path.read_text()) if manifest_path.exists() else {'version': 1, 'courses': []}
-    previous = {c['index']: c for c in manifest.get('courses', [])}
+    manifest = {'version': 2, 'courses': []}
     with concurrent.futures.ProcessPoolExecutor(max_workers=a.jobs) as pool:
-        jobs = {pool.submit(cook_course, i, catalog[i], a.output): i for i in wanted}
-        for job in concurrent.futures.as_completed(jobs):
-            result = job.result()
-            previous[result['index']] = result
-            print(f"{result['index']:2d} {result['name']:24s} {result['size'][0]}x{result['size'][1]} "
-                  f"{result['unitsPerPixel']:.1f} u/px road {result['roadWidth']:.0f}", flush=True)
-    manifest['courses'] = [previous[i] for i in sorted(previous)]
-    if len(manifest['courses']) != len(catalog):
-        raise SystemExit('Cook every course before writing the header (missing maps)')
-    atlas_size, rects = cook_atlas(a.output, a.mk7_cci, manifest)
+        jobs = [pool.submit(cook_course, i, c, a.output, a.data, a.exporter) for i, c in enumerate(catalog)]
+        for job in jobs:
+            r = job.result()
+            manifest['courses'].append(r)
+            s = r['stats']
+            print(f"{r['index']:2d} {r['name']:24s} {r['format']:8s} square {r['square'][2] - r['square'][0]:8.0f} "
+                  f"tris {s['triangles']} drawn {s['drawn']} culled {s['culled']}", flush=True)
+    atlas_size, rects = cook_atlas(a.output, manifest)
     timer, timer_source = timer_layout()
-    manifest['timer'] = {'source': timer_source.relative_to(ROOT).as_posix(), 'sha256': digest(timer_source), 'panes': timer}
-    manifest_path.write_text(json.dumps(manifest, indent=1) + '\n')
-    write_header(manifest, atlas_size, rects, timer, timer_source)
-    print(json.dumps({'maps': len(manifest['courses']), 'atlas': atlas_size,
+    manifest['timer'] = {'source': timer_source.relative_to(ROOT).as_posix(), 'sha256': digest(timer_source), 'scale': TIMER_SCALE, 'panes': timer}
+    (a.output / 'race-map.json').write_text(json.dumps(manifest, indent=1) + '\n')
+    write_header(manifest, atlas_size, rects, timer)
+    print(json.dumps({'maps': len(manifest['courses']), 'atlas': atlas_size, 'atlasBytes': manifest['atlas']['t3xBytes'],
                       'mapBytes': sum(c['t3xBytes'] for c in manifest['courses'])}))
 
 

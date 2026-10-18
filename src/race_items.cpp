@@ -31,7 +31,7 @@ void RaceItems::reset(const std::vector<ItemBox>& boxes,unsigned racers,uint32_t
     itemSpawnTimers_={1800,1800,900,1200};
     blooperCaster_=MaxRacers;blooperSelectionFrame_=blooperStartFrame_=blooperBusyUntil_=0;
     powTimer_=0;powUser_=MaxRacers;powTargets_={};
-    deployments_={};mushroomUses_={};
+    deployments_={};wheelieReference_={};mushroomUses_={};mushroomPulse_={};
     karts_->resetKarts();
     events_.clear();events_.reserve(64);sounds_.clear();sounds_.reserve(32);stepSounds_=0;count_=std::min(racers,MaxRacers);rng_=seed?seed:1;frame_=0;active_=contactsDone_=false;
 }
@@ -187,15 +187,18 @@ void RaceItems::applyLoss(unsigned player,const ItemKartLoss& loss){
         ItemKind kind=h.item==ItemKind::TripleGreenShell?ItemKind::GreenShell:h.item==ItemKind::TripleRedShell?ItemKind::RedShell:h.item==ItemKind::TripleBanana?ItemKind::Banana:h.item==ItemKind::TripleMushroom?ItemKind::Mushroom:h.item;
         if((kind==ItemKind::GreenShell||kind==ItemKind::RedShell||kind==ItemKind::Mushroom||kind==ItemKind::Star||trapItem(kind))&&h.charges&&!inventoryDrops_[player].ticks){
             auto& drop=inventoryDrops_[player];drop={};drop.kind=kind;drop.count=h.charges;drop.ticks=10;
-            // 2a18bc: table directions, random rotation and per-axis [1,1.2)
-            // multipliers. Physical release occurs at 7,5,3 remaining.
-            const float angle=float(random()&65535)*(2*Pi/65536.f);
+            // 2a18bc (PAL fn_1_2ABF9C 0x807BC350): table directions, random rotation and per-axis
+            // [1,1.2) multipliers, 20 units for a type with property +0x58, else 15 (0x808A6678 /
+            // 0x808A667C). A Time Trial (item flag 0x809C38BC) draws no random numbers: angle
+            // 5000 and multiplier 1.1. Physical release occurs at 7,5,3 remaining.
+            const bool fixed=timeTrial_;
+            const float angle=float(fixed?5000u:(random()&65535))*(2*Pi/65536.f);
             const Vec3 forward=normalized(racers_[player].forward,{0,0,1}),right=normalized(cross(racers_[player].up,forward),{1,0,0});
             for(unsigned n=0;n<drop.count;++n){
                 const float theta=drop.count==1?0:drop.count==2?(n? -2*Pi/3:2*Pi/3):n*2*Pi/3;
-                const float x=std::cos(theta)*(1+float(random()>>8)*(.2f/16777216.f));
-                const float z=std::sin(theta)*(1+float(random()>>8)*(.2f/16777216.f));
-                const float magnitude=kind==ItemKind::Star?15.f:20.f;
+                const float x=std::cos(theta)*(1+(fixed?.1f:float(random()>>8)*(.2f/16777216.f)));
+                const float z=std::sin(theta)*(1+(fixed?.1f:float(random()>>8)*(.2f/16777216.f)));
+                const float magnitude=groundItem(kind,timeTrial_)?20.f:15.f;
                 drop.velocity[n]=right*(magnitude*(x*std::cos(angle)-z*std::sin(angle)))+forward*(magnitude*(z*std::cos(angle)+x*std::sin(angle)));
             }
         }
@@ -239,26 +242,27 @@ void RaceItems::updateHeldItems(unsigned player,ItemWorldQuery query){
     const auto prop=itemProperties(unsigned(h.heldKind));
     state.previous=state.positions;
     if(state.age<65535)++state.age;
+    const HeldFrame frame=heldFrame(state.up,state.lift,racer,wheelieReference_[player]);
     // The source computes positions using the previous tick's terrain volume,
     // then grows the object and updates its separate contact volume.
     if(trailing(h.heldKind)){
         const float terrain=prop.terrain*state.scales[0]*racer.scale.y;
         const float oldHop=state.trailing.hop;
-        state.trailing.step(trailingPose(racer,terrain),h.heldCharges);
+        state.trailing.step(trailingPose(racer,frame,terrain),h.heldCharges);
         for(unsigned slot=0;slot<h.heldCharges;++slot){
             Vec3 position=state.trailing.positions[slot];
             const float slotTerrain=prop.terrain*state.scales[slot]*racer.scale.y;
-            if(slot)position+=racer.up*(slotTerrain-terrain);
+            if(slot)position+=frame.up*(slotTerrain-terrain);
             state.trailing.positions[slot]=position;
-            const auto surface=query?query(state.previous[slot],position,slotTerrain):ItemSurface{};
-            if(surface.kill||surface.cannon){removeHeld(player,slot,true);break;}
+            const auto surface=query?query(state.previous[slot],position,slotTerrain,HeldItemKclMask):ItemSurface{};
             state.trailing.correct(slot,surface.correction,length(surface.correction)>.0001f);
             state.positions[slot]=state.trailing.positions[slot];
             // 27d9b8/27da58: rear-facing traps, forward-facing shells, spring
-            // tilt from hop displacement, and .08 up-vector response.
-            Vec3 facing=normalized(racer.forward+state.trailing.backward*2+Vec3{0,-.0007f*state.trailing.hop*(state.trailing.hop-oldHop),0},-racer.forward);
+            // tilt from hop displacement, and .08 up-vector response: the head toward the
+            // holder's Y (0x80792A9C), each follower toward the item ahead (0x80793B94).
+            Vec3 facing=normalized(frame.forward+state.trailing.backward*2+Vec3{0,-.0007f*state.trailing.hop*(state.trailing.hop-oldHop),0},-frame.forward);
             if(h.heldKind==ItemKind::GreenShell||h.heldKind==ItemKind::RedShell)facing=-facing;
-            state.ups[slot]=normalized(lerp(state.ups[slot],racer.up,.08f),racer.up);
+            state.ups[slot]=normalized(lerp(state.ups[slot],slot?state.ups[slot-1]:frame.up,.08f),frame.up);
             state.forwards[slot]=facing;
             const float before=state.scales[slot];
             state.scales[slot]=heldGrowth(state.scales[slot],prop.heldScale,state.age,singleHeld(h.heldKind),slot);
@@ -268,20 +272,31 @@ void RaceItems::updateHeldItems(unsigned player,ItemWorldQuery query){
         }
         return;
     }
-    // 27f654: slot orbit and model spin are independent uint16 angles.
-    if(state.angularSpeed<1200)state.angularSpeed+=70;
-    state.angle+=state.angularSpeed;state.spin+=2000;
-    state.radiusX+=.2f*((racer.itemGeometry[1]+30)*racer.scale.z-state.radiusX);
-    state.radiusZ+=.2f*((racer.itemGeometry[0]+30)*racer.scale.x-state.radiusZ);
+    // 27f654 (PAL fn_1_2842E0 0x80794694): slot orbit and model spin are independent uint16
+    // angles. In an action (status 32) the ring stops and its speed resets; a trick (status 47,
+    // 54) slows it to .7 (0x808A4D74). It gains 70 a frame up to 1200, plus min(int(3 x speed),
+    // 300) (0x808A4D58), 300 when reversing.
+    if(racer.inAction)state.angularSpeed=0;
+    else{
+        if(racer.trickRotating)state.angularSpeed=uint16_t(float(state.angularSpeed)*.7f);
+        if(state.angularSpeed<1200)state.angularSpeed+=70;
+        const int drive=int(3*racer.speed);
+        state.angle=uint16_t(state.angle+state.angularSpeed+(uint16_t(drive)>300?300:drive));
+    }
+    state.spin+=2000;
+    // Front radius (+0x160) scale.x * (itemUnk170 + 30), side radius (+0x15c) scale.z *
+    // (itemUnk174 + 30), both eased .2: the ring is longer than it is wide.
+    state.radiusX+=.2f*((racer.itemGeometry[0]+30)*racer.scale.x-state.radiusX);
+    state.radiusZ+=.2f*((racer.itemGeometry[1]+30)*racer.scale.z-state.radiusZ);
     state.hop=(state.hop+.4f*racer.hop)*.8f;
-    const Vec3 forward=normalized(racer.forward,{0,0,1}),up=normalized(racer.up,{0,1,0});
-    const Vec3 right=normalized(cross(up,forward),{1,0,0});
-    const Vec3 center=racer.position+forward*(racer.itemGeometry[3]*racer.scale.z)+up*(racer.itemGeometry[2]*racer.scale.y+prop.terrain*state.scales[0]*racer.scale.y+state.hop-racer.hop);
+    // The ring lies in the holder's frame (heldFrame), not the body's: bike lean and pitch
+    // would otherwise lift the outer shells off the road.
+    const Vec3 forward=frame.forward,up=frame.up,right=frame.right;
+    const Vec3 center=frame.anchor+up*(racer.itemGeometry[2]*racer.scale.y+prop.terrain*state.scales[0]*racer.scale.y+state.hop-racer.hop);
     for(unsigned slot=0;slot<3;++slot)if(h.heldMask&(1u<<slot)){
         const float angle=float(state.angle)*(2*Pi/65536.f)+slot*(2*Pi/3.f);
         state.positions[slot]=center+forward*(state.radiusX*std::cos(angle))+right*(state.radiusZ*std::sin(angle));
-        const auto surface=query?query(state.previous[slot],state.positions[slot],prop.terrain*state.scales[slot]*racer.scale.y):ItemSurface{};
-        if(surface.kill||surface.cannon){removeHeld(player,slot,false);continue;}
+        const auto surface=query?query(state.previous[slot],state.positions[slot],prop.terrain*state.scales[slot]*racer.scale.y,HeldItemKclMask):ItemSurface{};
         auto& correction=state.trailing.corrections[slot];
         correction=length(surface.correction)>.0001f?lerp(correction,surface.correction,.2f):correction*.9f;
         state.positions[slot]+=correction;
@@ -294,10 +309,11 @@ void RaceItems::scatterHeld(unsigned player,unsigned slot){
     auto& h=hud_[player];auto& d=deployments_[player];
     const ItemKind kind=baseKind(h.heldKind);
     auto& a=spawn(player,kind,true,&d.positions[slot]);a.scattered=true;a.target=-1;a.guidance={};
-    // Shared dropped-object initializer 291f34: tangent velocity, 25-unit
-    // up impulse plus clamped inherited vertical motion and radial 13*index.
+    // Shared dropped-object initializer 291f34 (PAL fn_1_296BC0 0x807A6F74): tangent velocity,
+    // up impulse of 25 with property +0x58, else 35 (0x808A5680 / 0x808A5684), plus clamped
+    // inherited vertical motion and radial 13*index.
     const auto& r=racers_[player];const Vec3 up=normalized(r.up,{0,1,0});
-    a.velocity=tangent(d.positions[slot]-d.previous[slot],up)+up*(25+std::clamp(dot(itemMotion(r),up),0.f,1.2f))+
+    a.velocity=tangent(d.positions[slot]-d.previous[slot],up)+up*((groundItem(kind,timeTrial_)?25.f:35.f)+std::clamp(dot(itemMotion(r),up),0.f,1.2f))+
         normalized(d.positions[slot]-r.position,{})*(13.f*(slot+1));
     a.scale=std::max(.8f,d.scales[slot]);a.lifetime=1800;a.ownerImmunity=7;
     const auto prop=itemProperties(unsigned(kind));a.radius=prop.releasedContact*a.scale;a.terrainRadius=prop.terrain*a.scale;
@@ -378,9 +394,13 @@ void RaceItems::use(unsigned player,bool backwards){
     if(singleHeld(kind)||kind==ItemKind::TripleGreenShell||kind==ItemKind::TripleRedShell||kind==ItemKind::TripleBanana){
         h.deployed=true;h.heldKind=kind;h.heldCharges=h.charges;h.heldMask=uint8_t((1u<<h.charges)-1);
         h.item=ItemKind::None;h.charges=0;deployments_[player]={};
-        auto& state=deployments_[player];
-        if(trailing(kind)){state.trailing.init(trailingPose(racers_[player]));state.positions=state.trailing.positions;}
-        else state.positions.fill(racers_[player].position);
+        auto& state=deployments_[player];const auto& racer=racers_[player];
+        // The holder frame starts as the body pose (0x80791A94) and takes one heldFrame step
+        // (0x80791AFC); the ring starts at its centre, without radius (fn_1_2841A8 0x8079455C).
+        state.up=racer.up;
+        const HeldFrame frame=heldFrame(state.up,state.lift,racer,wheelieReference_[player]);
+        if(trailing(kind)){state.trailing.init(trailingPose(racer,frame));state.positions=state.trailing.positions;}
+        else state.positions.fill(frame.anchor+frame.up*(racer.itemGeometry[2]*racer.scale.y));
         // TripleTrailPrepare 8078a534 / SpinPrepare 8078b664: SE_ITM_EQUIP for the triples.
         if(!singleHeld(kind))sound(ItemSoundCue::Equip,player,kind,racers_[player].position);
         state.previous=state.positions;state.ups.fill(racers_[player].up);state.forwards.fill(racers_[player].forward);return;
@@ -388,12 +408,12 @@ void RaceItems::use(unsigned player,bool backwards){
     switch(kind){
     case ItemKind::Mushroom:case ItemKind::TripleMushroom:
         // RMCU useMushroom 0x8079f1a8 -> KartMove::activateMushroom.
-        karts_->activateMushroom(player);events_.push_back({ItemEffect::Mushroom,uint8_t(player)});h.ink=h.inkDelay=0;++mushroomUses_[player];break;
+        karts_->activateMushroom(player);mushroomPulse_[player]=true;events_.push_back({ItemEffect::Mushroom,uint8_t(player)});h.ink=h.inkDelay=0;++mushroomUses_[player];break;
     case ItemKind::GoldenMushroom:
         // RMCU useGolden 0x8079f2bc: a 450-frame window of mushrooms every 12 frames.
         // Each use is a new press (no repeat while held).
         if(!h.golden)h.golden=GoldenDuration;
-        karts_->activateMushroom(player);events_.push_back({ItemEffect::Mushroom,uint8_t(player)});h.ink=h.inkDelay=0;++mushroomUses_[player];return;
+        karts_->activateMushroom(player);mushroomPulse_[player]=true;events_.push_back({ItemEffect::Mushroom,uint8_t(player)});h.ink=h.inkDelay=0;++mushroomUses_[player];return;
     case ItemKind::Star:
         // RMCU useStar 0x807a860c: the kart may refuse (action, Bullet); the item is spent
         // either way. An accepted Star clears Blooper ink (activateStar bit 92).
@@ -492,6 +512,8 @@ void RaceItems::powStomp(unsigned stomp){
 }
 void RaceItems::updateHolder(unsigned i){
     auto& h=hud_[i];
+    // ItemHolderPlayer_update clears +0x238 first on every path (PAL 0x807979D8 / 0x807979E8).
+    mushroomPulse_[i]=false;
     // The tethered Blue Shell leaves on the update after its use and frees the slot.
     if(h.slotLock==ItemKind::BlueShell)h.slotLock=ItemKind::None;
     tick(h.ink);
@@ -535,7 +557,10 @@ void RaceItems::updateHolder(unsigned i){
         const auto velocity=drop.velocity[--drop.count];
         auto& a=spawn(i,drop.kind,true,&racers_[i].position);a.scattered=true;a.guidance={};a.target=-1;
         const Vec3 up=normalized(racers_[i].up,{0,1,0}),inherited=itemMotion(racers_[i]);
-        a.velocity=tangent(velocity+inherited*.7f,up)+up*((drop.kind==ItemKind::Star?35.f:25.f)+std::clamp(dot(inherited,up),0.f,1.2f));
+        // fn_1_2ABDBC (PAL 0x807BC170): + 0.7 x the kart's motion, then fn_1_296BC0's up impulse
+        // (0x807A6F74): 25 with property +0x58, else 35. The scale stays fn_1_2ABF9C's 0.05
+        // (0x808A668C); ItemHolder_spawnDirect's 0.7 is the course Mushroom's.
+        a.velocity=tangent(velocity+inherited*.7f,up)+up*((groundItem(drop.kind,timeTrial_)?25.f:35.f)+std::clamp(dot(inherited,up),0.f,1.2f));
         a.scale=.05f;a.radius=itemProperties(unsigned(a.kind)).releasedContact*a.scale;a.terrainRadius=itemProperties(unsigned(a.kind)).terrain*a.scale;
         // RMCU ItemHolder_spawnDirect: ejected items spare their owner for 7 frames.
         a.lifetime=1800;a.ownerImmunity=7;if(!drop.count)drop={};
@@ -609,6 +634,12 @@ void RaceItems::afterStep(const ItemRacer* racers,unsigned count,ItemWorldQuery 
     // A host model advances where the native kart step ran, before the item phase.
     if(active_)karts_->advance();
     for(unsigned i=0;i<count_;++i)racers_[i]=racers[i];
+    // ItemHolderPlayer_update (0x80797EC0) runs fn_1_285210 (0x807955C4) on race frame 60,
+    // countdown included: the last wheel's kart-frame y and z and its height above the kart.
+    for(unsigned i=0;i<count_;++i)if(racers_[i].wheelieReferenceFrame){
+        const auto& r=racers_[i];const Vec3 d=r.rearWheel-r.position;
+        wheelieReference_[i]={dot(d,r.up),dot(d,r.forward),d.y};
+    }
     karts_->bind(racers_.data(),count_);
     for(unsigned i=0;i<count_;++i)karts_->overlay(i,racers_[i]);
     if(!active_){for(unsigned i=0;i<count_;++i){held_[i]=inputs_[i].use;syncKart(i);}stepSounds_=sounds_.size();return;}

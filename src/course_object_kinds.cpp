@@ -1,6 +1,8 @@
 #include "mkw/course_object_kinds.hpp"
 #include "mkw/factory_belts.hpp"
 #include "mkw/render_quality.hpp"
+#include <game/kart/KartObjectManager.hh>
+#include <game/system/RaceConfig.hh>
 #include <game/field/ObjectDirector.hh>
 #include <game/field/obj/ObjectBase.hh>
 #include <game/field/obj/ObjectBasabasa.hh>
@@ -80,6 +82,26 @@ void drawGeneric(ObjectDraw& d,Visual& v){
     d.submit(t.model,m,a);
     if(v.shadow.model)d.shadow(v.shadow.model,m);
 }
+// DK Summit's cannon (DonkyCannon_wii) has one clip, the shot: it plays once
+// when a kart is launched (CannonStart) and otherwise rests on frame zero,
+// where the generic presenter looped it every 39 frames.
+void drawDonkyCannon(ObjectDraw& d,Visual& v){
+    const auto* karts=K::Kart::KartObjectManager::Instance();
+    const auto* config=K::System::RaceConfig::Instance();
+    bool launching=false;
+    for(unsigned i=0;karts&&config&&i<config->raceScenario().playerCount;++i)
+        launching|=karts->object(i)->status().onBit(K::Kart::eStatus::CannonStart);
+    // lastState: -1 never fired, 0 idle, 1 a launch in progress.
+    if(launching&&v.lastState!=1)v.stateTick=d.tick;
+    if(launching)v.lastState=1;else if(v.lastState==1)v.lastState=0;
+    const float last=std::max(clipFrames(v.main,v.main.clip)-1.f,0.f);
+    const float age=float(d.tick-v.stateTick);
+    const float frame=v.lastState>=0&&age<last?age:0.f;
+    const bool far=v.low.model&&length(position(v.placement)-d.camera)>renderQuality().objectLowDistance;
+    const Tracks& t=far?v.low:v.main;
+    d.submit(t.model,v.placement,animAt(t,frame));
+    if(v.shadow.model)d.shadow(v.shadow.model,v.placement);
+}
 // Toad's Factory's belts scroll their SRT0 at the rate their constructor stores
 // (USA 0x807F0C4C: BeltEasy 0.9, BeltCrossing 1.25; classifyObject sets v.rate).
 // The switching belt (ObjBeltCurveA) also loads BeltCurveB and BeltCurveC, the
@@ -109,9 +131,13 @@ void drawSun(ObjectDraw& d,Visual& v){
 }
 void drawKuribo(ObjectDraw& d,Visual& v){
     const auto& k=*static_cast<const K::Field::ObjectKuribo*>(v.object);
+    // Squashed Goombas blink out (retail 0x806DC790); the walk clip holds while
+    // hit, blinking or popping back up (0x806DB5B0), Kinoko's scale squashes it.
+    if(!k.visible())return;
+    if(k.walking())v.phase=k.animTimer();
     const C3D_Mtx m=liveMatrix(k);
     // Kinoko's walk timer is the CHR0 frame that gates each step.
-    Anim a;a.clip=v.clips[0];a.frame=k.animTimer();
+    Anim a;a.clip=v.clips[0];a.frame=v.phase;
     d.submit(v.main.model,m,a);
     if(v.shadow.model)d.shadow(v.shadow.model,m);
 }
@@ -423,10 +449,11 @@ void drawKoopaBall(ObjectDraw& d,Visual& v){
         if(v.extra[0].model)d.submit(v.extra[0].model,m,animAt(v.extra[0],float(d.tick)));
         if(v.shadow.model)d.shadow(v.shadow.model,m);
     }else if(state==2){
-        // The ball's collision is 870 units at scale 1; the bombCore mesh is 87.
-        C3D_Mtx e=m;const float factor=10.f;
-        for(unsigned r=0;r<3;++r)for(unsigned c=1;c<4;++c)e.r[r].c[c]*=factor;
-        drawExplosion(d,e,float(int(b.explodeFrames())-b.explodeTimer()));
+        // PAL 0x807719E8 (from calcTangible 0x80770F4C): bombCore at the ball's
+        // position with identity rotation and uniform scale 2.0 (0x808CF3F4).
+        // The cooked pose bank already holds the CHR0 scale (mesh radius ~870 at
+        // full size), so 2 x 870 is Kinoko's 1740-unit RADIUS_AABB.
+        drawExplosion(d,basisMatrix({1,0,0},{0,1,0},{0,0,1},vec(b.pos()),{2.f,2.f,2.f}),float(int(b.explodeFrames())-b.explodeTimer()));
     }
 }
 // GBA Shy Guy Beach cannonballs (Kinoko ObjectHeyhoBall): nothing while in
@@ -438,8 +465,12 @@ void drawHeyhoBall(ObjectDraw& d,Visual& v){
     const int state=b.stateId();
     if(state==0)return;
     if(state==3){
-        const float scale=1500.f/87.f;
-        drawExplosion(d,basisMatrix({1,0,0},{0,1,0},{0,0,1},vec(b.pos()),{scale,scale,scale}),float(b.stateFrame()));
+        // Enter-explode PAL 0x806D0D84: bombCore at m_initPos with identity
+        // rotation and uniform scale 1500/900 (1500.0 at 0x808C4BB8, 900 the
+        // bombCore normalisation at 0x8089FDAC). While exploding Kinoko keeps
+        // the ball at m_initPos - 50 Y (enterBlinking), so m_initPos is pos + 50 Y.
+        const float scale=1500.f/900.f;
+        drawExplosion(d,basisMatrix({1,0,0},{0,1,0},{0,0,1},vec(b.pos())+Vec3{0,50,0},{scale,scale,scale}),float(b.stateFrame()));
         return;
     }
     const C3D_Mtx m=liveMatrix(b);
@@ -685,7 +716,8 @@ bool hidden(const Visual& v,int course){
     // boxes are race items. Coconut Mall keeps its validated palm/escalator path.
     // The Factory line also owns its moving conveyor bricks, which are scenery.
     if(static_cast<ObjectId>(v.geo->id())==ObjectId::ItemboxLine)return false;
-    static const char* names[]={"itembox","pocha","pochaYogan","pochaMori","f_itembox","s_itembox","sin_itembox","w_itembox"};
+    // Arena coins (coin, pile_coin) are Coin Runners pickups, never Balloon Battle scenery.
+    static const char* names[]={"itembox","pocha","pochaYogan","pochaMori","f_itembox","s_itembox","sin_itembox","w_itembox","coin","pile_coin"};
     for(const char* n:names)if(named(v,n))return true;
     if(course==5&&(named(v,"PalmTree")||named(v,"escalator")||named(v,"escalator_group")))return true;
     return false;
@@ -703,6 +735,7 @@ bool classifyObject(Visual& v,const ObjectAssets& assets,int course){
     const auto id=static_cast<ObjectId>(v.geo->id());
     const bool live=v.object!=nullptr;
     if(classifyMover(v,assets))return true;
+    if(named(v,"DonkyCannon_wii")){v.present=drawDonkyCannon;return true;}
     if(id==ObjectId::Kuribo&&live){
         v.present=drawKuribo;v.clips[0]=clip(v.main,"walk_l");
     }else if(id==ObjectId::Wanwan&&live){

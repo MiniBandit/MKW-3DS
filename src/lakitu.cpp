@@ -87,9 +87,11 @@ struct Lakitu::Impl {
     Mode mode=Mode::Away;Phase phase=Phase::Drop;Interp interp;
     unsigned phaseTimer=0,ascendTimer=0,introFrames=0,lastLap=1,tick=0;
     bool started=false,wasRespawning=false,wasFinished=false,released=false;
+    bool visible=true; // LakituInput::visible of the last step
     float reverseActivation=0;bool reverseOn=false;
     // Direct placement (pickup, goal): position, facing, oscillation phases.
     Vec3 pos{},goalFrom{},goalTo{},forward{0,0,1};float phaseX=0,phaseY=0;
+    Vector3f anchor; // JugemMove +0x1c as last set here (the rescue ascent adds to it)
     C3D_Mtx world{};
     Attachment attachment=None;int digit=-1;std::array<uint32_t,6> lamps{};
     const char* bodyClip="wait";const char* rodClip="wait";unsigned clipStart=0;int clipFrame=-1;
@@ -97,6 +99,13 @@ struct Lakitu::Impl {
         // USA 0x8071ECA4: yaw-only basis from the camera, at the kart.
         const Vec3 up{0,1,0},side=normalized(cross(up,forwardH),{1,0,0});
         return vec(kart->pos())+side*local.x+up*local.y+forwardH*local.z;
+    }
+    // Rescue target (PAL 0x807242F4 / 0x80724430): the kart's full 3-D forward (mainRot * ez)
+    // times 180, plus 100 up, from the kart.
+    Vector3f rescueTarget() const {
+        Vector3f local=kart->mainRot().rotateVector(Vector3f::ez);
+        local.x=local.x*180.f;local.z=local.z*180.f;local.y=local.y*180.f+100.f;
+        return kart->pos()+local;
     }
     Vec3 upright(Vec3 local) const {
         // JugemUnit::transformLocalToWorldUpright (USA 0x807230D4).
@@ -157,10 +166,10 @@ void Lakitu::unload(){
 }
 void Lakitu::reset(){
     auto& m=*impl_;m.mode=Mode::Away;m.move.reset();m.kart=nullptr;m.introFrames=0;m.lastLap=1;m.started=false;
-    m.wasRespawning=m.wasFinished=false;m.reverseActivation=0;m.reverseOn=false;m.attachment=None;m.tick=0;
+    m.wasRespawning=m.wasFinished=false;m.reverseActivation=0;m.reverseOn=false;m.attachment=None;m.tick=0;m.visible=true;
 }
 void Lakitu::step(const LakituInput& in){
-    auto& m=*impl_;if(!m.ready||!in.kart)return;
+    auto& m=*impl_;m.visible=in.visible;if(!m.ready||!in.kart)return;
     if(in.kart!=m.kart){m.kart=in.kart;m.move=std::make_unique<Kinoko::Field::JugemMove>(m.kart);m.move->init();m.mode=Mode::Away;}
     ++m.tick;
     const auto& status=m.kart->status();
@@ -178,7 +187,11 @@ void Lakitu::step(const LakituInput& in){
         m.started=true;m.begin(Mode::Start,Phase::Drop,120,m.cameraFrame(forwardH,{0,2000,10}));
         m.attachment=Signal;m.digit=-1;m.clips("jg_ww","jg_ww");
     }else if(respawning&&!m.wasRespawning){
-        m.mode=Mode::Rescue;m.phase=Phase::Stay;m.phaseTimer=0;m.attachment=None;m.forward=forwardH*-1.f;m.clips("wait","pickup");
+        // JugemUnit rescue enter (PAL 0x807242F4): JugemMove starts at the rescue target,
+        // gliding (+0x140), not descending (+0x148), facing from the kart's main rotation.
+        m.mode=Mode::Rescue;m.phase=Phase::Stay;m.phaseTimer=0;m.attachment=None;m.clips("wait","pickup");
+        m.move->init();m.move->setPos(m.rescueTarget(),true);m.move->setAwayOrDescending(true);
+        m.move->setForwardFromKartObjMainRot(true);m.move->setDescending(false);m.anchor=Vector3f::zero;
     }else if(in.finished&&!m.wasFinished){
         m.mode=Mode::Goal;m.phase=Phase::Drop;m.interp.init(60);m.attachment=Flag;m.forward=forwardH*-1.f;m.clips("jg_wy","wait");
         m.goalFrom=m.cameraFrame(forwardH,{0,2000,700});m.goalTo=m.cameraFrame(forwardH,{0,120,700});m.pos=m.goalFrom;
@@ -241,15 +254,22 @@ void Lakitu::step(const LakituInput& in){
         move.calc();break;
     }
     case Mode::Rescue:{
-        // Lakitu carries the kart down for the 110 InRespawn ticks, then rises.
+        // JugemUnit rescue calc (PAL 0x80724430): JugemMove follows the rescue target for
+        // the kart's InRespawn time (fn_1_78C7C: 110 frames; 140 with state bit 135, which
+        // this port does not produce), then the anchor climbs (0,5,0) + t * (0,2,0) a frame
+        // (0x809C2A34 / 0x809C2A4C) and Lakitu leaves after t > 60 (0x808C959C).
+        constexpr unsigned CarryFrames=110,RiseFrames=60;
+        ++m.phaseTimer;
         if(m.phase==Phase::Stay){
-            m.pos=kartPos+forwardH*180.f+Vec3{0,100,0};
-            if(!respawning){m.phase=Phase::Ascend;m.phaseTimer=0;m.clips("wait","wait");}
+            m.anchor=m.rescueTarget();move.setAnchorPos(m.anchor);
+            if(m.phaseTimer>CarryFrames){m.phaseTimer=0;m.phase=Phase::Ascend;m.clips("wait","wait");}
         }else{
-            m.pos=m.pos+Vec3{0,5,0}+Vec3{0,2,0}*float(m.phaseTimer);
-            if(++m.phaseTimer>=60)m.mode=Mode::Away;
+            m.anchor=m.anchor+Vector3f(0.f,5.f,0.f);
+            m.anchor=m.anchor+Vector3f(0.f,2.f,0.f)*float(m.phaseTimer);
+            move.setAnchorPos(m.anchor);
+            if(m.phaseTimer>RiseFrames)m.mode=Mode::Away;
         }
-        m.place(m.pos,kartPos-m.pos,false);break;
+        move.calc();break;
     }
     case Mode::Goal:{
         if(m.phase==Phase::Drop){
@@ -265,7 +285,7 @@ void Lakitu::step(const LakituInput& in){
         m.place(m.pos,kartPos-m.pos,true);break;
     }
     }
-    if(m.mode==Mode::Start||m.mode==Mode::Lap||m.mode==Mode::Reverse){
+    if(m.mode==Mode::Start||m.mode==Mode::Lap||m.mode==Mode::Reverse||m.mode==Mode::Rescue){
         const auto& t=move.transform();float rows[12];
         for(unsigned r=0;r<3;++r)for(unsigned c=0;c<4;++c)rows[r*4+c]=t[r,c];
         store(m.world,rows);
@@ -285,7 +305,7 @@ uint16_t Lakitu::soundLoop()const{
 }
 Vec3 Lakitu::position()const{const auto& w=impl_->world;return {w.r[0].c[0],w.r[1].c[0],w.r[2].c[0]};}
 void Lakitu::draw(Renderer& renderer){
-    auto& m=*impl_;if(!m.ready||!m.kart||m.mode==Mode::Away)return;
+    auto& m=*impl_;if(!m.ready||!m.kart||m.mode==Mode::Away||!m.visible)return;
     const unsigned elapsed=m.tick-m.clipStart;
     auto frameOf=[&](DriverAnimation& bank,const char* name){
         const int clip=bank.find(name);if(clip<0)return std::pair<int,unsigned>{-1,0};

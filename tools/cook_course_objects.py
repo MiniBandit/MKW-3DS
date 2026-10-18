@@ -11,7 +11,7 @@ Original archives are only read; nothing in them is modified.
 import argparse, concurrent.futures, hashlib, json, os, struct, subprocess, sys
 from pathlib import Path
 from course_catalog import ROOT, courses
-from cook_model import cook
+from cook_model import cook, COURSE_TEXELS
 
 OUT = ROOT / 'sd-card/3ds/mkw-3ds'
 EXCLUDED = {'course_model.brres', 'vrcorn_model.brres', 'map_model.brres'}
@@ -79,7 +79,8 @@ def cook_course(course, force):
             with (work / 'export.log').open('w') as log:
                 subprocess.run(['node', str(ROOT / 'build/export_brres.mjs'), str(archive), str(work), model],
                                env=env, stdout=log, stderr=subprocess.STDOUT, check=True)
-            parts = cook(work, OUT, stem, 256, preserve_vertices=True, texture_prefix=texture_prefix, encoded_textures=encoded)
+            parts = cook(work, OUT, stem, preserve_vertices=True, texture_prefix=texture_prefix, encoded_textures=encoded,
+                         texel_budget=COURSE_TEXELS, brres=[archive, *(folder / n for n in ('course_model.brres', 'vrcorn_model.brres') if (folder / n).is_file())])
             if len(parts) != 1:
                 raise ValueError(f'{course["name"]}: {resource}/{model} needs {len(parts)} mesh parts')
             info = json.loads((work / 'bank.json').read_text())

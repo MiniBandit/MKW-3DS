@@ -121,7 +121,7 @@ uint32_t RaceResultsFlow::step(const RaceFlowInput& in){
   if(in.accept){chosen_=int(cursor_);enter(RaceFlowPhase::Chosen);events|=EventOptionChosen;}
   break;
  case RaceFlowPhase::Chosen:
-  if(pageFrame_>=ChooseFrames)enter(RaceFlowPhase::Leaving);
+  if(pageFrame_>=ChooseFrames){enter(RaceFlowPhase::Leaving);events|=EventLeaveStart;}
   break;
  case RaceFlowPhase::Leaving:
   if(pageFrame_>=LeaveFrames){enter(RaceFlowPhase::Done);events|=EventLeave;}

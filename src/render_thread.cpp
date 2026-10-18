@@ -71,7 +71,7 @@ struct DrawCommand {
     static constexpr uint16_t Type=CmdDraw;
     const Model* model;const Vertex* vertices;C3D_Mtx transform;
     Renderer::MaterialBinder material;void* context;Renderer::ShapeVisible visible;
-    uint32_t frame,additive;bool backdrop;
+    uint32_t frame,additive;float alpha;bool backdrop;
 };
 struct DrawAtScreenCommand {
     static constexpr uint16_t Type=CmdDrawAtScreen;
@@ -101,7 +101,7 @@ struct FontSpriteCommand {
 };
 struct MaterialQuadsCommand {
     static constexpr uint16_t Type=CmdMaterialQuads;
-    const Texture* texture;const Renderer::MaterialQuad* quads;unsigned count;uint32_t color0,color1;int wrapS,wrapT;
+    const Texture* texture;const Renderer::MaterialQuad* quads;unsigned count;uint32_t color0,color1;int wrapS,wrapT,alphaRef;
 };
 struct TextCommand {static constexpr uint16_t Type=CmdText;const char* text;float x,y,size;uint32_t rgba;};
 struct ScreenDepthCommand {static constexpr uint16_t Type=CmdScreenDepth;float parallax;};
@@ -286,17 +286,17 @@ void Renderer::execute(FrameList& list){
         case CmdBottom:bottom=true;if(eye+1==eyes)beginBottom();break;
         case CmdDraw:{
             const auto& c=*static_cast<const DrawCommand*>(body);
-            execFrame_=c.frame;execAdditive_=c.additive;
+            execFrame_=c.frame;execAdditive_=c.additive;execAlpha_=c.alpha;
             drawNow(*c.model,c.vertices,c.transform,c.backdrop,c.material,c.context,c.visible);break;
         }
         case CmdDrawAtScreen:{
             const auto& c=*static_cast<const DrawAtScreenCommand*>(body);
-            execFrame_=c.frame;execAdditive_=c.additive;
+            execFrame_=c.frame;execAdditive_=c.additive;execAlpha_=1;
             drawAtScreenNow(*c.model,c.vertices,c.transform,c.x,c.y,c.brightness,c.scaleX,c.scaleY);break;
         }
         case CmdMenuIcon:{
             const auto& c=*static_cast<const MenuIconCommand*>(body);
-            execFrame_=c.frame;execAdditive_=c.additive;
+            execFrame_=c.frame;execAdditive_=c.additive;execAlpha_=1;
             drawMenuIconNow(*c.model,c.vertices,c.transform,*c.quad);break;
         }
         case CmdEnvironmentUv:{const auto& c=*static_cast<const EnvironmentUvCommand*>(body);setEnvironmentUv(c.transform,c.uv);break;}
@@ -321,7 +321,7 @@ void Renderer::execute(FrameList& list){
         }
         case CmdMaterialQuads:{
             const auto& c=*static_cast<const MaterialQuadsCommand*>(body);
-            materialQuadsNow(c.texture,c.quads,c.count,c.color0,c.color1,c.wrapS,c.wrapT);break;
+            materialQuadsNow(c.texture,c.quads,c.count,c.color0,c.color1,c.wrapS,c.wrapT,c.alphaRef);break;
         }
         case CmdText:{const auto& c=*static_cast<const TextCommand*>(body);drawScreenText(c.text,c.x,c.y,c.size,c.rgba);break;}
         case CmdScreenDepth:screenDepthNow(static_cast<const ScreenDepthCommand*>(body)->parallax);break;
@@ -350,8 +350,10 @@ void Renderer::releaseRetired(){
 }
 
 // Recording side of the public calls (renderer.cpp holds the drawing side).
-void Renderer::setFov(float degrees){
+void Renderer::setFov(float degrees,bool mirror){
     fov_=std::clamp(degrees,1.f,170.f);Mtx_PerspTilt(&mainProjection_,C3D_AngleFromDegrees(fov_),C3D_AspectRatioTop,10.f,400000.f,false);
+    // Row 1 is the screen's horizontal axis (the display is rotated).
+    if(mirror)for(int c=0;c<4;++c)mainProjection_.r[1].c[c]=-mainProjection_.r[1].c[c];
     cullProjection_=mainProjection_;
     if(recording())command<ProjectionCommand>().projection=mainProjection_;
     else projection_=mainProjection_;
@@ -484,7 +486,7 @@ void Renderer::applyBloom(){
 }
 void Renderer::drawWith(const Model& model,const C3D_Mtx& transform,bool backdrop,MaterialBinder material,const void* context,std::size_t contextSize,ShapeVisible visible){
     if(!recording()){
-        if(!renderThread){execFrame_=animationFrame;execAdditive_=additiveColor;}
+        if(!renderThread){execFrame_=animationFrame;execAdditive_=additiveColor;execAlpha_=modelAlpha;}
         drawNow(model,model.vertices,transform,backdrop,material,const_cast<void*>(context),visible);
         return;
     }
@@ -492,11 +494,11 @@ void Renderer::drawWith(const Model& model,const C3D_Mtx& transform,bool backdro
     if(context&&contextSize){copied=data(contextSize);std::memcpy(copied,context,contextSize);}
     auto& c=command<DrawCommand>();
     c.model=&model;c.vertices=model.vertices;c.transform=transform;c.material=material;c.context=copied;c.visible=visible;
-    c.frame=animationFrame;c.additive=additiveColor;c.backdrop=backdrop;
+    c.frame=animationFrame;c.additive=additiveColor;c.alpha=modelAlpha;c.backdrop=backdrop;
 }
 void Renderer::drawAtScreen(const Model& model,const C3D_Mtx& transform,float x,float y,float brightness,float scaleX,float scaleY){
     if(!recording()){
-        if(!renderThread){execFrame_=animationFrame;execAdditive_=additiveColor;}
+        if(!renderThread){execFrame_=animationFrame;execAdditive_=additiveColor;execAlpha_=1;}
         drawAtScreenNow(model,model.vertices,transform,x,y,brightness,scaleX,scaleY);
         return;
     }
@@ -506,7 +508,7 @@ void Renderer::drawAtScreen(const Model& model,const C3D_Mtx& transform,float x,
 }
 void Renderer::drawMenuIcon(const Model& model,const C3D_Mtx& transform,const UiQuad& quad){
     if(!recording()){
-        if(!renderThread){execFrame_=animationFrame;execAdditive_=additiveColor;}
+        if(!renderThread){execFrame_=animationFrame;execAdditive_=additiveColor;execAlpha_=1;}
         drawMenuIconNow(model,model.vertices,transform,quad);
         return;
     }
@@ -642,14 +644,14 @@ void Renderer::drawScreenMaterialQuads(const Texture* texture,const MaterialQuad
     if((texture&&!texture->ready)||!count)return;
     if(!recording()){materialQuadsNow(texture,quads,count,color0,color1,wrapS,wrapT);return;}
     auto& c=command<MaterialQuadsCommand>();
-    c.texture=texture;c.quads=copy(quads,count);c.count=count;c.color0=color0;c.color1=color1;c.wrapS=wrapS;c.wrapT=wrapT;
+    c.texture=texture;c.quads=copy(quads,count);c.count=count;c.color0=color0;c.color1=color1;c.wrapS=wrapS;c.wrapT=wrapT;c.alphaRef=-1;
 }
-void Renderer::drawScreenMaterialQuadsInPlace(const Texture* texture,const MaterialQuad* quads,unsigned count,uint32_t color0,uint32_t color1){
+void Renderer::drawScreenMaterialQuadsInPlace(const Texture* texture,const MaterialQuad* quads,unsigned count,uint32_t color0,uint32_t color1,int alphaRef){
     if((texture&&!texture->ready)||!count||!quads)return;
-    if(!recording()){materialQuadsNow(texture,quads,count,color0,color1,-1,-1);return;}
+    if(!recording()){materialQuadsNow(texture,quads,count,color0,color1,-1,-1,alphaRef);return;}
     // The caller keeps quads unchanged until this frame is drawn.
     auto& c=command<MaterialQuadsCommand>();
-    c.texture=texture;c.quads=quads;c.count=count;c.color0=color0;c.color1=color1;c.wrapS=-1;c.wrapT=-1;
+    c.texture=texture;c.quads=quads;c.count=count;c.color0=color0;c.color1=color1;c.wrapS=-1;c.wrapT=-1;c.alphaRef=alphaRef;
 }
 void Renderer::drawScreenText(const char* text,float x,float y,float size,uint32_t rgba){
     if(!text||size<=0)return;

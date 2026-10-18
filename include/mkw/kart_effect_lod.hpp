@@ -32,13 +32,14 @@ struct EffectClipCamera {
     std::array<Vec3,4> planes{};
     float distanceScale=1;
 
-    // A look-at camera with world up (0, 1, 0) as the port presents it. fovy is the full
+    // A look-at camera with the up vector the port presents (RaceCamera's view roll,
+    // calcUp 0x805A40D0; world up elsewhere). fovy is the full
     // vertical field of view in degrees, which RaceCamera writes to the screen camera's +0x10
     // (0x80596ffc); aspect is the screen's width / height (+0x8 / +0xc). Retail passes fovy,
     // not fovy / 2, to SinCosFIdx, so its frustum is about twice as wide as the view.
-    static EffectClipCamera lookAt(Vec3 eye,Vec3 target,float fovy,float aspect){
+    static EffectClipCamera lookAt(Vec3 eye,Vec3 target,float fovy,float aspect,Vec3 viewUp={0,1,0}){
         EffectClipCamera c;
-        const Vec3 back=normalized(eye-target,{0,0,1}),right=normalized(cross({0,1,0},back),{1,0,0}),up=cross(back,right);
+        const Vec3 back=normalized(eye-target,{0,0,1}),right=normalized(cross(viewUp,back),{1,0,0}),up=cross(back,right);
         auto toWorld=[&](Vec3 v){return right*v.x+up*v.y+back*v.z;}; // VEC3TransformNormal by the inverse view
         auto unit=[](Vec3 v){const float d=dot(v,v);return d>0.f?v*(1.f/std::sqrt(d)):v;}; // 0x80782e90
         c.position=eye;

@@ -4,6 +4,7 @@
 namespace mkw {
 class Renderer;
 class RaceResultsFlow;
+struct FlowDemoCard;
 // Retail race-flow UI drawn over the race: the out-of-bounds wipe
 // (game_image/wipe.brlyt), the VS result boards (result/position_12players)
 // and the end-of-race buttons (button/common_w004_menu). Textures are cooked
@@ -28,6 +29,13 @@ public:
  // PushButton animation groups.
  void step(const RaceResultsFlow& flow);
  void drawResults(Renderer& renderer,const RaceResultsFlow& flow);
+ // The course preview's title card (demo/course_name, demo/cup_name): its font
+ // and its one icon (FlowDemoTextures, cooked by cook_demo), loaded for the Demo
+ // section. Free them (unloadDemo, unload) only once the GPU is idle: a recorded
+ // frame may still draw them.
+ bool loadDemo(int icon);
+ void unloadDemo();
+ void drawDemo(Renderer& renderer,const FlowDemoCard& card);
 private:
  struct Impl;std::unique_ptr<Impl> impl_;
 };

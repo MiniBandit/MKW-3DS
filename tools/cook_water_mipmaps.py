@@ -38,7 +38,9 @@ def main():
     for name,source in sorted(selected.items()):
         png=ASSETS/f'textures/{name}.png';old=(ASSETS/f'textures/{name}.t3x').read_bytes()
         width,height,fmt,levels,base=payload(old)
-        if fmt not in (12,13) or levels:raise ValueError('Expected original ETC base map')
+        # tools/cook_model.py already wrote the authored GX levels: no override.
+        if levels:continue
+        if fmt not in (12,13):raise ValueError('Expected original ETC base map')
         target=output/(name+'.t3x')
         subprocess.run([str(tool('tex3ds')),'-f','etc1a4' if fmt==13 else 'etc1','-q','high',
                         '-m','box','-z','none','-o',str(target),str(png)],check=True,stdout=subprocess.DEVNULL)
