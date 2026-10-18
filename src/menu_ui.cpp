@@ -10,6 +10,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <functional>
 
 namespace mkw {
 namespace {
@@ -142,7 +143,7 @@ public:
   if(std::strstr(key,"_free"))return UiFocusFreeLoopFrame;
   return float(state.age)*rate;
  }
- void panel(const char* key,Pose p={},float alpha=1){
+ void panel(const char* key,Pose p={},float alpha=1,const std::function<void()>& beforeTails={}){
   const auto* found=uiFindPanel(key);if(!found)return;const auto& r=*found;
   // One sample of the panel's animated parent serves every part drawn below.
   const auto focus=panelFocus(key,p);
@@ -159,7 +160,7 @@ public:
     const bool resident=transition&&transition->preload&&(at==loop.firstSlice||(slice.key!=UiBorderSlices[at-1].key&&std::strcmp(slice.key,UiBorderSlices[at-1].key)));
     if(slice.frame==frame||resident)region(slice.key,slice.x,slice.y,slice.w,slice.h,slice.u0,slice.v0,slice.u1,slice.v1,p,alpha,focus);
    }
-   films(key,p,alpha,focus);
+   films(key,p,alpha,focus,beforeTails);
    return;
   }
   float x=p.x+r.x*p.sx,y=-p.y+r.y*p.sy,w=r.w*p.sx,h=r.h*p.sy,a=alpha;
@@ -167,7 +168,7 @@ public:
   // submissions (movies, icons, text) sample their full ancestry separately.
   applyMotion(x,y,w,h,a,p,focus);
   sprite(key,x,y,w,h,a,0xffffffff,p);
-  films(key,p,alpha,focus);
+  films(key,p,alpha,focus,beforeTails);
  }
  // The live pose of an independently animated film pane (color_down,
  // pikapika, waku_light), relative to the selected reference it was baked in.
@@ -184,7 +185,9 @@ public:
  // (UiPanelTails, with/without each film's depth) are composed here, in the
  // original submission order. part: 0 plain, 1 below / 2 above the movie.
  // root: panelFocus() of key, the same pane its tails were baked under.
- void films(const char* key,Pose p,float alpha,const UiTextMotion& root){
+ // beforeTails: panes the layout submits between a film and its tail
+ // pictures (main menu: text_sha/text/text_light before Picture_02/01).
+ void films(const char* key,Pose p,float alpha,const UiTextMotion& root,const std::function<void()>& beforeTails={}){
   char family[64];std::snprintf(family,sizeof family,"%s",key);
   auto cut=[&](const char* suffix){const size_t n=std::strlen(family),m=std::strlen(suffix);if(n>m&&!std::strcmp(family+n-m,suffix)){family[n-m]=0;return true;}return false;};
   unsigned part=0;if(cut("_underlay"))part=1;else if(cut("_overlay"))part=2;
@@ -211,10 +214,24 @@ public:
     const auto first=out.size();sprite(f->key,x,y,w,h,alpha*std::clamp(live,0.f,1.f),0xffffffff,p);
     if(out.size()>first)out.back().additive=f->blend!=0;
    }
+   if(i==0&&beforeTails)beforeTails();
+   // ButtonMachine (PAL 808478f4) hides "hatena", the locked-vehicle "?",
+   // once the machine's thumbnail is set; every machine here is unlocked.
+   // The cook baked it into the vehicle tail, whose other pictures are the
+   // edge strips (|x| >= 65): draw the tail without the hatena columns.
+   const auto* hidden=!std::strcmp(family,"vehicle")?pane(stateKey,"hatena"):nullptr;
    for(const auto& t:UiPanelTails){
     if(t.part!=part||std::strcmp(t.panel,family)||std::strcmp(t.after,f->pane))continue;
     auto tail=[&](const char* k){
      const auto* r=*k?uiFindPanel(k):nullptr;if(!r)return;
+     if(hidden&&hidden->w>0){
+      // A resampling margin; nothing else lies within 40 units of hatena.
+      constexpr float Margin=4.f;
+      const float cut0=std::clamp(hidden->x-Margin,r->x,r->x+r->w),cut1=std::clamp(hidden->x+hidden->w+Margin,r->x,r->x+r->w);
+      if(cut0>r->x)region(k,r->x,r->y,cut0-r->x,r->h,0,0,(cut0-r->x)/r->w,1,p,alpha,root);
+      if(cut1<r->x+r->w)region(k,cut1,r->y,r->x+r->w-cut1,r->h,(cut1-r->x)/r->w,0,1,1,p,alpha,root);
+      return;
+     }
      float x=p.x+r->x*p.sx,y=-p.y+r->y*p.sy,w=r->w*p.sx,h=r->h*p.sy,a=alpha;
      applyMotion(x,y,w,h,a,p,root);
      sprite(k,x,y,w,h,a,0xffffffff,p);
@@ -340,14 +357,34 @@ public:
   }
   return tint;
  }
+ // MovieLayout draws a movie pane with its own TEV (PAL fn_1_EB7AC 805fbb60)
+ // and reads the pane material's texture SRT rotation, rounded, as a mode.
+ // Mode 3 (black_base while a drift/class/VS/battle button is Free; the
+ // Select group overrides the Loop group) scales the colour by K3 = 127/255
+ // (0x808963e0..ef also halve the chroma terms); 0 is the plain movie.
+ bool dimMovie(Pose p,const char* name,bool select)const{
+  UiFocusView view;const bool live=boundFocus(p,view)&&view.clip;
+  const UiAnimationClip* clip=live?view.clip:p.source?uiFindAnimationClip(p.source,"Select",select?"Select":"Free"):nullptr;
+  return clip&&std::lround(uiAnimationValue(*clip,name,"RLTS",2,live?view.frame:0.f,0.f))==3;
+ }
  void movie(const char* prefix,unsigned i,const char* base,const char* name,Pose p={},float a=1,float u0=0,float v0=0,float u1=1,float v1=1){
   char key[80];std::snprintf(key,sizeof key,"%s%u",prefix,i);
   unsigned frame=0;if(const auto* movie=uiFindMovie(key))frame=unsigned(double(state.age)*movie->fps*UiMovieFrameCount/(60.0*movie->frames))%UiMovieFrameCount;
   char sampled[96];std::snprintf(sampled,sizeof sampled,"%s_%u",key,frame);
+  char family[64];std::snprintf(family,sizeof family,"%s",base);bool select=false;
+  for(const char* suffix:{"_select","_free"}){const size_t n=std::strlen(family),m=std::strlen(suffix);
+   if(n>m&&!std::strcmp(family+n-m,suffix)){family[n-m]=0;select=suffix[1]=='s';break;}}
+  // MovieLayout's calc (PAL 807e8698) rewrites each movie pane's own alpha
+  // every frame: 1 until the layout activates, then (now-start)*7 up to 255.
+  // The authored alpha (drift_select black_base: 70) never reaches a playing
+  // movie, so it is divided out here; ancestors' alpha still applies.
+  const auto* node=uiFindPaneNode(family,name);
+  const float own=node&&node->alpha>0?node->alpha:1.f;
   const auto before=out.size();
-  inPane(sampled,base,name,p,a);
+  inPane(sampled,base,name,p,a/own);
   if(out.size()>before){auto& q=out.back();q.u0=u0+(u1-u0)*q.u0;q.u1=u0+(u1-u0)*q.u1;q.v0=v0+(v1-v0)*q.v0;q.v1=v0+(v1-v0)*q.v1;
    if(const unsigned n=uiFindMovieRegion(key);n<std::size(UiMovieRegions))q.movie=n;
+   if(!(transition&&transition->preload)&&dimMovie(p,name,select))q.tint=0x7f7f7fffu;
   }
  }
  void glow(const char* family,Pose p,const char* caption=nullptr,unsigned icon=~0u){
@@ -523,7 +560,12 @@ static void composeMenuImpl(const MenuState& s,const UiRaceView& race,std::vecto
  case UiPage::MainMenu:{
   const char* titles[]={"Single Player","Multiplayer","Nintendo WFC","Mario Kart Channel"};
   const char* groups[]={"TopMenuSingleWaku","TopMenuMultiWaku","TopMenuWifiWaku","TopMenuChannelWaku"};
-  for(unsigned i=0;i<4;++i){Pose p=control(groups[i],groups[i],UiFocusMainParentBase+i);c.panel("main_free",p);for(const char* field:{"text_sha","text","text_light"})c.text(titles[i],"main",p,0xffffffff,field);
+  for(unsigned i=0;i<4;++i){Pose p=control(groups[i],groups[i],UiFocusMainParentBase+i);
+   // common_w069 submits text_sha, text (alpha 128) and text_light inside
+   // con_window_null, before Null_00's gloss (Picture_02/01, the waku_light
+   // tail at alpha 128) and text_00, the opaque title drawn last.
+   c.panel("main_free",p,1,[&]{for(const char* field:{"text_sha","text","text_light"})c.text(titles[i],"main",p,0xffffffff,field);});
+   c.text(titles[i],"main",p,0xffffffff,"text_00");
    if(i==0){auto b=child(p,control("TopMenuSingle","ButtonSingle",0));auto base=c.buttonState("main_button",0);c.movieButton(base.c_str(),b);c.movie("main_movie_",0,base.c_str(),"black_base",b);c.movieOverlay(base.c_str(),b);c.text("1\nPlayer",base.c_str(),b);if(s.cursor==0)c.glow("main_button",b,"1\nPlayer");c.selectIn("main_button",b,"1\nPlayer");}
    if(i==1||i==2){unsigned n=i==1?3:2;for(unsigned k=0;k<n;++k){char v[48];std::snprintf(v,sizeof v,i==1?"ButtonMulti%uP":"ButtonWifi%uP",k+(i==1?2:1));Pose b=child(p,control(i==1?"TopMenuMulti":"TopMenuWifi",v,i==1?1+k:4+k));const auto slot=i==1?1+k:4+k;auto base=c.buttonState(i==1?"main_multi":"main_wifi",slot);c.movieButton(base.c_str(),b);c.movie("main_movie_",slot,base.c_str(),"black_base",b);c.movieOverlay(base.c_str(),b);char caption[20];const unsigned players=k+(i==1?2:1);std::snprintf(caption,sizeof caption,"%u\n%s",players,players==1?"Player":"Players");c.text(caption,base.c_str(),b);if(s.cursor==slot)c.glow(i==1?"main_multi":"main_wifi",b,caption);c.selectIn(i==1?"main_multi":"main_wifi",b,caption);}}
    if(i==3){Pose b=child(p,control("TopMenuChannel","ButtonChannel",6));auto base=c.buttonState("main_button",6);c.movieButton(base.c_str(),b);c.movie("main_movie_",6,base.c_str(),"black_base",b);c.movieOverlay(base.c_str(),b);}
