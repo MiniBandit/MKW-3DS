@@ -63,7 +63,8 @@ struct TextureJob final:AssetJob {
 };
 }
 struct MenuRenderer::Impl {
- struct Slot {std::unique_ptr<Texture> texture;std::shared_ptr<TextureJob> job;std::uint32_t used=0;unsigned failures=0;};
+ // deferred: a prefetch load failed; only a request that needs it now retries.
+ struct Slot {std::unique_ptr<Texture> texture;std::shared_ptr<TextureJob> job;std::uint32_t used=0;unsigned failures=0;bool deferred=false;};
  std::array<Slot,std::size(UiSprites)> slots;
  std::array<std::unique_ptr<MenuMovie>,std::size(UiMovieStreams)> movies;
  Residency pinned{},pinning{};Streams streamsPinned{},streamsPinning{};
@@ -85,7 +86,8 @@ void MenuRenderer::request(const std::vector<UiQuad>& resident,AssetPriority pri
  auto& s=*impl_;const auto needed=neededSprites(resident);
  for(unsigned i=0;i<needed.size();++i){if(!needed[i])continue;
   auto& slot=s.slots[i];slot.used=s.frame;
-  if(slot.texture||slot.failures>=3)continue;
+  if(priority!=AssetPriority::Prefetch)slot.deferred=false;
+  if(slot.texture||slot.failures>=3||slot.deferred)continue;
   if(!slot.job||(slot.job->done()&&slot.job->cancelled()))slot.job=std::make_shared<TextureJob>(UiSprites[i].path);
   if(!slot.job->done())AssetLoader::instance().submit(slot.job,priority);
  }
@@ -104,22 +106,32 @@ bool MenuRenderer::ready(const std::vector<UiQuad>& resident)const{
 void MenuRenderer::update(Renderer& renderer){
  auto& s=*impl_;
  s.pinned=s.pinning;s.pinning.reset();s.streamsPinned=s.streamsPinning;s.streamsPinning.fill(false);
+ // Texture::load fails when LINEAR has no contiguous block for it. Only a
+ // texture needed now counts towards giving up (ready() then stops waiting).
+ bool flush=false;
  for(unsigned i=0;i<s.slots.size();++i){auto& slot=s.slots[i];
   if(!slot.job||!slot.job->done())continue;
   auto job=std::move(slot.job);
-  if(job->texture){s.install(i,std::move(job->texture));slot.failures=0;}
-  else if(!job->cancelled())++slot.failures;
+  if(job->texture){s.install(i,std::move(job->texture));slot.failures=0;slot.deferred=false;}
+  else if(!job->cancelled()){if(s.pinned[i]){++slot.failures;flush=true;}else slot.deferred=true;}
  }
+ // Each needed texture still loading is one allocation (a 512x1024 RGBA8
+ // border is 2 MiB): keep it free beyond the reserve.
+ std::uint32_t incoming=0;
+ for(unsigned i=0;i<s.slots.size();++i)if(s.pinned[i]&&!s.slots[i].texture&&s.slots[i].failures<3)incoming+=UiSprites[i].gpuBytes;
  // Least recently requested first; never the pinned page/incoming sets.
  // Retired memory returns at the next frame, so count it as already free.
  std::uint32_t retiring=0;
- auto evict=[&](){
+ auto evict=[&](bool stale){
   unsigned victim=~0u;std::uint32_t oldest=~0u;
-  for(unsigned i=0;i<s.slots.size();++i)if(s.slots[i].texture&&!s.pinned[i]&&s.slots[i].used<oldest){oldest=s.slots[i].used;victim=i;}
+  for(unsigned i=0;i<s.slots.size();++i)if(s.slots[i].texture&&!s.pinned[i]&&s.slots[i].used<oldest&&(!stale||s.slots[i].used!=s.frame)){oldest=s.slots[i].used;victim=i;}
   if(victim==~0u)return false;
   auto texture=s.remove(victim);retiring+=texture->bytes();renderer.retire(std::move(texture));return true;
  };
- while((s.bytes>CacheCapacity||linearSpaceFree()+retiring<LinearReserve)&&evict()){}
+ while((s.bytes>CacheCapacity||linearSpaceFree()+retiring<LinearReserve)&&evict(false)){}
+ // That room comes from textures no request wants this frame; after a failed
+ // allocation all of them go, so the retry finds the largest free blocks.
+ while((flush||linearSpaceFree()+retiring<LinearReserve+incoming)&&evict(true)){}
  for(unsigned i=0;i<s.movies.size();++i)if(s.movies[i]&&!s.streamsPinned[i])renderer.retire(std::move(s.movies[i]));
  ++s.frame;
 }
@@ -166,18 +178,26 @@ void MenuRenderer::draw(Renderer& renderer,const std::vector<UiQuad>& quads,bool
   else if(q.movie<std::size(UiMovieRegions)){
    const auto& r=UiMovieRegions[q.movie];const auto& movie=impl_->movies[r.stream];
    if(movie&&movie->texture())renderer.drawScreenSpriteRegion(*movie->texture(),q.x,q.y,q.w,q.h,r.u0+(r.u1-r.u0)*q.u0,r.v0+(r.v1-r.v0)*q.v0,r.u0+(r.u1-r.u0)*q.u1,r.v0+(r.v1-r.v0)*q.v1,q.alpha,q.tint,q.corners.data(),q.additive);
-  }else if(q.sprite<impl_->slots.size()&&impl_->slots[q.sprite].texture){const auto& info=UiSprites[q.sprite];renderer.drawScreenSpriteRegion(*impl_->slots[q.sprite].texture,q.x,q.y,q.w,q.h,info.u*q.u0,info.v*q.v0,info.u*q.u1,info.v*q.v1,q.alpha,q.tint,q.corners.data(),q.additive);}
+  }else if(q.sprite<impl_->slots.size()&&impl_->slots[q.sprite].texture){const auto& info=UiSprites[q.sprite];
+   if(q.material){
+    // Corners TL, TR, BL, BR; the tint multiplies every corner colour.
+    const float corners[4][2]={{q.x,q.y},{q.x+q.w,q.y},{q.x,q.y+q.h},{q.x+q.w,q.y+q.h}};
+    const float uv[4][2]={{info.u*q.u0,info.v*q.v0},{info.u*q.u1,info.v*q.v0},{info.u*q.u0,info.v*q.v1},{info.u*q.u1,info.v*q.v1}};
+    uint32_t colors[4];
+    for(unsigned k=0;k<4;++k){colors[k]=0;for(unsigned shift:{24u,16u,8u,0u})colors[k]|=((((q.corners[k]>>shift)&255u)*((q.tint>>shift)&255u)+127u)/255u)<<shift;}
+    renderer.drawScreenMaterialQuad(impl_->slots[q.sprite].texture.get(),corners,uv,colors,q.color0,q.color1,q.alpha);
+   }else renderer.drawScreenSpriteRegion(*impl_->slots[q.sprite].texture,q.x,q.y,q.w,q.h,info.u*q.u0,info.v*q.v0,info.u*q.u1,info.v*q.v1,q.alpha,q.tint,q.corners.data(),q.additive);}
  }
 }
 void MenuRenderer::release(Renderer& renderer){
  auto& s=*impl_;
- for(unsigned i=0;i<s.slots.size();++i){auto& slot=s.slots[i];if(slot.job){slot.job->cancel();slot.job.reset();}slot.failures=0;renderer.retire(s.remove(i));}
+ for(unsigned i=0;i<s.slots.size();++i){auto& slot=s.slots[i];if(slot.job){slot.job->cancel();slot.job.reset();}slot.failures=0;slot.deferred=false;renderer.retire(s.remove(i));}
  for(auto& m:s.movies)renderer.retire(std::move(m));
  s.pinned.reset();s.pinning.reset();s.streamsPinned.fill(false);s.streamsPinning.fill(false);
 }
 void MenuRenderer::release(){
  auto& s=*impl_;
- for(unsigned i=0;i<s.slots.size();++i){auto& slot=s.slots[i];if(slot.job){slot.job->cancel();slot.job.reset();}slot.failures=0;s.remove(i);}
+ for(unsigned i=0;i<s.slots.size();++i){auto& slot=s.slots[i];if(slot.job){slot.job->cancel();slot.job.reset();}slot.failures=0;slot.deferred=false;s.remove(i);}
  for(auto& m:s.movies)m.reset();
  s.pinned.reset();s.pinning.reset();s.streamsPinned.fill(false);s.streamsPinning.fill(false);
 }

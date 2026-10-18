@@ -35,7 +35,7 @@ struct RaceResultCount {
 
 class RaceResultsFlow {
 public:
- enum Event:uint32_t {EventNone=0,EventFill=1,EventResultsShown=2,EventTotalsShown=4,EventMenuShown=8,EventOptionChosen=16,EventLeave=32,EventHudExit=64};
+ enum Event:uint32_t {EventNone=0,EventFill=1,EventResultsShown=2,EventTotalsShown=4,EventMenuShown=8,EventOptionChosen=16,EventLeave=32,EventHudExit=64,EventLeaveStart=128};
  static constexpr unsigned FinishCountFrames=70;   // go_fade_in.brlan
  static constexpr unsigned FinishHoldFrames=121;   // counter > 120 (0x80835A28)
  static constexpr unsigned HudExitFrames=20;       // 0.05 per frame (0x807E2B34)

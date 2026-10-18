@@ -10,6 +10,9 @@ struct LakituInput {
     unsigned stage=0,timer=0,lap=1,lapCount=3;
     bool introHeld=true,finished=false;
     Vec3 cameraForward{0,0,1};
+    // JugemManager_setVisible (PAL 0x8071E7AC): the race camera hides its
+    // player's Lakitu while looking back (0x805A66D8). Drawing only.
+    bool visible=true;
 };
 // The start signal's count-down clip, jg_cd (270 frames, played once). Retail
 // RacePage_afterCalc (USA 0x80835A28) starts it on every Lakitu when the

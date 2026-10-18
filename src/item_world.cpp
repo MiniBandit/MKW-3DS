@@ -56,6 +56,19 @@ int handlerAction(const ItemActor& a,const ItemRacer& r){
 }
 }
 
+void RaceItems::courseMushroom(Vec3 position,Vec3 velocity,unsigned owner){
+    // fn_1_289C08 (PAL 0x80799FBC, item kind 3): no Mushroom for owner 12 (an item no racer owns).
+    if(owner>=count_)return;
+    auto& a=spawn(owner,ItemKind::Mushroom,false,&position);
+    a.owner=int8_t(owner);
+    // ItemHolder_spawnDirect (0x8079A12C) sets scale 0.7 and runs fn_1_296BC0 (0x807A6F74):
+    // the scatter state (fn_1_296F9C) and a pop up of 25 with property +0x58, else 35 (Goombas
+    // drop Mushrooms only outside Time Trials, so 25), then adds the launch velocity.
+    // Its hitter is spared 7 frames.
+    a.position=a.previous=position;a.velocity=velocity+Vec3{0,groundItem(a.kind,timeTrial_)?25.f:35.f,0};a.scattered=true;a.guidance={};a.target=-1;
+    a.scale=.7f;a.radius=itemProperties(unsigned(a.kind)).releasedContact*a.scale;a.terrainRadius=itemProperties(unsigned(a.kind)).terrain*a.scale;
+    a.lifetime=1800;a.ownerImmunity=7;
+}
 ItemActor& RaceItems::spawn(unsigned player,ItemKind kind,bool backwards,const Vec3* origin){
     // Retail allocates from per-type pools, so a slot freed this step is never reused at once;
     // prefer slots that were already free when the step began.
@@ -145,11 +158,31 @@ void RaceItems::updateScattered(ItemActor& a,ItemWorldQuery query){
     // Shared source scatter state 292310: advance, XZ damping, gravity.
     // Complex moving-floor/sloped-wall callbacks remain in the source audit.
     a.position+=a.velocity;a.velocity.x*=.995f;a.velocity.z*=.995f;
-    const auto surface=query?query(a.previous,a.position,a.terrainRadius):ItemSurface{};
+    const auto surface=query?query(a.previous,a.position,a.terrainRadius,ItemKclMask):ItemSurface{};
     if(surface.kill||surface.cannon){a.active=false;return;}
     a.position+=surface.correction;
+    // PAL fn_1_296F9C 0x807A7350: after the push, an object without property +0x58 (every
+    // object in a Time Trial) is destroyed on its first KCL contact of types 0xF0F8FFFF,
+    // road and walls (fn_1_296860 0x807A6C14 -> fn_1_296644 0x807A69F8). Below y 0 it dies
+    // over 30 frames, otherwise over 6 with its model hidden (fn_1_28D56C 0x8079D920).
+    const bool ground=groundItem(a.kind,timeTrial_);
+    if(!ground&&(surface.types&0xF0F8FFFFu)){
+        const bool fell=a.position.y<0.f;
+        a.dying=fell?30:6;a.radius=0;if(!fell)a.scale=0;
+        return;
+    }
+    const bool bounced=a.objectBounce;a.objectBounce=false;
     if(length(surface.floorNormal)>.1f){
-        const auto n=normalized(surface.floorNormal);a.velocity=tangent(a.velocity,n);a.settled=true;a.up=n;
+        const auto n=normalized(surface.floorNormal);a.up=n;
+        // With a floor tracker (ItemObj_init 0x8079E2D8: property +0x58, or a Banana, Fake Item
+        // Box or Bob-omb), floor under the object lands it (fn_1_291F98 0x807A234C) unless an
+        // object bounced it since the last step, and fn_1_2A655C (0x807B6910) stops it dead.
+        const bool tracked=trapItem(a.kind)||ground;
+        // fn_1_2A655C, called here at 0x807A778C, plays the object's land sound (ObjProperties +0x68)
+        // as it comes to rest; its rest state (0x807B6BFC) plays nothing.
+        if(tracked&&!bounced&&!a.rested){a.rested=true;sound(ItemSoundCue::Land,a);}
+        if(tracked&&!bounced){a.velocity={};a.settled=true;}
+        else{a.velocity=tangent(a.velocity,n);a.settled=!tracked;}
     }else a.velocity.y=std::max(-100.f,a.velocity.y-2.2f);
     if(length(surface.wallNormal)>.1f){const auto n=normalized(surface.wallNormal);float into=dot(a.velocity,n);if(into<0)a.velocity=a.velocity-n*(2*into);}
 }
@@ -157,21 +190,91 @@ void RaceItems::updateActors(ItemWorldQuery query){
     // RMCU ItemHolderItem_update: one object type at a time (retail object IDs), each object
     // moving and then resolving its own contacts with other objects (ItemObj_update ->
     // CheckOtherObjsCollision 0x80798c88), including tethered ones.
-    std::array<uint8_t,MaxActors> order{};unsigned n=0;
+    std::array<uint8_t,MaxActors> order{},types{};unsigned n=0;
     for(unsigned type=0;type<15;++type)for(unsigned i=0;i<MaxActors;++i)
-        if(actors_[i].active&&retailObjectId(actors_[i].kind)==type)order[n++]=uint8_t(i);
-    for(unsigned k=0;k<n;++k){
-        auto& a=actors_[order[k]];if(!a.active)continue;
-        updateActor(a,query);if(!a.active)continue;
-        for(unsigned owner=0;owner<count_&&a.active;++owner)
-            for(unsigned slot=0;slot<3&&a.active;++slot)resolveActorHeld(a,owner,slot);
-        for(unsigned other=0;other<MaxActors&&a.active;++other)
-            if(other!=order[k]&&actors_[other].active)resolveActorPair(a,actors_[other]);
+        if(actors_[i].active&&retailObjectId(actors_[i].kind)==type){types[n]=uint8_t(type);order[n++]=uint8_t(i);}
+    unsigned k=0;
+    for(unsigned type=0;type<15;++type){
+        for(;k<n&&types[k]==type;++k){
+            auto& a=actors_[order[k]];if(!a.active)continue;
+            updateActor(a,query);if(!a.active||a.dying)continue;
+            for(unsigned owner=0;owner<count_&&a.active;++owner)
+                for(unsigned slot=0;slot<3&&a.active;++slot)resolveActorHeld(a,owner,slot);
+            for(unsigned other=0;other<MaxActors&&a.active;++other)
+                if(other!=order[k]&&actors_[other].active&&!actors_[other].dying)resolveActorPair(a,actors_[other]);
+            // Then the course objects (fn_1_291B24 after fn_1_2918E0 in ItemObj_update).
+            objectContacts(a);
+        }
+        // Tethered objects (ItemObj +0x78 bit 0) are objects of their type too.
+        heldObjectContacts(type);
+    }
+}
+void RaceItems::objectContacts(ItemActor& a){
+    // ItemObj_update (PAL 0x8079EFEC): with its collision registered, an object that has not
+    // come to rest (+0x78 bit 3, fn_1_2A655C) checks the course objects, and a Bob-omb
+    // (type 9) even at rest. A Blue registers collision only for its dive (0x807a326c); its
+    // blast is a separate retail object type the item tables here do not cover.
+    if(!a.active||a.radius<=0||blueFlight(a))return;
+    if(a.explosion&&a.kind!=ItemKind::Bobomb)return;
+    if(a.settled&&a.kind!=ItemKind::Bobomb)return;
+    const unsigned type=retailObjectId(a.kind);
+    if(type>9)return;
+    std::array<ItemObjectHit,8> hits;
+    const unsigned n=karts_->objectContacts(type,a.owner<0?12u:unsigned(a.owner),a.position,a.velocity,a.radius,false,hits.data(),unsigned(hits.size()));
+    // fn_1_291B24 (0x807A1ED8): every touched object adds its push-out to the bounds that
+    // move the item at the end; response 1 bounces it off (fn_1_291548 0x807A18FC) and
+    // clears the young-owner flag 0x20000, response 2 destroys it with its break effect.
+    // A blast (Bob-omb OnKill) stays: the objects react, its own state is the blast's.
+    Vec3 low{},high{};
+    for(unsigned i=0;i<n&&a.active;++i){
+        const Vec3 depth=hits[i].depth;
+        // Only a contact with a response pushes (fn_1_291B24: reaction != 0); an object the item
+        // passes through (response 0) leaves its path alone.
+        if(hits[i].response){
+            low={std::min(low.x,depth.x),std::min(low.y,depth.y),std::min(low.z,depth.z)};
+            high={std::max(high.x,depth.x),std::max(high.y,depth.y),std::max(high.z,depth.z)};
+        }
+        if(a.explosion)continue;
+        if(hits[i].response==1){
+            bumpItem(a,normalized(Vec3{depth.x,0,depth.z},normalized(-a.velocity,{1,0,0})),{});
+            a.ownerImmunity=0;a.objectBounce=true;
+        }else if(hits[i].response==2){
+            if(blastItem(a.kind))explode(a);
+            else{a.active=false;sound(ItemSoundCue::Break,a);events_.push_back({ItemEffect::Break,uint8_t(a.owner<0?12:a.owner),uint16_t(a.kind),a.position,-1,a.scale});}
+            return;
+        }
+    }
+    if(a.active&&!a.explosion)a.position+=low+high;
+}
+void RaceItems::heldObjectContacts(unsigned type){
+    // A tethered item checks the course objects like a free one; only response 2 counts for
+    // it (the search skips bounces while held): fn_1_291548 detaches it from its holder
+    // (fn_1_284DF8) and kills it with its break effect; a Bob-omb detonates where it trails.
+    for(unsigned owner=0;owner<count_;++owner){
+        const auto& h=hud_[owner];
+        if(!h.deployed||retailObjectId(h.heldKind)!=type||racers_[owner].unavailable)continue;
+        auto& state=deployments_[owner];
+        for(unsigned slot=0;slot<3;++slot){
+            if(!(h.heldMask&(1u<<slot))||state.scales[slot]<HeldContactMinimumScale)continue;
+            std::array<ItemObjectHit,8> hits;
+            const unsigned n=karts_->objectContacts(type,owner,state.positions[slot],state.positions[slot]-state.previous[slot],
+                                                    heldItemContactRadius(owner,slot),true,hits.data(),unsigned(hits.size()));
+            for(unsigned i=0;i<n;++i)if(hits[i].response==2){destroyHeld(owner,slot);break;}
+            if(!h.deployed)break;
+        }
     }
 }
 void RaceItems::updateActor(ItemActor& a,ItemWorldQuery query){
     {
         a.previous=a.position;++a.age;
+        if(a.dying){
+            // Dying state fn_1_29352C (0x807A38E0): an object that died below y 0 keeps its
+            // velocity and its scale falls by (t-1)/t (min 0.001, 0x808A5668) each frame;
+            // ItemHolderItem_despawn once the count reaches 0.
+            if(a.scale>0){a.position+=a.velocity;a.scale=std::max(.001f,a.scale*float(a.dying-1)/float(a.dying));}
+            if(!--a.dying)a.active=false;
+            return;
+        }
         if(a.explosion){
             // Blast update: grow, then end collision and despawn on the retail ticks.
             a.radius=bombBlastRadius(a.age,a.blastInitialScale);
@@ -211,7 +314,7 @@ void RaceItems::updateActor(ItemActor& a,ItemWorldQuery query){
             }
             a.position+=a.velocity;a.yaw=std::atan2(a.velocity.x,a.velocity.z);
             if(query){
-                const auto surface=query(a.previous,a.position,a.terrainRadius);a.position+=surface.correction;
+                const auto surface=query(a.previous,a.position,a.terrainRadius,ItemKclMask);a.position+=surface.correction;
                 if(surface.kill||surface.cannon){a.active=false;return;}
                 if(length(surface.floorNormal)>.1f){
                     const Vec3 normal=normalized(surface.floorNormal);const float into=dot(a.velocity,normal);
@@ -220,16 +323,19 @@ void RaceItems::updateActor(ItemActor& a,ItemWorldQuery query){
                         a.flightDirection=normalized(a.flightDirection-normal*dot(a.flightDirection,normal),a.flightDirection);
                         a.velocity=a.flightDirection*a.travelSpeed-normal*2.5f;
                     }else if(trapItem(a.kind)){
-                        // fn_1_294794: a Bob-omb thuds on every floor hit.
-                        if(a.kind==ItemKind::Bobomb&&!a.settled)sound(ItemSoundCue::Bounce,a);
+                        // fn_1_294794 (0x807A4BB8): a Bob-omb thuds on a bounce (+0x74 bit 0x10 from
+                        // fn_1_2A71BC 0x807B7570); its landing plays the land sound below, never both.
+                        if(a.kind==ItemKind::Bobomb&&a.floorBounces)sound(ItemSoundCue::Bounce,a);
                         if(a.floorBounces){
                             --a.floorBounces;const Vec3 component=normal*into;
                             const float restitution=a.kind==ItemKind::Banana?0:a.kind==ItemKind::Bobomb?(a.backwards?a.bounceImpulse:.45f):a.backwards?0:.45f;
                             a.velocity=(a.velocity-component)*.55f-component*restitution;
                             if(a.kind==ItemKind::Bobomb&&a.backwards)a.bounceImpulse*=.8f;
                         }else{
-                            // ObjThrowable::OnFinishThrow (807a8078): the object's land sound once.
-                            if(!a.settled)sound(ItemSoundCue::Land,a);
+                            // ObjThrowable::OnFinishThrow (807a8078) = PAL fn_1_2A655C 0x807B6910, from the
+                            // Banana (0x807A3F0C), Fake Item Box (0x807A7A44) and Bob-omb (0x807A4BF4) states:
+                            // the land sound once; the rest state it enters (0x807B6BFC) plays nothing.
+                            if(!a.rested){a.rested=true;sound(ItemSoundCue::Land,a);}
                             a.velocity={};a.settled=true;
                         }
                     }else if(into<0)a.velocity=a.velocity-normal*into;
@@ -318,6 +424,7 @@ bool RaceItems::itemTouchesKart(const ItemActor& a,unsigned player)const{
     // young; a coarse kart-radius + item-radius sphere, then the kart centre inside the item
     // or the item sphere against the kart's collision hull.
     const auto& r=racers_[player];
+    if(a.dying)return false; // destroyed: fn_1_296644 removed its BoxColManager entry (0x8079EECC)
     if(int(player)==a.owner&&a.age<=a.ownerImmunity)return false;
     const Vec3 d=a.position-r.position;const float distance2=dot(d,d);
     const float reach=r.radius+a.radius;
@@ -340,7 +447,8 @@ void RaceItems::actorKartContact(ItemActor& a,unsigned player){
     if(a.kind==ItemKind::Mushroom||a.kind==ItemKind::Star){
         if(a.scattered&&a.scale<HeldContactMinimumScale)return;
         if(a.kind==ItemKind::Mushroom){
-            karts_->activateMushroom(player);events_.push_back({ItemEffect::Mushroom,uint8_t(player)});
+            // PlayerSub18_handleMushroomCollision (PAL 0x805731E0) -> activateMushroom: +0x238 too.
+            karts_->activateMushroom(player);mushroomPulse_[player]=true;events_.push_back({ItemEffect::Mushroom,uint8_t(player)});
             hud_[player].ink=hud_[player].inkDelay=0;
         }else if(karts_->activateStar(player)){
             hud_[player].ink=hud_[player].inkDelay=0;inkReadyFrame_[player]=0;events_.push_back({ItemEffect::Cure,uint8_t(player)});
@@ -368,7 +476,11 @@ void RaceItems::actorKartContact(ItemActor& a,unsigned player){
         if(blastItem(a.kind))explode(a);
         else if(a.guidance.pending!=5){a.active=false;sound(ItemSoundCue::Hit,a);events_.push_back({ItemEffect::Break,uint8_t(owner),uint16_t(a.kind),a.position,-1,a.scale});}
     }
-    if(action>=0)strike(player,action,owner,away);
+    // PlayerSub18_checkItemCollision (0x805727B4-0x80572AD0): once the action starts, the
+    // owner's driver cheers unless it hit itself or the object was dropped on a hit (+0x78
+    // bit 0x8000, the scatter state).
+    if(action>=0&&strike(player,action,owner,away)&&hitVoiceItem(a.kind)&&!a.scattered&&owner<count_&&owner!=player)
+        sound(ItemSoundCue::HitSuccess,owner);
 }
 void RaceItems::heldKartContacts(unsigned player){
     // Tethered items of other racers: the same handlers, never against their holder or a
@@ -390,7 +502,7 @@ void RaceItems::heldKartContacts(unsigned player){
             const Vec3 away=normalized(r.position-state.positions[slot],racers_[owner].forward);
             contactSounds(kind,player);
             destroyHeld(owner,slot); // A Bob-omb detonates where it trailed; its blast hits.
-            if(action>=0)strike(player,action,owner,away);
+            if(action>=0&&strike(player,action,owner,away)&&hitVoiceItem(kind))sound(ItemSoundCue::HitSuccess,owner);
         }
     }
 }
@@ -410,9 +522,14 @@ void RaceItems::boxContacts(unsigned player){
 }
 void RaceItems::kartContacts(unsigned player){
     if(!active_||player>=count_)return;
-    const auto& r=racers_[player];
     boxContacts(player);
-    if(r.finished)return;
+    // No finish gate: PlayerSub_update2 (PAL 0x80596CFC) runs the item pass for every kart,
+    // gated only by the fade/vanish bits 82/83 (Kinoko KartSub::calcPass1 then skips this
+    // hook). A finish sets them only for a ghost, 70 frames after its goal (0x80578968).
+    // ItemHolder_checkPlayerCollision (0x80799CAC) itself returns at once in a Time Trial or
+    // ghost race (flag 0x809C38BC, RaceGlobals_init 0x807BD1D0): no item object touches a kart.
+    // Otherwise neither it, 0x807A14D4 nor KartAction::start (VS) tests a finish.
+    if(timeTrial_)return;
     // Actor pool order stands in for the retail entity search order.
     for(auto& a:actors_)if(a.active&&itemTouchesKart(a,player))actorKartContact(a,player);
     heldKartContacts(player);

@@ -10,6 +10,10 @@ struct UiTextMotion {
  float sx=1,sy=1,tx=0,ty=0,alpha=1;
  bool visible=true;
  bool absoluteAlpha=false;
+ // The live pane alpha including its inherited ancestors (InfluencedAlpha),
+ // independent of the reference pose; meaningful when evaluated is true.
+ float absolute=1;
+ bool evaluated=false;
 };
 UiTextMotion uiTextMotion(const UiPaneInfo&,std::initializer_list<UiTextClipFrame>);
 }

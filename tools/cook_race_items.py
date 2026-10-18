@@ -102,7 +102,7 @@ def cook_image_sprite(original, name, output):
             "v": height / padded_size[1]}
 
 
-def cook_world(source, model, name, clip, output):
+def cook_world(source, model, name, clip, output, exact_formats=False):
     temporary = ROOT / "assets/race-items" / name
     args = ["node", str(ROOT / "build/export_brres.mjs"), str(source), str(temporary), model]
     if clip:
@@ -115,7 +115,7 @@ def cook_world(source, model, name, clip, output):
                    env={**os.environ, "MKW_FREEZE_NONLINEAR_UV": "1", "MKW_RACE_MATERIALS": "1", "MKW_FIRST_SAMPLER": "1"})
     data = json.loads((temporary / "model.json").read_text())
     vertices = [v for m in data["models"] for s in m["shapes"] for v in s["vertices"]]
-    parts = cook(temporary, output, name, preserve_vertices=bool(clip))
+    parts = cook(temporary, output, name, preserve_vertices=bool(clip), exact_formats=exact_formats)
     if len(parts) != 1:
         raise ValueError("Item geometry unexpectedly requires partitioning: " + name)
     target = output / "models" / (name + ".gmdl")
@@ -133,6 +133,93 @@ def cook_world(source, model, name, clip, output):
         record["clips"] = json.loads(result.stdout)["clips"]
         record["defaultClip"] = clip
     return record
+
+
+def sparkle_levels(name, model, output, groups=3):
+    """Per-dot sparkle groups of an item box's mat_boxout.
+
+    GX stage 0 samples the noise through the indirect texture (map 1), which
+    shifts the lookup of every mask dot (map 3) by that dot's intensity; PICA
+    has no indirect stage. src/race_hud.cpp draws the sparkle once per group of
+    dot intensities instead: this replaces the cooked mask with RGB8 whose
+    channel k is the mask over the dots of group k, and returns each group's
+    intensity (0..255) for export_item_box_uv.ts. With more distinct dot
+    intensities than groups, a group takes its dots' area-weighted mean."""
+    import numpy as np
+    source = ROOT / "assets/race-items" / name
+    material = next(m for entry in json.loads((source / "materials.json").read_text()) if entry["name"] == model
+                    for m in entry["materials"] if m["name"] == "mat_boxout")
+    if material["texSrts"][1]["srtMtx"] != material["texSrts"][3]["srtMtx"]:
+        raise ValueError("Indirect and mask coordinates differ: " + name)
+    textures = json.loads((source / "model.json").read_text())["textures"]
+
+    def intensity(sampler):
+        index, t = next((i, t) for i, t in enumerate(textures) if t["name"] == material["samplers"][sampler]["name"])
+        if ImageFormat(t["format"]) != ImageFormat.I8:
+            raise ValueError("Expected I8 sparkle texture: " + t["name"])
+        image = decode_image(io.BytesIO((source / (t["file"] + ".bin")).read_bytes()), io.BytesIO(b""),
+                             ImageFormat.I8, PaletteFormat.IA8, 0, t["width"], t["height"])
+        return index, np.asarray(image.convert("L"), dtype=np.int32)
+
+    _, indirect = intensity(1)
+    mask_index, mask = intensity(3)
+    if indirect.shape != mask.shape:
+        raise ValueError("Indirect and mask sizes differ: " + name)
+    h, w = mask.shape
+    # Dots: 4-connected mask cores; every other covered texel joins its nearest
+    # core. A dot cut by the texture edge stays two dots: its halves need not
+    # have the same intensity.
+    label = np.zeros((h, w), np.int32)
+    queue, cores = [], 0
+    def neighbours(a, b):
+        return [(c, d) for c, d in ((a + 1, b), (a - 1, b), (a, b + 1), (a, b - 1)) if 0 <= c < h and 0 <= d < w]
+    for y in range(h):
+        for x in range(w):
+            if mask[y, x] > 127 and not label[y, x]:
+                cores += 1
+                label[y, x] = cores
+                stack = [(y, x)]
+                while stack:
+                    a, b = stack.pop()
+                    queue.append((a, b))
+                    for c, d in neighbours(a, b):
+                        if mask[c, d] > 127 and not label[c, d]:
+                            label[c, d] = cores
+                            stack.append((c, d))
+    for a, b in queue:
+        for c, d in neighbours(a, b):
+            if mask[c, d] and not label[c, d]:
+                label[c, d] = label[a, b]
+                queue.append((c, d))
+    dots = []
+    for k in range(1, cores + 1):
+        core = (label == k) & (mask >= 250)
+        if not core.any():
+            core = label == k
+        dots.append((float(np.median(indirect[core])), int(core.sum())))
+    levels = sorted({level for level, _ in dots})
+    if len(levels) <= groups:
+        centres = levels
+    else:
+        # One-dimensional k-means over the dot intensities, weighted by area.
+        centres = [levels[round(i * (len(levels) - 1) / (groups - 1))] for i in range(groups)]
+        for _ in range(100):
+            members = [[] for _ in centres]
+            for level, area in dots:
+                members[min(range(len(centres)), key=lambda i: abs(level - centres[i]))].append((level, area))
+            updated = [sum(l * a for l, a in m) / sum(a for _, a in m) if m else c for m, c in zip(members, centres)]
+            if updated == centres:
+                break
+            centres = updated
+    group = {k + 1: min(range(len(centres)), key=lambda i: abs(dots[k][0] - centres[i])) for k in range(cores)}
+    channels = np.zeros((h, w, 3), np.uint8)
+    for k, g in group.items():
+        channels[..., g] = np.where(label == k, mask, channels[..., g])
+    png = output / "textures" / f"{name}_{mask_index:03d}.png"
+    Image.fromarray(channels, "RGB").save(png)
+    subprocess.run([str(tool('tex3ds')), "-f", "rgb8", "-z", "none", "-o", str(png.with_suffix(".t3x")), str(png)],
+                   check=True, stdout=subprocess.DEVNULL)
+    return centres
 
 
 def write_header(manifest):
@@ -174,13 +261,17 @@ def main():
         manifest = {"version": 1, "uiSources": extract_ui(args.disc), "items": {}, "hudItems": {}, "hudRanks": {}, "hudDigits": {}}
         common = ROOT / "assets/common"
         for ident, (source, model, clip) in WORLD.items():
-            manifest["items"][str(ident)] = cook_world(common / (source + ".brres"), model, "item_" + str(ident), clip, args.output)
-        manifest["itemBox"] = cook_world(ROOT / "assets/luigi/itembox.brres", "itembox", "item_box", None, args.output)
+            # Item boxes keep their GX texels (the binder's effect textures lose them to ETC1).
+            manifest["items"][str(ident)] = cook_world(common / (source + ".brres"), model, "item_" + str(ident), clip, args.output,
+                                                       exact_formats=model == "itemBoxNise")
+        manifest["itemBox"] = cook_world(ROOT / "assets/luigi/itembox.brres", "itembox", "item_box", None, args.output, exact_formats=True)
         manifest["bombCore"] = cook_world(common / "bombCore.brres", "bombCore", "bomb_core", "bombCore", args.output)
+        sparkle = {"itembox": sparkle_levels("item_box", "itembox", args.output),
+                   "itemBoxNise": sparkle_levels("item_3", "itemBoxNise", args.output)}
         subprocess.run(["node", str(ROOT / "build/export_item_box_uv.mjs"),
                         str(ROOT / "assets/luigi/itembox.brres"),
                         str(ROOT / "include/mkw/item_box_uv.hpp"),
-                        str(common / "itemBoxNiseRtpa.brres")], check=True)
+                        str(common / "itemBoxNiseRtpa.brres"), json.dumps(sparkle)], check=True)
         manifest["itemBox"]["runtimeUVAnimation"] = {"source": "itembox and itemBoxNise SRT0 and materials", "frames": 300,
                                                      "header": "include/mkw/item_box_uv.hpp"}
         manifest["startSignal"] = cook_world(common / "jugemu_signal.brres", "jugemu_signal", "start_signal", None, args.output)

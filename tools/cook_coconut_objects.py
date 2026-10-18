@@ -2,7 +2,7 @@
 """Cook original Coconut Mall palm and escalator meshes, excluding duplicate LODs."""
 import json,os,subprocess,sys
 from pathlib import Path
-from cook_model import cook
+from cook_model import cook,COURSE_TEXELS
 ROOT=Path(__file__).resolve().parents[1]
 def main():
     out=ROOT/'sd-card/3ds/mkw-3ds'
@@ -31,7 +31,8 @@ def main():
                         for vertex in end:
                             v=vertex.copy();v[1]+=offset;v[2]-=3*offset;shape['vertices'].append(v)
             path.write_text(json.dumps(data))
-        parts=cook(exported,out,prefix,256)
+        # The course-object texture policy (tools/cook_course_objects.py).
+        parts=cook(exported,out,prefix,texel_budget=COURSE_TEXELS,brres=[ROOT/'assets/coconut-mall'/(archive+'.brres')])
         if len(parts)!=1:raise ValueError('Object runtime expects one partition')
     print('Coconut palms and escalator treads cooked from local source.')
 if __name__=='__main__':main()

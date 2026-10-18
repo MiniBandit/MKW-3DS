@@ -8,10 +8,13 @@
 namespace mkw {
 // RMCU AISpeedRace: section1+227f80/22801c/2280b8; see CPU_SOURCE.md.
 struct CpuSpeedParam { float advantage=0, bias=1, minimum=50; };
-inline bool readCpuSpeedParam(const void* data,size_t size,unsigned course,unsigned engineClass,unsigned difficulty,CpuSpeedParam& out){
-    // Retail VS: 128 GP records, then 3 engine classes * 32 courses * 3 difficulties.
+inline bool readCpuSpeedParam(const void* data,size_t size,unsigned course,unsigned engineClass,unsigned difficulty,CpuSpeedParam& out,
+                              bool grandPrix=false,bool mirror=false){
+    // AiParams_load (PAL 0x8073ACA8): 128 Grand Prix records, course*4 + engine class (3 =
+    // Mirror), then VS: 3 engine classes * 32 courses * 3 difficulties.
     if(!data||size!=4992||course>=32||engineClass>=3||difficulty>=3)return false;
-    const auto* p=static_cast<const uint8_t*>(data)+12*(128+(engineClass*32+course)*3+difficulty);
+    const unsigned record=grandPrix?course*4+(mirror?3:engineClass):128+(engineClass*32+course)*3+difficulty;
+    const auto* p=static_cast<const uint8_t*>(data)+12*record;
     float v[3];for(unsigned i=0;i<3;++i){uint32_t w=uint32_t(p[4*i])<<24|uint32_t(p[4*i+1])<<16|uint32_t(p[4*i+2])<<8|p[4*i+3];std::memcpy(v+i,&w,4);if(!std::isfinite(v[i]))return false;}
     if(v[1]<=0||v[2]<=0)return false;out={v[0],v[1],v[2]};return true;
 }

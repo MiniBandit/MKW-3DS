@@ -87,6 +87,18 @@ struct ItemActor {
     uint8_t bounceLimit=10;
     bool active=false, explosion=false,backwards=false;
     bool settled=false, scattered=false;
+    // Sound only: fn_1_2A655C (PAL 0x807B6910) ran, the object came to rest and played its land
+    // sound (ObjProperties +0x68). Retail's rest state (fn_1_2A6848 0x807B6BFC) plays nothing, so
+    // the sound does not repeat when `settled` lapses for a frame without floor contact.
+    bool rested=false;
+    // ItemObj +0x78 bit 0x2000: a course object bounced it (fn_1_291548 response 1); its next
+    // scatter step (fn_1_296F9C) cannot land it (fn_1_291F98) and clears the bit.
+    bool objectBounce=false;
+    // Frames left in the dying state (fn_1_29352C 0x807A38E0) after fn_1_296644 (0x807A69F8)
+    // destroyed it, ItemHolderItem_despawn at 0: hidden (scale 0) for 6, or 30 when it was
+    // below y 0, moving on and shrinking. A dying object touches nothing (its BoxColManager
+    // entry is removed, fn_1_28EB18 0x8079EECC).
+    uint8_t dying=0;
     int16_t fuse=300;
     uint16_t hitMask=0;
     // RMCU ObjItem +0x78 bit 0x20000: the thrower is immune until the item is older than
@@ -111,7 +123,8 @@ enum class ItemEffect : uint8_t { Mushroom, Spin, Launch, Explosion, Shrink, Cru
 // action 1 for a target, 0 for the user. Bolt (KartEffect +0x4c / +0x50 reset) has frames 0
 // for a Lightning bolt and 1 for the Thunder Cloud's strike.
 struct ItemEvent { ItemEffect effect; uint8_t player; uint16_t frames=0; Vec3 direction{}; int8_t action=-1; float scale=1; uint8_t source=0xff; };
-struct ItemSurface { Vec3 correction{}, floorNormal{}, wallNormal{}; bool kill=false; bool cannon=false; };
+// types: the KCL type bits the sphere touched (ColInfo +0xd4 in the retail scatter state).
+struct ItemSurface { Vec3 correction{}, floorNormal{}, wallNormal{}; bool kill=false; bool cannon=false; uint32_t types=0; };
 // Sound cues: where retail item objects and holders call Audio::ItemActor, the
 // holder's KartActor or its CharacterActor (docs/AUDIO_SOURCE.md "Items").
 enum class ItemSoundCue : uint8_t {
@@ -138,9 +151,20 @@ enum class ItemSoundCue : uint8_t {
     // The Thunder Cloud object (ObjKumo) over its carrier:
     CloudOn, CloudAttach, CloudStrike, CloudOff,
     BoxBreak,   // a racer breaks an item box (ObjItemBox kart collision: SE_ITM_BOX_BRK on the box's actor)
+    HitSuccess, // the player's item put another racer into an action (PlayerSub18_checkItemCollision
+                // 0x80572AD0 -> CharacterActor fn_1_355164 0x80865518: voice 3, ITM_SCES)
 };
 struct ItemSound { ItemSoundCue cue; uint8_t player=0xff, actor=0xff; ItemKind kind=ItemKind::None; Vec3 position{}; bool flag=false; uint8_t value=0; };
-using ItemWorldQuery=ItemSurface(*)(Vec3 previous,Vec3 position,float radius);
+// The KCL types an item object's course query accepts. 0x6CEBDFFF for every object
+// (CourseModel::checkSphereFullPush 0x8078F784 from the scatter state, 0x807A73B8);
+// 0x6CEBDBFF, without the solid OOB, for the Blue Shell: its own states pass it (dive
+// 0x807AE0D4, checkSphereFull 0x807B4348) and the shared shell movers pick it by +0x1CC
+// (0x807B4ED4, 0x807B555C), which only the Blue's 0x807AC634 / 0x807AE6EC set.
+inline constexpr uint32_t ItemKclMask=0x6CEBDFFF,BlueShellKclMask=0x6CEBDBFF;
+// Held (ring and trail) items test floors only and are pushed, never destroyed, by them
+// (calcRotatingItemObjs 0x807941F0, fn_1_282264 0x80792904, fn_1_2831B8 0x80793BF8).
+inline constexpr uint32_t HeldItemKclMask=0x20E80FFF;
+using ItemWorldQuery=ItemSurface(*)(Vec3 previous,Vec3 position,float radius,uint32_t mask);
 
 // Race item manager at 60 Hz. RMCU order: item boxes move with the course objects before the
 // karts; each kart resolves its box and item contacts inside its own collision pass
@@ -157,7 +181,13 @@ public:
     /// native Kinoko link.
     void setKarts(ItemKarts* karts);
     ItemKarts& karts() { return *karts_; }
-    bool loadOdds(const void* data,size_t size){return odds_.load(data,size,2,3);}
+    /// ItemSlot.bin tables (PAL fn_1_2AAB94 after RaceGlobals_init): a Grand Prix reads
+    /// tables 0 (players) and 1 (CPUs), unscaled; VS reads 2 and 3. Set before resetFromCourse.
+    void setGrandPrix(bool grandPrix){grandPrix_=grandPrix;}
+    /// The item manager's Time Trial flag (PAL 0x809C38BC): RaceGlobals_init 0x807BD1D0 sets
+    /// it from RaceConfig +0xB70 for Time Trial and Ghost Race. Set before resetFromCourse.
+    void setTimeTrial(bool timeTrial){timeTrial_=timeTrial;}
+    bool loadOdds(const void* data,size_t size){return grandPrix_?odds_.load(data,size,0,1):odds_.load(data,size,2,3);}
     bool oddsReady()const{return odds_.ready();}
     bool loadShellRoute(const void* bytes,size_t size,unsigned course=0xffff){shellCourse_=course;return shellRoute_.load(bytes,size);}
     const ShellRoute& shellRoute()const{return shellRoute_;}
@@ -202,6 +232,7 @@ public:
     static bool segmentHits(Vec3 from,Vec3 to,Vec3 center,float radius);
 private:
     ItemOdds odds_;
+    bool grandPrix_=false,timeTrial_=false;
     ShellRoute shellRoute_;
     unsigned shellCourse_=0xffff;
     std::unique_ptr<ItemKarts> ownKarts_;
@@ -247,9 +278,18 @@ private:
         std::array<float,3> scales{HeldInitialScale,HeldInitialScale,HeldInitialScale};
         std::array<Vec3,3> positions{},previous{},ups{},forwards{};
         TrailingItems trailing{};
+        Vec3 up{0,1,0};float lift=0; // heldFrame(): holder +0x64, +0xcc
     };
     std::array<HeldState,MaxRacers> deployments_{};
+    // Holder +0xc0 / +0xc4 / +0xc8 (fn_1_285210 0x807955C4): the last wheel's kart-frame y and
+    // z and its height above the kart on race frame 60, for heldFrame()'s wheelie lift.
+    std::array<Vec3,MaxRacers> wheelieReference_{};
     std::array<uint16_t,MaxRacers> mushroomUses_{};
+    // ItemHolderPlayer +0x238 (PAL): set by activateMushroom (0x8079864C), cleared at the
+    // top of every holder update (0x807979D8 / 0x807979E8); a Blue Shell dodges on it.
+    std::array<bool,MaxRacers> mushroomPulse_{};
+    // RaceConfig +0xB6C engine class (0 50cc, 1 100cc, 2 150cc): the Blue's dodge floor.
+    uint8_t engineClass_=2;
     std::vector<ItemEvent> events_;
     // This step's sounds, then any emitted between steps (give() from QA or tests), which
     // the next step keeps: stepSounds_ counts the last finished step's.
@@ -299,6 +339,11 @@ private:
     void trackShellRacers();
     uint16_t itemPoint(unsigned racer);
     ItemActor& spawn(unsigned player,ItemKind kind,bool backwards,const Vec3* origin=nullptr);
+public:
+    // A course object's loose Mushroom (a squashed Goomba, Kinoko ObjectKuribo):
+    // launched from the object; owner 12 is nobody.
+    void courseMushroom(Vec3 position,Vec3 velocity,unsigned owner);
+private:
     void releaseHeld(unsigned player,bool backwards);
     void removeHeld(unsigned player,unsigned slot,bool breakChain);
     int targetAhead(unsigned player,bool leader=false) const;
@@ -309,6 +354,9 @@ private:
     void boxContacts(unsigned player);
     void resolveActorPair(ItemActor& a,ItemActor& b);
     void resolveActorHeld(ItemActor& actor,unsigned owner,unsigned slot);
+    // Item vs course object (ItemObj_update 0x8079EFEC -> fn_1_291B24 0x807A1ED8).
+    void objectContacts(ItemActor& actor);
+    void heldObjectContacts(unsigned type);
     void updateHeldItems(unsigned player,ItemWorldQuery query);
     void snapshotNative(unsigned count,std::array<ItemRacer,MaxRacers>& out) const;
     void unhookNative();

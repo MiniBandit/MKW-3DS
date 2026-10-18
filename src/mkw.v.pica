@@ -9,6 +9,10 @@
 ; Affine applied to UV1 last (rows dot (u,v,0,1)); identity outside GX
 ; EnvCamera materials whose texture SRT follows the environment projection.
 .fvec uv1Row0, uv1Row1
+; GX projection-mapped texgen on unit 0 (the sea's camera glow): rows of
+; (s*q, t*q, q) on the eye position; unit 0 in projection mode divides by q.
+.fvec projRow0, projRow1, projRow2
+.bool projectedUv0
 ; GX colour channel 0 (retail course lighting, src/renderer_retail.cpp):
 ;   colour = vertex * min(light + lightDiff * df(dot(n, lightDir.xyz)), lightDir.w)
 ; with the diffuse function df(x) = max(x*lightFn.x + lightFn.y, lightFn.z)
@@ -31,6 +35,7 @@
 .constf normalEpsilon(0.000000000001, 0.0, 0.0, 0.0)
 .out outpos position
 .out outtc texcoord0
+.out outtcw texcoord0w.x
 .out outtc1 texcoord1
 .out outtc2 texcoord2
 .out outcolor color
@@ -111,7 +116,15 @@
     dp3 r5.x, uvRow0, r11
     dp3 r5.y, uvRow1, r11
     add r5.xy, uvScroll.xy, r5.xy
+    mov r7, constants.yyyy
+    ifu projectedUv0
+        dp4 r5.x, projRow0, r1
+        dp4 r5.y, projRow1, r1
+        dp4 r7.x, projRow2, r1
+    .end
     mov outtc, r5
+    ; PICA requires all lanes of each output written.
+    mov outtcw, r7.xxxx
     mov r11.xy, inuv.zw
     mov r5, constants.xxxy
     dp3 r5.x, uvRow2, r11

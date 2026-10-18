@@ -2947,6 +2947,14 @@ inline constexpr UiSpriteInfo UiSprites[]={
 {"map_29","textures/ui_map_29.t3x",256.00000000f,256.00000000f,1.00000000f,1.00000000f,"",0,0,262144},
 {"map_30","textures/ui_map_30.t3x",256.00000000f,256.00000000f,1.00000000f,1.00000000f,"",0,0,262144},
 {"map_31","textures/ui_map_31.t3x",256.00000000f,256.00000000f,1.00000000f,1.00000000f,"",0,0,262144},
+{"message_half","textures/ui_message_half.t3x",386.00000000f,187.00000000f,0.75390625f,0.73046875f,"",0,0,524288},
+{"text_style_1_0_237","textures/ui_text_style_1_0_237.t3x",53.00000000f,51.00000000f,0.82812500f,0.79687500f,"OK",0,1,16384},
+{"text_style_1_1_237","textures/ui_text_style_1_1_237.t3x",48.00000000f,43.00000000f,0.75000000f,0.67187500f,"OK",1,1,16384},
+{"text_style_2_0_237","textures/ui_text_style_2_0_237.t3x",53.00000000f,51.00000000f,0.82812500f,0.79687500f,"OK",0,2,16384},
+{"text_style_2_1_237","textures/ui_text_style_2_1_237.t3x",48.00000000f,43.00000000f,0.75000000f,0.67187500f,"OK",1,2,16384},
+{"text_style_9_0_237","textures/ui_text_style_9_0_237.t3x",53.00000000f,51.00000000f,0.82812500f,0.79687500f,"OK",0,9,16384},
+{"text_style_9_1_237","textures/ui_text_style_9_1_237.t3x",48.00000000f,43.00000000f,0.75000000f,0.67187500f,"OK",1,9,16384},
+{"text_style_33_0_277","textures/ui_text_style_33_0_277.t3x",657.00000000f,51.00000000f,0.64160156f,0.79687500f,"There are no ghosts for this course.",0,33,262144},
 };
 inline constexpr const char* UiHelpMain[]={"Play a Grand Prix and other modes alone.","Race or battle with two players.","Play online.","View rankings and enter tournaments."};
 inline constexpr const char* UiHelpMainMulti[]={"Race or battle with two players.","Race or battle with three players.","Race or battle with four players."};
@@ -3789,6 +3797,7 @@ inline constexpr UiPanelInfo UiPanels[]={
 {"license_bottom_empty_selectin_waku_light_01",-108.00000000f,-161.00000000f,216.00000000f,196.00000000f},
 {"strap_a",-304.00000000f,-228.00000000f,608.00000000f,456.00000000f},
 {"strap_b",-304.00000000f,-228.00000000f,608.00000000f,456.00000000f},
+{"message_half",-193.00000000f,-89.00000000f,386.00000000f,187.00000000f},
 };
 struct UiPaneInfo {const char* panel;const char* name;float x,y,w,h,fontW,fontH;unsigned textAlign,textPosition,font,textStyle;float alpha,z;unsigned vertexColors[4];bool visible;};
 inline constexpr UiPaneInfo UiPanes[]={
@@ -5967,6 +5976,14 @@ inline constexpr UiPaneInfo UiPanes[]={
 {"confirm_selectin","text_light_02",-65.87520131f,-22.25666062f,129.41923137f,38.50000018f,33.87407751f,39.27000018f,1,4,0,23,1.00000000f,160.00000000f,{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu},true},
 {"license_top_empty_selectin","waku_light_01",-105.03672795f,-121.43310449f,210.09614949f,190.89999604f,0.00000000f,0.00000000f,1,4,0,0,1.00000000f,0.00000000f,{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu},true},
 {"license_bottom_empty_selectin","waku_light_01",-105.03672795f,-158.37849169f,210.09614949f,190.89999604f,0.00000000f,0.00000000f,1,4,0,0,1.00000000f,0.00000000f,{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu},true},
+{"message_half","RootPane",-304.00000000f,-228.00000000f,608.00000000f,456.00000000f,0.00000000f,0.00000000f,1,4,0,0,1.00000000f,0.00000000f,{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu},true},
+{"message_half","pause_w_fade_n",-18.26923077f,-19.00000000f,36.53846154f,50.00000000f,0.00000000f,0.00000000f,1,4,0,0,1.00000000f,0.00000000f,{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu},true},
+{"message_half","touch",-191.46153576f,-91.83331884f,382.92303110f,191.66663768f,0.00000000f,0.00000000f,1,4,0,0,1.00000000f,0.00000000f,{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu},true},
+{"message_half","pause_w_null",-9.86538435f,-9.49998438f,19.73076871f,26.99999928f,0.00000000f,0.00000000f,1,4,0,0,1.00000000f,0.00000000f,{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu},true},
+{"message_half","fukidashi_null",-16.44230726f,-19.49998030f,32.88461451f,44.99999881f,0.00000000f,0.00000000f,1,4,0,0,1.00000000f,10.00000000f,{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu},true},
+{"message_half","Window",-190.73076424f,-86.69997623f,381.46152836f,182.33331274f,0.00000000f,0.00000000f,1,4,0,0,1.00000000f,10.00000000f,{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu},true},
+{"message_half","check",-172.64426634f,-58.78327089f,346.60383697f,130.49999654f,0.00000000f,0.00000000f,1,4,0,0,1.00000000f,10.00000000f,{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu},true},
+{"message_half","text",-164.42305845f,-71.36667433f,331.76919076f,150.73333799f,22.49307181f,37.17900025f,1,4,0,33,1.00000000f,30.00000000f,{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu},true},
 };
 struct UiPaneNode {const char* panel;const char* name;const char* parent;const char* material;float x,y,z,rx,ry,rz,sx,sy,w,h,alpha,fontW,fontH;unsigned flags,origin;short materialColors[2][4];unsigned vertexColors[4];};
 inline constexpr UiPaneNode UiPaneNodes[]={
@@ -6743,6 +6760,14 @@ inline constexpr UiPaneNode UiPaneNodes[]={
 {"course_movie_frame","RootPane","","",0.00000000f,0.00000000f,0.00000000f,0.00000000f,0.00000000f,0.00000000f,1.00000000f,1.00000000f,608.00000000f,456.00000000f,1.00000000f,0.00000000f,0.00000000f,1,4,{{0,0,0,0},{255,255,255,255}},{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},
 {"course_movie_frame","movie_null","RootPane","",0.00000000f,0.00000000f,10.00000000f,0.00000000f,0.00000000f,0.00000000f,1.00000000f,1.00000000f,50.00000000f,50.00000000f,1.00000000f,0.00000000f,0.00000000f,7,4,{{0,0,0,0},{255,255,255,255}},{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},
 {"course_movie_frame","black_base","movie_null","black_base",-0.00000000f,-0.00000000f,20.00000000f,0.00000000f,0.00000000f,0.00000000f,1.00000000f,1.00000000f,336.00000000f,180.00000000f,1.00000000f,0.00000000f,0.00000000f,1,4,{{0,0,0,0},{255,255,255,255}},{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},
+{"message_half","RootPane","","",0.00000000f,0.00000000f,0.00000000f,0.00000000f,0.00000000f,0.00000000f,1.00000000f,1.00000000f,608.00000000f,456.00000000f,1.00000000f,0.00000000f,0.00000000f,1,4,{{0,0,0,0},{255,255,255,255}},{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},
+{"message_half","pause_w_fade_n","RootPane","",-0.00000000f,-6.00000000f,0.00000000f,0.00000000f,0.00000000f,0.00000000f,1.00000000f,1.00000000f,50.00000000f,50.00000000f,1.00000000f,0.00000000f,0.00000000f,7,4,{{0,0,0,0},{255,255,255,255}},{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},
+{"message_half","touch","pause_w_fade_n","",-0.00002766f,2.00000000f,0.00000000f,0.00000000f,0.00000000f,0.00000000f,0.89999998f,0.89999998f,582.22216797f,212.96293640f,1.00000000f,0.00000000f,0.00000000f,1,4,{{0,0,0,0},{255,255,255,255}},{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},
+{"message_half","pause_w_null","pause_w_fade_n","",0.00000000f,1.99998474f,0.00000000f,0.00000000f,0.00000000f,0.00000000f,0.89999998f,0.89999998f,30.00000000f,30.00000000f,1.00000000f,0.00000000f,0.00000000f,3,4,{{0,0,0,0},{255,255,255,255}},{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},
+{"message_half","fukidashi_null","pause_w_null","",-0.00000000f,1.11110687f,10.00000000f,0.00000000f,0.00000000f,0.00000000f,1.00000000f,1.00000000f,50.00000000f,50.00000000f,1.00000000f,0.00000000f,0.00000000f,1,4,{{0,0,0,0},{255,255,255,255}},{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},
+{"message_half","Window","fukidashi_null","WindowC ",-0.00000009f,-1.62962341f,0.00000000f,0.00000000f,0.00000000f,0.00000000f,1.00000000f,1.00000000f,580.00000000f,202.59257507f,1.00000000f,0.00000000f,0.00000000f,1,4,{{0,0,0,0},{193,193,193,255}},{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},
+{"message_half","check","fukidashi_null","check",0.99993896f,-3.85189819f,0.00000000f,0.00000000f,0.00000000f,0.00000000f,1.00000000f,1.00000000f,527.00000000f,145.00000000f,1.00000000f,0.00000000f,0.00000000f,1,4,{{247,249,251,0},{255,255,255,255}},{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},
+{"message_half","text","pause_w_null","text",2.22221994f,0.00002289f,30.00000000f,0.00000000f,0.00000000f,0.00000000f,1.00000000f,1.00000000f,504.44439697f,167.48149109f,1.00000000f,34.19999313f,41.31000137f,1,4,{{255,255,255,0},{128,128,128,255}},{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},
 };
 struct UiGlowInfo {const char* panel;const char* pane;const char* key;const char* group;unsigned variant,blend;float pivotX,pivotY;unsigned materialColors[2];};
 inline constexpr UiGlowInfo UiGlows[]={

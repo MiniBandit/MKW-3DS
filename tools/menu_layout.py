@@ -97,7 +97,7 @@ def sample_texture(tex, u, v, sampler):
 
 
 def render_layout(path, source, animations=(), frame=0, bounds=None, exclude=(), include=None,
-                  pane_overrides=None, material_overrides=None, aspect_scale=(608/832,1.0),animation_groups=None,exclude_exact=(),z_range=None,texture_overrides=None,animation_frames=None):
+                  pane_overrides=None, material_overrides=None, aspect_scale=(608/832,1.0),animation_groups=None,exclude_exact=(),z_range=None,texture_overrides=None,animation_frames=None,window_frames=False):
     """Bake a source picture-pane subtree, returning image, bounds and pane poses.
 
     Bounds are [left, top, right, bottom] in a y-down coordinate system whose
@@ -213,6 +213,28 @@ def render_layout(path, source, animations=(), frame=0, bounds=None, exclude=(),
             if not visible or alpha<=0:continue
             draw=not (name in exclude_exact or any(x in name for x in exclude) or (include is not None and name not in include) or (z_range is not None and not z_range[0]<=z<z_range[1]))
             uv=struct.unpack_from('>8f',d,content+20) if d[content+18] else (0,0,1,0,0,1,1,1)
+            if tag==b'wnd1' and window_frames:
+                # nw4r::lyt::Window: DrawContent (PAL 0x8007D410) insets the content
+                # by the frame size and adds the inflation; the one-frame DrawFrame
+                # (0x8007D520) then mirrors the frame texture into the four corners,
+                # each quad running on along an edge (texcoords past 1, clamped).
+                # Opt-in: earlier cooks drew the content quad alone.
+                il,ir,it,ib=struct.unpack_from('>4f',d,s+68)
+                if d[s+84]!=1:raise ValueError(f'Unsupported window frame count {d[s+84]}: {path} / {name}')
+                fmi=struct.unpack_from('>H',d,block+struct.unpack_from('>I',d,block+struct.unpack_from('>I',d,s+92)[0])[0])[0]
+                ftex=texture(path.parent.parent/'timg'/textures[materials[fmi]['samplers'][0][0]])
+                th,tw=ftex.shape[:2];W,H=v[8],v[9]
+                def quad(qx,qy,qw,qh,coords,qmi,qcolors):
+                    c=matrix@np.array([[qx,qx+qw,qx,qx+qw],[qy,qy,qy-qh,qy-qh],[1,1,1,1]])
+                    qrect=[float(c[0].min()),float(-c[1].max()),float(c[0].max()),float(-c[1].min())]
+                    panes.append((name,matrix,alpha,qx,qy,qw,qh,qcolors,qmi,coords,z,qrect,draw))
+                quad(left+tw-il,top-th+it,W-2*tw+il+ir,H-2*th+it+ib,uv,mi,colors/255)
+                white=np.ones((4,4),dtype=np.float32)
+                pw,ph=W-tw,th;quad(left,top,pw,ph,(0,0,pw/tw,0,0,ph/th,pw/tw,ph/th),fmi,white)
+                pw,ph=tw,H-th;quad(left+W-tw,top,pw,ph,(pw/tw,0,0,0,pw/tw,ph/th,0,ph/th),fmi,white)
+                pw,ph=W-tw,th;quad(left+tw,top-H+th,pw,ph,(pw/tw,ph/th,0,ph/th,pw/tw,0,0,0),fmi,white)
+                pw,ph=tw,H-th;quad(left,top-th,pw,ph,(0,ph/th,pw/tw,ph/th,0,0,pw/tw,0),fmi,white)
+                continue
             panes.append((name,matrix,alpha,left,top,v[8],v[9],colors/255,mi,uv,z,rect,draw))
         elif tag==b'pas1':stack.append(pose)
         elif tag==b'pae1':stack.pop()

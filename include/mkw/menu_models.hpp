@@ -25,7 +25,7 @@ public:
     void update(Renderer&, const MenuState& visual);
     // Synchronous load of everything the state shows (QA captures).
     void prepare(Renderer&, const MenuState&);
-    void advance(unsigned ticks){backgroundFrame_+=ticks;driverFrame_+=ticks;}
+    void advance(unsigned ticks){backgroundFrame_+=ticks;driverFrame_+=ticks;kartTicks_+=ticks;}
     // The menu camera and its stereo: Mario Kart 7's garage camera, whose
     // subject is the selection models.
     void begin(Renderer&);
@@ -41,10 +41,20 @@ private:
     const Entry* find(int kind,int id) const;
     Entry& obtain(int kind,int id);
     void show(Renderer&,int kind,int id);
+    void turnKart(const MenuState&, const UiTransitionView&);
     std::vector<std::unique_ptr<Entry>> entries_;
     int shownDriver_=-1,shownBackground_=-1,shownMachine_=-1;
     int driverClip_=-1,driverFace_=-1,backgroundClip_=-1;
+    // The character page's OK press puts its driver model in state 1, sel_gut
+    // (CharacterSelect front handler PAL 8083dfa8 -> fn_1_31F7C4).
+    bool driverConfirm_=false;
     unsigned backgroundFrame_=0,driverFrame_=0;
+    // Menu kart turntable: KartModelMgr's frame count (+0x50, 0..719) and the
+    // shown kart's rotation (+0x28); see turnKart().
+    unsigned kartTicks_=0,kartCount_=0;
+    float kartRotation_=0;
+    int kartShown_=-1;
+    bool kartVehiclePage_=false;
     std::uint32_t clock_=1;
 };
 }

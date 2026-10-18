@@ -14,7 +14,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'tools'))
 from course_catalog import courses
-from cook_model import cook
+from cook_model import cook, COURSE_TEXELS, LARGE_TEXELS
 from cook_course_objects import cook_course
 
 OUT = ROOT / 'sd-card/3ds/mkw-3ds'
@@ -53,7 +53,11 @@ def recook(course, objects):
         with (exported / 'export.log').open('w') as log:
             subprocess.run(['node', str(ROOT / 'build/export_brres.mjs'), str(folder / resource), str(exported)],
                            env=env, stdout=log, stderr=subprocess.STDOUT, check=True)
-        cook(exported, OUT, prefix, 256)
+        # The same texture policy as tools/import_courses.py.
+        if label == 'map':
+            cook(exported, OUT, prefix, 256)
+        else:
+            cook(exported, OUT, prefix, texel_budget=LARGE_TEXELS if label == 'sky' else COURSE_TEXELS, brres=[folder / resource])
         cooked.append(prefix)
     refresh_receipt(course, cooked)
     if objects and course['kind'] == 'race':

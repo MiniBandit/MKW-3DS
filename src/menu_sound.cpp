@@ -35,7 +35,13 @@ void post(SoundCommand::Type type, std::uint16_t slot, std::uint32_t id, float v
  SoundCommand c; c.type = type; c.slot = slot; c.id = id; c.value = value; c.frames = frames;
  SoundSystem::instance().post(c);
 }
-void ui(std::uint32_t id) { SoundSystem::instance().play(id, 0); }
+// The menu RSAR player's start (PAL 0x8071497C) writes local variable 0 =
+// the pressing player (0 here) into SE_UI_BTN_OK and SE_UI_CTRL_ON, whose
+// sequences transpose by it; unset it is -1, a semitone flat.
+void ui(std::uint32_t id) {
+ if (id == id::SE_UI_BTN_OK || id == id::SE_UI_CTRL_ON) SoundSystem::instance().play(id, 0, 0);
+ else SoundSystem::instance().play(id, 0);
+}
 // The Mii select voices (BNK_VO_MENU_MII) can never play: Mii slots are
 // shown as unavailable in this port. Everything else in GRP_MENU loads.
 constexpr std::uint32_t MenuSkip[] = {id::bankfile::BNK_VO_MENU_MII};
@@ -78,14 +84,17 @@ void MenuSound::input(const MenuState& before, const MenuState& after, const UiI
  if (after.unavailable && !before.unavailable) {
   // A "Not available" message: MessageBox BeforeEntranceAnimations (SE_UI_CTRL_WIN_POPUP).
   ui(id::SE_UI_CTRL_WIN_POPUP);
-  volume_.set(0.55f,30); // MessageBoxTransparent805d8998: duck over30 frames.
+  // MessageBoxTransparent (PAL 0x805F924C): track 5 to 0.4 over 30 frames, on
+  // top of the page layer's volume (track 3).
+  popup_.set(0.4f, 30);
   unavailable_ = true;
   return;
  }
  if (unavailable_ && !after.unavailable) {
+  // PAL 0x805F9290: POPDOWN, then track 5 back to 1.0 over 10 frames.
   ui(id::SE_UI_CTRL_WIN_POPDOWN);unavailable_ = false;
-  volume_.set(layerOf(after.page)==5?0.55f:1.f,30);
- } // AfterExitAnimations restores the underlying page volume.
+  popup_.set(1.0f, 10);
+ }
  if(before.page==UiPage::EngineClass&&after.page==before.page&&
     before.selection.mixedEngineTypes!=after.selection.mixedEngineTypes){
   // GPClassSelect::OnStartPress (USA 80825200-24): toggle +0x6c4,
@@ -93,15 +102,14 @@ void MenuSound::input(const MenuState& before, const MenuState& after, const UiI
   ui(after.selection.mixedEngineTypes?id::SE_UI_SHEET_RIGHT:id::SE_UI_SHEET_LEFT);
   return;
  }
- // Pages::RaceMenu::OnButtonClick (80838664): Continue has no button sound
- // (SE_RC_PAUSE_OFF at accepted input, before scenery restoration); leaving the race (restart,
- // quit, the end-of-race choices) plays SE_RC_PAUSE_EXIT_GAME
- // (PlayEndRaceMenuButtonClickSound, 8070e54c).
+ // Pages::RaceMenu::OnButtonClick (80838664): Continue has no button sound;
+ // leaving the race (restart, quit, the end-of-race choices) plays
+ // SE_RC_PAUSE_EXIT_GAME (PlayEndRaceMenuButtonClickSound, 8070e54c).
  if (before.page == UiPage::Pause || before.page == UiPage::QuitConfirm || before.page == UiPage::Results) {
-  if (after.page == UiPage::Race) {
-   // Resume feedback belongs to the accepted button, before scenery reload.
-   ui(id::SE_RC_PAUSE_OFF);return;
-  }
+  // RaceRSARPlayer::Resume (PAL 0x80715F60) plays SE_RC_PAUSE_OFF on the frame
+  // the pause pages close, the press itself: here, not after the course reload
+  // (RaceSound::pause(false) only resumes the players).
+  if (after.page == UiPage::Race) { ui(id::SE_RC_PAUSE_OFF); return; }
   const bool leaving = action == UiAction::RestartRace || action == UiAction::StartRace ||
                        (before.page==UiPage::Pause&&before.cursor==1&&key.accept&&!key.back) ||
                        (pageChanged && after.page != UiPage::Pause && after.page != UiPage::QuitConfirm && after.page != UiPage::Results && (key.accept || key.start));
@@ -118,7 +126,9 @@ void MenuSound::input(const MenuState& before, const MenuState& after, const UiI
    ui(id::SE_UI_PAGE_PREV);
   return;
  }
- const bool samePageOk=before.page==UiPage::Confirm&&key.accept&&!key.back&&
+ // The no-ghost ConfirmPage's OK starts the race from its own page too
+ // (PushButton default SE_UI_BTN_OK, PAL 0x805C21C0).
+ const bool samePageOk=(before.page==UiPage::Confirm||before.page==UiPage::NoGhosts)&&key.accept&&!key.back&&
                        !after.unavailable&&before.supportsRace();
  if ((pageChanged||samePageOk) && (key.accept || key.start)) {
   // PushButton::HandleClick (805b66b4): the button's selection sound,
@@ -148,11 +158,16 @@ void MenuSound::applyLayer(int layer, int frames) {
  // MenuRSARPlayer::OnNewPageLayer (8070c8d0): layers 0-3 restore BGM volume
  // (1.0) and change stems over 30 frames; layer 5 ducks to 0.55.
  if (layer == 6) return;
- volume_.set(layer == 5 || unavailable_ ? 0.55f : 1.0f, frames);
+ volume_.set(layer == 5 ? 0.55f : 1.0f, frames);
  if (bgm_ == id::SEQ_O_SELECT && layer <= 2) for (int t = 0; t < 4; ++t) stems_[t].set(SelectStems[layer][t], frames);
 }
 
 void MenuSound::startBgm(UiPage page) {
+ // MenuRSARPlayer::OnLoad (PAL 0x80715BD4) first sets every sound player but
+ // the UI's (1) back to full volume (PlayersVolumeMgr, PAL 0x8070F554, table
+ // 0x808A1D48 = 1.0): a race's fade-out (RaceSound::fadeOut) leaves players
+ // 2-10 at 0, and the menu voices play on player 8.
+ for (std::uint32_t p = 0; p < 11; ++p) if (p != 1) post(SoundCommand::PlayerVolume, 0, p, 1.0f);
  // MenuRSARPlayer::OnLoad (8070e130) -> SinglePlayer::PlayBGSound -> PlaySound(Section::GetSoundId).
  const std::uint32_t sound = section_ == Section::Title ? std::uint32_t(id::W_BGM_TITLE) : std::uint32_t(id::SEQ_O_SELECT);
  slot_ = slot_ == BgmSlots[0] ? BgmSlots[1] : BgmSlots[0];
@@ -164,10 +179,12 @@ void MenuSound::startBgm(UiPage page) {
   const int l = layer == 1 || layer == 2 ? layer : 0;
   for (int t = 0; t < 4; ++t) { stems_[t].value = stems_[t].target = SelectStems[l][t]; stems_[t].frames = 0; post(SoundCommand::TrackVolume, slot_, 1u << t, stems_[t].value); }
  }
- // OnLoad: SinglePlayerValuesMgr::SetVolume(1.0, 3, 10); the page layer then applies.
- volume_.value = 0; volume_.set(1.0f, 10); postedVolume_ = -1;
+ // The new RSAR player resets every track to 1.0 (PAL 0x80713E90), so the BGM
+ // starts at full volume (OnLoad's SetVolume(1.0, 3, 10) changes nothing);
+ // the main menu's layer then ducks it over 30 frames.
+ volume_ = Track{}; postedVolume_ = -1;
  layer_ = layer;
- if (layer == 5 || unavailable_) volume_.set(0.55f, 30);
+ if (layer == 5) volume_.set(0.55f, 30);
 }
 
 void MenuSound::enterSection(Section next, UiPage page) {
@@ -184,22 +201,46 @@ void MenuSound::enterSection(Section next, UiPage page) {
  (void)page;
 }
 
-void MenuSound::frame(const MenuState& visual, bool revealed) {
+void MenuSound::frame(const MenuState& visual, bool revealed, unsigned steps) {
  auto& sound = SoundSystem::instance();
  if (!sound.available()) return;
  const Section next = sectionOf(visual.page);
- if (revealed && next != section_ && next != Section::Race) enterSection(next, visual.page);
- if (pendingStart_ > 0 && sound.sceneReady()) { pendingStart_ = -1; startBgm(visual.page); }
+ // After a race (engine restarted, no section) the menu groups load at once,
+ // before the page's textures fill LINEAR: BNK_VO_MENU needs one 1.28 MB block
+ // and failed to fit behind them (no menu voices). The BGM still waits for the page.
+ if ((revealed || section_ == Section::None) && next != section_ && next != Section::Race) enterSection(next, visual.page);
+ if (pendingStart_ > 0 && revealed && sound.sceneReady()) { pendingStart_ = -1; startBgm(visual.page); }
  const int layer = layerOf(visual.page);
  if (bgm_ != 0xFFFFFFFF && layer != layer_) { applyLayer(layer, 30); if (layer != 6) layer_ = layer; }
+ // ConfirmPage BeforeIn / AfterOut (PAL 0x805C2324 / 0x805C2340): the page
+ // layer's volume (track 3) to 0.55 over 30 frames while the popup shows,
+ // back to 1.0 over 30 once it has gone.
+ const bool confirmPopup = visual.page == UiPage::NoGhosts;
+ if (confirmPopup != confirmPopup_) { confirmPopup_ = confirmPopup; if (bgm_ != 0xFFFFFFFF) volume_.set(confirmPopup ? 0.55f : 1.0f, 30); }
  // StreamsMgr::Calc / SinglePlayerValuesMgr::Calc (806f54b8 / 806f4d24): per frame.
- if (bgm_ != 0xFFFFFFFF) {
-  volume_.calc();
-  if (volume_.value != postedVolume_) { post(SoundCommand::Volume, slot_, 0, volume_.value); postedVolume_ = volume_.value; }
-  if (bgm_ == id::SEQ_O_SELECT) for (int t = 0; t < 4; ++t) if (stems_[t].calc()) post(SoundCommand::TrackVolume, slot_, 1u << t, stems_[t].value);
+ for (unsigned step = 0; step < steps; ++step) {
+  popup_.calc();
+  if (bgm_ != 0xFFFFFFFF) {
+   volume_.calc();
+   // ValuesMgr::Calc multiplies its tracks (PAL 0x806F9CE0).
+   const float v = volume_.value * popup_.value;
+   if (v != postedVolume_) { post(SoundCommand::Volume, slot_, 0, v); postedVolume_ = v; }
+   if (bgm_ == id::SEQ_O_SELECT) for (int t = 0; t < 4; ++t) if (stems_[t].calc()) post(SoundCommand::TrackVolume, slot_, 1u << t, stems_[t].value);
+  }
+  // One game frame for the audio thread's BasicSound updates.
+  SoundCommand c; c.type = SoundCommand::Layer; sound.post(c);
  }
- // One game frame for the audio thread's BasicSound updates.
- SoundCommand c; c.type = SoundCommand::Layer; sound.post(c);
+}
+
+void MenuSound::fadeOut() {
+ auto& sound = SoundSystem::instance();
+ // The race keeps its own players (RaceSound); this is the menus' Stop only.
+ if (!sound.available() || section_ == Section::Race) return;
+ // MenuRSARPlayer::Stop: StopSound(0x14), then PlayersVolumeMgr::Stop
+ // (PAL 0x8070F4D0) fades the other players, the menu voice among them.
+ if (bgm_ != 0xFFFFFFFF) sound.stopSlot(slot_, 20);
+ sound.stopSlot(VoiceSlot, 20);
+ bgm_ = 0xFFFFFFFF;
 }
 
 void MenuSound::leave() {

@@ -14,7 +14,11 @@ class EnemyRoute;
 // AISpeedRace and AIRankManager. Ported from the USA StaticR decompilation
 // with doldecomp/mkw class layouts; addresses and constants in docs/CPU_AI.md.
 // trick: KPad trick input (0 none, 1 up, 2 down, 3 left, 4 right).
-struct CpuCommand { uint16_t buttons=0; float stick=0; uint8_t trick=0; };
+// stick: the KPad stick (AIInfo +0x10), neutral in normal driving: the AI turns the body.
+// animationStick: Enemy::AI +0x14, which AI::getStick (0x80726204) hands the driver model
+// (fn_1_2BBDC0 / KartModel fn_1_2BCF78) for a CPU instead of its pad. lean: KartMove +0x28C,
+// the bike lean input KartMoveBike reads for a CPU (0x80587E58, 0x805871C0).
+struct CpuCommand { uint16_t buttons=0; float stick=0; uint8_t trick=0; float animationStick=0,lean=0; };
 // Item holder view for AIItemRace (ItemKind values, 20 = none) and its output:
 // the item button for this frame plus the stick-up/down throw direction.
 struct CpuItemView { uint8_t item=20,heldCount=0; bool roulette=false,held=false,heldRed=false,inked=false; };
@@ -29,12 +33,24 @@ public:
     struct Setup {
         const EnemyRoute* route=nullptr;
         unsigned count=1,engineClass=2,cpuMode=1;
-        bool mirror=false;
+        // Time Trials: a human racer the QA autopilot drives steers by input
+        // only, so the run replays as a ghost (the body yaw below is not input).
+        bool inputOnlyHumans=false;
         CpuSpeedParam speed{};bool speedReady=false;
         std::array<CpuActionParam,12> actions{};bool actionsReady=false;
+        // Rank distances: raceCompletion times the mean checkpoint lap length
+        // (CheckpointHolder_computeMeanTotalDistance 0x80512370, fn_1_22F088).
         float courseLength=6000;
         uint32_t humanMask=1;
         uint32_t seed=0x2a;
+        // fn_1_22015C: STGI pole position (1 flips the start lanes).
+        unsigned polePosition=0;
+        // fn_1_22C244 / fn_1_26474: races start the route at ENPT point 0.
+        bool startAtPointZero=false;
+        // AIRankManager::init (fn_1_2311B4): the race number in the Grand Prix / VS set
+        // (RaceConfig +0xB8C, 0 = first) and every racer's points before this race (+0xD8).
+        unsigned raceNumber=0;
+        std::array<uint16_t,Capacity> points{};
     };
     // After the race scene is built (karts at their grid slots).
     void reset(const Setup& setup);
@@ -57,6 +73,8 @@ public:
         hazardCount_=std::min(count,MaxHazards);
         for(unsigned k=0;k<hazardCount_;++k){hazards_[k]=positions[k];hazardRadii_[k]=radii[k];}
     }
+    // AIPowAvoider (0x8072A7A0) reads the POW manager's timer (0: no POW); set once per tick before step.
+    void setPowTimer(uint16_t timer){ powTimer_=timer; }
     unsigned routePoint(unsigned racer) const { return racer<Capacity?racers_[racer].path.cur:0; }
     Vec3 target(unsigned racer) const { return racer<Capacity?racers_[racer].path.target:Vec3{}; }
     float baseSpeed(unsigned racer) const { return racer<Capacity?racers_[racer].speed.result:0; }
@@ -92,6 +110,7 @@ private:
         bool switched=false;
         float feedForward=0;    // DriveInfo+0x1c, persists across ticks
         float lastAngle=0;      // controller +0xc
+        float lean=0;           // KartMove +0x28C: written in the normal state only
     };
     // AIControlBase +0x48 obstacle avoider (ctor fn_1_2161C0, vtable 808c688c).
     struct Avoid {
@@ -133,7 +152,7 @@ private:
     struct Racer {
         Path path;Drive drive;Speed speed;Rank rank;CpuCommand command;
         ItemAi item;CpuItemView itemView;CpuItemCommand itemCommand;Avoid avoid;Stuck stuck;Block block;
-        bool active=false,human=false,mushroomRoute=false,dropping=false,recovering=false,wheelie=false;
+        bool active=false,human=false,mushroomRoute=false,respawning=false,recovering=false,wheelie=false;
         int startBoost=0;bool startDecided=false;
         bool driftRolled=false,canMiniturbo=true;
     };
@@ -145,7 +164,7 @@ private:
     // AIPathPoint / AIPathHandler.
     Vec3 pointPos(unsigned index) const;
     float widthOffset(unsigned index) const;
-    unsigned chooseBranch(unsigned racer,unsigned from);
+    unsigned chooseBranch(unsigned racer,unsigned from,bool allowMushroom=true);
     void computeCurvature(Path& p) const;
     void recalcTarget(Path& p,float inside) const;
     float slotOffset(unsigned racer) const;
@@ -155,6 +174,9 @@ private:
     bool shouldGoNext(Path& p,Vec3 kartPos) const;
     void goNext(unsigned racer,Vec3 kartPos);
     void updatePath(unsigned racer,Vec3 kartPos);
+    // Respawn: the path restarts at the respawn point's ENPT link (fn_1_22B79C).
+    unsigned respawnLink(unsigned racer,Vec3 kartPos) const;
+    void onOutOfBounds(unsigned racer,unsigned point);
     bool driftHere(const Path& p) const;
     bool endDriftHere(const Path& p) const;
     // AIControlRace / kart controller.
@@ -166,6 +188,8 @@ private:
     void assignGroupTargets();
     void redistribute();
     void swapTargets(Group& g);
+    void swapWithOther(Group& g,int member);
+    void updateTopGroup(unsigned finalLap,const std::array<unsigned,Capacity>& laps);
     void chase(float t);
     // Block line.
     void blockUpdate(unsigned racer);
@@ -188,7 +212,10 @@ private:
     int humanAdjacent(unsigned racer);
 
     const EnemyRoute* route_=nullptr;
+    // Per JGPT: its ENPT link (MapdataJugemPoint +0x28, fn_1_8148 0x805184FC).
+    std::vector<uint8_t> respawnLinks_;
     Setup setup_{};
+    bool driveFinished_=false; // the racer drive() steers has finished
     std::array<Racer,Capacity> racers_{};
     std::array<Group,3> groups_{}; // top, middle, bottom
     int topType=2;
@@ -200,6 +227,7 @@ private:
     uint32_t rng_=1;
     uint32_t frame_=0;
     std::array<Vec3,MaxHazards> hazards_{};std::array<float,MaxHazards> hazardRadii_{};unsigned hazardCount_=0;
+    uint16_t powTimer_=0;
     bool raceStarted_=false;
     // Course objects' positions and probe reach for this step's findObstacle
     // calls (objects only move in the Kinoko step that follows).

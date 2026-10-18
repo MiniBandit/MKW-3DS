@@ -1,14 +1,80 @@
 #include <mkw/qa.hpp>
+#include <mkw/race_grid.hpp>
 #include <game/system/KPadDirector.hh>
 #include <game/system/RaceManager.hh>
+#include <game/system/CourseMap.hh>
+#include <game/system/map/MapdataJugemPoint.hh>
 #include <game/kart/KartObjectManager.hh>
 #include <game/kart/KartMove.hh>
 #include <game/kart/Status.hh>
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <utility>
 namespace mkw {
 namespace K=Kinoko;
+void QaRaceWatch::step(unsigned now,const RaceGrid& grid,void (*log)(const char*)){
+    using St=K::Kart::eStatus;
+    constexpr unsigned StallSteps=1200;constexpr float StallProgress=.01f;
+    auto* race=K::System::RaceManager::Instance();auto* objects=K::Kart::KartObjectManager::Instance();
+    if(!race||!objects||!grid.count())return;
+    char line[320];
+    auto* kart=objects->object(0);const auto& st=kart->status();const auto& me=race->player(0);
+    const auto pos=kart->pos();
+    if(grid.driveLocal!=route_){
+        route_=grid.driveLocal;
+        snprintf(line,sizeof line,"QA route driver %s racer=0 step=%u lap=%u finished=%d comp=%.3f",route_?"on":"off",now,grid.lap(),int(grid.finished()),me.raceCompletion());
+        log(line);
+    }
+    const bool fall=st.onBit(St::BeforeRespawn),respawn=st.onBit(St::InRespawn),landing=st.onBit(St::AfterRespawn);
+    if(fall&&!fall_){
+        snprintf(line,sizeof line,"QA fall racer=0 step=%u pos=%.0f,%.0f,%.0f lap=%d cp=%u jugem=%d comp=%.3f speed=%.1f route=%d",
+                 now,pos.x,pos.y,pos.z,int(me.currentLap()),unsigned(me.checkpointId()),int(me.jugemId()),me.raceCompletion(),kart->move()->speed(),int(grid.driveLocal));
+        log(line);
+    }
+    if(respawn&&!respawn_){
+        // The JGPT whose grid slot (fn_1_85B8, PAL 0x8051896C) the racer was placed at.
+        int point=-1;float best=1e30f;
+        if(auto* map=K::System::CourseMap::Instance())
+            for(K::u16 k=0;k<map->getJugemPointCount();++k){
+                K::EGG::Vector3f slot;map->getJugemPoint(k)->findRespawnPos(slot,0);
+                const float d=(slot.x-pos.x)*(slot.x-pos.x)+(slot.z-pos.z)*(slot.z-pos.z);
+                if(d<best){best=d;point=int(k);}
+            }
+        snprintf(line,sizeof line,"QA respawn racer=0 step=%u jgpt=%d pos=%.0f,%.0f,%.0f cp=%u jugem=%d",now,point,pos.x,pos.y,pos.z,unsigned(me.checkpointId()),int(me.jugemId()));
+        log(line);
+    }
+    if(landing_&&!landing){
+        const Vec3 t=grid.ai().target(0);
+        snprintf(line,sizeof line,"QA land racer=0 step=%u pos=%.0f,%.0f,%.0f lap=%d cp=%u comp=%.3f ai_point=%u target=%.0f,%.0f,%.0f route=%d",
+                 now,pos.x,pos.y,pos.z,int(me.currentLap()),unsigned(me.checkpointId()),me.raceCompletion(),grid.ai().routePoint(0),t.x,t.y,t.z,int(grid.driveLocal));
+        log(line);
+    }
+    fall_=fall;respawn_=respawn;landing_=landing;
+    if(!race->isStageReached(K::System::RaceManager::Stage::Race)){racing_=false;return;}
+    if(!racing_){
+        racing_=true;
+        for(unsigned i=0;i<grid.count()&&i<Capacity;++i){best_[i]=race->player(i).raceCompletion();since_[i]=now;}
+    }
+    for(unsigned i=0;i<grid.count()&&i<Capacity;++i){
+        const auto& p=race->player(i);
+        if(p.finished()||grid.ghost(i)||p.raceCompletion()>best_[i]+StallProgress){
+            best_[i]=std::max(best_[i],p.raceCompletion());since_[i]=now;continue;
+        }
+        const unsigned stalled=now-since_[i];
+        if(!stalled||stalled%StallSteps)continue;
+        auto* k=objects->object(i);const auto kp=k->pos();const auto& ks=k->status();
+        char flags[8]{};unsigned n=0;
+        for(auto [bit,c]:{std::pair{St::TouchingGround,'G'},{St::WallCollision,'W'},{St::InAction,'A'},{St::BeforeRespawn,'F'},{St::InRespawn,'R'},{St::AfterRespawn,'L'}})
+            if(ks.onBit(bit)&&n<7)flags[n++]=c;
+        const Vec3 t=grid.ai().target(i);
+        snprintf(line,sizeof line,"QA stall racer=%u step=%u secs=%u lap=%d comp=%.3f best=%.3f cp=%u jugem=%d pos=%.0f,%.0f,%.0f speed=%.1f st=%s ai_point=%u target=%.0f,%.0f,%.0f stuck=%d route=%d",
+                 i,now,stalled/60,int(p.currentLap()),p.raceCompletion(),best_[i],unsigned(p.checkpointId()),int(p.jugemId()),kp.x,kp.y,kp.z,k->move()->speed(),flags,
+                 grid.ai().routePoint(i),t.x,t.y,t.z,grid.ai().stuckState(i),int(i?grid.ai().ready():grid.driveLocal));
+        log(line);
+    }
+}
 bool runControlChecks(K::EGG::SceneManager& scenes){
     bool valid=true,drift=false,ground=false,wall=false;
     double total=0,worst=0;unsigned steps=0;float speedBefore=0,speedAfter=0,boostBefore=0,boostAfter=0;

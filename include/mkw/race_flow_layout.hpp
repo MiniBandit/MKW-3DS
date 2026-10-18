@@ -526,4 +526,103 @@ inline constexpr FlowKey FlowButtonKeys[]={
     {25.f,0.f,0.f},{0.f,1.f,0.f},{0.f,1.f,0.f},{0.f,0.f,0.f},
 };
 inline constexpr FlowLayoutDef FlowButtonLayout{FlowButtonPanes,16,FlowButtonMaterials,13,FlowButtonClips,9,FlowButtonTracks,FlowButtonKeys};
+// Course preview title card (DemoPage_onInit, PAL 0x80855200; tools/cook_race_flow.py cook_demo):
+// demo/course_name and demo/cup_name, static, shown for the whole Demo section and faded with it.
+// FlowDemoTextures: the card font, then the 13 cup_icon_64x64_common icons in pane order.
+inline constexpr std::array<const char*,14> FlowDemoTextures{{"textures/flow_demo_font.t3x","textures/flow_demo_icon_00.t3x","textures/flow_demo_icon_01.t3x","textures/flow_demo_icon_02.t3x","textures/flow_demo_icon_03.t3x","textures/flow_demo_icon_04.t3x","textures/flow_demo_icon_05.t3x","textures/flow_demo_icon_06.t3x","textures/flow_demo_icon_07.t3x","textures/flow_demo_icon_08.t3x","textures/flow_demo_icon_09.t3x","textures/flow_demo_icon_10.t3x","textures/flow_demo_icon_11.t3x","textures/flow_demo_icon_12.t3x"}};
+inline constexpr int8_t FlowDemoIconSlot=1; // material texture slot of cup_icon: the loaded icon
+inline constexpr FlowGlyph FlowDemoGlyphs[]={
+    {u' ',88,160,0,12,12},
+    {u'\'',43,160,13,-1,12},
+    {u'/',406,107,21,-3,14},
+    {u'0',181,54,27,-2,24},
+    {u'1',1,160,19,1,24},
+    {u'2',326,54,26,-1,24},
+    {u'3',412,1,28,-3,24},
+    {u'4',442,1,28,-2,24},
+    {u'5',472,1,28,-2,24},
+    {u'6',210,54,27,-2,24},
+    {u'7',354,54,26,-1,24},
+    {u'8',1,54,28,-2,24},
+    {u'9',239,54,27,-2,24},
+    {u'A',156,1,32,-2,28},
+    {u'B',31,54,28,-2,23},
+    {u'C',319,1,29,-2,25},
+    {u'D',223,1,30,-2,25},
+    {u'E',382,54,26,-2,21},
+    {u'F',276,107,24,-2,20},
+    {u'G',255,1,30,-2,26},
+    {u'H',350,1,29,-2,24},
+    {u'J',429,107,20,-2,17},
+    {u'K',381,1,29,-1,26},
+    {u'L',302,107,24,-2,20},
+    {u'M',121,1,33,-2,29},
+    {u'N',61,54,28,-2,25},
+    {u'P',268,54,27,-2,22},
+    {u'R',91,54,28,-2,24},
+    {u'S',121,54,28,-3,23},
+    {u'T',151,54,28,-2,23},
+    {u'V',190,1,31,-3,26},
+    {u'W',1,1,41,-4,33},
+    {u'Y',287,1,30,-3,25},
+    {u'a',410,54,26,-1,23},
+    {u'b',438,54,26,-2,21},
+    {u'c',328,107,24,-1,22},
+    {u'd',466,54,26,-2,23},
+    {u'e',1,107,26,-2,21},
+    {u'f',451,107,20,-2,15},
+    {u'g',141,107,25,-2,22},
+    {u'h',168,107,25,-1,22},
+    {u'i',58,160,13,0,12},
+    {u'k',195,107,25,-2,20},
+    {u'l',73,160,13,0,12},
+    {u'm',84,1,35,-3,29},
+    {u'n',222,107,25,-1,23},
+    {u'o',29,107,26,-1,24},
+    {u'p',57,107,26,-2,21},
+    {u'q',85,107,26,-2,22},
+    {u'r',22,160,19,-2,15},
+    {u's',354,107,24,-3,19},
+    {u't',473,107,20,-2,15},
+    {u'u',249,107,25,-2,21},
+    {u'v',297,54,27,-2,23},
+    {u'w',44,1,38,-3,32},
+    {u'y',113,107,26,-3,21},
+    {u'z',380,107,24,-3,18},
+};
+inline constexpr FlowFont FlowDemoFont{0,512,256,51,42,51,51,FlowDemoGlyphs,57}; // kart_kanji_font
+inline constexpr FlowPane FlowCourseNamePanes[]={
+    {"RootPane",-1,0,1,4,255,-1,0.f,0.f,0.f,0.f,1.f,1.f,608.f,456.f,{{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},{{0.f,0.f,1.f,0.f,0.f,1.f,1.f,1.f}},0,0,0.f,0.f,0.f},
+    {"course_name_null",0,0,7,4,255,-1,0.f,0.f,0.f,0.f,1.f,1.f,30.f,40.f,{{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},{{0.f,0.f,1.f,0.f,0.f,1.f,1.f,1.f}},0,0,0.f,0.f,0.f},
+    {"shadow",1,2,1,4,255,0,-0.f,-1.f,0.f,0.f,1.f,1.f,200.f,35.f,{{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},{{0.f,0.f,1.f,0.f,0.f,1.f,1.f,1.f}},5,2,25.8000011f,30.6000004f,0.f},
+    {"course_name",1,2,1,4,255,1,-0.f,1.f,0.f,0.f,1.f,1.f,200.f,35.f,{{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},{{0.f,0.f,1.f,0.f,0.f,1.f,1.f,1.f}},5,2,25.8000011f,30.6000004f,0.f},
+};
+inline constexpr FlowMaterial FlowCourseNameMaterials[]={
+    {"shadow",{{0,0,0,0}},{{0,0,0,255}},-1,0,0,{{0.f,0.f,0.f,1.f,1.f}}},
+    {"course_name",{{0,0,0,0}},{{192,192,192,255}},-1,0,0,{{0.f,0.f,0.f,1.f,1.f}}},
+};
+inline constexpr FlowLayoutDef FlowCourseNameLayout{FlowCourseNamePanes,4,FlowCourseNameMaterials,2,nullptr,0,nullptr,nullptr};
+inline constexpr FlowPane FlowCupNamePanes[]={
+    {"RootPane",-1,0,1,4,255,-1,0.f,0.f,0.f,0.f,1.f,1.f,608.f,456.f,{{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},{{0.f,0.f,1.f,0.f,0.f,1.f,1.f,1.f}},0,0,0.f,0.f,0.f},
+    {"cup_name_null",0,0,7,4,255,-1,0.f,0.f,0.f,0.f,1.f,1.f,30.f,40.f,{{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},{{0.f,0.f,1.f,0.f,0.f,1.f,1.f,1.f}},0,0,0.f,0.f,0.f},
+    {"cup_icon",1,1,1,4,255,1,10.f,1.5f,0.f,0.f,1.f,1.f,64.f,64.f,{{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},{{0.f,0.f,1.f,0.f,0.f,1.f,1.f,1.f}},0,0,0.f,0.f,0.f},
+    {"cup_name",1,2,1,4,255,0,231.f,-10.f,0.f,0.f,1.f,1.f,380.666687f,35.f,{{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},{{0.f,0.f,1.f,0.f,0.f,1.f,1.f,1.f}},3,0,25.8000011f,30.6000004f,0.f},
+};
+inline constexpr FlowMaterial FlowCupNameMaterials[]={
+    {"cup_name",{{0,0,0,0}},{{255,199,58,255}},-1,0,0,{{0.f,0.f,0.f,1.f,1.f}}},
+    {"cup_icon",{{0,0,0,0}},{{255,255,255,255}},1,0,0,{{0.f,0.f,0.f,1.f,1.f}}},
+};
+inline constexpr FlowLayoutDef FlowCupNameLayout{FlowCupNamePanes,4,FlowCupNameMaterials,2,nullptr,0,nullptr,nullptr};
+// course_name.brctr / cup_name.brctr variants (16:9 transform).
+inline constexpr FlowControl FlowCourseNameControl{250.f,-190.f,1.20000005f,1.20000005f,20.f};
+inline constexpr FlowControl FlowCupNameControl{-340.f,170.f,1.20000005f,1.20000005f,10.f};
+inline constexpr std::array<const char*,42> FlowCourseNames{{"Mario Circuit","Moo Moo Meadows","Mushroom Gorge","Grumble Volcano","Toad's Factory","Coconut Mall","DK Summit","Wario's Gold Mine","Luigi Circuit","Daisy Circuit","Moonview Highway","Maple Treeway","Bowser's Castle","Rainbow Road","Dry Dry Ruins","Koopa Cape","GCN Peach Beach","GCN Mario Circuit","GCN Waluigi Stadium","GCN DK Mountain","DS Yoshi Falls","DS Desert Hills","DS Peach Gardens","DS Delfino Square","SNES Mario Circuit 3","SNES Ghost Valley 2","N64 Mario Raceway","N64 Sherbet Land","N64 Bowser's Castle","N64 DK's Jungle Parkway","GBA Bowser Castle 3","GBA Shy Guy Beach","Delfino Pier","Block Plaza","Chain Chomp Wheel","Funky Stadium","Thwomp Desert","GCN Cookie Land","DS Twilight House","SNES Battle Course 4","GBA Battle Course 3","N64 Skyscraper"}}; // by retail course id
+inline constexpr std::array<const char*,8> FlowCupNames{{"Mushroom Cup","Flower Cup","Star Cup","Special Cup","Shell Cup","Banana Cup","Leaf Cup","Lightning Cup"}}; // Common.bmg 0x23F0
+inline constexpr std::array<const char*,4> FlowEngineClassText{{"50cc","100cc","150cc","Mirror"}}; // Race.bmg 0x589-0x58C
+inline constexpr std::array<const char*,4> FlowGpRaceText{{"%s %s 1st Race","%s %s 2nd Race","%s %s 3rd Race","%s %s Final Race"}}; // 0x582-0x585: class, cup
+inline constexpr const char* FlowVsRaceText="%s VS %u/%u"; // 0x586: class, race, races
+inline constexpr std::array<const char*,2> FlowBattleText{{"Balloon Battle","Coin Runners"}}; // 0x587, 0x588
+inline constexpr std::array<int8_t,0x20> FlowCourseCup{{1,0,0,2,0,1,1,1,0,2,3,2,3,3,3,2,4,6,5,7,4,6,7,5,7,4,4,5,7,6,6,5}}; // fn_1_350000
+inline constexpr std::array<int8_t,8> FlowCupIcon{{3,2,7,6,5,1,4,0}}; // fn_1_3507A0
+inline constexpr int8_t FlowIconHatena=8,FlowIconBalloon=9,FlowIconCoin=10,FlowIconFlag=11;
 }

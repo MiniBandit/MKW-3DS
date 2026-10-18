@@ -55,7 +55,7 @@ const char* uiSelectedMenuControl(const MenuState& state,bool back){
  case UiPage::Confirm:return "MenuEndConfirm";
  case UiPage::Pause:return uiPauseMenuControl(state);
  case UiPage::QuitConfirm:return "YesNoButton";
- case UiPage::Error:return "ConfirmOK";
+ case UiPage::Error:case UiPage::NoGhosts:return "ConfirmOK";
  default:return "";
  }
 }
@@ -76,10 +76,19 @@ float uiMenuMaxDelay(const MenuState& state){
  case UiPage::BattleCup:return std::max(maximum("BattleCupSelectCup"),delay("BattleCupSelectNULL","CupSelectCourseNULL")+maximum("BattleCupSelectStage"));
  case UiPage::BattleStage:return maximum("BattleStageSelectStage");
  case UiPage::Ghost:return maximum("TimeAttackGhostList");
- case UiPage::Confirm:return maximum("MenuEndConfirm");
+ // Page fn_1_F2518 (PAL 806028cc) keeps the largest start frame among the
+ // page's own controls. RaceConfirmPage (fn_1_3320C8, fn_1_332290) loads
+ // MenuEndConfirm/ButtonOK, Back/ButtonBackMenuEndConfirm, RaceConfirmBack/
+ // BlackBack and both obis - not MenuEndConfirm's ButtonBack (21).
+ case UiPage::Confirm:return std::max({delay("MenuEndConfirm","ButtonOK"),delay("Back","ButtonBackMenuEndConfirm"),delay("RaceConfirmBack","BlackBack"),
+                                       delay("MenuObiTopRaceConfirm","MenuEndConfirmObiTop"),delay("MenuObiBottomRaceConfirm","MenuEndConfirmObiBottom")});
  case UiPage::Pause:return maximum(uiPauseMenuControl(state));
  case UiPage::QuitConfirm:return maximum("YesNoButton");
  case UiPage::Error:return delay("ConfirmOK","OK");
+ // ConfirmPage_onInit (PAL 0x805C1EB8): MenuObiTitleText, ConfirmOK/OK,
+ // Back/ButtonBackPopup and MessageWindowHalf.
+ case UiPage::NoGhosts:return std::max({delay("MenuObiTitleText","MenuObiTitleText"),delay("ConfirmOK","OK"),delay("Back","ButtonBackPopup"),
+                                        delay("MessageWindowHalf","MessageWindowHalf")});
  default:return 0;
  }
 }
@@ -92,6 +101,11 @@ float uiMenuExitHold(const MenuState& state,bool back){
   const auto* clip=uiFindAnimationClip("PressStart","eAFPressStart","PressStart");
   return clip&&clip->rate>0?clip->duration/clip->rate:0.f;
  }
+ // CharacterSelect's front handler (PAL 8083dfa8) passes max(OK delay,
+ // DriverModelMgr+0xc) to startReplace. The manager's ctor (fn_1_31FDCC,
+ // 80830180) stores there the longest sel_gut CHR0 of all menu drivers
+ // (fn_1_4AADC 8055ae90: frame count): Driver.szs fk.brres, 78 frames.
+ if(state.page==UiPage::Character)return std::max(uiButtonConfirmFrames(uiSelectedMenuControl(state)),78.f);
  return uiButtonConfirmFrames(uiSelectedMenuControl(state));
 }
 
@@ -105,6 +119,7 @@ void MenuTransition::reset(){
  phase_=Phase::Idle;elapsed_=-1;exitHold_=outDelay_=inDelay_=0;
  pending_=ready_=UiAction::None;selectedControl_="";section_=back_=skipEnter_=skipExit_=false;
  hasUnderlay_=openingModal_=closingModal_=holding_=false;underlayHoldFrame_=-1;underlaySelectedControl_="";
+ fadeAfterExit_=false;
 }
 
 bool MenuTransition::begin(const MenuState& before,const MenuState& after,bool back,UiAction action){
@@ -116,6 +131,11 @@ bool MenuTransition::begin(const MenuState& before,const MenuState& after,bool b
  exitHold_=uiMenuExitHold(before,back);outDelay_=uiMenuMaxDelay(before);inDelay_=uiMenuMaxDelay(after);
  selectedControl_=back?"":uiSelectedMenuControl(before);
  section_=uiMenuChangesSection(before.page,after.page,action);
+ // ConfirmPage's OK (PAL 0x805C21C0) replaces the popup after the OK
+ // animation, so it slides out first; TimeAttackBackPage_onRefocus
+ // (0x80639260) then changes section with delay 0 behind it.
+ fadeAfterExit_=action==UiAction::StartRace&&before.page==UiPage::NoGhosts;
+ if(fadeAfterExit_)section_=false;
  // Cup and Course pages share their cup controls and never slide between
  // each other (retail USA REL):
  //  CupSelect_BeforeExit 8082761c: forward to page 0x6f ends the exit state
@@ -169,12 +189,20 @@ bool MenuTransition::advance(MenuState& logical,unsigned ticks,bool incomingRead
       :exitHold_+(openingModal_||skipExit_?0.f:section_?FadeOutLastFrame:UiPageMotionFrames+outDelay_);
   if(elapsed_>=duration){
    if(!entering){
+    if(fadeAfterExit_){
+     // The emptied TimeAttackBackPage stays on screen through the fade.
+     fadeAfterExit_=false;section_=true;exitHold_=outDelay_=0;selectedControl_="";
+     outgoing_.page=UiPage::TimeAttackBack;elapsed_=-1;continue;
+    }
     if(pending_!=UiAction::None){ready_=pending_;pending_=UiAction::None;phase_=Phase::Idle;break;}
-    if(closingModal_){logical.age=underlay_.age;logical.focusAge=underlay_.focusAge;hasUnderlay_=closingModal_=false;phase_=Phase::Idle;elapsed_=-1;changed=true;continue;}
+    if(closingModal_){logical.age=underlay_.age;logical.focusAge=underlay_.focusAge;logical.sectionAge=underlay_.sectionAge;hasUnderlay_=closingModal_=false;phase_=Phase::Idle;elapsed_=-1;changed=true;continue;}
     // The incoming page appears only once its assets are resident: hold the
     // completed exit (still presenting at 60 Hz) instead of blocking on I/O.
     if(!incomingReady){holding_=true;ticks=0;break;}
     phase_=skipEnter_?Phase::Idle:Phase::Enter;openingModal_=false;elapsed_=-1;logical.age=logical.focusAge=0;changed=true;
+    // The section's background runs on through a page change; a section
+    // change rebuilds the scene behind the fade.
+    logical.sectionAge=section_?0:outgoing_.sectionAge;
    }else{phase_=Phase::Idle;elapsed_=-1;}
    continue;
   }

@@ -67,6 +67,13 @@ for row in shadow_manifest['choices']:
  if hashlib.sha256(source.read_bytes()).hexdigest()!=row['sha256']:raise ValueError('Vehicle shadow changed: '+str(relative))
  files[source]=relative
 files[shadow_root/'models/vehicle-shadows.json']=Path('models/vehicle-shadows.json')
+# Item and item-box shadow volumes (tools/cook_item_shadows.py).
+item_shadow_root=ROOT/'build/item-shadows'
+for row in json.loads((item_shadow_root/'models/item-shadows.json').read_text())['models']:
+ source=item_shadow_root/row['path']
+ if hashlib.sha256(source.read_bytes()).hexdigest()!=row['sha256']:raise ValueError('Item shadow changed: '+row['path'])
+ files[source]=Path(row['path'])
+files[item_shadow_root/'models/item-shadows.json']=Path('models/item-shadows.json')
 textures={'drift_sparkTex2','drift_flash2','drift_rk_smoke2'}
 files[assets/'textures/drift-effects.bin']=Path('textures/drift-effects.bin')
 files[assets/'textures/drift-effects-bike.bin']=Path('textures/drift-effects-bike.bin')
@@ -280,11 +287,11 @@ flow=ROOT/'build/race-flow/textures'
 if not (flow/'flow_wipe.t3x').is_file():raise ValueError('Run tools/cook_race_flow.py before packaging')
 for extra in sorted(flow.glob('flow_*.t3x')):
  if not extra.name.startswith('._'):overlay['textures/'+extra.name]=extra
-# Race bottom screen (tools/cook_race_map.py): 32 course maps, their overviews
-# and the UI atlas, cooked into this tree's own overlay directory.
+# Race bottom screen (tools/cook_race_map.py): retail's minimap capture of every
+# course and arena and the UI atlas, cooked into this tree's own overlay directory.
 race_map=ROOT/'build/race-map/textures'
-if not (race_map/'race_bottom_ui.t3x').is_file():raise ValueError('Run tools/cook_race_map.py before packaging')
-for extra in sorted(race_map.glob('race_*.t3x')):
+if not (race_map/'race_minimap_ui.t3x').is_file():raise ValueError('Run tools/cook_race_map.py before packaging')
+for extra in sorted(race_map.glob('race_minimap_*.t3x')):
  if not extra.name.startswith('._'):overlay['textures/'+extra.name]=extra
 # Sound engine (tools/cook_audio.py): the cooked tables from build/audio and
 # the user's retail BRSAR and BRSTM streams, unmodified, read by offset.

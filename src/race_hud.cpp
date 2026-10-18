@@ -6,6 +6,8 @@
 #include <mkw/item_box_uv.hpp>
 #include <mkw/bomb_blast.hpp>
 #include <mkw/race_balloon.hpp>
+#include <mkw/race_chase_layout.hpp>
+#include <mkw/race_flow_pose.hpp>
 #include <mkw/bullet_bill.hpp>
 #include <mkw/blooper.hpp>
 #include <mkw/thunder_cloud.hpp>
@@ -18,35 +20,45 @@
 #include <mkw/pose_compaction.hpp>
 #include <game/kart/KartObjectManager.hh>
 #include <game/system/RaceConfig.hh>
+#include <game/system/RaceManager.hh>
 #include <array>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <vector>
 namespace mkw {
 namespace {
-// Retail itembox / itemBoxNise materials (layout generated from the BRRES).
+// Retail itembox / itemBoxNise materials (layout generated from the BRRES). Every pass is
+// one draw of one submesh, in GX order: mat_boxin (itemBoxNise: and its rainbow layer),
+// mat_question, then mat_boxout's environment shell and its sparkle per dot group.
+enum class BoxPass : uint8_t { Inner, Rainbow, Question, Shell, Sparkle };
 struct BoxMaterial { Renderer* renderer; const Model* model; const ItemBoxLayout* layout;
-    const std::array<std::array<float,6>,300>* inner; C3D_Mtx transform; unsigned frame; bool sparkle; };
+    const std::array<std::array<float,6>,300>* inner; C3D_Mtx transform; unsigned frame; BoxPass pass; uint8_t group,rainbow; };
 constexpr float IdentitySRT[6]={1,0,0,0,1,0};
 uint32_t abgr(const unsigned char (&c)[3]){return 0xff000000u|c[0]|uint32_t(c[1])<<8|uint32_t(c[2])<<16;}
-void bindBox(void* context,std::size_t submesh){
+void bindBox(void* context,std::size_t){
     auto& m=*static_cast<BoxMaterial*>(context);const auto& L=*m.layout;
     for(int stage=0;stage<6;++stage)C3D_TexEnvInit(C3D_GetTexEnv(stage));
     auto* e0=C3D_GetTexEnv(0);auto* e1=C3D_GetTexEnv(1);
     auto texture=[&](int index,GPU_TEXTURE_WRAP_PARAM wrap){auto* t=&m.model->textures[index]->gpu;C3D_TexSetWrap(t,wrap,wrap);return t;};
     C3D_AlphaTest(false,GPU_ALWAYS,0);
     C3D_TexEnvColor(e0,0xffffffff);C3D_TexEnvSrc(e0,C3D_Alpha,GPU_CONSTANT);C3D_TexEnvFunc(e0,C3D_Alpha,GPU_REPLACE);
-    if(submesh==L.inner){
+    // No item box material updates framebuffer alpha (GX alphaUpdate off): the blends keep it.
+    if(m.pass==BoxPass::Inner||m.pass==BoxPass::Rainbow){
         // mat_boxin: weight*TEXC, environment mapped; GX cull front shows the far inner walls.
-        float srt[6];const auto& f=(*m.inner)[m.frame%m.inner->size()];for(unsigned i=0;i<6;++i)srt[i]=f[i];
+        // itemBoxNise lerps it toward its rainbow layer by A0 (m.rainbow): (1-A0)*TEXC here, then
+        // the Rainbow pass adds A0*layer over the same depth.
+        const bool layer=m.pass==BoxPass::Rainbow;
+        float srt[6];const auto& f=(*m.inner)[m.frame%m.inner->size()];for(unsigned i=0;i<6;++i)srt[i]=layer?L.rainbowSRT[i]:f[i];
         m.renderer->setEnvironmentUv(m.transform,srt);
-        C3D_TexBind(1,texture(L.innerTexture,GPU_REPEAT));
-        C3D_TexEnvColor(e0,0xff000000u|L.innerWeight*0x010101u);
+        C3D_TexBind(1,layer?texture(L.rainbowTexture,GPU_CLAMP_TO_EDGE):texture(L.innerTexture,GPU_REPEAT));
+        const uint32_t weight=layer?m.rainbow:L.innerWeight*(255u-m.rainbow)/255u;
+        C3D_TexEnvColor(e0,0xff000000u|weight*0x010101u);
         C3D_TexEnvSrc(e0,C3D_RGB,GPU_TEXTURE1,GPU_CONSTANT);C3D_TexEnvFunc(e0,C3D_RGB,GPU_MODULATE);
-        C3D_CullFace(GPU_CULL_BACK_CCW);
-        C3D_AlphaBlend(GPU_BLEND_ADD,GPU_BLEND_ADD,GPU_ONE,GPU_ZERO,GPU_ONE,GPU_ZERO);
-        C3D_DepthTest(true,GPU_GEQUAL,GPU_WRITE_ALL);
-    }else if(submesh==L.question){
+        C3D_CullFace(m.renderer->faceCull(GPU_CULL_BACK_CCW));
+        C3D_AlphaBlend(GPU_BLEND_ADD,GPU_BLEND_ADD,GPU_ONE,layer?GPU_ONE:GPU_ZERO,GPU_ZERO,GPU_ONE);
+        C3D_DepthTest(true,GPU_GEQUAL,layer?GPU_WRITE_COLOR:GPU_WRITE_ALL);
+    }else if(m.pass==BoxPass::Question){
         // mat_question: lerp(low, high, TEXC), alpha TEXA tested >= reference.
         C3D_TexBind(0,texture(L.questionTexture,GPU_CLAMP_TO_EDGE));
         C3D_TexEnvColor(e0,abgr(L.questionLow));
@@ -56,27 +68,38 @@ void bindBox(void* context,std::size_t submesh){
         C3D_TexEnvSrc(e1,C3D_RGB,GPU_CONSTANT,GPU_PREVIOUS,GPU_TEXTURE0);C3D_TexEnvFunc(e1,C3D_RGB,GPU_INTERPOLATE);
         C3D_AlphaTest(true,GPU_GEQUAL,L.questionAlpha);
         C3D_CullFace(GPU_CULL_NONE);
-        C3D_AlphaBlend(GPU_BLEND_ADD,GPU_BLEND_ADD,GPU_ONE,GPU_ZERO,GPU_ONE,GPU_ZERO);
+        C3D_AlphaBlend(GPU_BLEND_ADD,GPU_BLEND_ADD,GPU_ONE,GPU_ZERO,GPU_ZERO,GPU_ONE);
         C3D_DepthTest(true,GPU_GEQUAL,GPU_WRITE_ALL);
         if(m.layout==&ItemBoxMaterials){const auto& uv=ItemBoxQuestionUV[m.frame%ItemBoxQuestionUV.size()];m.renderer->setUvOffset(uv[2],uv[5]);}
-    }else if(submesh==L.outer){
-        // mat_boxout: additive, no depth write, GX cull back.
-        C3D_CullFace(GPU_CULL_FRONT_CCW);
+    }else{
+        // mat_boxout: additive, no depth write, GX cull back. GX stage 2 adds the environment
+        // shell to the sparkle of stages 0-1; each is its own additive pass here.
+        C3D_CullFace(m.renderer->faceCull(GPU_CULL_FRONT_CCW));
         C3D_AlphaBlend(GPU_BLEND_ADD,GPU_BLEND_ADD,GPU_ONE,GPU_ONE,GPU_ZERO,GPU_ONE);
         C3D_DepthTest(true,GPU_GEQUAL,GPU_WRITE_COLOR);
-        if(!m.sparkle){
+        if(m.pass==BoxPass::Shell){
             m.renderer->setEnvironmentUv(m.transform,IdentitySRT);
             C3D_TexBind(1,texture(L.shell,GPU_CLAMP_TO_EDGE));
             C3D_TexEnvSrc(e0,C3D_RGB,GPU_TEXTURE1);C3D_TexEnvFunc(e0,C3D_RGB,GPU_REPLACE);
         }else{
-            // clamp(2*(3/4*noise - (1-mask))).
-            m.renderer->setEnvironmentUv(m.transform,L.noiseSRT);
+            // GX: clamp(2*(3/4*noise - (1-mask) - 1/2)), the noise read through the indirect
+            // texture. Its offset is constant per dot: the dots of group m.group use their
+            // offset, their mask is that channel of the mask texture (cook_race_items.py).
+            float srt[6];for(unsigned i=0;i<6;++i)srt[i]=L.noiseSRT[i];
+            srt[2]+=L.sparkleOffset[m.group][0];srt[5]+=L.sparkleOffset[m.group][1];
+            m.renderer->setEnvironmentUv(m.transform,srt);
             C3D_TexBind(0,texture(L.mask,GPU_REPEAT));C3D_TexBind(1,texture(L.noise,GPU_REPEAT));
             C3D_TexEnvColor(e0,0xffbfbfbf);
             C3D_TexEnvSrc(e0,C3D_RGB,GPU_TEXTURE1,GPU_CONSTANT);C3D_TexEnvFunc(e0,C3D_RGB,GPU_MODULATE);
+            constexpr GPU_TEVOP_RGB inverseMask[]={GPU_TEVOP_RGB_ONE_MINUS_SRC_R,GPU_TEVOP_RGB_ONE_MINUS_SRC_G,GPU_TEVOP_RGB_ONE_MINUS_SRC_B};
             C3D_TexEnvSrc(e1,C3D_RGB,GPU_PREVIOUS,GPU_TEXTURE0);
-            C3D_TexEnvOpRgb(e1,GPU_TEVOP_RGB_SRC_COLOR,GPU_TEVOP_RGB_ONE_MINUS_SRC_COLOR);
-            C3D_TexEnvFunc(e1,C3D_RGB,GPU_SUBTRACT);C3D_TexEnvScale(e1,C3D_RGB,GPU_TEVSCALE_2);
+            C3D_TexEnvOpRgb(e1,GPU_TEVOP_RGB_SRC_COLOR,inverseMask[m.group]);
+            C3D_TexEnvFunc(e1,C3D_RGB,GPU_SUBTRACT);
+            // The GX -1/2 bias, then its x2 scale: prev + 0 - 1/2 (ADD_SIGNED), doubled.
+            auto* e2=C3D_GetTexEnv(2);
+            C3D_TexEnvColor(e2,0xff000000);
+            C3D_TexEnvSrc(e2,C3D_RGB,GPU_PREVIOUS,GPU_CONSTANT);C3D_TexEnvFunc(e2,C3D_RGB,GPU_ADD_SIGNED);
+            C3D_TexEnvScale(e2,C3D_RGB,GPU_TEVSCALE_2);
         }
     }
 }
@@ -140,12 +163,28 @@ void drawBlast(Renderer& renderer,const Model& model,const C3D_Mtx& t,unsigned a
     renderer.draw(model,t,false,bindBlast,m);
     renderer.setOverrides(nullptr,0);
 }
-bool outerOnly(void* context,std::size_t submesh){return submesh==static_cast<BoxMaterial*>(context)->layout->outer;}
+bool boxPassShape(void* context,std::size_t submesh){
+    const auto& m=*static_cast<BoxMaterial*>(context);const auto& L=*m.layout;
+    return submesh==(m.pass==BoxPass::Inner||m.pass==BoxPass::Rainbow?L.inner:m.pass==BoxPass::Question?L.question:L.outer);
+}
 void drawBox(Renderer& renderer,const Model& model,const ItemBoxLayout& layout,const std::array<std::array<float,6>,300>& inner,const C3D_Mtx& t,unsigned frame,bool sparkle=true){
-    BoxMaterial m{&renderer,&model,&layout,&inner,t,frame,false};
-    renderer.draw(model,t,false,bindBox,m);
-    // Reduced detail drops the additive sparkle pass of distant boxes.
-    if(sparkle){m.sparkle=true;renderer.draw(model,t,false,bindBox,m,outerOnly);}
+    BoxMaterial m{&renderer,&model,&layout,&inner,t,frame,BoxPass::Inner,0,0};
+    const Vec3 centre{t.r[0].w,t.r[1].w,t.r[2].w};
+    if(layout.rainbowTexture>=0){
+        // ItemObjFib (PAL 0x807A7D90): A0 = 255 * (camera distance - 3000) / (6000 - 3000),
+        // clamped and truncated; far fake boxes take the real boxes' rainbow.
+        const Vec3 d=centre-renderer.cameraPosition();
+        m.rainbow=uint8_t(std::clamp(255.f*(std::sqrt(dot(d,d))-3000.f)/3000.f,0.f,255.f));
+    }
+    renderer.draw(model,t,false,bindBox,m,boxPassShape);
+    if(m.rainbow){m.pass=BoxPass::Rainbow;renderer.draw(model,t,false,bindBox,m,boxPassShape);}
+    // hatenaPlane is an NW4R BILLBOARD_ROT node with no local rotation: at the box centre,
+    // facing the screen upright, scaled with the box; it does not tumble with the box.
+    const float scale=std::sqrt(t.r[0].x*t.r[0].x+t.r[1].x*t.r[1].x+t.r[2].x*t.r[2].x);
+    m.pass=BoxPass::Question;renderer.draw(model,renderer.cameraFacing(centre,scale),false,bindBox,m,boxPassShape);
+    m.pass=BoxPass::Shell;renderer.draw(model,t,false,bindBox,m,boxPassShape);
+    // Reduced detail drops the additive sparkle passes of distant boxes.
+    if(sparkle)for(m.group=0;m.group<layout.sparkleGroups;++m.group){m.pass=BoxPass::Sparkle;renderer.draw(model,t,false,bindBox,m,boxPassShape);}
     renderer.clearEnvironmentUv();renderer.setUvOffset(0,0);
 }
 // The fake box mask samples TEX0 through a static SRT; bake it into UV0.
@@ -158,10 +197,215 @@ void bakeMaskUv(Model& model,const ItemBoxLayout& L){
     flushGpuData(model.vertices,model.vertexCount*sizeof(Vertex));
 }
 // Retail ItemObjFakeBox draw (PAL 0x807A7FEC): 0.4x object scale, 2 deg/frame about X and Z.
+// ItemObj property +0x6c by object (0x809C2F48 + type*0x74, from the templates copied by
+// initItemObjProperties 0x80790AFC): the drop shadow's x and z scale; 0 for no shadow model.
+float itemShadowWidth(ItemKind kind){
+    switch(kind){
+    case ItemKind::GreenShell:case ItemKind::RedShell:case ItemKind::Banana:case ItemKind::Bobomb:return 1;
+    case ItemKind::Star:return .8f;
+    case ItemKind::BlueShell:return .9f;
+    case ItemKind::FakeBox:return 1.2f;
+    case ItemKind::ThunderCloud:return 1.3f;
+    default:return 0;
+    }
+}
+C3D_Mtx axesTransform(Vec3 x,Vec3 y,Vec3 z,Vec3 p){
+    C3D_Mtx t;Mtx_Identity(&t);
+    t.r[0].x=x.x;t.r[0].y=y.x;t.r[0].z=z.x;t.r[0].w=p.x;
+    t.r[1].x=x.y;t.r[1].y=y.y;t.r[1].z=z.y;t.r[1].w=p.y;
+    t.r[2].x=x.z;t.r[2].y=y.z;t.r[2].z=z.z;t.r[2].w=p.z;
+    return t;
+}
 void fakeBoxTransform(C3D_Mtx& t,Vec3 p,Vec3 scale,unsigned counter){
     const float a=float(counter%180)*2.f*float(M_PI)/180.f;
     Mtx_Identity(&t);Mtx_Translate(&t,p.x,p.y,p.z,true);Mtx_RotateZ(&t,a,true);Mtx_RotateX(&t,a,true);
     Mtx_Scale(&t,.4f*scale.x,.4f*scale.y,.4f*scale.z);
+}
+// CtrlRaceItemBalloon (game_image chase_icon; PAL load 0x807F1F50, calcSelf 0x807F22BC):
+// player 0's incoming-item icon and the BalloonManager fields it reads.
+struct ChaseIcon {
+    int fade=0;float fadeFrame=0;               // eFade clip (ChaseFade) and frame; init 0x807F2118: alpha_0
+    float roopFrame=0,zoomFrame=0;              // roop (hilight turn) and zoom (picture pulse) groups
+    float roopRate=1,zoomRate=1;                // their group speeds (GroupThing_construct 0x8063C844: 1)
+    bool hidden=true;                           // +0x80
+    float x=0,paneX=0;                          // +0x184 eased x; chase_icon_null x (layout units)
+    int item=-1,racerPicture=-1,itemPicture=-1; // +0x18c, +0x17c, +0x180
+    uint8_t picture=ChasePictureRed;            // the item pane: chase_icon.brlyt's tt_item_kame_red
+    bool alarm=false;float alarmX=0,alarmRate=0;
+    int opened=-1;std::array<uint16_t,21> shown{}; // QA
+};
+// The on-screen test |x| < screen width / 2 (*0x809C4758 +0x3F0), on the 400 px top screen.
+constexpr float ChaseHalfWidth=200.f*456.f/240.f;
+// fn_1_12C6E4 (0x8063CA98) starts the opposite eFade clip at the mirrored frame, so the
+// alpha carries on. calcSelf's show: alpha_0 -> fade_in, fade_out -> fade_in.
+void chaseOpen(ChaseIcon& c){
+    c.hidden=false;
+    if(c.fade==0){c.fade=1;c.fadeFrame=0;}
+    else if(c.fade==3){c.fadeFrame=ChaseFade[1].frames*(1-c.fadeFrame/ChaseFade[3].frames);c.fade=1;}
+}
+// Its close: x 0; alpha_255 -> fade_out, fade_in -> fade_out; at alpha_0 hidden.
+void chaseClose(ChaseIcon& c){
+    c.x=0;c.hidden=false;
+    if(c.fade==2){c.fade=3;c.fadeFrame=0;}
+    else if(c.fade==1){c.fadeFrame=ChaseFade[3].frames*(1-c.fadeFrame/ChaseFade[1].frames);c.fade=3;}
+    else if(c.fade==0){c.hidden=true;c.fadeFrame=0;}
+}
+// The view the icon is placed from (fn_1_2E28D0 0x807F2C84, fn_1_2E32D8 0x807F368C).
+// Without look-behind: a LookAtCamera at the eye mirrored through the target in x/z
+// (2 target - eye, the eye's height kept), looking at the target with up negated, so
+// a point behind the kart keeps its side of the screen. With look-behind: the camera.
+Vec3 chaseView(const HudCamera& camera,Vec3 p){
+    Vec3 eye=camera.eye,up=camera.up;
+    if(!camera.lookBack){eye={2*camera.target.x-eye.x,eye.y,2*camera.target.z-eye.z};up=-up;}
+    const Vec3 z=normalized(eye-camera.target,{0,0,1}),x=normalized(cross(up,z),{1,0,0}),y=cross(z,x),d=p-eye;
+    return {dot(d,x),dot(d,y),dot(d,z)};
+}
+// fn_80227E18 on the race frustum, canvas centred (fn_1_55C6C 0x80566020): layout
+// x = vx * cot(fovy/2) * 228 / -vz on the 456-unit-high HUD canvas.
+float chaseX(Vec3 v,float fov){
+    const float x=v.x*228.f/(std::tan(fov*float(M_PI)/360.f)*-v.z);
+    return std::isfinite(x)?x:0.f;
+}
+// The tracking tail: chase_icon_null at (x, 0); roop at rate r = clamp(-2000/vz, 0.01, 2)
+// and zoom at 1.5r (0x808A9EEC, 0x808A9EF0, 0x808A9ED8, 0x808A9EF4); the alarm while
+// |x| is on screen.
+void chasePlace(ChaseIcon& c,float x,float vz,bool lookBack,bool alarm){
+    c.x=lookBack?0.f:x;c.paneX=x;
+    const float r=-(2000.f/vz),rate=r>=.01f?std::min(r,2.f):.01f;
+    c.roopRate=rate;c.zoomRate=1.5f*rate;
+    if(alarm&&std::fabs(x)<ChaseHalfWidth){c.alarm=true;c.alarmX=c.x;c.alarmRate=rate;}
+}
+// fn_1_2E28D0: a Red Shell homing on the racer, or a near Blue Shell, sits where the
+// mirrored view sees it (closed while behind that camera), easing 0.96/0.04
+// (0x808A9EDC/0x808A9EE0). A Blue Shell locked on the racer stays at view depth -500
+// (0x808A9EE4) and eases 0.94 (0x808A9EE8) toward the centre. No alarm for a Blue in
+// its blast (state 6).
+void chaseItem(ChaseIcon& c,const ItemActor& a,bool lockedBlue,const HudCamera& camera,bool mirror){
+    float x,vz;
+    if(!lockedBlue){
+        const Vec3 v=chaseView(camera,a.visualPosition());
+        if(v.z>0){chaseClose(c);return;}
+        x=chaseX(v,camera.fov);if(mirror)x=-x;
+        if(!camera.lookBack&&c.x!=0)x=.96f*c.x+.04f*x;
+        vz=v.z;
+    }else{
+        // Retail leaves x unset when +0x184 is 0 (stack 0x44(r1), stored only at 0x807F32F8): 0 here.
+        x=!camera.lookBack&&c.x!=0?.94f*c.x:0.f;vz=-500.f;
+        chaseOpen(c);
+    }
+    chasePlace(c,x,vz,camera.lookBack,!(a.kind==ItemKind::BlueShell&&a.explosion));
+}
+// fn_1_2E32D8: a racer behind sits where the mirrored view sees its kart while within
+// 7500 of that camera (0x808D3E18) and behind the race camera; easing 0.7/0.3
+// (0x808A9DF0/0x808A9EF8).
+void chaseRacer(ChaseIcon& c,Vec3 position,float raceZ,const HudCamera& camera,bool mirror){
+    const Vec3 v=chaseView(camera,position);
+    if(!camera.lookBack&&!(v.z>=-7500.f&&raceZ>=0)){chaseClose(c);return;}
+    float x=chaseX(v,camera.fov);if(mirror)x=-x;
+    if(!camera.lookBack&&c.x!=0)x=.7f*c.x+.3f*x;
+    chasePlace(c,x,v.z,camera.lookBack,true);
+}
+// fn_1_2E27C0 (0x807F2B74): while fading in or shown; a new item restarts the easing.
+void chaseItemPicture(ChaseIcon& c,int slot,ItemKind kind){
+    if(c.fade!=1&&c.fade!=2)return;
+    if(slot!=c.item)c.x=0;
+    c.item=slot;c.racerPicture=-1;
+    if(kind==ItemKind::BlueShell){if(c.itemPicture!=5){c.itemPicture=5;c.picture=ChasePictureBlue;}}
+    else if(c.itemPicture!=1){c.itemPicture=1;c.picture=ChasePictureRed;}
+}
+// fn_1_2E3138 (0x807F34EC): Star, then Bullet Bill, Mega Mushroom, Thunder Cloud; the
+// picture only moves to a status the racer has.
+void chaseRacerPicture(ChaseIcon& c,bool star,bool bullet,bool mega,bool cloud){
+    c.itemPicture=-1;
+    if(c.fade!=1&&c.fade!=2)return;
+    int& p=c.racerPicture;
+    if(star){if(p!=0){p=0;c.picture=ChasePictureStar;}}
+    else if(bullet){if(p!=1){p=1;c.picture=ChasePictureBullet;}}
+    else if(mega){if(p!=2){p=2;c.picture=ChasePictureMega;}}
+    else if(cloud&&p!=3){p=3;c.picture=ChasePictureCloud;}
+}
+// UIAnimator group calc (fn_1_12C830 0x8063CBE4): the frame advances by the group speed;
+// a looping clip wraps, an ended one starts its BRCTR next clip at frame 0.
+void chaseAdvance(const ChaseClip* clips,int& clip,float& frame,float speed){
+    frame+=speed;
+    const auto& c=clips[clip];
+    if(frame<c.frames)return;
+    if(c.loop){while(frame>=c.frames)frame-=c.frames;}
+    else if(c.next>=0){clip=c.next;frame=0;}
+    else frame=c.frames;
+}
+float chaseSample(const ChaseClip& c,float frame){return flowSample(ChaseKeys+c.first,c.count,c.reverse?c.frames-frame:frame,false);}
+// Player 0's BalloonManager (0x807F132C; items register through fn_1_2E1A00 0x807F1DB4)
+// and CtrlRaceItemBalloon::calcSelf, then its animator: once per 60 Hz step.
+void stepChase(ChaseIcon& c,const RaceItems& items,const HudCamera& camera){
+    namespace K=Kinoko;using St=K::Kart::eStatus;
+    c.alarm=false;c.opened=-1;
+    const auto& scenario=K::System::RaceConfig::Instance()->raceScenario();
+    // The time-trial race page (control mask 0x116E) has no CtrlRaceItemBalloon (0x800).
+    if(scenario.isTimeTrial())return;
+    auto* race=K::System::RaceManager::Instance();auto* karts=K::Kart::KartObjectManager::Instance();
+    const unsigned count=std::min<unsigned>(scenario.playerCount,12);
+    const auto& me=karts->object(0)->status();
+    // Items register as they update (Red fn_1_29A4C8 0x807AA87C, Blue fn_1_29CD64 0x807AD118,
+    // both -> fn_1_34869C), by object type then slot. The first homing on the racer
+    // (+0xbc: a Red's +0x280; a Blue's once locked, +0x2a8) ends it; Blue Shells also keep
+    // the nearest (+0xb8, +0xb4) by render-group camera distance |pos - eye|^2 *
+    // (min(fovy,55)/55)^2 (fn_1_2773C0 0x80787774, fn_1_276CC8 0x8078707C).
+    const auto& actors=items.actors();
+    const float fovScale=std::min(camera.fov,55.f)/55.f;
+    int target=-1,nearBlue=-1;float nearest=3.40282347e38f; // 0x808A9E38
+    for(ItemKind kind:{ItemKind::RedShell,ItemKind::BlueShell})
+        for(unsigned i=0;i<actors.size()&&target<0;++i){
+            const auto& a=actors[i];if(!a.active||a.kind!=kind)continue;
+            const Vec3 d=a.visualPosition()-camera.eye;const float distance=dot(d,d)*fovScale*fovScale;
+            if(a.target==0&&(kind==ItemKind::RedShell||(a.guidance.phase>=2&&a.guidance.targetLive))){target=int(i);nearest=distance;}
+            else if(kind==ItemKind::BlueShell&&distance<nearest){nearest=distance;nearBlue=int(i);}
+        }
+    // BalloonManager_calc: from race frame 420 (0x808D3E10) until stage 4, the racer nearest
+    // the camera with Star, Mega, Bullet Bill or a Thunder Cloud (KartState bits 63, 79, 91,
+    // 93) whose kart + (0,120,0) is behind it (view z > 0); while looking back, one on screen
+    // up to 7500 in front (battle 75000: CtrlRaceItemBalloon_load's 0x808D3E14).
+    int racer=-1;float racerZ=0;
+    const unsigned stage=unsigned(race->stage());
+    if(stage>=2&&stage<4&&race->timer()>=420&&!me.onBit(St::BeforeRespawn)){
+        const Vec3 back=normalized(camera.eye-camera.target,{0,0,1}),right=normalized(cross(camera.up,back),{1,0,0});
+        const float range=scenario.gameMode==K::System::RaceConfig::Scenario::GameMode::Battle?75000.f:7500.f;
+        float best=3.40282347e38f;
+        for(unsigned i=1;i<count;++i){
+            if(race->player(i).finished())continue;
+            const auto* kart=karts->object(i);const auto& s=kart->status();
+            if(!s.onBit(St::Star)&&!s.onBit(St::Mega)&&!s.onBit(St::Bullet)&&!s.onBit(St::ThunderCloud))continue;
+            const auto& p=kart->pos();const Vec3 d=Vec3{p.x,p.y+120.f,p.z}-camera.eye;
+            const float z=dot(d,back);
+            if(camera.lookBack?!(z>=-range&&z<=0&&std::fabs(chaseX({dot(d,right),0,z},camera.fov))<=ChaseHalfWidth):!(z>0))continue;
+            if(dot(d,d)<best){best=dot(d,d);racer=int(i);racerZ=z;}
+        }
+    }
+    // calcSelf: closed once the racer finishes and in the respawn fall (bit 4). Its other
+    // test, the race page's *0x809C4758 +0x38B, has no port state.
+    const bool mirror=scenario.mirror; // RaceConfig +0xB90 bit 0
+    const int was=c.fade;
+    if(race->player(0).finished()||me.onBit(St::BeforeRespawn))chaseClose(c);
+    else{
+        const bool shown=c.fade!=0;c.hidden=!shown;
+        if(target>=0){
+            const auto& a=actors[unsigned(target)];
+            chaseOpen(c);chaseItem(c,a,a.kind==ItemKind::BlueShell,camera,mirror);chaseItemPicture(c,target,a.kind);
+        }else if(racer>=0){
+            const auto* kart=karts->object(unsigned(racer));const auto& s=kart->status();const auto& p=kart->pos();
+            chaseOpen(c);chaseRacer(c,{p.x,p.y,p.z},racerZ,camera,mirror);
+            chaseRacerPicture(c,s.onBit(St::Star),s.onBit(St::Bullet),s.onBit(St::Mega),s.onBit(St::ThunderCloud));
+        }else if(nearBlue>=0&&nearest<1e7f){ // 0x808A9ED0
+            chaseOpen(c);chaseItem(c,actors[unsigned(nearBlue)],false,camera,mirror);chaseItemPicture(c,nearBlue,ItemKind::BlueShell);
+        }else if(shown)chaseClose(c);
+        // Look-behind (camera flag 0x20) hides it at once.
+        if(camera.lookBack){c.hidden=true;c.fade=0;c.fadeFrame=0;}
+    }
+    if(was==0&&c.fade==1){c.opened=c.picture;++c.shown[c.picture];}
+    // LayoutUIControl_calc (0x8063DB00) then runs the animator (fn_1_12C408 0x8063C7BC):
+    // eFade at 0.75 (init 0x807F2118, 0x808A9ECC), roop and zoom at their rates.
+    chaseAdvance(ChaseFade,c.fade,c.fadeFrame,.75f);
+    int loop=0;chaseAdvance(ChaseRoop,loop,c.roopFrame,c.roopRate);chaseAdvance(ChaseZoom,loop,c.zoomFrame,c.zoomRate);
 }
 }
 struct RaceHud::Impl {
@@ -173,6 +417,10 @@ struct RaceHud::Impl {
     std::array<std::unique_ptr<DriverAnimation>,21> animations;
     std::unique_ptr<Model> box;
     std::unique_ptr<Model> bombCore;
+    // Retail drop-shadow volumes (tools/cook_item_shadows.py); optional, as older SD cards
+    // lack them. `shadows` is reused for the frame's single stencil batch.
+    std::unique_ptr<Model> shadowKoura,shadowBanana,shadowKumo,boxShadow;
+    std::vector<Renderer::ShadowVolume> shadows;
     bool blastMaterials=false; // raw-UV models/bomb_blast.gmdl with the retail binder
     Vertex* bombFrames=nullptr;
     unsigned bombFrameCount=0;
@@ -207,6 +455,8 @@ struct RaceHud::Impl {
     unsigned balloonTick=0;
     std::array<Texture,24> names;
     Texture balloonLine;
+    ChaseIcon chase;
+    std::array<Texture,ChaseTextures.size()> chaseTextures;
 };
 RaceHud::RaceHud():impl_(std::make_unique<Impl>()){}
 RaceHud::~RaceHud()=default;
@@ -215,6 +465,8 @@ bool RaceHud::load(){
     reset();bool valid=true;
     auto model=[](const char* path){auto m=std::make_unique<Model>();if(!path||!m->load(path))m.reset();return m;};
     impl_->box=model(ItemBoxModel);valid&=bool(impl_->box);
+    impl_->shadowKoura=model("models/item_shadow_koura.gmdl");impl_->shadowBanana=model("models/item_shadow_banana.gmdl");
+    impl_->shadowKumo=model("models/item_shadow_kumo.gmdl");impl_->boxShadow=model("models/item_box_shadow.gmdl");
     impl_->bombCore=model("models/bomb_blast.gmdl");impl_->blastMaterials=bool(impl_->bombCore);
     if(!impl_->bombCore)impl_->bombCore=model("models/bomb_core.gmdl");
     valid&=bool(impl_->bombCore);
@@ -266,9 +518,13 @@ bool RaceHud::load(){
     for(unsigned i=0;i<HudExtraCount;++i)valid&=impl_->extras[i].load(HudExtras[i].path);
     for(unsigned i=0;i<BalloonNames.size();++i)valid&=impl_->names[i].load(BalloonNames[i].path);
     valid&=impl_->balloonLine.load(BalloonLinePath);
+    for(unsigned i=0;i<ChaseTextures.size();++i)valid&=impl_->chaseTextures[i].load(ChaseTextures[i]);
     return valid;
 }
-void RaceHud::stepWorld(const RaceItems& items,Vec3 cameraBackward,bool started){
+bool RaceHud::chaseAlarm(float& x,float& rate) const{const auto& c=impl_->chase;x=c.alarmX;rate=c.alarmRate;return c.alarm;}
+int RaceHud::chaseOpened() const{return impl_->chase.opened;}
+const std::array<uint16_t,21>& RaceHud::chaseShown() const{return impl_->chase.shown;}
+void RaceHud::stepWorld(const RaceItems& items,Vec3 cameraBackward,bool started,const HudCamera* camera){
     for(unsigned i=0;i<Kinoko::System::RaceConfig::Instance()->raceScenario().playerCount;++i){
         const auto& effect=items.hud(i);
         auto* kart=Kinoko::Kart::KartObjectManager::Instance()->object(i);
@@ -330,6 +586,80 @@ void RaceHud::stepWorld(const RaceItems& items,Vec3 cameraBackward,bool started)
     auto& b=impl_->base;
     if(started&&b.state!=3)b.state=2;
     advance(b.state,b.slide);
+    if(camera)stepChase(impl_->chase,items,*camera);
+}
+void RaceHud::drawBombBlast(Renderer& renderer,const C3D_Mtx& t,unsigned age) const{
+    auto& model=impl_->bombCore;if(!model)return;
+    Vertex* originalVertices=model->vertices;
+    if(impl_->bombFrames)model->vertices=impl_->bombFrames+std::min(age,impl_->bombFrameCount-1)*model->vertexCount;
+    if(impl_->blastMaterials)drawBlast(renderer,*model,t,age,false);
+    else renderer.draw(*model,t);
+    model->vertices=originalVertices;
+}
+// Retail drop shadows are closed volumes in the shadow pass of the karts and course objects
+// (ItemObj fn_1_28FC8C 0x807A0040 and ObjItemBox register with the same manager, 0x809C1B40),
+// hence the same .5. RaceGfxManager_vf_10 (0x805B3B00) draws that manager's list +0x14
+// (0x805B8E70) as GfxManager group 9: category 2 (0x808B6ED0), opaque priority 0x34 + 1 =
+// 0x35 (fn_8023BB18 0x8023BC68, fn_8023C400). The course model (group 6, CourseModel ctor
+// 0x8078E404) draws at 0x1B + 0xA = 0x25, the karts (group 10) at 0x4E and the item objects
+// (group 11, fn_1_28FC8C) at 0x51: the volumes shade the course, never a kart or an item.
+// One stencil batch: each volume encloses its caster.
+void RaceHud::drawShadows(Renderer& renderer,const RaceItems& items,Vec3 viewer){
+    if(renderQuality().shadowVolumes){
+        auto& volumes=impl_->shadows;volumes.clear();
+        auto add=[&](const std::unique_ptr<Model>& m,const C3D_Mtx& t){if(m&&renderer.visible(*m,t))volumes.push_back({m.get(),t});};
+        // ObjItemBox (0x80828AE0-0x80828C14): itembox-shadow at the box's rest position, without
+        // the appearance rise, with the box's tumble, its world Y row x4 (0x808AC700) and scale.
+        if(impl_->boxShadow)for(const auto& box:items.boxes())if(box.active&&dot(box.position-viewer,box.position-viewer)<20000.f*20000.f){
+            const auto pose=itemBoxPose(box);
+            C3D_Mtx t;Mtx_Identity(&t);Mtx_Translate(&t,box.position.x,box.position.y,box.position.z,true);
+            Mtx_Scale(&t,1,4,1);Mtx_RotateZ(&t,pose.angle,true);Mtx_RotateX(&t,pose.angle,true);
+            Mtx_Scale(&t,pose.scale.x,pose.scale.y,pose.scale.z);
+            add(impl_->boxShadow,t);
+        }
+        // ItemObj (fn_1_290404 0x807A07B8 -> fn_1_2906B4 0x807A0A68): koura_s or banana_s with
+        // the model's matrix, x and z scaled by +0x6c; a Fake Item Box's stays upright (makeT,
+        // fn_1_297C38 0x807A8108). Held, thrown and dropped objects alike.
+        auto itemShadow=[&](ItemKind kind,const HeldItemVisual& v,Vec3 p){
+            const float w=itemShadowWidth(kind);
+            if(!w||v.scale.x<=0||v.scale.y<=0||v.scale.z<=0)return;
+            const auto& m=kind==ItemKind::Banana?impl_->shadowBanana:impl_->shadowKoura;
+            if(kind==ItemKind::FakeBox)add(m,axesTransform({v.scale.x*w,0,0},{0,v.scale.y,0},{0,0,v.scale.z*w},p));
+            else add(m,axesTransform(v.right*(v.scale.x*w),v.up*v.scale.y,v.forward*(v.scale.z*w),p));
+        };
+        for(const auto& actor:items.actors())if(actor.active&&!actor.explosion&&unsigned(actor.kind)<21&&impl_->models[unsigned(actor.kind)]&&
+            dot(actor.position-viewer,actor.position-viewer)<22000.f*22000.f){
+            auto v=releasedItemVisual(actor);Vec3 p=actor.visualPosition();
+            if(actor.kind==ItemKind::FakeBox)v.scale={actor.scale,actor.scale,actor.scale};
+            if(actor.kind==ItemKind::BlueShell&&actor.guidance.phase<4){
+                // In flight (+0x78 bits 0x4000 and 0x4000000, 0x807AC518) the volume stands at
+                // the object's height, not the drawn one, and keeps only the yaw (0x807A0C04).
+                p=actor.position;
+                if(v.up.z<.99f){
+                    const float xz=v.right.z,zz=v.forward.z,n=xz*xz+zz*zz,r=n>0?1/std::sqrt(n):0;
+                    v.right=n>0?Vec3{zz*r,0,xz*r}:Vec3{1,0,0};
+                    v.forward=n>0?Vec3{-xz*r,0,zz*r}:Vec3{0,0,1};v.up={0,1,0};
+                }
+            }
+            itemShadow(actor.kind,v,p);
+        }
+        for(unsigned i=0;i<Kinoko::System::RaceConfig::Instance()->raceScenario().playerCount;++i){
+            const auto& effect=items.hud(i);
+            if(effect.deployed){
+                const ItemKind kind=effect.heldKind==ItemKind::TripleGreenShell?ItemKind::GreenShell:effect.heldKind==ItemKind::TripleRedShell?ItemKind::RedShell:
+                    effect.heldKind==ItemKind::TripleBanana?ItemKind::Banana:effect.heldKind;
+                if(impl_->models[unsigned(kind)])for(unsigned n=0;n<3;++n)if(effect.heldMask&(1u<<n))itemShadow(kind,items.heldItemVisual(i,n),items.heldItemPosition(i,n));
+            }
+            if(effect.cloud&&impl_->models[14]){
+                // fn_1_29EFE8 (0x807AF4C8): kumo_s upright (makeT), 280 minus the cloud's height
+                // +0x1EC (365 on one screen, 0x808A5F34) from the cloud.
+                Vec3 p=impl_->clouds[i].modelPosition();p.y+=280.f-365.f;
+                const float w=itemShadowWidth(ItemKind::ThunderCloud);
+                add(impl_->shadowKumo,axesTransform({w,0,0},{0,1,0},{0,0,w},p));
+            }
+        }
+        renderer.drawShadowVolumes(volumes.data(),unsigned(volumes.size()),.5f);
+    }
 }
 void RaceHud::drawWorld(Renderer& renderer,const RaceItems& items,Vec3 viewer,unsigned tick){
     std::array<bool,21> needed{};
@@ -369,7 +699,7 @@ void RaceHud::drawWorld(Renderer& renderer,const RaceItems& items,Vec3 viewer,un
         // frustum produces no fragments, so skip its material passes.
         if(!renderer.visible(*impl_->box,t))continue;
         const float ratio=quality.reduced?RenderQuality::screenRatio({impl_->box->minimum,impl_->box->maximum},t,camera):1.f;
-        if(ratio<quality.minScreenRatio)continue;
+        if(ratio<quality.minRatio())continue;
         drawBox(renderer,*impl_->box,ItemBoxMaterials,ItemBoxInnerSRT,t,tick,ratio>=quality.boxSparkleRatio);
     }
     // Leave the uniforms as the last drawBox would, whether or not any was drawn.
@@ -428,13 +758,10 @@ void RaceHud::drawWorld(Renderer& renderer,const RaceItems& items,Vec3 viewer,un
         unsigned orbitModel=effect.heldKind==ItemKind::TripleGreenShell?0:effect.heldKind==ItemKind::TripleRedShell?1:effect.heldKind==ItemKind::TripleBanana?2:unsigned(effect.heldKind);
         if(orbit&&impl_->models[orbitModel])for(unsigned n=0;n<3;++n)if(effect.heldMask&(1u<<n)){
             const Vec3 position=items.heldItemPosition(i,n);
-            auto visual=items.heldItemVisual(i,n);
-            if(spinningShell(effect.heldKind)){
-                // Triples already carry their own source spin in heldItemVisual.
-                const float spin=shellVisualSpin(tick);
-                visual.forward=visual.forward*std::cos(spin)+visual.right*std::sin(spin);
-                visual.right=cross(visual.up,visual.forward);
-            }
+            const auto visual=items.heldItemVisual(i,n);
+            // Retail spins only the triple orbit (fn_1_2842E0 0x80794694, carried by
+            // heldItemVisual); a single trailed shell keeps the trail's axes
+            // (fn_1_2831B8 0x8079356C -> fn_1_280F2C 0x807912E0): it does not spin.
             if(orbitModel==unsigned(ItemKind::FakeBox)){
                 C3D_Mtx t;fakeBoxTransform(t,position,visual.scale,tick);
                 drawBox(renderer,*impl_->models[orbitModel],FakeBoxMaterials,FakeBoxInnerSRT,t,tick);continue;
@@ -495,6 +822,7 @@ void RaceHud::drawOverlay(Renderer& renderer,const RaceItems& items,unsigned sta
         }else{
             for(auto& b:bs)if(b.racer==0||(b.racer>0&&(unsigned(b.racer)>=count||!seen[b.racer].ok)))b.racer=-1;
             for(unsigned i=1;i<count;++i){
+                if(scenario.players[i].type==Kinoko::System::RaceConfig::Player::Type::Ghost)continue;
                 if(!seen[i].ok||std::any_of(bs.begin(),bs.end(),[&](const auto& b){return b.racer==int(i);}))continue;
                 auto free=std::find_if(bs.begin(),bs.end(),[](const auto& b){return b.racer<0;});
                 if(free!=bs.end()){free->racer=int(i);continue;}
@@ -525,6 +853,31 @@ void RaceHud::drawOverlay(Renderer& renderer,const RaceItems& items,unsigned sta
         }
     }
     renderer.setScreenDepth(hudDepth);
+    // CtrlRaceItemBalloon (chase_icon_1) draws in the name balloons' race-page pass, before
+    // the HUD panes. chase_icon_null: the control origin + (x, 0), scale 0.8 with one screen
+    // (init 0x807F2118, 0x808A9EC4), its eFade alpha passed to base, then the hilight turned
+    // by roop (NW4R rotation is counter-clockwise), then the picture scaled by zoom.
+    if(const auto& c=impl_->chase;!c.hidden){
+        const float alpha=std::clamp(chaseSample(ChaseFade[c.fade],c.fadeFrame)/255.f,0.f,1.f);
+        constexpr float Unit=240.f/456.f; // the race HUD's layout unit -> top-screen px
+        const float sx=.8f*ChaseControl[2]*Unit,sy=.8f*ChaseControl[3]*Unit;
+        const float cx=200.f+(ChaseControl[0]+c.paneX*ChaseControl[2])*Unit,cy=120.f-ChaseControl[1]*Unit;
+        auto picture=[&](const Texture& texture,const ChasePicture& p,float u,float v,float scale,float angle){
+            const float hw=p.w*scale*.5f,hh=p.h*scale*.5f,co=std::cos(angle),si=std::sin(angle);
+            const uint32_t color=0xffffff00u|uint32_t(std::lround(alpha*255.f));
+            Renderer::MaterialQuad q{};
+            for(unsigned k=0;k<4;++k){ // TL, TR, BL, BR, screen y down
+                const float lx=k&1?hw:-hw,ly=k&2?hh:-hh;
+                q.x[k]=cx+(lx*co-ly*si)*sx;q.y[k]=cy+(lx*si+ly*co)*sy;q.u[k]=k&1?u:0.f;q.v[k]=k&2?v:0.f;q.color[k]=color;
+            }
+            renderer.drawScreenMaterialQuads(&texture,&q,1,p.color0,p.color1,GPU_CLAMP_TO_EDGE,GPU_CLAMP_TO_EDGE);
+        };
+        if(alpha>0){
+            picture(impl_->chaseTextures[ChaseBase.texture],ChaseBase,1,1,1,0);
+            picture(impl_->chaseTextures[ChaseHilight.texture],ChaseHilight,1,1,1,-chaseSample(ChaseRoop[0],c.roopFrame)*float(M_PI)/180.f);
+            picture(impl_->icons[c.picture],ChaseItem,HudItems[c.picture].u,HudItems[c.picture].v,chaseSample(ChaseZoom[0],c.zoomFrame),0);
+        }
+    }
     // Single-player HUD slot colour (USA 0x807e2674, table 0x8088fd18): the
     // mean of (255,255,0) and (210,170,0) on top, +(40,130,40) on the bottom.
     static constexpr uint32_t Gold[4]={0xe8d400ffu,0xe8d400ffu,0xffff28ffu,0xffff28ffu};

@@ -447,7 +447,11 @@ struct Engine::Impl {
   for (auto& v : voices) if (v.active && &v != except && (!best || voiceLess(v, *best))) best = &v;
   return best;
  }
- int freeHw() const { for (int i = 0; i < hwVoices; ++i) if (hwOwner[i] == -1) return i; return -1; }
+ int freeHw() const {
+  for (int i = 0; i < hwVoices; ++i) if (hwOwner[i] == -1 && !hw->busy(i)) return i;
+  for (int i = 0; i < hwVoices; ++i) if (hwOwner[i] == -1) return i;
+  return -1;
+ }
 
  void voiceStopHw(Voice& v) {
   for (int c = 0; c < v.channels; ++c) if (v.hw[c] >= 0) { if (v.started) hw->stop(v.hw[c]); }
@@ -773,22 +777,31 @@ struct Engine::Impl::Sounds {
  }
 
  // ------------------------------------------------ allocation
- // SoundPlayer::CheckPlayableSoundCount + SoundInstanceManager::Alloc
+ // SoundArchivePlayer::detail_SetupSoundImpl (PAL 0x800A1820) order: the player
+ // check (detail_CanPlaySound 0x800A3BE0, nothing stopped yet), the instance
+ // (SoundInstanceManager::Alloc, the lowest stopped while none is free), then
+ // detail_AppendSound (0x800A38D0) shuts the player's lowest down while full.
+ // Lowest = least current priority, oldest first; an equal start replaces it.
  SoundBase* alloc(u8 type, u32 playerId, int priority, int startPriority) {
   startPriority = clamp(startPriority, 0, PriorityMax);
   if (playerId >= players.size()) return nullptr;
   const int playable = players[playerId].playable;
   if (playable == 0) return nullptr;
-  while (countPlayer(playerId) >= playable) {
-   SoundBase* drop = lowest([](const SoundBase& s, u32 p) { return s.playerId == p; }, playerId);
-   if (!drop || startPriority < drop->calcPriority()) return nullptr;
-   shutdown(*drop);
+  auto onPlayer = [](const SoundBase& s, u32 p) { return s.playerId == p; };
+  if (countPlayer(playerId) >= playable) {
+   const SoundBase* low = lowest(onPlayer, playerId);
+   if (!low || startPriority < low->calcPriority()) return nullptr;
   }
   const int limit = type == TypeSeq ? seqLimit : type == TypeStrm ? strmLimit : waveLimit;
   while (countType(type) >= limit) {
    SoundBase* drop = lowest([](const SoundBase& s, u32 t) { return s.type == t; }, type);
    if (!drop || startPriority < drop->calcPriority()) return nullptr;
    stop(*drop, 0);
+  }
+  while (countPlayer(playerId) >= playable) {
+   SoundBase* drop = lowest(onPlayer, playerId);
+   if (!drop || startPriority < drop->calcPriority()) return nullptr;
+   shutdown(*drop);
   }
   SoundBase* slot = nullptr;
   for (auto& s : sound) if (!s.used) { slot = &s; break; }
@@ -802,6 +815,15 @@ struct Engine::Impl::Sounds {
   slot->priority = priority;
   return slot;
  }
+#ifndef MKW_RELEASE
+ // QA: a start that found no slot, and what held its player then (the first two
+ // such failures and the latest; audio-race-status.txt).
+ void noteFull(u32 id, u32 playerId, int startPriority) {
+  FullPlayer& f = e.stats.failedAlloc <= 2 ? e.stats.firstFull[e.stats.failedAlloc - 1] : e.stats.lastFull;
+  f = FullPlayer{}; f.failure = e.stats.failedAlloc; f.sound = id; f.player = playerId; f.start = u8(clamp(startPriority, 0, PriorityMax));
+  for (const auto& x : sound) if (x.used && x.playerId == playerId && f.count < 8) { f.held[f.count] = u16(x.id); f.heldPriority[f.count] = u8(x.calcPriority()); ++f.count; }
+ }
+#endif
 
  // ------------------------------------------------ players: stop/pause
  void stopPlayer(SoundBase& s) {
@@ -809,9 +831,15 @@ struct Engine::Impl::Sounds {
   else if (s.type == TypeWave) wsdFinish(s);
   else strmStop(s);
  }
+ // SeqTrack::PauseAllChannel (PAL 0x8009B530) / WsdPlayer::Pause: the channel
+ // and its voice (Voice::Pause 0x800AA820 stops the AX voice in place).
+ void channelPause(Channel& c, bool flag) {
+  c.pause = flag;
+  if (Voice* v = c.voice) for (int i = 0; i < v->channels; ++i) if (v->hw[i] >= 0) e.hw->pause(v->hw[i], flag);
+ }
  void playerPause(SoundBase& s, bool flag) {
-  if (s.type == TypeSeq) { s.seq.paused = flag; for (auto* t : s.seq.tracks) if (t) for (Channel* c = t->channels; c; c = c->nextTrackChannel) if (c->active && c->pause != flag) c->pause = flag; }
-  else if (s.type == TypeWave) { s.wsd.paused = flag; if (s.wsd.channel) s.wsd.channel->pause = flag; }
+  if (s.type == TypeSeq) { s.seq.paused = flag; for (auto* t : s.seq.tracks) if (t) for (Channel* c = t->channels; c; c = c->nextTrackChannel) if (c->active && c->pause != flag) channelPause(*c, flag); }
+  else if (s.type == TypeWave) { s.wsd.paused = flag; if (s.wsd.channel) channelPause(*s.wsd.channel, flag); }
   else { s.strm.paused = flag; for (auto& t : s.strm.track) if (Voice* v = t.voice) for (int c = 0; c < v->channels; ++c) if (v->hw[c] >= 0) e.hw->pause(v->hw[c], flag); }
  }
 
@@ -894,7 +922,7 @@ struct Engine::Impl::Sounds {
    if (!waveFromFile(bank, inst.waveIndex, wave)) { ++e.stats.missingData; e.stats.lastMissingSound = pl.soundId; e.stats.lastMissingFile = pl.bankFile; e.stats.lastMissingWave = u32(inst.waveIndex); return nullptr; }
    const int priority = pl.priority + t.priority;
    ch = e.allocChannel(std::min<int>(wave.channels, ChannelMax), priority, &trackChannelCallback, &t);
-   if (!ch) return nullptr;
+   if (!ch) { ++e.stats.notesDropped; e.stats.lastDroppedSound = pl.soundId; return nullptr; }
    ch->key = key; ch->originalKey = inst.originalKey;
    f32 iv = velocity / 127.0f; iv *= iv; iv *= inst.volume / 127.0f;
    ch->initVolume = iv; ch->tune = inst.tune;
@@ -1316,7 +1344,7 @@ struct Engine::Impl::Sounds {
   u16 n = 0;
   for (u32 i = 0; i < r.count; ++i) n += !e.residency->ready(r.file, r.waves[i]);
   s.wavesPending = n;
-  if (n && ++s.waitFrames > WaveWaitFrames) { ++e.stats.startsFailed; shutdown(s); return false; }
+  if (n && ++s.waitFrames > WaveWaitFrames) { ++e.stats.startsFailed; ++e.stats.failedWait; e.stats.lastFailedWait = s.id; shutdown(s); return false; }
   return true;
  }
  void basicUpdate(SoundBase& s) {
@@ -1356,9 +1384,31 @@ struct Engine::Impl::Sounds {
   if (!info || info->type == TypeInvalid) { ++e.stats.startsFailed; return false; }
   u32 playerId = info->playerId; int playerPriority = info->playerPriority;
   if (si) { if (si->playerId >= 0) playerId = u32(si->playerId); if (si->playerPriority >= 0) playerPriority = si->playerPriority; }
-  const int startPriority = (hold ? playerPriority - 1 : playerPriority) + (amb ? amb->priority : 0);
-  SoundBase* s = alloc(info->type, playerId, playerPriority, startPriority);
-  if (!s) { ++e.stats.startsFailed; return false; }
+  // A hold starts one below the player priority and keeps it: SetupSoundImpl
+  // passes that value to the BasicSound ctor (0x8008E0E0), stored at +0x8c.
+  const int priority = hold ? playerPriority - 1 : playerPriority;
+  const int startPriority = priority + (amb ? amb->priority : 0);
+  // The starting actor's actor player (SoundActor ctor 0x8009DBE0: player 0
+  // unlimited, 1-3 one sound each): a lower start fails (ExternalSoundPlayer::
+  // detail_CanPlaySound 0x80091E80); otherwise it replaces that sound.
+  Handle replaced{};
+  if (info->actorPlayerId && amb && amb->owner) {
+   const SoundBase* held = nullptr;
+   for (const auto& x : sound) {
+    const SoundEntry* xi = x.used && x.hasAmbient && x.ambient.owner == amb->owner ? e.archive->sound(x.id) : nullptr;
+    if (xi && xi->actorPlayerId == info->actorPlayerId && (!held || x.calcPriority() < held->calcPriority())) held = &x;
+   }
+   if (held && clamp(startPriority, 0, PriorityMax) < held->calcPriority()) { ++e.stats.startsFailed; return false; }
+   if (held) replaced = Handle{u16(held - sound), held->generation};
+  }
+  SoundBase* s = alloc(info->type, playerId, priority, startPriority);
+  if (!s) {
+   ++e.stats.startsFailed; ++e.stats.failedAlloc; e.stats.lastFailedAlloc = id;
+#ifndef MKW_RELEASE
+   noteFull(id, playerId, startPriority);
+#endif
+   return false;
+  }
   s->id = id;
   if (amb) { s->ambient = *amb; s->hasAmbient = true; }
   bool ok = false;
@@ -1403,6 +1453,8 @@ struct Engine::Impl::Sounds {
    ok = strmPrepare(*s, *info, si);
   }
   if (!ok) { ++e.stats.startsFailed; shutdown(*s); return false; }
+  // ExternalSoundPlayer::detail_AppendSound (0x80091BC0): the old one is shut down.
+  if (SoundBase* old = get(replaced); old && old != s) shutdown(*old);
   if (e.residency && (info->type == TypeSeq || info->type == TypeWave)) {
    const WaveReach r = e.archive->reach(id);
    for (u32 i = 0; i < r.count; ++i) if (!e.residency->acquire(r.file, r.waves[i])) ++s->wavesPending;

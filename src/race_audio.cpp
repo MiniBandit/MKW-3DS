@@ -101,6 +101,7 @@ enum Status {
  Accelerate = 0, Brake = 1, DriftInput = 2, BeforeRespawn = 4, GroundStart = 9, AnyWheelCollision = 11, DriftAuto = 28,
  Wheelie = 29, InAction = 32, TriggerRespawn = 33, InCannon = 36, ChargingSSMT = 57, Star = 63, Shocked = 71, InRespawn = 77,
  Mega = 79, Crushed = 80, Bullet = 91,
+ JumpPadOn = 30, InATrick = 38, OverZipper = 42, HalfPipeTrick = 47, Trickable = 62, JumpPadMushroomTrigger = 70, AfterRespawn = 78,
 };
 f32 length(Vec3f v) { return std::sqrt(v.x * v.x + v.y * v.y + v.z * v.z); }
 
@@ -224,12 +225,19 @@ struct KartAudio {
  s16 plankDistance = 0; u8 plankAlt = 0;   // +0xd6, +0xd5
  s8 bumpFrames = 0; u8 hornCount = 0;      // +0xd3 (capped 126), +0xd4
  u16 jumpPadTimer = 0, jumpPadCount = 0;   // +0xcc, +0xce
+ s16 hpipeFrames = 0;                 // +0xd0: frames over a half-pipe (DK Summit's cheer)
+ s8 objectFrames = 0;                 // +0xd2: since the last object hit (capped 100)
+ f32 objectSpeed = 0;                 // +0xec: |velocity| at the last update
+ bool lapFinished = false;            // +0xda: the finish seen by UpdateLapSounds
  bool wasBullet = false;              // Bullet Bill status last frame (Kart::Killer on/off)
  // Effects::Player fields.
  bool fxBeforeRespawn = false;        // +0x96
  int thunderA = 690, thunderB = 540;  // +0x4c, +0x50: the shock effect counters (Effects::Player::Reset)
  f32 fxSpeed = 0;                     // +0x6e8: |velocity|
  s8 wallFrames = 0, bushFrames = 0, bumpFxFrames = 0;   // +0x7b4, +0x7b7, +0x7b8 (capped 100)
+ bool fxWater = false, fxLava = false, fxIce = false;   // +0x79, +0x7a, +0x7b: this fall's splash played
+ int rbwTimer = -1; f32 rbwY = 0;     // +0x64, +0x70: frames since a Rainbow fall (-1 none), its height
+ bool wasAfterRespawn = false;        // status 78 last frame (KartMove::calcRespawnBoost clears it)
  template <class F> void eachSlot(F f) { for (auto& s : limited) f(s); f(engineSlot); f(driftSlot); f(mtSlot); f(roadSlot); }
 };
 
@@ -307,6 +315,7 @@ struct VoiceAudio {
  bool echoNext = false, fellInWater = false, wasWheelie = false; // +0x6fe, +0x700
  u32 actionCount = 0; u16 airtime = 0, airtimeBefore = 0;   // action and driver-airtime trackers
  bool wasStar = false, wasMega = false, wasSlipBoost = false;
+ f32 lastSpeed = 0, lastRatio = 0;      // the kart's speed and capped ratio at the previous tick
  Rng rng;
 };
 
@@ -385,16 +394,25 @@ u32 objectUserParam(u16 id, u8 mode, f32 scale, unsigned course) {
  case 0x2c9: case 0x206: case 0x216: case 0x25c: case 0x25d: dist = 0xe; break;
  case 0x20a: dist = 0xe; inner = 7; break;
  case 0x212: dist = course == 0xc ? 3 : 6; break;   // FlamePole_v
+ // The KMP sound_* emitters' DisableConditional (PAL fn_1_1FE8DC 0x8070EC90).
+ case 0x5: if (course == 0x1d || course == 0x14) dist = 8; break;
+ case 0x6: case 0x8: dist = 10; break;
+ case 0x9: dist = course == 0x1d ? 0xc : 6; break;
+ case 0xa: if (course == 0x10) dist = 0xe; else if (course == 0x17) dist = 10; break;
+ case 0xb: if (course == 0x9) dist = 8; break;
+ case 0xc: dist = 0xe; break;
+ case 0xe: if (course == 0x14) dist = 9; break;
  default: break;
  }
  if (id == 0x205) inner = 3;
  return dist | inner << 4;
 }
-// RaceMgr::SortAndToggleActors (8070b0b4), object list: these stay audible;
-// the rest compete for the nearest four (8089d4dc, one local player).
+// RaceMgr::SortAndToggleActors (8070b0b4; PAL 0x80712B58, id tree 0x80713190-
+// 0x8071330C), object list: these stay audible; the rest (0x75 ItemDirect among
+// them) compete for the nearest four (8089d4dc, one local player).
 bool objectAlwaysAudible(u16 id) {
  switch (id) {
- case 0x65: case 0x70: case 0x74: case 0x75: case 0x76: case 0xc9: case 0xce: case 0xd3: case 0xd5: case 0xeb: case 0xef:
+ case 0x65: case 0x70: case 0x74: case 0x76: case 0xc9: case 0xce: case 0xd3: case 0xd5: case 0xeb: case 0xef:
  case 0xf0: case 0xf2: case 0x16a: case 0x16f: case 0x170: case 0x171: case 0x175: case 0x176: case 0x18c: case 0x19d:
  case 0x1a3: case 0x1ab: case 0x1ff: case 0x205: case 0x20a: case 0x20c: case 0x20d: case 0x211: case 0x2d8: case 0x2db:
  case 0x1478: case 0x2780: case 0x27e3:
@@ -403,6 +421,39 @@ bool objectAlwaysAudible(u16 id) {
  }
 }
 constexpr int ObjectsAudible = 4;
+// ObjectActor::Update's idle loop (PAL fn_1_1FDA94 0x8070DE48), held every frame;
+// RaceConfig mode 0xb (the award ceremony) swaps the crowds for SE_CC_AWARD_AUD.
+u32 objectIdleLoop(u16 id, unsigned mode) {
+ const bool award = mode == 0xb;
+ switch (id) {
+ case 0x152: case 0x153: case 0x156: case 0x180: case 0x182: return 0x1d4;   // FlagA*: SE_CC_OBJ_FLAG_L
+ case 0x154: case 0x155: return 0x1d5;                                      // FlagB1/B2: SE_CC_OBJ_FLAG_S
+ case 0x2c3: return award ? 0x1ed : 0x1e7;                                  // group_enemy_a..f: GROUP_AUD_A..F
+ case 0x2bd: return award ? 0x1ed : 0x1e8;
+ case 0x2be: return award ? 0x1ed : 0x1e9;
+ case 0x2c6: return 0x1ea;
+ case 0x2c8: return 0x1eb;
+ case 0x2ca: return 0x1ec;
+ case 0x165: case 0x20b: case 0x2970: return 0x1e2;                         // monte_a, venice_gondola: MONTE_M1
+ case 0x185: case 0x2c9: return 0x1e4;                                      // group_monte: MONTE_GROUP
+ case 0x2eb: case 0x2ec: return 0x1e6;                                      // mare_a/b: MARE_M1
+ case 0x141: return 0x223;                                                  // PeachHunsuiGC: ENV_FOUNTAIN
+ case 0x140: return 0x353;                                                  // MarioGo64c: 64M_BILLBOARD_MV
+ case 0x2dc: case 0x2dd: return 0x1ed;                                      // the demo crowds: AWARD_AUD
+ default: return 0;
+ }
+}
+// The KMP sound_* emitters (Link PAL fn_1_1FE670 0x8070EA24, table 0x808C8CB8):
+// SE_CC_ENV_SEA is the course's own sea on GCN Peach Beach and DS Delfino Square.
+u32 emitterLoop(u16 id, unsigned course) {
+ switch (id) {
+ case 0x5: return 0x21d; case 0x6: return 0x21f; case 0x8: return 0x221; case 0x9: return 0x220;
+ case 0xa: return course == 0x10 ? 0x362 : course == 0x17 ? 0x381 : 0x222;
+ case 0xb: return 0x223; case 0xc: return 0x226; case 0xd: return 0x224; case 0xe: return 0x21e;
+ case 0xf: return 0x2cd; case 0x10: return 0x2b4; case 0x15: return 0x225;
+ default: return 0;
+ }
+}
 // Audio::GessoActor (806fe230): the Blooper on a local racer's screen, at its kart
 // (GessoScreen::UpdateModel -> 806fe3e0). StartSoundLimited (806fe3f4) uses one slot.
 struct GessoAudio { Actor3D actor; bool placed = false; Slot slot; };
@@ -426,10 +477,14 @@ struct RaceAudioLayer::Impl {
  RaceAudioLayer* owner = nullptr;
  Engine3D e3d;
  Listener3D listener; bool listenerPlaced = false;
+ AudioTrack listenerVolume{1, 1, 0, 0};       // EchoMgr's listener volume track (bss_51C0 +0x10)
+ std::array<RaceAudioObjectSound, 16> hitObjectSound{};   // the karts' object hits' calls on the objects
+ int hitObjectSounds = 0;
  std::array<KartAudio, 12> karts{};
  std::array<VoiceAudio, 12> voices{};
  std::array<ItemObjAudio, 96> items{};
  std::array<ItemObjAudio, 12> heldItems{};   // tethered objects (their own ItemActors in retail)
+ u32 alarmDropSeen = 0;                     // QA: EngineStats::notesDropped at the last alarm frame
  Slot roulette, alarm;                       // RaceRSARPlayer 2D: SE_RC_ITEM_ROULETTE, ItemWarning
  Slot global;                                // RaceAmbienceMgr +0x18: PlayGlobalSound
  std::array<AmbienceAudio, 3> ambiences{};   // RaceAmbienceMgr +0x1c
@@ -451,7 +506,9 @@ struct RaceAudioLayer::Impl {
  }
  Ambient ambientFor(Engine& e, u32 id, const Actor3D& a, Sound3DHistory* h) {
   const SoundEntry* info = e.archive() ? e.archive()->sound(id) : nullptr;
-  return info ? e3d.update(*info, id, a, listener, h) : Ambient{};
+  Ambient r = info ? e3d.update(*info, id, a, listener, h) : Ambient{};
+  r.owner = &a;   // the actor's SoundActor: its actor players limit what it holds
+  return r;
  }
  // RaceActor::detail_UpdateAmbientArg + BasicSound's ambient update: every
  // actor sound follows its actor from the previous frame's position.
@@ -703,6 +760,9 @@ struct RaceAudioLayer::Impl {
   if (c & cue::Horn) playHorn(e, k, in);
   if (c & cue::StartFail) { startLimited(e, k, 0x1a8); startLimited(e, k, 0x1a9); }   // fn_1_78EB8: SPIN, START_FAIL
   if (c & cue::StarHit) startNewLimited(e, k, 0x110);   // CheckKartCollision 8056b0b8: SE_ITM_STAR_HIT
+  // A finished ghost starts to shrink away (fn_1_71034 0x805813E8): KartActor vt+0xE4
+  // (StartNewSoundLimited) SE_VCL_BTL_NO_BALLOON, argument 0.0.
+  if (c & cue::Vanish) startNewLimited(e, k, 0x1aa);
   // The driver model starts its trick animation (fn_1_18BE08 0x80697D34, local kart).
   if (c & cue::JumpAction) startLimited(e, k, sid::JumpAction);
   // A half-pipe trick (fn_1_64AAC 0x805AF9E8): the course crowd on DK Summit
@@ -746,6 +806,134 @@ struct RaceAudioLayer::Impl {
    k.bushFrames = 0;
    startLimited(e, k, sid::ColShigemi);
   }
+  // KartMove::calcRespawnBoost lands the respawn (PAL 0x80581C90 -> Effects 0x806B2964).
+  const bool afterRespawn = bit(in.status, AfterRespawn);
+  if (k.wasAfterRespawn && !afterRespawn) respawnEffects(e, index);
+  k.wasAfterRespawn = afterRespawn;
+  // Object code's sounds on the kart (vt+0xe0): Monty Mole mounds (PAL 0x806B9164),
+  // Chain Chomps (0x806E526C), on any racer.
+  for (int n = 0; n < in.kartSounds && n < 4; ++n) startLimited(e, k, in.kartSound[n]);
+  // The objects' kart contact callbacks, in ObjectDirector's order.
+  for (int n = 0; n < in.objectHits && n < 4; ++n) objectHit(e, index, in.objectHit[n]);
+  // KartCollide::activateOob on a fall boundary (PAL 0x80573B70 -> Effects 0x806AB6B0).
+  if (in.fallBoundary != 0xff) fallBoundary(e, index, in.fallBoundary);
+ }
+ // ---- Kart-object hits (KartActor PAL 0x80709CA4 / 0x80709B08 / 0x80709DF8) ----
+ // onWallCollision (reactions WallAllSpeed / WallSpark) takes 31 frames since the
+ // last hit and |velocity| above 30; onObjectCollision 31 frames (Bob-omb's spikes
+ // 10). A Star, Mega or Bullet racer adds SE_ITM_STAR_HIT, and the object's own
+ // sounds keep quiet on the damaging path (the solid one only for dossunc and kuribo).
+ void objectHit(Engine& e, int index, const RaceAudioObjectHit& h) {
+  KartAudio& k = karts[index];
+  const RaceAudioKart& in = frame.kart[index];
+  const bool power = bit(in.status, Star) || bit(in.status, Mega) || bit(in.status, Bullet);
+  bool quiet = false;
+  if (h.wall) {
+   if (k.objectFrames < 31 || !(k.objectSpeed > 30.0f)) return;
+   k.objectFrames = 0;
+   if (power && (h.id == 0xdb || h.id == 0x191)) { startNewLimited(e, k, 0x110); quiet = true; }
+  } else {
+   if (k.objectFrames < 31 && (h.id != 0x1a3 || k.objectFrames < 10)) return;
+   k.objectFrames = 0;
+   if (power) startNewLimited(e, k, 0x110);
+   quiet = power;
+  }
+  objectHitSound(e, index, h, power, quiet);
+ }
+ // fn_1_1F9A44 (PAL 0x80709DF8): the local kart's collision sound by object id
+ // (findings/race_sfx_coverage.md appendix A), the object's reaction, then the
+ // driver's voice (Kart::Link::PlayCharacterSound 0x11, 5 when invincible).
+ void objectHitSound(Engine& e, int index, const RaceAudioObjectHit& h, bool power, bool quiet) {
+  KartAudio& k = karts[index];
+  if (!k.local) return;
+  auto kart = [&](u32 id) { startNewLimited(e, k, id); };   // KartActor vt+0xe4
+  using C = RaceAudioObjectSound;
+  auto object = [&](u32 id, C::Call call) {                 // the object's actor: vt+0x3c StartNew, +0x30 Start, +0x40 its voice
+   if (h.slot != 0xff && hitObjectSounds < int(hitObjectSound.size())) hitObjectSound[hitObjectSounds++] = {h.slot, u16(id), u8(call), 0.0f};
+  };
+  switch (h.id) {
+  case 0x66: {   // DummyPole: the wall tables by its GOBJ settings[0]
+   const u16 v = h.variant;
+   u32 id = 0;
+   if (v < 8) id = KclSound[WallSet + v];
+   else if (u16(v - 8) < 8) id = KclSound[WallSet + 8 + (v - 8)];
+   else if (v == 0x10) id = 0x1d6;
+   else if (v == 0x11) id = 0x186;
+   if (id == 0x27c) startLimited(e, k, id); else if (id) kart(id);
+   break;
+  }
+  case 0x70: case 0x130: case 0x134: case 0x138: case 0x145: case 0x146: case 0x14a: case 0x151: case 0x158:
+  case 0x15a: case 0x15b: case 0x2780: kart(0x181); break;                       // COL_WOOD
+  case 0xd3: case 0x19f: case 0x27e3: if (!quiet) kart(0x181); break;
+  case 0xcb: kart(0x17f); object(0x36d, C::StartNew); break;                     // WLwallGC: GCW_PWALL_COL
+  case 0xcc: case 0xe7: case 0xe8:                                                // CarA: SHP_CAR_COL, horn
+   if (!quiet) { object(0x2ad, C::StartNew); object(0x2b0, C::StartNew); kart(0x17f); }
+   break;
+  case 0xcd: if (!quiet) kart(0x23c); break;
+  case 0xcf: if (!quiet) kart(0x2ef); break;
+  case 0xd0: if (!quiet) kart(0x17f); object(0x20a, C::Start); break;            // kart_truck: TGE_CAR_T_HORN_COL
+  case 0xd1: if (!quiet) kart(0x17f); object(0x201, C::Start); break;            // car_body: TGE_CAR_N_HORN_COL
+  case 0xd5: if (!quiet) kart(0x180); break;
+  case 0xd6: if (!quiet) kart(0x2d9); break;
+  case 0xd7: if (!quiet) { kart(0x17f); object(0x344, C::StartNew); object(0x34e, C::Voice); } break;   // penguin_s
+  case 0xd8: if (!quiet) { kart(0x17f); object(0x34d, C::StartNew); object(0x345, C::Voice); } break;   // penguin_m
+  case 0xdb: if (!quiet) kart(0x244); break;
+  case 0xe2: case 0xf0: case 0xf2: if (!quiet) kart(0x26d); break;
+  case 0xe5: if (!quiet) { kart(0x17f); object(0x330, C::StartNew); } break;     // crab
+  case 0xe9: case 0x196: if (!quiet) { object(0x232, C::StartNew); kart(0x186); } break;   // Chain Chomps
+  case 0xea: if (!quiet) kart(0x186); break;
+  case 0xeb: if (!quiet) { object(0x236, C::StartNew); kart(0x186); } break;
+  case 0xf1: case 0x20c: kart(0x244); break;
+  case 0x12e: if (!quiet) kart(0x1d6); break;
+  case 0x13f: case 0x1a2: kart(0x1d6); break;
+  case 0x144: if (!quiet) kart(0x1f9); break;                                     // pylon01
+  case 0x16e: if (!quiet) kart(0x32a); break;
+  case 0x191: if (!quiet) { kart(0x17f); object(0x229, C::StartNew); } break;    // kuribo
+  case 0x192: case 0x19a: if (!quiet) { kart(0x17f); object(0x266, C::StartNew); object(0x26a, C::Voice); } break;   // choropu
+  case 0x193: if (!quiet) { kart(0x17f); object(0x291, C::StartNew); object(0x293, C::Voice); } break;   // cow
+  case 0x194: if (!quiet) { kart(0x182); object(0x27b, C::StartNew); } break;    // pakkun_f
+  case 0x195: case 0x1a1: case 0x1a5: kart(0x1a3); break;                         // fire: DMG_CMN_FIRE
+  case 0x197: if (!quiet) kart(0x17f); break;
+  case 0x198: if (!quiet) kart(0x373); break;
+  case 0x199: if (!quiet) kart(0x248); break;
+  case 0x19b: if (!quiet) kart(0x2c0); break;
+  case 0x19c: if (!quiet) kart(0x2b7); break;
+  case 0x19d: if (!quiet) kart(0x29c); break;
+  case 0x1a3: startLimited(e, k, 0x27c); break;                                   // begoman_spike (vt+0xe0)
+  case 0x1a4: case 0x1a8: if (!quiet) kart(0x258); break;
+  case 0x1a6: kart(0x2c7); break;
+  case 0x1a9: kart(0x323); break;
+  case 0x1aa: if (!quiet) { kart(0x182); object(0x277, C::StartNew); } break;    // puchi_pakkun
+  case 0x1ab: case 0x1ac: if (!quiet) kart(0x24f); break;
+  case 0x203: case 0x212: if (!quiet) kart(0x1dd); break;
+  case 0x210: kart(0x31e); break;
+  default: break;
+  }
+  voiceRequest(e, index, power ? 5 : 0x11);
+ }
+ // ---- Effects::Player falls (PAL 0x806AB6B0) and the respawn (0x806B2964) ----
+ // Once per fall, for courses whose objects bring the effect ("pocha" water,
+ // "pochaYogan" lava, Rainbow's "entry"); never for a ghost. Variant 3 is
+ // N64 Sherbet Land's freezing water: the ice breaks when the respawn lands.
+ void fallBoundary(Engine& e, int i, int variant) {
+  KartAudio& k = karts[i];
+  const u8 fx = frame.pocha;
+  if (!fx || frame.kart[i].ghost || k.fxWater || k.fxLava || k.rbwTimer != -1) return;
+  if (variant == 1 || variant == 3) {
+   k.fxWater = true; k.fxIce = variant == 3;
+   if (fx & 1) { startLimited(e, k, 0x1a1); voices[i].fellInWater = true; }   // SE_VCL_FALL_WATER (fn_1_19B7A8)
+  } else if (variant == 2) {
+   k.fxLava = true;
+   if (fx & 2) startLimited(e, k, 0x1a2);                                     // SE_VCL_FALL_LAVA (fn_1_19B988)
+  } else if (variant == 5 && (fx & 4)) { k.rbwTimer = 0; k.rbwY = frame.kart[i].position.y; }
+ }
+ void respawnEffects(Engine& e, int i) {
+  KartAudio& k = karts[i];
+  k.fxWater = k.fxLava = false; k.rbwTimer = -1;
+  if (k.fxIce) {
+   if (!frame.kart[i].ghost) { startNewLimited(e, k, 0x350); voiceRequest(e, i, 0x1a); }   // SE_CR_64S_KART_ICE_BRK
+   k.fxIce = false;
+  }
  }
  // Effects::Player::UpdateValues and the wall hit of UpdateNonItemEffects (80692654).
  void effects(Engine& e, int index) {
@@ -775,6 +963,13 @@ struct RaceAudioLayer::Impl {
   k.thunderA = std::min(k.thunderA + 1, 690);
   if (shocked && !atB && k.thunderA == 690 && k.thunderB >= index + 71 && k.thunderB < 540) holdLimited(e, k, sid::ThndrState);
   k.thunderB = std::min(k.thunderB + 1, 540);
+  // fn_1_183AE0 (PAL 0x806944C4): a Rainbow fall's timer runs to 36; fn_1_18E4F8
+  // (0x8069E8AC): 35 frames on and 700 below where it fell, SE_CN_RBW_FALL.
+  if (k.rbwTimer != -1 && k.rbwTimer <= 35) ++k.rbwTimer;
+  if ((frame.pocha & 4) && k.rbwTimer >= 35 && in.position.y < k.rbwY - 700.0f) startNewLimited(e, k, 0x2f8);
+  // UpdateWaterEffects (PAL 0x8069C7F0) -> SetRoadState (0x8070B8DC): only the
+  // local kart's sounds follow GCN Peach Beach's tide.
+  if (k.local) k.roadState = in.seaState;
  }
 
  // KartActor::Update (80700d2c).
@@ -783,6 +978,14 @@ struct RaceAudioLayer::Impl {
   const RaceAudioKart& in = frame.kart[index];
   place(k.actor, k.placed, in.position);
   const u32* w = in.status;
+  // KartActor::UpdateLapSounds (PAL 0x8070B250): the local racer crossing the
+  // line fades EchoMgr's listener volume, which scales every 3D sound, to 0 over
+  // 180 frames (fn_1_207F04) and each playing ambience to 0 over 300 (fn_1_1ECBEC).
+  if (k.local && in.finished && !k.lapFinished) {
+   listenerVolume.set(0.0f, 0xb4);
+   for (auto& a : ambiences) if (e.attached(a.slot.h)) a.track.set(0.0f, 300);
+  }
+  k.lapFinished = in.finished;
   // Respawning: KartActor::Reset clears the actor velocity (no Doppler jump).
   if (bit(w, BeforeRespawn) || bit(w, TriggerRespawn) || bit(w, InRespawn)) k.actor.velocity = {};
   if (bit(w, BeforeRespawn)) return;
@@ -791,6 +994,8 @@ struct RaceAudioLayer::Impl {
   updateKcl(k, in);
   k.onGround = bit(w, AnyWheelCollision);
   k.driftState = in.finished ? 0 : in.driftState;
+  k.objectFrames = s8(std::min(k.objectFrames + 1, 100));
+  k.objectSpeed = length(in.velocity);
   k.bumpFrames = s8(std::min(k.bumpFrames + 1, 0x7e));
   k.bullet = bit(w, Bullet);
   if (k.bullet) holdLimited(e, k, sid::KillerFly);
@@ -820,6 +1025,12 @@ struct RaceAudioLayer::Impl {
   if (frame.raceState != 3 && bit(w, GroundStart) && (in.cues & cue::Landing)) startLimited(e, k, landingSound(k));
   if (k.jumpPadTimer) --k.jumpPadTimer;
   else k.jumpPadCount = 0;
+  // KartActor::Update (PAL 0x80707E10): DK Summit's crowd cheers once a kart has
+  // been 10 frames over a half-pipe (course 0x23 plays sound 0, nothing).
+  if (frame.course == 0x6 || frame.course == 0x23) {
+   if (!bit(w, OverZipper)) k.hpipeFrames = 0;
+   else if (++k.hpipeFrames == 10 && frame.course == 0x6) startLimited(e, k, sid::HpipeCheer);
+  }
   if (!in.local) nonLocal(e, k, in);
  }
  // KartActor::SetNonLocalVolumeAndPriority (80705468).
@@ -1046,7 +1257,7 @@ struct RaceAudioLayer::Impl {
   if (!v.enabled) return false;
   int delay = 0x3c;
   switch (type) {
-  case 0xb: trickCheer(e, i); break;
+  case 0xb: trickCheer(e, i, 1); break;
   case 0xc: if (frame.course == 0x1d) return false; break;
   case 0x16: case 0x18: case 0x19:
    if (unsigned(v.curType - 0x16) < 3 || v.curType == 0x19) return false;
@@ -1071,17 +1282,26 @@ struct RaceAudioLayer::Impl {
   }
   return voicePlay(e, i, type);
  }
- // fn_1_356274 (808621f8): the crowd cheers a local trick on Waluigi Stadium
- // and Funky Stadium, cutting the running cheer.
- void trickCheer(Engine& e, int i) {
+ // fn_1_356274 (808621f8, PAL 0x80866628): the crowd cheers a local jump (0) or
+ // trick (1) on Waluigi Stadium and Funky Stadium. A trick cuts the running
+ // cheer; a jump leaves a trick's cheer alone and restarts its own.
+ void trickCheer(Engine& e, int i, int trick) {
   VoiceAudio& v = voices[i];
   if (karts[i].muted || frame.kart[i].finished || !v.local) return;
   u32 first, second;
   if (frame.course == 0x12) { first = 0x36a; second = 0x36b; }
   else if (frame.course == 0x23) { first = 0x30d; second = 0x30e; }
   else return;
-  for (auto& s : v.limited) if (e.attached(s.h) && (e.soundId(s.h) == first || e.soundId(s.h) == second)) { e.stop(s.h, 0x1e); break; }
-  startLimitedVoice(e, i, second);
+  auto holding = [&](u32 id) -> Slot* { for (auto& s : v.limited) if (e.attached(s.h) && e.soundId(s.h) == id) return &s; return nullptr; };
+  if (trick) {
+   Slot* s = holding(first);
+   if (!s) s = holding(second);
+   if (s) e.stop(s->h, 0x1e);
+  } else {
+   if (holding(second)) return;
+   if (Slot* s = holding(first)) e.stop(s->h, 0x1e);
+  }
+  startLimitedVoice(e, i, trick ? second : first);
  }
  // fn_1_354938 (808608bc): the result voice, 120 frames after the finish.
  void finishVoice(Engine& e, int i, int type) {
@@ -1134,7 +1354,14 @@ struct RaceAudioLayer::Impl {
   if (c & cue::Fall) voiceRequest(e, i, in.fallVoice);             // Kart::Collision::ActivateOOB
   if (in.actionCount != v.actionCount) {                            // Kart::Damage::SetDamage
    v.actionCount = in.actionCount;
-   if (in.action >= 0) voicePlay(e, i, damageVoice(in.action));
+   if (in.action >= 0) {
+    const bool ok = voicePlay(e, i, damageVoice(in.action));
+#ifndef MKW_RELEASE
+    if (owner) { owner->damageVoiceRequests.fetch_add(1, std::memory_order_relaxed); if (ok) owner->damageVoices.fetch_add(1, std::memory_order_relaxed); }
+#else
+    (void)ok;
+#endif
+   }
   }
   if (c & cue::PowerHit) voiceRequest(e, i, 5);                    // CheckKartCollision power-up contact
   if (c & cue::Bump) voicePlay(e, i, std::fabs(in.bump) > 24.0f ? 0x12 : 5);   // fn_1_355180 from fn_1_609F4
@@ -1160,7 +1387,32 @@ struct RaceAudioLayer::Impl {
   // fn_1_354D84 from Kart::Status::UpdateCollisions: landing (local racer), by
   // the driver's airtime two model updates back.
   if (bit(w, GroundStart) && v.local) landingVoice(e, i);
+  // KartHalfPipe::calcTrick (PAL 0x80574C90), then KartJump::calc's fn_1_658B8
+  // (0x80575C6C): 11 frames into the air, with the speeds the kart had before
+  // this tick's KartMove update.
+  if (in.airtime == 11) {
+   if (bit(w, OverZipper) && !bit(w, HalfPipeTrick)) jumpVoice(e, i, 3);
+   if ((in.boostRampType >= 0 || bit(w, Trickable)) && v.lastRatio > 0.5f && !bit(w, InATrick)) {
+    int kind = 0;
+    if (!bit(w, JumpPadOn)) kind = in.boostRampType == 0 ? 2 : in.boostRampType == 1 ? 1 : 0;
+    else if (bit(w, JumpPadMushroomTrigger)) kind = 4;
+    jumpVoice(e, i, kind);
+   }
+  }
+  v.lastSpeed = in.speed; v.lastRatio = in.speedRatioCapped;
   v.airtimeBefore = v.airtime; v.airtime = in.airtime;
+ }
+ // fn_1_354C9C (PAL 0x80865050): the jump voices VO_JP_S/M/L (types 8, 9, 10);
+ // the big ones cheer the stadium crowd. Below speed 45 nothing, below 80 one size smaller.
+ void jumpVoice(Engine& e, int i, int kind) {
+  VoiceAudio& v = voices[i];
+  if (!v.enabled) return;
+  int type = 9;
+  if (kind == 2 || kind == 3) { type = 10; trickCheer(e, i, 0); }
+  else if (kind == 0) type = 8;
+  if (!(v.lastSpeed >= 45.0f)) return;
+  if (v.lastSpeed < 80.0f && kind != 4 && type != 8) --type;
+  voicePlay(e, i, type);
  }
  void landingVoice(Engine& e, int i) {
   VoiceAudio& v = voices[i];
@@ -1337,7 +1589,8 @@ struct RaceAudioLayer::Impl {
    case ItemHit: if (o) itemStart(e, *o, ItemObjSound[object][1]); break;
    case ItemExplode:
     if (o) itemStart(e, *o, c.kind == KindBlue ? 0x105 : c.kind == KindBobomb ? 0x109 : 0);
-    if (c.kind == KindBlue) globalSound(e, 0x106);   // 807a363c: SE_ITM_HANE_BOMB_ECHO, global
+    // 807a363c (Blue Shell), PAL 0x807A45E0 (Bob-omb): SE_ITM_HANE_BOMB_ECHO, global.
+    if (c.kind == KindBlue || c.kind == KindBobomb) globalSound(e, 0x106);
     break;
    case ItemEquip:
     if (c.player < 12 && karts[c.player].present && karts[c.player].local) startLimited(e, karts[c.player], 0xf6);
@@ -1382,11 +1635,19 @@ struct RaceAudioLayer::Impl {
   const int p = c.player < 12 && c.player < frame.karts ? c.player : -1;
   KartAudio* k = p >= 0 && karts[p].present ? &karts[p] : nullptr;
   switch (c.cue) {
-  case ItemHitSuccess:
-   // Kart collision handler 8056dc80 -> CharacterActor 808610e8:
-   // the attacker's local CharacterActor plays type 3, ITM_SCES.
-   if(p>=0&&voices[p].enabled&&voices[p].local)voicePlay(e,p,3);
+  case ItemHitSuccess: {
+   // Kart collision handler 8056dc80 (PAL 0x80572AD0) -> CharacterActor 808610e8 (PAL
+   // fn_1_355164 0x80865518): the attacker's CharacterActor plays type 3, ITM_SCES. It checks
+   // only +0x6FF (enabled), so a CPU attacker cheers too (its NPC set, in 3D).
+   if (p < 0 || !voices[p].enabled) break;
+   const bool ok = voicePlay(e, p, 3);
+#ifndef MKW_RELEASE
+   if (owner) { owner->hitVoiceRequests.fetch_add(1, std::memory_order_relaxed); if (ok) owner->hitVoices.fetch_add(1, std::memory_order_relaxed); }
+#else
+   (void)ok;
+#endif
    break;
+  }
   case ItemFakeBox: if (k) { if (c.flag) startNewLimited(e, *k, sid::BoxSmoke); else startLimited(e, *k, sid::BoxHitFx); } break;
   case ItemBarrier: if (k) startNewLimited(e, *k, sid::StarBarrier); break;
   case ItemInk: if (k) startLimited(e, *k, sid::GesoSumiOn); break;   // Effects::Player::UpdateInkEffect 8069bd4c
@@ -1497,6 +1758,7 @@ struct RaceAudioLayer::Impl {
    break;
   case AmbienceOp::Global: globalSound(e, op.id); break;
   case AmbienceOp::GlobalStop: if (e.attached(global.h)) e.stop(global.h, op.frames); break;
+  case AmbienceOp::GlobalStopIf: if (e.attached(global.h) && e.soundId(global.h) == op.id) e.stop(global.h, op.frames); break;
   case AmbienceOp::GlobalVolume: if (e.attached(global.h)) e.setVolume(global.h, op.value, op.frames); break;
   case AmbienceOp::GlobalFadeIn: if (e.attached(global.h)) e.fadeIn(global.h, op.frames); break;
   case AmbienceOp::OneShot:
@@ -1690,6 +1952,16 @@ struct RaceAudioLayer::Impl {
    else if (o.freeze) p = o.actor.position;
    place(o.actor, o.placed, p);
    objectAmbient(e, o);
+   // ObjectActor::Update (PAL 0x8070CC08): the object's idle loop (retail holds it
+   // just before SetPosition; the sound's first 3D update sees the new position either way).
+   if (o.mode == 1 && frame.objectsReady) if (const u32 loop = objectIdleLoop(o.id, frame.mode)) objectHold(e, o, loop, 0.0f);
+   // A sound_* emitter's Update (PAL 0x8070EB38): at its route's point nearest the
+   // listener, holding its loop (Peach Beach's sea waits out the course preview);
+   // the audience at half volume.
+   if (o.mode == 1 && frame.objectsReady) if (const u32 loop = emitterLoop(o.id, frame.course); loop && !(frame.raceState == 2 && loop == 0x362)) {
+    objectHold(e, o, loop, 0.0f);
+    if (o.id == 0xd) for (auto& s : o.limited) if (e.attached(s.h) && e.soundId(s.h) == loop) e.setVolume(s.h, 0.5f);
+   }
   }
   for (int n = 0; n < frame.objectSounds; ++n) {
    const RaceAudioObjectSound& c = frame.objectSound[n];
@@ -1706,6 +1978,16 @@ struct RaceAudioLayer::Impl {
    default: break;
    }
   }
+  // The karts' object hits (kartCues): the objects' reaction sounds.
+  for (int n = 0; n < hitObjectSounds; ++n) {
+   const RaceAudioObjectSound& c = hitObjectSound[n];
+   if (c.slot >= frame.objects || c.slot >= objects.size()) continue;
+   ObjAudio& o = objects[c.slot];
+   if (c.call == RaceAudioObjectSound::Start) objectStart(e, o, c.sound, 0.0f);
+   else if (c.call == RaceAudioObjectSound::StartNew) objectStartNew(e, o, c.sound, 0.0f);
+   else if (c.call == RaceAudioObjectSound::Voice) objectVoice(e, o, c.sound);
+  }
+  hitObjectSounds = 0;
   for (auto& b : boxActors) if (b.live) objectAmbient(e, b);
   // SortAndToggleActors runs the objects on the frames the racers skip.
   if (toggleOdd) return;
@@ -1734,6 +2016,18 @@ struct RaceAudioLayer::Impl {
   objAmbient(e, lakitu);
   if (frame.lakituSound) objHold(e, lakitu, frame.lakituSound);
  }
+ // CtrlRaceItemBalloon -> ItemWarningMgr fn_1_1E76F4 (PAL 806f7aa8): SE_ITM_ALARM_VCL on
+ // the same handle unless it holds SE_ITM_ALARM; pan from the icon's x (fn_1_1E72E4
+ // 806f7698, one screen), volume and tempo from its rate (rodata 808a0eb4..808a0ecc).
+ void balloonAlarm(Engine& e) {
+  if (!frame.balloonAlarm || e.soundId(alarm.h) == 0x118) return;
+  alarm.flat = true;
+  e.holdSound(alarm.h, 0x119);
+  const f32 x = frame.balloonX, r = frame.balloonRate;
+  e.setPan(alarm.h, x >= 300.0f ? 0.8f : x <= -300.0f ? -0.8f : x * 0.0026666666f);
+  e.setVolume(alarm.h, r < 1.6f ? 0.2f + 0.5f * r : 1.0f);
+  e.setTempoRatio(alarm.h, r < 1.6f ? 1.0f + 0.625f * r : 2.0f);
+ }
  // ItemWarningMgr::PlayTargetedWarning (80713adc): a Red or Blue Shell homing on
  // the local racer within 6000 units: louder and faster as it nears.
  void itemAlarm(Engine& e) {
@@ -1746,14 +2040,17 @@ struct RaceAudioLayer::Impl {
    for (int n = 0; n < frame.items; ++n) {
     const RaceAudioItem& it = frame.item[n];
     if (it.object != object || it.target != local || it.explosion || it.scattered) continue;
+    if (owner) owner->homingFrames.fetch_add(1, std::memory_order_relaxed);
     const Vec3f t = frame.kart[local].position;
     const f32 d = length(Vec3f{it.position.x - t.x, it.position.y - t.y, it.position.z - t.z});
     if (d > 6000.0f || d < 0.0f) continue;
     any = true; dist = d;
    }
-  if (!any) return;
+  if (!any) { balloonAlarm(e); return; }
   alarm.flat = true;
   e.holdSound(alarm.h, 0x118);
+  if (owner && e.attached(alarm.h)) owner->alarmFrames.fetch_add(1, std::memory_order_relaxed);
+  if (owner && e.stats().notesDropped != alarmDropSeen) { alarmDropSeen = e.stats().notesDropped; if (e.stats().lastDroppedSound == 0x118) owner->alarmDropped.fetch_add(1, std::memory_order_relaxed); }
   const f32 t = (6000.0f - dist) / 6000.0f;
   e.setPan(alarm.h, 0.0f);
   e.setVolume(alarm.h, 0.2f + 0.8f * t);
@@ -1825,6 +2122,7 @@ void RaceAudioLayer::gameFrame(Engine& e) {
  if (tail == head_.load(std::memory_order_acquire)) return;
  m.frame = ring_[tail % Ring];
  tail_.store(tail + 1, std::memory_order_release);
+ m.e3d.swapPan = m.frame.mirror;
  // Karts present now get their EngineMgr (KartActor::Link -> EngineMgr::Init).
  for (int i = 0; i < m.frame.karts && i < 12; ++i) {
   auto& k = m.karts[i];
@@ -1839,9 +2137,14 @@ void RaceAudioLayer::gameFrame(Engine& e) {
    m.voiceLink(i);   // the racer's CharacterActor
   }
  }
- // RaceMgr::UpdatePlayerMatrix: the listener from the camera (scale 0.99).
+ // RaceMgr::UpdatePlayerMatrix (PAL fn_1_200DE4 0x80711198): the listener from
+ // the camera (scale by camera mode, race_audio_frame.cpp). fn_1_968A4 (0x805A6C58)
+ // builds it as an EGG LookAtCamera with the camera's own up (+0x7c), so it rolls.
  const Vec3f before = m.listener.position;
- m.listener.lookAt(m.frame.eye, m.frame.target, {0, 1, 0}, 0.99f);
+ m.listener.lookAt(m.frame.eye, m.frame.target, m.frame.up, m.frame.listenerScale);
+ // EchoMgr's listener volume (Snd3DCalc multiplies every 3D volume by it).
+ m.listenerVolume.calc(); m.listenerVolume.clamp(0, 1);
+ m.listener.volume = m.listenerVolume.value;
  m.listener.velocity = m.listenerPlaced ? Vec3f{m.listener.position.x - before.x, m.listener.position.y - before.y, m.listener.position.z - before.z} : Vec3f{};
  m.listenerPlaced = true;
  // RaceMgr::Calc -> RaceAmbienceMgr::Update: this tick's zone and intro

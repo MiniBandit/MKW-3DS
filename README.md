@@ -21,7 +21,8 @@ vehicles each):
 - **Time Trials**: solo, a Triple Mushroom, best time per course saved to the SD card
 - **All 12 vehicles** for every driver, including the unlockables
 - **Speedometer** on the race HUD (SELECT toggles it)
-- **Tricks on R** off ramps (Mario Kart 7 style), plus X/Y for tricks and wheelies
+- **Tricks on Y** (the Circle Pad picks the direction) or the D-pad, also bike wheelies; R only hops and drifts, as on the Wii
+- **Look behind** on X (Mario Kart 7 style) or ZL
 - **Smoke and dust**: start-boost smoke, burnout, drift smoke, off-road dust, landing puffs
 - **Balloon Battle** on all ten arenas, with CPU opponents, balloon scoring and a three-minute match
 - Model and HUD fixes
@@ -107,13 +108,16 @@ and copy `build/release/sd-card/3ds` to your SD card again.
 | Circle Pad | Steer; up/down when using an item throws forward/back |
 | A | Accelerate |
 | B | Brake / reverse |
-| R | Hop and drift; trick off a ramp |
-| X / Y | Trick (Circle Pad picks the direction) / bike wheelie |
+| R | Hop and drift |
+| X (or ZL) | Look behind |
+| Y | Trick (Circle Pad picks the direction) / bike wheelie |
 | D-pad | Trick / wheelie (Wii Classic Controller style) |
 | L | Use item |
 | START | Pause |
 | SELECT | Speedometer on/off |
 | Touch screen | Switch the bottom-screen map view |
+
+On the Wii a trick is a shake of the Wii Remote. The 3DS has no equivalent, so Y and the D-pad stand in for it.
 
 ## Contributing
 

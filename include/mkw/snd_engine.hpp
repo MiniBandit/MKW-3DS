@@ -145,6 +145,8 @@ public:
  // rate in Hz, gains linear (AX mix 0x8000 == 1.0), lpf 0 = bypass.
  virtual void set(int v, f32 rate, f32 left, f32 right, f32 lpfHz) = 0;
  virtual bool finished(int v) = 0;
+ // Free for the engine but still fading out a stopped voice: taken last.
+ virtual bool busy(int) const { return false; }
  // Called once at the end of every audio-thread pass, after all set() calls.
  virtual void commit() {}
 };
@@ -197,10 +199,19 @@ struct StartInfo {
 
 // 3D actor parameters (MKW Audio::Engine3D inputs) are applied by the
 // caller through ambient overrides on each sound.
-struct Ambient { f32 volume = 1, pitch = 1, pan = 0, surroundPan = 0, fxSend = 0, lpf = 0; int priority = 0; };
+// `owner`: the 3D actor (SoundActor) that started the sound, compared only; its
+// actor players 1-3 hold one sound each.
+struct Ambient { f32 volume = 1, pitch = 1, pan = 0, surroundPan = 0, fxSend = 0, lpf = 0; int priority = 0; const void* owner = nullptr; };
+
+// QA (filled outside release builds): start failure number `failure` found no
+// slot; its start priority and the sounds then on its player, with priorities.
+struct FullPlayer { u32 failure = 0, sound = InvalidId, player = 0; u8 start = 0, count = 0; u16 held[8]{}; u8 heldPriority[8]{}; };
 
 struct EngineStats { u32 voicesActive = 0, voicesDropped = 0, soundsActive = 0, startsFailed = 0, missingData = 0, streamUnderruns = 0;
- u32 lastMissingSound = InvalidId, lastMissingFile = InvalidId, lastMissingWave = InvalidId; };  // QA
+ u32 lastMissingSound = InvalidId, lastMissingFile = InvalidId, lastMissingWave = InvalidId;
+ u32 notesDropped = 0, lastDroppedSound = InvalidId;  // QA; notesDropped: sequence notes that got no voice
+ u32 failedAlloc = 0, failedWait = 0, lastFailedAlloc = InvalidId, lastFailedWait = InvalidId;  // QA: startsFailed by cause (no sound slot / waves not in time)
+ FullPlayer firstFull[2]{}, lastFull{}; };  // QA: the first two no-slot failures and the latest
 
 // The NW4R runtime: SoundArchivePlayer + SoundPlayers + sequencer + channels +
 // voices. Not thread safe; one audio thread owns it.

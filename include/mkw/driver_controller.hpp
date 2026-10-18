@@ -1,141 +1,159 @@
 #pragma once
 #include <algorithm>
 #include <array>
-#include <cmath>
-#include <cstring>
+#include <cstdint>
 
 namespace mkw {
+// One frame of the kart state the retail driver model (PlayerModel, PAL StaticR
+// 0x807C6A0C..0x807D4400) reads, plus the events other systems send it.
 // Presentation signals only. This class never changes simulation state.
 struct DriverSignals {
-    float steering=0; // Same sign as Kinoko stick.x: negative left, positive right.
-    float speed=0;    // Signed forward speed, not the magnitude of velocity.
-    int driftDirection=0; // Kinoko hopStickX convention: +1 left, -1 right.
-    bool drift=false,boost=false,trick=false,hit=false,finished=false;
-    bool bike=false,wheelie=false,airborne=false,hopping=false,inCannon=false;
-    bool accelerating=false,braking=false,countdown=false;
-    int trickVariant=-1; // Optional authored sjump_a/b/c selection, 0..2.
-    int finishType=0; // 0 first, 1 good (2nd..5th), 2 bad (6th..12th).
-    int itemThrowDirection=0; // Rising edge: +1 forward, -1 backward.
-    bool celebrate=false; // Rising edge: successful-hit fist pump (gut).
-    bool blink=false;     // Caller supplies cadence; the authored wink lasts 8 frames.
+    // Kart status bits (Kinoko eStatus / retail KartState).
+    bool accelerate=false,brake=false;      // 0, 1
+    bool drifting=false;                    // 3 DriftManual | 28 DriftAuto
+    bool beforeRespawn=false;               // 4
+    bool anyWheel=false,allWheels=false;    // 11, 12
+    bool stickLeft=false,stickRight=false;  // 13, 24
+    bool touchingGround=true,hop=false;     // 18, 19
+    bool boost=false,rampBoost=false;       // 20, 31
+    bool wheelie=false;                     // 29
+    bool inAction=false,inCannon=false;     // 32, 36
+    bool inATrick=false,overZipper=false;   // 38, 42
+    bool burnout=false;                     // 50
+    bool mtBoost=false;                     // 52: a drift mini-turbo's boost (KartMove +0x102 timer)
+    bool chargingSsmt=false;                // 57
+    bool slipstreamBoost=false;             // 65
+    bool frozen=false;    // 77/78 InRespawn|AfterRespawn on N64 Sherbet Land: the wait clip stops
+    int inkFrames=-1;     // fn_1_6ECA8 0x8057F05C: frames since Blooper ink landed, -1 without ink
+    float speed=0;        // KartMove speed (signed)
+    float speedRatio=0;   // KartMove speedRatioCapped
+    int hopStickX=0;      // KartMove +0xCC (Kinoko hopStickX): +1 left, -1 right
+    int appliedHopStickX=0; // KartMove::getAppliedHopStickX
+    float steering=0;     // PlayerModel +0x58 (Kinoko Render::KartModel::steeringInput)
+    float stickX=0;       // Enemy::AI::getStick: the kart's input stick
+    bool accelButton=false; // the accelerate button itself (input +0x2C & 1)
+    bool lookBack=false;    // the look-behind button (input +0x2C & 0x20)
+    bool countdown=false;   // RaceInfo_getCountdown() > 0
+    bool finished=false;    // RaceManager player +0x38 bit 1
+    int finishType=4;       // fn_1_27CBF0 0x8078CFA4: 0 1st, 1 good, 2 bad, otherwise none
+    bool far=false;         // PlayerModel +0xB4 (fn_1_2BADE4 0x807CB2D4), see farFromCamera
+    // Events of this frame.
+    int trickVariant=-1,trickDirection=0; // setTrick 0x807D18EC: SurfaceVariant, System::Trick
+    int itemThrow=0;        // fn_1_2C23E4 0x807D2798: +1 thrown forward, -1 backward
+    bool gut=false;         // fn_1_2C1614 0x807D19C8: this racer's item hit another racer
 };
 struct DriverPose {
-    const char* clipName="wait";
+    const char* clipName="drive";
     float frame=0;
-    const char* faceName=nullptr;
+    // Crossfade: fromClip keeps its own frame; weight is clipName's share (1 = none).
+    const char* fromClip=nullptr;
+    float fromFrame=0,weight=1;
+    const char* faceName=nullptr;  // texture pattern (and the eye SRT of the same name)
     float faceFrame=0;
 };
 
-// Source clip names, CHR0 durations, sweep centers and steering smoothing are
-// recovered. The priority policy, reverse/idle epsilon, deterministic trick
-// fallback and face selection are native adaptations; the original full
-// animation state machine / runtime limb IK have not been recovered.
+// Port of the retail PlayerModel animation logic: per-frame update fn_1_2BB17C
+// (0x807CB530), state machine fn_1_2BBDC0 (0x807CC174), kart / bike air and
+// trick handlers (0x807CF510 / 0x807CF9F0), steering sweep (0x807CD32C), the
+// face controller (0x807C6A44) and the blend engine (crossfade of 1/rate
+// frames, both clips keep animating). Clip IDs are the retail clip table's
+// (0x808A68E8). Not ported: head look-at, body-reaction springs and limb IK
+// (findings 16), the distance LOD flag (+0xB4), the CPU AI's model flags
+// (Enemy::AI +0x1C) and online-only state bits.
 class DriverController {
 public:
-    enum Clip : unsigned {
-        First,Back,Bad,Damage,Dash,DriftLeft,DriftRight,Drive,Good,Gut,
-        TrickA,TrickB,TrickC,ThrowBack,ThrowForward,ThrowForwardEnd,Wait,Wheelie,JumpStart,Jump,JumpEnd,BikeTrickStart,BikeTrickEnd,Count
+    enum Clip : uint8_t {
+        Drive,Dash,DriftL,DriftR,Wheelie,Wait2,Back,Wait,First,Good,Bad,
+        Gut=20,ThrowF,ThrowFEd,ThrowB,FireF,FireB,Damage,JumpEd,SjumpEd,JumpSt,SjumpSt,
+        SjumpSa,SjumpSb,SjumpSc,SjumpMa,SjumpMb,SjumpMc,SjumpLa,SjumpLb,SjumpLc,Jump,
+        Count,None=Count
     };
-    inline static constexpr const char* names[Count]={
-        "1st","back","bad","damage","dash","drift_l","drift_r","drive",
-        "good","gut","sjump_a","sjump_b","sjump_c","throw_b","throw_f",
-        "throw_f_ed","wait","wheelie","jump_st","jump","jump_ed","sjump_st","sjump_ed"
-    };
-    void reset() {
-        steering_=0;steeringEnvelope_=1;active_=Wait;clipFrame_=0;
-        oneShot_=Count;oneShotFrame_=0;nextTrick_=0;blinkFrame_=8;
-        previous_={};pendingTrick_=TrickA;airTrick_=false;jumpAirborne_=false;
+    // Retail clip name (fn_1_2C043C 0x807D07F0: karts take the alternative name).
+    static const char* clipName(unsigned clip,bool bike);
+    // fn_1_27CBF0 for GP/VS: rank 1 -> 1st, rank <= 0x808D1820[racers-1] -> good, else bad.
+    static int finishTypeForRank(unsigned rank,unsigned racers){
+        static constexpr unsigned Good[12]={1,1,2,2,3,3,4,4,5,5,5,5};
+        if(rank<=1)return 0;
+        return rank<=Good[std::clamp(racers,1u,12u)-1]?1:2;
     }
-    // Populate this from each character's CHR0 metadata after loading. Defaults
-    // below are the original Mario Standard Kart M bank, not universal timings.
-    void setDuration(const char* name,float frames) {
-        if(!name||!std::isfinite(frames)||frames<1)return;
-        for(unsigned i=0;i<Count;++i)if(std::strcmp(names[i],name)==0)durations_[i]=frames;
+    // PlayerModel +0xB4, set each frame by fn_1_2BADE4 (0x807CB2D4): +0xAC squared is
+    // below the racer's render-group distance (fn_1_277964 0x80787D18), which is
+    // |kart - eye|^2 x (min(fovy,55)/55)^2 per screen (fn_1_2773C0 0x80787774,
+    // fn_1_276CC8 0x8078707C). +0xAC is 4000 for a CPU (fn_1_27CBA8 0x8078CF5C) and
+    // 100000 for the local human and ghosts with one local player (PlayerModel_init
+    // 0x807C8758). A far racer's state machine shows drive and skips the rest,
+    // the finish-pose counter included (0x807CC174).
+    static bool farFromCamera(float distanceSquared,float fovy,bool cpu){
+        const float radius=cpu?4000.f:100000.f,scale=std::min(fovy,55.f)*(1.f/55.f);
+        return radius*radius<scale*scale*distanceSquared;
     }
-    DriverPose step(const DriverSignals& input) {
-        DriverSignals s=input;
-        s.steering=std::isfinite(s.steering)?std::clamp(s.steering,-1.0f,1.0f):0;
-        // Normal-driving branch of DriverController::vf_1c (PAL 807CD32C),
-        // reproduced in Kinoko Render/KartModel.cc. Burnout/cannon variants
-        // are intentionally left to the caller's future richer signal path.
-        steering_*=0.9f;
-        const float previousSteering=steering_;
-        if(s.steering<-0.2f)steering_-=0.1f;
-        else if(s.steering>0.2f)steering_+=0.1f;
-        steeringEnvelope_+=0.1f*(std::fabs(s.steering)-steeringEnvelope_);
-        if(previousSteering < -steeringEnvelope_ || steeringEnvelope_ < previousSteering) {
-            if(steering_ < -steeringEnvelope_)steering_+=0.1f;
-            else if(steering_ > steeringEnvelope_)steering_-=0.1f;
-        } else steering_=std::clamp(steering_,-steeringEnvelope_,steeringEnvelope_);
-        steering_=std::clamp(steering_,-1.0f,1.0f);
-
-        // Cannon launch uses the takeoff clip; ordinary airborne transitions
-        // use the sustained jump pose instead.
-        if(s.bike&&s.airborne&&!previous_.airborne){
-            jumpAirborne_=!s.hopping;
-        }
-        if(s.inCannon&&!previous_.inCannon)startOneShot(JumpStart);
-        if(s.bike&&!s.airborne&&previous_.airborne&&!s.trick){
-            if(airTrick_)startOneShot(BikeTrickEnd);
-            else if(jumpAirborne_&&(oneShot_==Count||oneShot_==JumpStart))startOneShot(JumpEnd);
-            airTrick_=false;jumpAirborne_=false;
-        }
-        if(s.trick&&!previous_.trick) {
-            const unsigned variant=s.trickVariant>=0?unsigned(s.trickVariant)%3:nextTrick_++%3;
-            pendingTrick_=Clip(TrickA+variant);
-            airTrick_=s.bike;
-            startOneShot(s.bike?BikeTrickStart:pendingTrick_);
-        } else if(s.itemThrowDirection!=0&&previous_.itemThrowDirection==0) {
-            startOneShot(s.itemThrowDirection>0?ThrowForward:ThrowBack);
-        } else if(s.celebrate&&!previous_.celebrate)startOneShot(Gut);
-        if(s.blink&&!previous_.blink)blinkFrame_=0;
-
-        Clip wanted=Drive;
-        bool parameterized=false;
-        if(s.finished) {
-            wanted=s.finishType==0?First:s.finishType==1?Good:Bad;
-            oneShot_=Count;
-        } else if(s.hit) {
-            wanted=Damage;oneShot_=Count;
-        } else if(oneShot_!=Count)wanted=oneShot_;
-        else if(s.bike&&s.airborne&&(jumpAirborne_||airTrick_))wanted=Jump;
-        else if(s.bike&&s.wheelie){wanted=Wheelie;parameterized=true;}
-        else if(s.speed < -0.05f) {wanted=Back;parameterized=true;}
-        else if(s.drift) {wanted=s.driftDirection>0?DriftLeft:DriftRight;parameterized=true;}
-        else if(s.boost) {wanted=Dash;parameterized=true;}
-        else if(s.countdown||(!s.accelerating&&std::fabs(s.speed)<0.05f))wanted=Wait;
-        else {wanted=Drive;parameterized=true;}
-
-        if(wanted!=active_) {active_=wanted;clipFrame_=0;}
-        DriverPose pose;pose.clipName=names[wanted];
-        // drive/back/dash/drift_l/drift_r are steering sweeps: authored keys
-        // at 0 / 15 / 30, with neutral at 15. They are not 31-frame loops.
-        // The sign maps the model's anatomical +X-left to input's +right.
-        if(parameterized)pose.frame=(durations_[wanted]-1)*0.5f*(1-steering_);
-        else if(wanted==oneShot_)pose.frame=oneShotFrame_;
-        else pose.frame=std::fmod(clipFrame_,durations_[wanted]);
-        if(wanted==First||wanted==Good||wanted==Bad||wanted==Damage) {
-            pose.faceName=names[wanted];pose.faceFrame=pose.frame;
-        } else if(blinkFrame_<8) {pose.faceName="wink";pose.faceFrame=float(blinkFrame_);}
-        else if(steering_<-0.2f)pose.faceName="left";
-        else if(steering_>0.2f)pose.faceName="right";
-        ++clipFrame_;
-        if(blinkFrame_<8)++blinkFrame_;
-        if(wanted==oneShot_ && ++oneShotFrame_>=durations_[oneShot_]) {
-            if(oneShot_==BikeTrickStart)startOneShot(pendingTrick_);
-            else if(oneShot_==ThrowForward)startOneShot(ThrowForwardEnd);
-            else {oneShot_=Count;oneShotFrame_=0;}
-        }
-        previous_=s;
-        return pose;
+    // Vehicle and character are retail IDs; insideDrift is the bike's drift type.
+    void configure(bool bike,unsigned vehicle,unsigned character,bool insideDrift,uint32_t seed);
+    // Back to the model's initial state (PlayerModel init: drive, blinking).
+    void reset();
+    // Register the loaded bank's clips (CHR) and face patterns (PAT) after configure().
+    void setDuration(const char* name,float frames,bool loop=false);
+    void setFace(const char* name,float frames,bool loop=false);
+    // Every clip and face pattern of a loaded DriverAnimation bank.
+    template<class Bank> void registerBank(const Bank& bank){
+        for(unsigned c=0;c<bank.count();++c)setDuration(bank.name(c),bank.duration(c),bank.loop(c));
+        for(unsigned f=0;f<bank.faceCount();++f)setFace(bank.faceName(f),bank.faceDuration(f),bank.faceLoop(f));
     }
+    DriverPose step(const DriverSignals& input);
 private:
-    void startOneShot(Clip clip) {oneShot_=clip;oneShotFrame_=0;}
-    std::array<float,Count> durations_{{50,31,49,19,31,31,31,31,49,31,50,50,55,20,20,35,30,31,30,30,21,6,20}};
-    float steering_=0,steeringEnvelope_=1,clipFrame_=0,oneShotFrame_=0;
-    Clip active_=Wait,oneShot_=Count,pendingTrick_=TrickA;
-    unsigned nextTrick_=0,blinkFrame_=8;
-    bool airTrick_=false,jumpAirborne_=false;
-    DriverSignals previous_{};
+    struct Track {uint8_t clip=Drive;float frame=0,rate=1;};
+    struct Face {int8_t id=-1;float frame=0;};
+    bool has(unsigned clip) const {return clip<Count&&present_[clip];}
+    float length(unsigned clip) const {return clip<Count?durations_[clip]:1;}
+    unsigned anim() const {return cur_.clip;}
+    bool done() const {return length(cur_.clip)<=cur_.frame;}
+    unsigned random(unsigned n);
+    bool setAnimation(float rate,unsigned clip);
+    void cut(unsigned clip);
+    void change();
+    bool canChange(const DriverSignals& s) const;
+    void setTrick(int variant,int direction);
+    unsigned trickClip() const;
+    void stateMachine(const DriverSignals& s);
+    void selectState(const DriverSignals& s);
+    void face(const DriverSignals& s);
+    void faceCategory(unsigned category);
+    void setFaceClip(int id);
+    void kartAir(const DriverSignals& s);
+    void bikeAir(const DriverSignals& s);
+    bool landed(const DriverSignals& s) const;
+    void steer(const DriverSignals& s);
+    void blink();
+    void advance(Track& t) const;
+    // Configuration and bank contents.
+    bool bike_=false,bikeIk_=false,insideDrift_=false,cannonJump_=false;
+    uint32_t seed_=1,random_=1;
+    std::array<float,Count> durations_{};
+    std::array<bool,Count> present_{},loop_{};
+    // Face patterns by name index (see faceNames in driver_controller.cpp).
+    std::array<float,48> faceDurations_{};
+    std::array<bool,48> faceLoop_{},facePresent_{};
+    // Animation layer 0: current clip (+0xFA) and the clip it fades from.
+    Track cur_,prev_;
+    float weight_=1,blendRate_=.1f;
+    bool blending_=false;
+    // State machine (offsets in the retail PlayerModel).
+    uint8_t applied_=Drive,wanted_=Drive;   // +0xF4, +0xF6
+    bool badFlag_=false,dashFlag_=false;    // +0x10, +0x4F
+    bool driftL_=false,driftR_=false;       // +0x4D, +0x4E
+    int finished_=0,poseFrames_=0,stickNeutral_=0,backHold_=0,lookBack_=0; // +0x2D8 +0x2DC +0x2E0 +0x6D8 +0x14
+    int eyeRight_=0,eyeLeft_=0;             // +0x18, +0x1C
+    float lean_=0,leanStep_=0;              // +0x5C, +0x64
+    // Air / trick handler.
+    int air_=0,prevAir_=0,ground_=0,prevGround_=0; // +0x2C8 +0x2CC +0x2D0 +0x2D4
+    int trickRequest_=0,trickThreshold_=0,cooldown_=0; // +0x2C, +0x30, +0x34
+    int trickVariant_=0,trickDirection_=0;  // +0x38, +0x3C
+    uint8_t trickStart_=JumpSt,pendingTrick_=None,trickLanding_=JumpEd; // +0x40, +0x42, +0x44
+    float trickRate_=1;                     // +0x48
+    bool bikeToggle_=false;                 // +0x4C
+    // Face controller (+0x2C4): category, blink timer; the pattern on the face layer.
+    unsigned faceCategory_=3;int blinkTimer_=10;
+    Face face_{};
+    int clipFace_=-1;                       // +0x1C8: the clip whose own face is applied
 };
 } // namespace mkw

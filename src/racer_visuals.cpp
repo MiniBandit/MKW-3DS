@@ -3,6 +3,8 @@
 #include <mkw/star_power.hpp>
 #include <mkw/animation.hpp>
 #include <mkw/driver_controller.hpp>
+#include <mkw/driver_signals.hpp>
+#include <mkw/race_grid.hpp>
 #include <mkw/garage.hpp>
 #include <mkw/vehicle_animation.hpp>
 #include <mkw/job_worker.hpp>
@@ -10,8 +12,10 @@
 #include <mkw/render_quality.hpp>
 #include <game/kart/KartObjectManager.hh>
 #include <game/kart/KartMove.hh>
+#include <game/kart/KartParam.hh>
 #include <game/kart/Status.hh>
 #include <game/system/RaceConfig.hh>
+#include <game/system/RaceManager.hh>
 #include <array>
 #include <cstdio>
 #include <cstring>
@@ -27,13 +31,18 @@ struct RacerVisuals::Impl {
         std::unique_ptr<DriverAnimation> animation,bodyAnimation;
         std::array<std::unique_ptr<DriverAnimation>,9> extraAnimation;
         DriverController controller;
+        DriverSignalReader reader;
         DriverPose pose;
+        bool ghost=false;
         VehicleAnimation vehicle;
         struct Clock {int clip=-1;unsigned start=0;} bodyClock;
         std::array<Clock,9> extraClocks;
     };
     std::array<std::unique_ptr<Racer>,11> racers;
-    unsigned count=0;
+    unsigned count=0,fallbacks=0;
+    // A pause's copy of each racer's animation state (saveAnimation / restoreAnimation).
+    struct Saved {const GarageChoice* choice;DriverController controller;DriverSignalReader reader;DriverPose pose;VehicleAnimation vehicle;Racer::Clock bodyClock;std::array<Racer::Clock,9> extraClocks;};
+    std::array<std::unique_ptr<Saved>,11> saved;
     // One frame's pose and visibility per racer (prepareRacer), drawn in order.
     struct Prepared {
         bool draw=false,bodyVisible=false,driverVisible=false;
@@ -53,53 +62,99 @@ struct RacerVisuals::Impl {
     }
     std::array<std::pair<Impl*,unsigned>,11> jobContext{};
     void prepareRacer(unsigned i);
+    void drawRacer(Renderer& renderer,unsigned i);
 };
+// Retail Time Trial ghosts are half see-through: the TT draw path blends them at
+// 0x80/255 (fn_1_A112C 0x805B14E0 sets it), which .5 rounds to.
+constexpr float GhostAlpha=.5f;
 RacerVisuals::RacerVisuals():impl_(std::make_unique<Impl>()){}
 RacerVisuals::~RacerVisuals()=default;
 void RacerVisuals::reset(){for(auto& r:impl_->racers)r.reset();impl_->count=0;}
 unsigned RacerVisuals::count() const{return impl_->count;}
+unsigned RacerVisuals::fallbacks() const{return impl_->fallbacks;}
+const char* RacerVisuals::driverClip(unsigned racer) const{return racer>=1&&racer<=11&&impl_->racers[racer-1]?impl_->racers[racer-1]->pose.clipName:nullptr;}
 bool RacerVisuals::load(){
-    reset();const auto& config=K::System::RaceConfig::Instance()->raceScenario();
+    reset();impl_->fallbacks=0;const auto& config=K::System::RaceConfig::Instance()->raceScenario();
     bool valid=true;
     for(unsigned i=1;i<config.playerCount&&i<=11;++i){
-        auto r=std::make_unique<Impl::Racer>();const auto& player=config.players[i];
-        for(const auto& choice:GarageChoices)if(choice.character==unsigned(player.character)&&choice.vehicle==unsigned(player.vehicle)){r->choice=&choice;break;}
-        if(!r->choice){valid=false;continue;}
-        auto model=[&](const char* suffix){auto p=std::make_unique<Model>();char path[160];std::snprintf(path,sizeof path,"models/%s%s.gmdl",r->choice->prefix,suffix);if(!p->load(path))p.reset();return p;};
-        auto bank=[&](const char* suffix,Model* model){auto p=std::make_unique<DriverAnimation>();char path[160];std::snprintf(path,sizeof path,"models/%s%s.dskm",r->choice->prefix,suffix);if(!model||!p->load(path,*model))p.reset();else p->prepareLitSkinning(*model);return p;};
-        r->body=model("body");r->driver=model("driver");r->shadow=model("shadow");r->animation=bank("driver",r->driver.get());
-        const char* wheelNames[]={"tire_fl","tire_fr","tire_rl","tire_rr"};
-        for(unsigned w=0;w<(r->choice->bike?2u:4u);++w){r->wheels[w]=model(wheelNames[w]);valid&=bool(r->wheels[w]);}
-        if(r->choice->bodyAnimation){r->bodyAnimation=bank("body",r->body.get());valid&=bool(r->bodyAnimation);}
-        for(unsigned j=0;j<9;++j)if(r->choice->extrasMask&(1u<<j)){
-            r->extras[j]=model(GarageExtraNames[j]);valid&=bool(r->extras[j]);
-            if(r->choice->extraAnimationMask&(1u<<j)){r->extraAnimation[j]=bank(GarageExtraNames[j],r->extras[j].get());valid&=bool(r->extraAnimation[j]);}
+        const auto& player=config.players[i];
+        const auto* kart=K::Kart::KartObjectManager::Instance()->object(i);
+        auto find=[&](auto&& match)->const GarageChoice*{for(const auto& choice:GarageChoices)if(choice.character==unsigned(player.character)&&match(choice))return &choice;return nullptr;};
+        // The racer drawn with one vehicle's models; ok when every part it needs loaded.
+        auto build=[&](const GarageChoice* choice,bool& ok){
+            auto r=std::make_unique<Impl::Racer>();r->choice=choice;ok=true;
+            auto model=[&](const char* suffix){auto p=std::make_unique<Model>();char path[160];std::snprintf(path,sizeof path,"models/%s%s.gmdl",r->choice->prefix,suffix);if(!p->load(path))p.reset();return p;};
+            auto bank=[&](const char* suffix,Model* model){auto p=std::make_unique<DriverAnimation>();char path[160];std::snprintf(path,sizeof path,"models/%s%s.dskm",r->choice->prefix,suffix);if(!model||!p->load(path,*model))p.reset();else p->prepareLitSkinning(*model);return p;};
+            r->ghost=player.type==K::System::RaceConfig::Player::Type::Ghost;
+            r->body=model("body");r->driver=model("driver");r->shadow=model("shadow");r->animation=bank("driver",r->driver.get());
+            const char* wheelNames[]={"tire_fl","tire_fr","tire_rl","tire_rr"};
+            for(unsigned w=0;w<(r->choice->bike?2u:4u);++w){r->wheels[w]=model(wheelNames[w]);ok&=bool(r->wheels[w]);}
+            if(r->choice->bodyAnimation){r->bodyAnimation=bank("body",r->body.get());ok&=bool(r->bodyAnimation);}
+            for(unsigned j=0;j<9;++j)if(r->choice->extrasMask&(1u<<j)){
+                r->extras[j]=model(GarageExtraNames[j]);ok&=bool(r->extras[j]);
+                if(r->choice->extraAnimationMask&(1u<<j)){r->extraAnimation[j]=bank(GarageExtraNames[j],r->extras[j].get());ok&=bool(r->extraAnimation[j]);}
+            }
+            ok&=bool(r->body)&&bool(r->driver)&&bool(r->animation)&&bool(r->shadow);
+            {
+                const bool inside=kart->param()->stats().driftType==K::Kart::KartParam::Stats::DriftType::Inside_Drift_Bike;
+                r->controller.configure(r->choice->bike,r->choice->vehicle,r->choice->character,inside,0x9e3779b9u*(i+1));
+                if(r->animation)r->controller.registerBank(*r->animation);
+            }
+            return r;
+        };
+        const GarageChoice* drawn=find([&](const GarageChoice& c){return c.vehicle==unsigned(player.vehicle);});
+        bool ok=false;std::unique_ptr<Impl::Racer> r;
+        if(drawn)r=build(drawn,ok);
+        // Port-only safety, no retail counterpart (retail loads every racer's own
+        // vehicle): a racer whose drawn vehicle cannot load is drawn with its weight
+        // class's Standard Kart or Bike, the vehicle type its physics drives, rather
+        // than leaving the race unable to start.
+        if(!ok){
+            const bool bike=kart->param()->isBike();
+            const auto* standard=find([&](const GarageChoice& c){return c.bike==bike&&(c.vehicle<3||(c.vehicle>=18&&c.vehicle<21));});
+            if(standard&&standard!=drawn){r.reset();r=build(standard,ok);impl_->fallbacks+=ok;}
         }
-        valid&=bool(r->body)&&bool(r->driver)&&bool(r->animation)&&bool(r->shadow);
-        if(r->animation)for(unsigned c=0;c<r->animation->count();++c)r->controller.setDuration(r->animation->name(c),r->animation->duration(c));
+        if(!r){valid=false;continue;}
+        valid&=ok;
         impl_->racers[i-1]=std::move(r);++impl_->count;
     }
     resetAnimation();return valid;
 }
 void RacerVisuals::resetAnimation(){
     for(unsigned i=0;i<11;++i)if(auto* r=impl_->racers[i].get()){
-        r->controller.reset();r->pose={};r->bodyClock={};r->extraClocks={};
+        r->controller.reset();r->reader.reset();r->pose={};r->bodyClock={};r->extraClocks={};
         r->vehicle.reset();r->vehicle.step(*K::Kart::KartObjectManager::Instance()->object(i+1));
     }
 }
-void RacerVisuals::step(unsigned tick){
+void RacerVisuals::saveAnimation(){
+    for(unsigned i=0;i<11;++i){
+        const auto* r=impl_->racers[i].get();
+        impl_->saved[i]=r?std::make_unique<Impl::Saved>(Impl::Saved{r->choice,r->controller,r->reader,r->pose,r->vehicle,r->bodyClock,r->extraClocks}):nullptr;
+    }
+}
+void RacerVisuals::restoreAnimation(){
+    for(unsigned i=0;i<11;++i)if(auto& s=impl_->saved[i]){
+        if(auto* r=impl_->racers[i].get();r&&r->choice==s->choice){
+            r->controller=s->controller;r->reader=s->reader;r->pose=s->pose;r->vehicle=s->vehicle;r->bodyClock=s->bodyClock;r->extraClocks=s->extraClocks;
+        }
+        s.reset();
+    }
+}
+void RacerVisuals::step(unsigned tick,const RaceItems& items,const RaceGrid& grid,uint32_t far){
+    const auto* race=K::System::RaceManager::Instance();
     for(unsigned i=0;i<11;++i)if(auto* r=impl_->racers[i].get()){
-        auto* kart=K::Kart::KartObjectManager::Instance()->object(i+1);auto& status=kart->status();
-        r->vehicle.step(*kart);DriverSignals s;
-        s.bike=kart->param()->isBike();s.wheelie=status.onBit(K::Kart::eStatus::Wheelie);
-        s.airborne=status.offBit(K::Kart::eStatus::TouchingGround);s.hopping=status.onBit(K::Kart::eStatus::Hop);
-        s.inCannon=status.onBit(K::Kart::eStatus::InCannon);
-        s.steering=kart->inputs()->currentState().stick.x;s.speed=kart->move()->speed();
-        s.drift=status.onBit(K::Kart::eStatus::DriftManual,K::Kart::eStatus::DriftAuto);s.driftDirection=kart->move()->hopStickX();
-        s.boost=status.onBit(K::Kart::eStatus::Boost);s.trick=status.onBit(K::Kart::eStatus::InATrick,K::Kart::eStatus::ZipperTrick);
-        s.hit=status.onBit(K::Kart::eStatus::InAction,K::Kart::eStatus::Burnout,K::Kart::eStatus::Shocked);
-        s.accelerating=status.onBit(K::Kart::eStatus::Accelerate);s.braking=status.onBit(K::Kart::eStatus::Brake);
-        s.blink=(tick+i*13)%180==0;r->pose=r->controller.step(s);
+        auto* kart=K::Kart::KartObjectManager::Instance()->object(i+1);
+        r->vehicle.step(*kart);
+        // Every racer's driver model runs the retail state machine (0x807CC174).
+        DriverSignals s=r->reader.read(*kart);
+        s.countdown=race&&race->stage()<K::System::RaceManager::Stage::Race;
+        s.finished=grid.finished(i+1);
+        s.far=(far>>(i+1))&1u;
+        // fn_1_27CBF0: a ghost always takes the 1st pose; racers by rank and racer count.
+        s.finishType=r->ghost?0:DriverController::finishTypeForRank(grid.rank(i+1),grid.count());
+        s.inkFrames=inkFrames(items,i+1);
+        readItemEvents(s,items,i+1);
+        r->pose=r->controller.step(s);
         auto advance=[&](DriverAnimation* bank,Impl::Racer::Clock& clock,bool handle){
             if(!bank)return;
             const int clip=handle&&bank->handleDriveClip()>=0?bank->handleDriveClip():!std::strcmp(r->pose.clipName,"dash")&&bank->dashClip()>=0?bank->dashClip():bank->shakeClip();
@@ -136,15 +191,12 @@ void RacerVisuals::Impl::prepareRacer(unsigned i){
         auto frustum=view.model(matrix);
         return bank->apply(model,c,f,tick,-1,0,&frustum);
     };
-    const char* name=r->pose.clipName;float frame=r->pose.frame;
-    if(r->choice->bike&&!std::strncmp(name,"sjump_",6)&&std::strlen(name)==7){const char* bikeNames[]={"sjump_ma","sjump_mb","sjump_mc"};if(name[6]>='a'&&name[6]<='c')name=bikeNames[name[6]-'a'];}
-    if(!std::strcmp(name,"jump")&&r->animation->find(name)<0){name="jump_st";int c=r->animation->find(name);frame=c>=0?r->animation->duration(c)-1:0;}
-    int expression=r->animation->face(name);float faceFrame=frame;
-    if(expression<0){expression=r->animation->face(r->pose.faceName);faceFrame=r->pose.faceFrame;}
+    const auto& pose=r->pose;
+    const DriverAnimation::ClipBlend from{pose.fromClip?r->animation->find(pose.fromClip):-1,pose.fromFrame,pose.weight};
     C3D_Mtx seated=transform;Mtx_Translate(&seated,0,r->choice->seatY,r->choice->seatZ,true);
     auto frustum=view.model(seated);
     out.draw=true;out.body=transform;out.seated=seated;
-    out.driverVisible=!tiny(*r->driver,seated)&&r->animation->apply(*r->driver,r->animation->find(name),frame,tick,expression,faceFrame,&frustum);
+    out.driverVisible=!tiny(*r->driver,seated)&&r->animation->apply(*r->driver,r->animation->find(pose.clipName),pose.frame,from,tick,r->animation->face(pose.faceName),pose.faceFrame,&frustum);
     out.additive=starMaterialColor(items.hud(i+1).star);
     out.bodyVisible=animate(r->bodyAnimation.get(),*r->body,r->bodyClock,false,transform);
     out.wheels=r->vehicle.wheelCount();
@@ -179,11 +231,6 @@ void RacerVisuals::prepare(const Renderer& renderer,const RaceItems& items,Vec3 
 void RacerVisuals::draw(Renderer& renderer,const RaceItems& items,Vec3 viewer,unsigned tick,const Model* playerShadow,const C3D_Mtx* playerTransform){
     auto& d=*impl_;
     if(!d.frame.open){d.openFrame(renderer,items,viewer,tick);d.queued.fill(false);}
-    auto drawSkinned=[&](const DriverAnimation* bank,const Model& model,const C3D_Mtx& matrix){
-        if(bank&&bank->gpuSkinned())renderer.setSkinPalette(bank->palette(),bank->matrixCount(),21);
-        renderer.draw(model,matrix);
-        renderer.setSkinPalette(nullptr,0,12);
-    };
     // Run the racers the worker has not reached yet here, from the back of its
     // queue (it takes them from the front), so this thread waits only for jobs
     // already running. Draws keep their order below.
@@ -193,21 +240,44 @@ void RacerVisuals::draw(Renderer& renderer,const RaceItems& items,Vec3 viewer,un
     for(unsigned i=0;i<11;++i)if(auto* r=d.racers[i].get()){
         if(d.queued[i])jobWorker().finish(d.jobs[i]);else d.prepareRacer(i);
         const auto& out=d.prepared[i];
-        if(out.draw&&r->shadow&&d.frame.view.visible(*r->shadow,out.body))shadows[shadowCount++]={r->shadow.get(),out.body};
+        if(out.draw&&r->shadow&&!r->ghost&&d.frame.view.visible(*r->shadow,out.body))shadows[shadowCount++]={r->shadow.get(),out.body};
     }
     // Submit all racers in one stencil batch: overlaps darken once. Resolve
     // before the racer models, so their own volumes cannot shade the casters.
     renderer.drawShadowVolumes(shadows.data(),shadowCount,.5f);
-    for(unsigned i=0;i<11;++i)if(auto* r=d.racers[i].get()){
-        const auto& out=d.prepared[i];
-        if(!out.draw)continue;
-        renderer.additiveColor=out.additive;
-        if(out.bodyVisible)drawSkinned(r->bodyAnimation.get(),*r->body,out.body);
-        if(out.driverVisible)drawSkinned(r->animation.get(),*r->driver,out.seated);
-        for(unsigned w=0;w<out.wheels;++w)if(out.wheelVisible[w])renderer.draw(*r->wheels[r->vehicle.modelIndex(w)],out.wheel[w]);
-        for(unsigned e=0;e<out.extras;++e){const auto& x=out.extra[e];if(x.visible)drawSkinned(r->extraAnimation[x.part].get(),*r->extras[x.part],x.matrix);}
-        renderer.additiveColor=0;
-    }
+    for(unsigned i=0;i<11;++i)if(auto* r=d.racers[i].get())if(!r->ghost)d.drawRacer(renderer,i);
     d.frame.open=false;
+}
+void RacerVisuals::Impl::drawRacer(Renderer& renderer,unsigned i){
+    auto* r=racers[i].get();const auto& out=prepared[i];
+    if(!r||!out.draw)return;
+    auto drawSkinned=[&](const DriverAnimation* bank,const Model& model,const C3D_Mtx& matrix){
+        if(bank&&bank->gpuSkinned())renderer.setSkinPalette(bank->palette(),bank->matrixCount(),21);
+        renderer.draw(model,matrix);
+        renderer.setSkinPalette(nullptr,0,12);
+    };
+    renderer.additiveColor=out.additive;
+    if(out.bodyVisible)drawSkinned(r->bodyAnimation.get(),*r->body,out.body);
+    if(out.driverVisible)drawSkinned(r->animation.get(),*r->driver,out.seated);
+    for(unsigned w=0;w<out.wheels;++w)if(out.wheelVisible[w])renderer.draw(*r->wheels[r->vehicle.modelIndex(w)],out.wheel[w]);
+    for(unsigned e=0;e<out.extras;++e){const auto& x=out.extra[e];if(x.visible)drawSkinned(r->extraAnimation[x.part].get(),*r->extras[x.part],x.matrix);}
+    renderer.additiveColor=0;
+}
+void RacerVisuals::drawGhosts(Renderer& renderer){
+    auto& d=*impl_;
+    // Retail composites the ghosts as one layer (TT draw path 0, EGG 0x802218EC): drawn
+    // opaque into their own colour and depth capture, then blended where they are nearer
+    // than the scene, writing their depth. Here their depth goes first (modelAlpha 0),
+    // then their colour only where it is the nearest ghost surface.
+    for(const float alpha:{0.f,GhostAlpha}){
+        renderer.modelAlpha=alpha;
+        for(unsigned i=0;i<11;++i)if(auto* r=d.racers[i].get()){
+            // A finished ghost slows, shrinks out (its kart scale) and is then gone: Kinoko
+            // KartMove::calcGhostGoal/calcVanish (0x80578968, 0x805813E8), status bit 83.
+            if(!r->ghost||K::Kart::KartObjectManager::Instance()->object(i+1)->status().onBit(K::Kart::eStatus::Vanished))continue;
+            d.drawRacer(renderer,i);
+        }
+    }
+    renderer.modelAlpha=1;
 }
 }

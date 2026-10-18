@@ -18,11 +18,14 @@ static_assert(sizeof(FlowQuad)==sizeof(Renderer::MaterialQuad)&&std::is_standard
 struct RaceFlowUi::Impl {
  Texture wipe;
  std::array<Texture,FlowResultTextures.size()> results;unsigned loaded=0;bool failed=false;
+ std::array<Texture,2> demo;bool drawingDemo=false; // the card's font and icon
  FlowDrawer drawer;
  Renderer* renderer=nullptr;
  static void submit(const FlowBatch& batch,void* context){
   auto& m=*static_cast<Impl*>(context);
-  Texture* t=batch.texture>=0&&unsigned(batch.texture)<m.results.size()?&m.results[batch.texture]:nullptr;
+  Texture* t=nullptr;
+  if(m.drawingDemo)t=batch.texture>=0&&unsigned(batch.texture)<m.demo.size()?&m.demo[batch.texture]:nullptr;
+  else t=batch.texture>=0&&unsigned(batch.texture)<m.results.size()?&m.results[batch.texture]:nullptr;
   if(batch.texture>=0&&(!t||!t->ready))return;
   // The sampler wrap is set where the quads are drawn (the render thread in races).
   m.renderer->drawScreenMaterialQuads(t,reinterpret_cast<const Renderer::MaterialQuad*>(batch.quads),batch.count,batch.color0,batch.color1,
@@ -42,7 +45,26 @@ bool RaceFlowUi::load(){
  return true;
 }
 
-void RaceFlowUi::unload(){impl_->wipe.reset();unloadResults();}
+void RaceFlowUi::unload(){impl_->wipe.reset();unloadResults();unloadDemo();}
+
+bool RaceFlowUi::loadDemo(int icon){
+ auto& m=*impl_;
+ unloadDemo();
+ if(!m.demo[0].load(FlowDemoTextures[0]))return false;
+ if(icon>=0&&unsigned(icon)+1<FlowDemoTextures.size()&&!m.demo[FlowDemoIconSlot].load(FlowDemoTextures[1+icon])){unloadDemo();return false;}
+ // cup_icon's sampler clamps (GX wrap 0); Texture::load leaves repeat.
+ if(m.demo[FlowDemoIconSlot].ready)C3D_TexSetWrap(&m.demo[FlowDemoIconSlot].gpu,GPU_CLAMP_TO_EDGE,GPU_CLAMP_TO_EDGE);
+ return true;
+}
+void RaceFlowUi::unloadDemo(){for(auto& t:impl_->demo)t.reset();}
+
+void RaceFlowUi::drawDemo(Renderer& renderer,const FlowDemoCard& card){
+ auto& m=*impl_;
+ if(!m.demo[0].ready)return;
+ m.renderer=&renderer;m.drawingDemo=true;
+ m.drawer.drawDemo(card,&Impl::submit,&m);
+ m.drawingDemo=false;
+}
 
 bool RaceFlowUi::loadResultsStep(){
  auto& m=*impl_;

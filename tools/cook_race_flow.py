@@ -307,6 +307,11 @@ def emit_layout(prefix, layout, clips, texture_slot, header):
         header.append(f'    {{"{m["name"]}",{{{{{",".join(str(c) for c in m["c0"])}}}}},{{{{{",".join(str(c) for c in m["c1"])}}}}},'
                       f'{slot},{m["wrap"][0]},{m["wrap"][1]},{{{{{",".join(f(x) for x in m["srt"])}}}}}}},')
     header.append('};')
+    if not clips:
+        # A static layout: no clip, track or key tables.
+        header.append(f'inline constexpr FlowLayoutDef {prefix}Layout{{{prefix}Panes,{len(layout["panes"])},{prefix}Materials,'
+                      f'{len(layout["materials"])},nullptr,0,nullptr,nullptr}};')
+        return
     header.append(f'inline constexpr FlowClip {prefix}Clips[]={{')
     header += clip_lines
     header.append('};')
@@ -461,6 +466,143 @@ def cook_results(out, manifest, header):
     manifest['results'] = {'textures': textures, 'sources': {p.relative_to(ROOT).as_posix(): digest(p) for p in sources}}
 
 
+def bmg_formats(path):
+    """BMG messages with their argument commands as printf conversions: a
+    message argument (control group 2, type 0x11) becomes %s and a number
+    (type 0x10) %u, in argument order. Returns {id: text}."""
+    d = path.read_bytes()
+    offset, blocks = 32, {}
+    for _ in range(struct.unpack_from('>I', d, 12)[0]):
+        blocks[d[offset:offset + 4]] = offset
+        offset += struct.unpack_from('>I', d, offset + 4)[0]
+    info, strings = blocks[b'INF1'], blocks[b'DAT1'] + 8
+    count, stride = struct.unpack_from('>HH', d, info + 8)
+    result = {}
+    for index in range(count):
+        at = strings + struct.unpack_from('>I', d, info + 16 + index * stride)[0]
+        text, arguments = '', [[], []]
+        while d[at:at + 2] != b'\0\0':
+            if d[at:at + 2] == b'\0\x1a':
+                size, group, kind = d[at + 2], d[at + 3], struct.unpack_from('>H', d, at + 4)[0]
+                if group == 2 and kind in (0x10, 0x11):
+                    arguments[kind & 1].append(struct.unpack_from('>H', d, at + 6)[0])
+                    text += '%s' if kind == 0x11 else '%u'
+                at += size
+                continue
+            c = d[at:at + 2].decode('utf-16be')
+            if c == '%':
+                raise ValueError('Literal % in a title-card message')
+            text += c
+            at += 2
+        # None: arguments out of order, which a printf format cannot express.
+        ordered = all(a == list(range(len(a))) for a in arguments)
+        result[struct.unpack_from('>I', d, blocks[b'MID1'] + 16 + index * 4)[0]] = text if ordered else None
+    return result
+
+
+# DemoPage_onInit (PAL 0x80855200) helpers: course -> cup (fn_1_350000,
+# 0x808603B4) and cup -> cup_icon_64x64_common pane (fn_1_3507A0 table at
+# 0x808AF960: icon_03_kinoko, icon_02_flower, icon_07_star, icon_06_oukan,
+# icon_05_koura, icon_01_banana, icon_04_konoha, icon_00_thunder).
+COURSE_CUP = {0: 1, 5: 1, 6: 1, 7: 1, 1: 0, 2: 0, 4: 0, 8: 0, 3: 2, 9: 2, 0xb: 2, 0xf: 2, 10: 3, 0xc: 3, 0xd: 3, 0xe: 3,
+              0x10: 4, 0x14: 4, 0x19: 4, 0x1a: 4, 0x11: 6, 0x15: 6, 0x1d: 6, 0x1e: 6, 0x12: 5, 0x17: 5, 0x1b: 5, 0x1f: 5,
+              0x13: 7, 0x16: 7, 0x18: 7, 0x1c: 7}
+CUP_ICON = [3, 2, 7, 6, 5, 1, 4, 0]
+
+
+def cook_demo(out, manifest, header):
+    """The course preview's title card (DemoPage): demo/course_name and
+    demo/cup_name with the cup_icon_64x64_common icons. Both controls are
+    static: their BRCTR files bind no animation and the variant's animate
+    flag is 0, so the card shows unchanged for the whole Demo section."""
+    sources = []
+    demo = UI / 'Race/demo'
+    course = parse_layout(demo / 'blyt/course_name.brlyt')
+    cup = parse_layout(demo / 'blyt/cup_name.brlyt')
+    icons = parse_layout(demo / 'blyt/cup_icon_64x64_common.brlyt')
+    sources += [demo / 'blyt/course_name.brlyt', demo / 'blyt/cup_name.brlyt', demo / 'blyt/cup_icon_64x64_common.brlyt',
+                demo / 'ctrl/course_name.brctr', demo / 'ctrl/cup_name.brctr']
+    for name, layout in (('course_name', course), ('cup_name', cup)):
+        if controller_clips(demo / f'ctrl/{name}.brctr', layout, demo / 'anim'):
+            raise ValueError(f'{name}.brctr binds animations; the card is drawn static')
+    course_control = controller_variants(demo / 'ctrl/course_name.brctr')['course_name']
+    cup_control = controller_variants(demo / 'ctrl/cup_name.brctr')['cup_name']
+
+    race = bmg_formats(UI / 'Race_U/message/Race.bmg')
+    common = bmg_formats(UI / 'Race_U/message/Common.bmg')
+    sources += [UI / 'Race_U/message/Race.bmg', UI / 'Race_U/message/Common.bmg']
+    # fn_1_3232B4: courses 0x2454 + id, arenas 0x2498 + id.
+    course_names = [common[0x2454 + i] if i < 0x20 else common[0x2498 + i] for i in range(0x2a)]
+    cup_names = [common[0x23f0 + i] for i in range(8)]
+    classes = [race[0x589 + i] for i in range(4)]       # 50cc, 100cc, 150cc, Mirror (0x58C)
+    gp_races = [race[0x582 + i] for i in range(4)]       # "%s %s 1st Race" .. "Final Race"
+    vs_race, battles = race[0x586], [race[0x587], race[0x588]]
+    texts = course_names + cup_names + classes + gp_races + [vs_race] + battles
+    if None in texts:
+        raise ValueError('A title-card message has its arguments out of order')
+    if any(t.count('%s') != 2 or '%u' in t for t in gp_races) or vs_race.count('%s') != 1 or vs_race.count('%u') != 2:
+        raise ValueError('Unexpected title-card message arguments')
+    if any(ord(c) > 127 for t in texts for c in t):
+        raise ValueError('Title-card text outside ASCII')
+
+    textures = []
+    def add(name, image, fmt):
+        textures.append(texture_file(image, name, out, fmt))
+        return len(textures) - 1
+    # Message font attribute 1 (BMGHolder::GetFontIndex): kart_kanji_font, as on the result board.
+    font_path = UI / 'Font/kart_kanji_font.brfnt'
+    sources.append(font_path)
+    characters = ''.join(t.replace('%s', '').replace('%u', '') for t in texts) + '0123456789'
+    info, glyphs = font_glyphs(font_path, characters.replace(' ', '') + ' ')
+    atlas, rects = pack_atlas({c: g['image'] for c, g in glyphs.items()})
+    font_slot = add('flow_demo_font', atlas, 'la4')
+    # One texture per icon pane, in pane order; the card loads only its own.
+    icon_panes = [p for p in icons['panes'] if p['kind'] == 1]
+    if [p['name'][:7] for p in icon_panes] != [f'icon_{i:02d}' for i in range(13)]:
+        raise ValueError('Unexpected cup_icon_64x64_common panes')
+    for i, p in enumerate(icon_panes):
+        tpl = demo / 'timg' / icons['materials'][p['material']]['texture']
+        sources.append(tpl)
+        add(f'flow_demo_icon_{i:02d}', decode_tpl(tpl), 'rgba8')
+
+    def texture_slot(name):
+        if name != 'tt_cup_icon_kinoko_00.tpl':
+            raise ValueError(f'Unexpected title-card texture {name}')
+        return 1   # FlowDemoIconSlot: the card's own icon
+    header += [
+        '// Course preview title card (DemoPage_onInit, PAL 0x80855200; tools/cook_race_flow.py cook_demo):',
+        '// demo/course_name and demo/cup_name, static, shown for the whole Demo section and faded with it.',
+        '// FlowDemoTextures: the card font, then the 13 cup_icon_64x64_common icons in pane order.',
+        f'inline constexpr std::array<const char*,{len(textures)}> FlowDemoTextures{{{{{",".join(chr(34) + t + chr(34) for t in textures)}}}}};',
+        'inline constexpr int8_t FlowDemoIconSlot=1; // material texture slot of cup_icon: the loaded icon',
+        f'inline constexpr FlowGlyph FlowDemoGlyphs[]={{',
+    ]
+    for c in sorted(glyphs):
+        x, y, w, _ = rects[c]
+        g = glyphs[c]
+        header.append(f'    {{u\'{c if c not in chr(39) + chr(92) else chr(92) + c}\',{x},{y},{g["width"]},{g["left"]},{g["advance"]}}},')
+    header.append('};')
+    header.append(f'inline constexpr FlowFont FlowDemoFont{{{font_slot},{atlas.size[0]},{atlas.size[1]},{info["cellH"]},{info["width"]},'
+                  f'{info["height"]},{info["linefeed"]},FlowDemoGlyphs,{len(glyphs)}}}; // kart_kanji_font')
+    emit_layout('FlowCourseName', course, [], texture_slot, header)
+    emit_layout('FlowCupName', cup, [], texture_slot, header)
+    header.append('// course_name.brctr / cup_name.brctr variants (16:9 transform).')
+    for key, v in (('FlowCourseNameControl', course_control), ('FlowCupNameControl', cup_control)):
+        header.append(f'inline constexpr FlowControl {key}{{{f(v["x"])},{f(v["y"])},{f(v["sx"])},{f(v["sy"])},{f(v["delay"])}}};')
+    def strings(values):
+        return ','.join('"' + v.replace('\\', '\\\\').replace('"', '\\"') + '"' for v in values)
+    header.append(f'inline constexpr std::array<const char*,{len(course_names)}> FlowCourseNames{{{{{strings(course_names)}}}}}; // by retail course id')
+    header.append(f'inline constexpr std::array<const char*,8> FlowCupNames{{{{{strings(cup_names)}}}}}; // Common.bmg 0x23F0')
+    header.append(f'inline constexpr std::array<const char*,4> FlowEngineClassText{{{{{strings(classes)}}}}}; // Race.bmg 0x589-0x58C')
+    header.append(f'inline constexpr std::array<const char*,4> FlowGpRaceText{{{{{strings(gp_races)}}}}}; // 0x582-0x585: class, cup')
+    header.append(f'inline constexpr const char* FlowVsRaceText={strings([vs_race])}; // 0x586: class, race, races')
+    header.append(f'inline constexpr std::array<const char*,2> FlowBattleText{{{{{strings(battles)}}}}}; // 0x587, 0x588')
+    header.append('inline constexpr std::array<int8_t,0x20> FlowCourseCup{{' + ','.join(str(COURSE_CUP[i]) for i in range(0x20)) + '}}; // fn_1_350000')
+    header.append('inline constexpr std::array<int8_t,8> FlowCupIcon{{' + ','.join(str(i) for i in CUP_ICON) + '}}; // fn_1_3507A0')
+    header.append('inline constexpr int8_t FlowIconHatena=8,FlowIconBalloon=9,FlowIconCoin=10,FlowIconFlag=11;')
+    manifest['demo'] = {'textures': textures, 'sources': {p.relative_to(ROOT).as_posix(): digest(p) for p in sources}}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, default=ROOT / 'build/race-flow')
@@ -472,6 +614,7 @@ def main():
               '#pragma once', '#include <array>', '#include <cstdint>', 'namespace mkw {']
     cook_wipe(out, manifest, header)
     cook_results(out, manifest, header)
+    cook_demo(out, manifest, header)
     header.append('}')
     (ROOT / 'include/mkw/race_flow_layout.hpp').write_text('\n'.join(header) + '\n')
     (out / 'race-flow.json').write_text(json.dumps(manifest, indent=2) + '\n')

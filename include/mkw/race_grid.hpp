@@ -30,6 +30,19 @@ private:
 class RaceGrid {
 public:
     static constexpr unsigned Capacity=12;
+    // The menu RaceConfig a race runs under (retail RaceConfig +0xB70 game mode, +0xB8C race
+    // number, each player's points +0xD8, GlobalContext +0x74 vehicle rule). Set before the
+    // race scene is created; configure() and reset() read it.
+    struct Session {
+        enum class Mode : uint8_t { GrandPrix=0, Versus=1, TimeTrial=2, Battle=3 };
+        Mode mode=Mode::Versus;
+        unsigned vehicles=2;      // 0 karts only, 1 bikes only, 2 both
+        unsigned raceNumber=0;    // 0: the first race of the Grand Prix / VS set
+        std::array<uint16_t,Capacity> points{}; // every racer's points before this race
+        bool newLineup=true;      // a new set from the menus: draw the CPU racers again
+        uint32_t seed=1;          // the menus' Util::Random seed (retail: the OS time)
+    };
+    void setSession(const Session& session){session_=session;lineupPending_|=session.newLineup;}
     // Call within the RaceConfig init callback. Count=1 keeps a solo race.
     void configure(Kinoko::System::RaceConfig& config,unsigned localGarageChoice,unsigned count=Capacity);
     // Call after every scene creation/restart. Owns copies, never scene pointers.
@@ -44,6 +57,8 @@ public:
     uint16_t bulletNoEndPlayers() const;
     unsigned rank(unsigned player=0) const{return player<count_?ranks_[player]:0;}
     bool finished(unsigned player=0) const{return player<count_&&finished_[player];}
+    // A Time Trial ghost: Kinoko's ghost pad drives it.
+    bool ghost(unsigned player) const{return player<count_&&((ghostMask_>>player)&1);}
     unsigned lap(unsigned player=0) const{return player<count_?laps_[player]:0;}
     unsigned garageChoice(unsigned player) const{return player<count_?choices_[player]:0;}
     unsigned routePoint(unsigned player) const{return player<count_?drivers_[player].segment:EnemyRoute::Invalid;}
@@ -51,8 +66,10 @@ public:
     // QA autopilot: player zero follows the CPU route like the other racers.
     bool driveLocal=false;
     CpuAi& ai(){return ai_;}
+    const CpuAi& ai()const{return ai_;}
 private:
     void forwardBumps();
+    void drawLineup(unsigned localDriver);
     struct Driver {CpuSpeedState speedPolicy{};float nativeSpeed=70,desiredSpeed=70;unsigned segment=EnemyRoute::Invalid,bulletSegment=EnemyRoute::Invalid,stuck=0,reverse=0,recoveries=0,routeTicks=0;Vec3 last{};float bulletTurn=.03f;bool respawning=false,bullet=false;};
     EnemyRoute route_,bulletRoute_;
     CpuAi ai_;
@@ -61,5 +78,10 @@ private:
     std::array<bool,Capacity> finished_{};
     CpuSpeedParam speedParam_{};bool speedParamReady_=false;float lapDistance_=0;
     unsigned count_=1;bool battleArena_=false;
+    uint32_t ghostMask_=0;
+    // The CPU line-up (garage choices), kept for every race of a Grand Prix / VS set.
+    Session session_{};
+    std::array<unsigned,Capacity> lineup_{};
+    unsigned lineupDriver_=~0u;bool lineupPending_=true;
 };
 }

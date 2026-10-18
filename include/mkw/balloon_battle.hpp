@@ -10,6 +10,7 @@ class BalloonBattle {
 public:
     static constexpr unsigned MaxRacers = 12;
     static constexpr unsigned StartingBalloons = 3;
+    static constexpr unsigned MaxBalloons = 5; // fn_1_359D28: `count < 5`
     static constexpr unsigned DurationTicks = 180 * 60;
 
     void reset(unsigned racers) {
@@ -32,6 +33,20 @@ public:
             balloons_[victim] = StartingBalloons;
         }
         ++hits_;
+        return true;
+    }
+
+    /// Star contact and mushroom bumps (retail fn_1_285E0 -> fn_1_359D28): the attacker takes
+    /// one of the victim's balloons, up to MaxBalloons (a sixth one just pops). Only a racer
+    /// that still has balloons can steal.
+    bool stealBalloon(unsigned victim, unsigned attacker) {
+        if (attacker >= count_ || attacker == victim || balloons_[attacker] == 0)
+            return false;
+        const bool gain = balloons_[attacker] < MaxBalloons;
+        if (!loseBalloon(victim, attacker))
+            return false;
+        if (gain)
+            ++balloons_[attacker];
         return true;
     }
 

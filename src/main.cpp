@@ -7,18 +7,26 @@
 #include <mkw/qa.hpp>
 #include <mkw/animation.hpp>
 #include <mkw/driver_controller.hpp>
+#include <mkw/driver_signals.hpp>
 #include <mkw/roster.hpp>
 #include <mkw/garage.hpp>
 #include <mkw/vehicle_animation.hpp>
 #include <mkw/race_grid.hpp>
+#include <mkw/time_trial_ghost.hpp>
+#include <game/item/ItemDirector.hh>
+#include <ctime>
 #include <mkw/balloon_battle.hpp>
 #include <mkw/race_intro.hpp>
 #include <mkw/race_camera.hpp>
 #include <mkw/race_chase_camera.hpp>
 #include <mkw/race_events.hpp>
+#include <mkw/race_flow_draw.hpp>
+#include <mkw/race_flow_layout.hpp>
 #include <mkw/race_flow_ui.hpp>
 #include <mkw/kart_start_effects.hpp>
 #include <mkw/kart_smoke_effects.hpp>
+#include <mkw/kart_terrain_effects.hpp>
+#include <mkw/kart_drift_effects.hpp>
 #include <mkw/race_results.hpp>
 #include <mkw/trick_presentation.hpp>
 #include <mkw/race_items.hpp>
@@ -49,6 +57,7 @@
 #include <mkw/menu_audio_assets.hpp>
 #include <mkw/menu_sound.hpp>
 #include <mkw/race_sound.hpp>
+#include <mkw/sound_ids.hpp>
 #include <mkw/sound_system.hpp>
 #include <mkw/runtime_profile.hpp>
 #include <mkw/presentation_cadence.hpp>
@@ -72,6 +81,7 @@
 #include <game/kart/KartSuspensionPhysics.hh>
 #include <game/kart/KartMove.hh>
 #include <game/kart/KartJump.hh>
+#include <game/kart/KartParam.hh>
 #include <game/field/ObjectDirector.hh>
 #include <cstdio>
 #include <cstdlib>
@@ -121,9 +131,14 @@ static unsigned battleTicks = 0;
 static mkw::BalloonBattle balloonBattle;
 // Kinoko engine class: 0 = 50cc, 1 = 100cc, 2 = 150cc (Grand Prix choice; VS and Time Trials race 150cc).
 static unsigned engineClass = 2;
+// Mirror (Grand Prix): the 150cc race shown flipped left to right.
+static bool mirrorMode = false;
 // Time Trials: one racer, no item boxes, a Triple Mushroom at the start, and
 // the best finish per course kept on the SD card (milliseconds, 0 = none).
 static bool timeTrial = false, newRecord = false;
+// Time Trials ghost page: Race This Ghost (player 1 is the ghost) or Watch
+// the Replay (the ghost drives player 0 and nobody else races).
+static bool raceGhost = false, watchReplay = false;
 static std::array<uint32_t, 32> bestTimes{};
 static constexpr const char *BestTimesPath = "sdmc:/3ds/mkw-3ds/best-times.bin";
 static void loadBestTimes()
@@ -155,6 +170,62 @@ static void saveBestTimes()
     remove(BestTimesPath);
     rename(Temporary, BestTimesPath);
 }
+// Time Trial ghosts (mkw/time_trial_ghost.hpp): the course's fastest ghost
+// races as player 1, and the player's run is recorded as one.
+static mkw::TimeTrialGhost ttGhost;
+static mkw::GhostRecorder ghostRun;
+static unsigned ghostFrame = 0;
+static bool ghostRecording = false, ghostSaved = false, ghostFinishLogged = false;
+// The menus' fastest-ghost list (MenuState::ghostTimes) must be read again.
+static bool ghostTimesStale = true;
+// QA: the recorded kart's position per input frame (pb-XX.trace beside the
+// ghost), compared with the ghost replaying it to find where they part.
+struct GhostTraceRow
+{
+    float x, y, z, speed, qx, qy, qz, qw;
+    uint16_t buttons;
+    int8_t stick;
+    uint8_t trick;
+    uint32_t flags;
+};
+static std::vector<GhostTraceRow> ghostTrace, ghostTraceRef;
+static GhostTraceRow ghostTraceRow(unsigned slot)
+{
+    using St = K::Kart::eStatus;
+    const auto *kart = K::Kart::KartObjectManager::Instance()->object(slot);
+    const auto &in = K::System::KPadDirector::Instance()->playerInput(slot).currentState();
+    const auto &q = kart->dynamics()->mainRot();
+    uint32_t flags = 0;
+    unsigned bit = 0;
+    for (auto s : {St::Accelerate, St::Brake, St::AccelerateStart, St::StickLeft, St::StickRight, St::TouchingGround, St::Hop, St::Boost, St::MushroomBoost,
+                   St::Wheelie, St::InAction, St::InATrick, St::Burnout, St::ChargingSSMT, St::DriftManual, St::AirtimeOver20, St::RampBoost, St::ZipperBoost})
+        flags |= uint32_t(kart->status().onBit(s)) << bit++;
+    return {kart->pos().x, kart->pos().y, kart->pos().z, kart->move()->speed(), q.v.x, q.v.y, q.v.z, q.w,
+            uint16_t(in.buttons & ~4u), int8_t(std::lround(in.stick.x * 7.f)), uint8_t(in.trick), flags};
+}
+static bool ghostDiverged = false;
+static bool ghostDrawable(unsigned character, unsigned vehicle)
+{
+    for (const auto &c : mkw::GarageChoices)
+        if (c.character == character && c.vehicle == vehicle)
+            return true;
+    return false;
+}
+// Watch the Replay: player 0 takes the ghost's driver, vehicle and drift.
+static bool useReplayDriver()
+{
+    if (!ttGhost.load(unsigned(Courses[courseChoice].id), ghostDrawable))
+        return false;
+    for (unsigned i = 0; i < mkw::GarageChoices.size(); ++i)
+        if (mkw::GarageChoices[i].character == ttGhost.header().character && mkw::GarageChoices[i].vehicle == ttGhost.header().vehicle)
+        {
+            driverChoice = i / mkw::VehiclesPerDriver;
+            vehicleChoice = i % mkw::VehiclesPerDriver;
+            automaticDrift = ttGhost.header().automaticDrift;
+            return true;
+        }
+    return false;
+}
 static void formatTime(char *out, size_t size, uint32_t ms) { snprintf(out, size, "%u:%02u.%03u", unsigned(ms / 60000), unsigned(ms / 1000 % 60), unsigned(ms % 1000)); }
 static bool courseAvailable(unsigned i) { return Courses[i].supported && exists("Race/Common.szs") && exists(Courses[i].archive) && exists(Courses[i].models) && (!*Courses[i].sky || exists(Courses[i].sky)); }
 static void showControls(bool ready)
@@ -177,10 +248,27 @@ static void configure(K::System::RaceConfig *config, void *context)
     auto &s = config->raceScenario();
     s.course = Courses[courseChoice].id;
     s.engineClass = u8(engineClass);
+    s.mirror = mirrorMode;
+    s.timeTrial = timeTrial;
     if (fullRace)
     {
         static_cast<mkw::RaceGrid *>(context)->configure(*config, driverChoice * mkw::VehiclesPerDriver + vehicleChoice, timeTrial ? 1 : 12);
+        // RaceConfig +0xB70. Kinoko reads it for the item-vs-object reaction mapping
+        // (ObjectBase::processItemReactions: Time Trial keeps object reactions 5/6, VS and
+        // Battle map them to 3/4) and the Time Trial-only Poihana path.
+        using GameMode = K::System::RaceConfig::Scenario::GameMode;
+        s.gameMode = timeTrial ? GameMode::Time_Trial : balloonBattleMode ? GameMode::Battle : GameMode::Versus;
         s.players[0].driftIsAuto = automaticDrift;
+        // Initialising the ghost pad fills in its character, vehicle and drift.
+        if (timeTrial && (raceGhost || watchReplay) && ttGhost.load(unsigned(s.course), ghostDrawable))
+        {
+            config->setGhost(ttGhost.rkg());
+            const unsigned slot = watchReplay ? 0 : 1;
+            s.players[slot].type = K::System::RaceConfig::Player::Type::Ghost;
+            s.playerCount = u8(slot + 1);
+        }
+        else
+            ttGhost.clear();
         return;
     }
     auto &p = s.players[0];
@@ -670,7 +758,6 @@ int main()
         }
         gfxFlushBuffers();
     }
-    hidSetRepeatParameters(24, 6); // Source menus repeat directions; A/B are edge-triggered.
     if (fullRace)
     {
         mkw::MenuMovieAudio::initialize();
@@ -751,6 +838,10 @@ int main()
     // Set when the race faded out for a section change (the end-of-race menu):
     // the next menu page starts with the scene fader's fade in.
     bool sectionFadeIn = false;
+    // MainMenuPage_onActivate (PAL 0x80850DB0) clears RaceConfig (0x8052E454
+    // stores race number +0x177C = 0) and the VS race count (GlobalContext
+    // +0x60 = 0): reaching the Mode or Main Menu page ends a GP or VS set.
+    bool menuEndedSet = false;
     auto runMenu = [&]()
     {
         renderer.frameSync = true;
@@ -802,12 +893,17 @@ int main()
             report("FAIL menu asset thread; loading on demand");
         mkw::pack::open();
         auto last = svcGetSystemTick();
+        u32 lastMenuRefresh = C3D_FrameCounter(0);
+        double menuStall = 0; // seconds without a display refresh
+        bool menuFadingOut = false;
         double pending = 0;
         unsigned menuSourceTicks = 0;
         mkw::PresentationCadence menuPresentation;
         menuPresentation.setTicksPerSlot(new3ds && !renderer.stereoWanted() ? 1u : 2u);
         int activeAudio = -1;
         mkw::MenuTransition transition;
+        mkw::UiDirectionRepeat directions;
+        u32 lastInputRefresh = C3D_FrameCounter(0);
         if (sectionFadeIn)
         {
             sectionFadeIn = false;
@@ -828,8 +924,43 @@ int main()
         // frame (race or black) stays on screen instead of a partial page.
         bool revealed = false;
         unsigned stable = 0, heldFrames = 0;
+        // Neighbour residency lists are composed on the second core (JobWorker),
+        // one job at a time: the same composition as residentQuads(state, nullptr).
+        struct PrefetchCompose
+        {
+            mkw::Job job;
+            mkw::MenuState state;
+            mkw::UiRaceView race;
+            std::vector<mkw::UiQuad> quads;
+            unsigned index = 0, generation = 0;
+            bool busy = false;
+        } prefetchCompose;
+        unsigned prefetchGeneration = 0;
+        // Takes a finished job's list; wait: also finish one still running.
+        auto collectPrefetch = [&](bool wait)
+        {
+            if (!prefetchCompose.busy || (!wait && prefetchCompose.job.state.load(std::memory_order_acquire) != 2))
+                return;
+            mkw::jobWorker().finishAll();
+            prefetchCompose.busy = false;
+            if (prefetchCompose.generation == prefetchGeneration && prefetchCompose.index == prefetchResident.size() && prefetchResident.size() < prefetchStates.size())
+                prefetchResident.push_back(std::move(prefetchCompose.quads));
+        };
+        // A neighbour's list for the same residency key holds the same sprites
+        // and streams. Not on the cup pages: their captions follow the focus
+        // animation (UiFocusView::changing), which the key does not include.
+        auto prefetchedList = [&](const ResidencyKey &wanted, mkw::UiPage page) -> const std::vector<mkw::UiQuad> *
+        {
+            if (page == mkw::UiPage::Cup || page == mkw::UiPage::BattleCup)
+                return nullptr;
+            for (size_t i = 0; i < prefetchResident.size(); ++i)
+                if (residencyKey(prefetchStates[i], nullptr) == wanted)
+                    return &prefetchResident[i];
+            return nullptr;
+        };
         auto leave = [&](mkw::UiAction action)
         {
+            collectPrefetch(true);
             loader.stop();
             renderer.waitForGpu();
             menuAudio.close();
@@ -849,9 +980,19 @@ int main()
                 releaseRace();
             menuProfile->begin(unsigned(menu.page), transition.active());
             hidScanInput();
-            unsigned down = hidKeysDown();
-            unsigned navigation = down | hidKeysDownRepeat();
-            mkw::UiInput input{bool(navigation & (KEY_DUP | KEY_CPAD_UP)), bool(navigation & (KEY_DDOWN | KEY_CPAD_DOWN)), bool(navigation & (KEY_DLEFT | KEY_CPAD_LEFT)), bool(navigation & (KEY_DRIGHT | KEY_CPAD_RIGHT)), bool(down & KEY_A), bool(down & KEY_B), bool(down & KEY_START), bool(down & KEY_Y)};
+            unsigned down = hidKeysDown(), held = hidKeysHeld();
+            // Directions repeat by held 60 Hz frames (UiDirectionRepeat), not passes.
+            const u32 inputRefresh = C3D_FrameCounter(0);
+            mkw::UiInput input = directions.step(held & (KEY_DUP | KEY_CPAD_UP), held & (KEY_DDOWN | KEY_CPAD_DOWN), held & (KEY_DLEFT | KEY_CPAD_LEFT), held & (KEY_DRIGHT | KEY_CPAD_RIGHT), std::min<u32>(inputRefresh - lastInputRefresh, 6));
+            lastInputRefresh = inputRefresh;
+            input.accept = down & KEY_A;
+            input.back = down & KEY_B;
+            input.start = down & KEY_START;
+            input.switchType = down & KEY_Y;
+            // Inputs are dropped while a page animates; its activation restarts
+            // the hold count, so a direction still held moves at once.
+            if (transition.active() || !revealed)
+                directions.reset();
             if (!revealed)
                 input = {};
             if (autoplay)
@@ -860,21 +1001,53 @@ int main()
                 if (autopilot->finished())
                     return leave(mkw::UiAction::Exit);
             }
+            // Time Trials: each course's fastest ghost decides the ghost page's
+            // options. Read once per menu session (from the mode choice on) and
+            // again after a ghost save, not on every cup or course visit.
+            if (menu.page == mkw::UiPage::Mode)
+                ghostTimesStale = true;
+            if (ghostTimesStale && menu.selection.mode == mkw::UiMode::TimeTrials && (menu.page == mkw::UiPage::Cup || menu.page == mkw::UiPage::Course))
+            {
+                ghostTimesStale = false;
+                std::array<uint32_t, 64> times{};
+                mkw::TimeTrialGhost::fastest(times, ghostDrawable);
+                for (unsigned i = 0; i < menu.ghostTimes.size() && i < CourseCount; ++i)
+                    menu.ghostTimes[i] = times[unsigned(Courses[i].id) % times.size()];
+            }
             const auto beforeInput = menu;
             auto action = transition.input(menu, input);
             menuSound.input(beforeInput, menu, input, action);
+            if (menu.page == mkw::UiPage::Mode || menu.page == mkw::UiPage::MainMenu)
+                menuEndedSet = true;
             if (action != mkw::UiAction::None)
             {
                 if (action == mkw::UiAction::StartRace || action == mkw::UiAction::RestartRace)
                     menuSound.leave();
                 return leave(action);
             }
+            // Whole display refreshes (at most six). Passes between refreshes add
+            // nothing; the clock counts only after 0.1 s without one (a stalled
+            // display). Emulators run the system tick ahead of the display.
             auto now = svcGetSystemTick();
-            pending += std::min(double(now - last) / SYSCLOCK_ARM11, .1) * 60;
+            const double delta = double(now - last) / SYSCLOCK_ARM11;
             last = now;
+            const u32 menuRefresh = C3D_FrameCounter(0), menuRefreshes = menuRefresh - lastMenuRefresh;
+            lastMenuRefresh = menuRefresh;
+            if (menuRefreshes)
+            {
+                pending += double(std::min<u32>(menuRefreshes, 6));
+                menuStall = 0;
+            }
+            else if ((menuStall += delta) > .1)
+            {
+                pending += std::min(menuStall, .1) * 60;
+                menuStall = 0;
+            }
             unsigned ticks = unsigned(pending);
             pending -= ticks;
             menuSourceTicks += ticks;
+            // Menu audio steps once per 60 Hz frame too (its fades count frames).
+            const unsigned audioTicks = ticks;
             // While the outgoing page is visible, the logical state is the page
             // that appears next: start its loads now and gate its entrance.
             if (transition.exiting())
@@ -882,7 +1055,11 @@ int main()
                 const auto key = residencyKey(menu, nullptr);
                 if (!incomingKeyed || !(key == incomingKey))
                 {
-                    residentQuads(menu, nullptr, incomingResident);
+                    collectPrefetch(true);
+                    if (const auto *list = prefetchedList(key, menu.page))
+                        incomingResident = *list;
+                    else
+                        residentQuads(menu, nullptr, incomingResident);
                     incomingKey = key;
                     incomingKeyed = true;
                 }
@@ -906,6 +1083,15 @@ int main()
             transition.advance(menu, ticks, incomingReady);
             if (transition.holding())
                 menuProfile->hold();
+            // fn_1_AC34 (PAL 0x8051AFE8) starts the section fade-out and
+            // MenuRSARPlayer::Stop on the same frame: sound fades with the picture.
+            {
+                const auto fade = transition.view();
+                const bool fadingOut = fade.active && fade.section && !fade.entering && fade.elapsed >= fade.exitHold;
+                if (fadingOut && !menuFadingOut)
+                    menuSound.fadeOut();
+                menuFadingOut = fadingOut;
+            }
             menuModels.advance(ticks);
             action = transition.takeAction();
             if (action != mkw::UiAction::None)
@@ -920,7 +1106,17 @@ int main()
             const auto key = residencyKey(visual, motion.underlay);
             if (!visualKeyed || !(key == visualKey))
             {
-                residentQuads(visual, &motion, visualResident);
+                collectPrefetch(true);
+                // The same set without composing it again: the incoming page's
+                // list, or a neighbour's (no transition view; see prefetchedList).
+                // The view's other fields are read only while it is active.
+                const bool cupPage = visual.page == mkw::UiPage::Cup || visual.page == mkw::UiPage::BattleCup;
+                if (!motion.underlay && incomingKeyed && key == incomingKey && !cupPage)
+                    visualResident = incomingResident;
+                else if (const auto *list = !motion.active && !motion.underlay ? prefetchedList(key, visual.page) : nullptr)
+                    visualResident = *list;
+                else
+                    residentQuads(visual, &motion, visualResident);
                 visualKey = key;
                 visualKeyed = true;
                 // The user moved on: queued prefetches for the old state are stale.
@@ -937,9 +1133,13 @@ int main()
                 if (!prefetched)
                 {
                     prefetched = true;
+                    ++prefetchGeneration; // a job still running belongs to the old list
                     prefetchStates.clear();
                     prefetchResident.clear();
-                    const mkw::UiInput moves[] = {{false, false, false, false, true}, {false, false, false, false, false, true}, {true}, {false, true}, {false, false, true}, {false, false, false, true}};
+                    // Adjacent selections first (left, right, up, down): their name
+                    // texts and models load in this order, ahead of the next and
+                    // previous pages (accept, back).
+                    const mkw::UiInput moves[] = {{false, false, true}, {false, false, false, true}, {true}, {false, true}, {false, false, false, false, true}, {false, false, false, false, false, true}};
                     for (const auto &move : moves)
                     {
                         auto next = menu;
@@ -948,14 +1148,38 @@ int main()
                             continue;
                         if (next.page == menu.page && next.cursor == menu.cursor)
                             continue;
+                        if (std::any_of(prefetchStates.begin(), prefetchStates.end(), [&](const mkw::MenuState &known)
+                                        { return known.page == next.page && known.cursor == next.cursor; }))
+                            continue;
                         prefetchStates.push_back(next);
                     }
                 }
-                // One neighbour per frame keeps composition out of any single frame.
-                if (prefetchResident.size() < prefetchStates.size())
+                // One neighbour at a time, composed on the second core; without
+                // the worker, one per frame here as before.
+                collectPrefetch(false);
+                if (!prefetchCompose.busy && prefetchResident.size() < prefetchStates.size())
                 {
-                    prefetchResident.emplace_back();
-                    residentQuads(prefetchStates[prefetchResident.size() - 1], nullptr, prefetchResident.back());
+                    if (mkw::jobWorker().running())
+                    {
+                        prefetchCompose.state = prefetchStates[prefetchResident.size()];
+                        prefetchCompose.race = uiRace;
+                        prefetchCompose.index = unsigned(prefetchResident.size());
+                        prefetchCompose.generation = prefetchGeneration;
+                        prefetchCompose.job.reset([](void *context)
+                                                  {
+                            auto &c = *static_cast<PrefetchCompose *>(context);
+                            mkw::UiTransitionView view{};
+                            view.preload = true;
+                            view.selectedControl = mkw::uiSelectedMenuControl(c.state);
+                            mkw::composeMenu(c.state, c.race, c.quads, view); }, &prefetchCompose);
+                        prefetchCompose.busy = true;
+                        mkw::jobWorker().submit(prefetchCompose.job);
+                    }
+                    else
+                    {
+                        prefetchResident.emplace_back();
+                        residentQuads(prefetchStates[prefetchResident.size() - 1], nullptr, prefetchResident.back());
+                    }
                 }
                 for (size_t i = 0; i < prefetchResident.size(); ++i)
                 {
@@ -980,7 +1204,7 @@ int main()
             // the THP opening keeps its own stream. The cooked title WAV remains the
             // fallback when the sound archive is missing.
             const bool engineAudio = mkw::SoundSystem::instance().available();
-            menuSound.frame(visual, revealed);
+            menuSound.frame(visual, revealed, audioTicks);
             // QA: sound engine health as profiler events (in memory; written at the end).
             if (menuProfile->enabled() && engineAudio)
             {
@@ -1007,6 +1231,8 @@ int main()
                     menuAudio.setVolume(mkw::UiTitleMusicVolume);
                 }
                 last = svcGetSystemTick();
+                lastMenuRefresh = C3D_FrameCounter(0);
+                menuStall = 0;
                 pending = 0;
             }
             menuProfile->mark(MenuStage::Audio);
@@ -1226,8 +1452,8 @@ int main()
         return ok ? 0 : 4;
     }
     auto applySelection = [&]()
-    {timeTrial=menu.selection.mode==mkw::UiMode::TimeTrials;balloonBattleMode=menu.selection.mode==mkw::UiMode::Battle&&!menu.selection.coinRunners;newRecord=false;if(timeTrial)loadBestTimes();courseChoice=balloonBattleMode?CourseCount-10+menu.selection.battleStage:menu.selection.course;driverChoice=menu.selection.driver;vehicleChoice=menu.selection.vehicle;automaticDrift=menu.selection.automatic;
-        engineClass=menu.selection.mode==mkw::UiMode::GrandPrix&&menu.selection.engineClass==mkw::UiEngineClass::CC50?0:menu.selection.mode==mkw::UiMode::GrandPrix&&menu.selection.engineClass==mkw::UiEngineClass::CC100?1:2; };
+    {timeTrial=menu.selection.mode==mkw::UiMode::TimeTrials;raceGhost=timeTrial&&menu.selection.ghostChoice==0;watchReplay=timeTrial&&menu.selection.ghostChoice==1;balloonBattleMode=menu.selection.mode==mkw::UiMode::Battle&&!menu.selection.coinRunners;newRecord=false;if(timeTrial)loadBestTimes();courseChoice=balloonBattleMode?CourseCount-10+menu.selection.battleStage:menu.selection.course;driverChoice=menu.selection.driver;vehicleChoice=menu.selection.vehicle;automaticDrift=menu.selection.automatic;if(watchReplay)watchReplay=useReplayDriver();
+        engineClass=menu.selection.mode==mkw::UiMode::GrandPrix&&menu.selection.engineClass==mkw::UiEngineClass::CC50?0:menu.selection.mode==mkw::UiMode::GrandPrix&&menu.selection.engineClass==mkw::UiEngineClass::CC100?1:2;mirrorMode=menu.selection.mode==mkw::UiMode::GrandPrix&&menu.selection.engineClass==mkw::UiEngineClass::Mirror; };
     if (fullRace)
     {
         if (runMenu() != mkw::UiAction::StartRace)
@@ -1340,10 +1566,16 @@ int main()
     bool wasTricking = false, wasBoosting = false;
     uint16_t lastMushroomUses = 0;
     mkw::TrickPresentation trickModel; // the local driver model's trick gate (sparkle + SE_VCL_JUMP_ACTION)
+    mkw::DriverSignalReader driverSignals; // the player's kart as its driver model reads it
+    uint32_t driverFar = 0;                // bit i: racer i's driver beyond its LOD radius (DriverSignals::far)
     // Course preview before every race. While it plays Kinoko keeps simulating
     // but holds its intro stage; its own 172 frames then lead into the countdown.
     mkw::RaceIntro intro;
     unsigned introTick = 0, introCaptured = ~0u;
+    // The Demo section around the preview: scene fades, skip rule, title card.
+    mkw::DemoSection demo;
+    bool demoOk = false; // a new A press since the last 60 Hz step
+    mkw::FlowDemoCard demoCard;
     // Race camera director (src/race_camera.cpp): start pan, out-of-bounds
     // holds and wipe, respawn re-seat, goal and KMP TV cameras. It reads the
     // simulation after each step and never writes it.
@@ -1374,38 +1606,59 @@ int main()
         unsigned race = 0, driver = ~0u;
         std::array<uint16_t, 12> points{};
         bool next = false;
+        // The set's mode and class (RaceConfig +0x1760 / +0x175C, Mirror as 3).
+        mkw::UiMode mode = mkw::UiMode::GrandPrix;
+        unsigned engine = ~0u;
     };
     auto vsSetStorage = std::make_unique<VsSet>();
     auto &vsSet = *vsSetStorage;
     bool nextRaceQueued = false;
+    // RaceMenuPage_onButtonFront's Next (PAL 0x8085A0F4, case 7) calls
+    // RaceConfig::update (0x80531CE4: race number +0x177C + 1); the next
+    // initRace (0x805302C4 -> 0x8052FB90) zeroes the points only on race 0.
+    // The port's menus can also back out of a set to another mode or class.
     auto startVsRace = [&](bool restart)
     {
         if (balloonBattleMode)
             return;
         if (restart)
             return;
-        if (vsSet.next && vsSet.race < mkw::RaceResultsFlow::VSRaces && vsSet.driver == driverChoice)
+        const unsigned engine = mirrorMode ? 3u : engineClass;
+        if (vsSet.next && !menuEndedSet && vsSet.race < mkw::RaceResultsFlow::VSRaces && vsSet.driver == driverChoice &&
+            vsSet.mode == menu.selection.mode && vsSet.engine == engine)
             ++vsSet.race;
         else
         {
             vsSet = VsSet{};
             vsSet.race = 1;
             vsSet.driver = driverChoice;
+            vsSet.mode = menu.selection.mode;
+            vsSet.engine = engine;
         }
         vsSet.next = false;
+        menuEndedSet = false;
     };
     vsSet.race = 1;
     vsSet.driver = driverChoice; // the first race was chosen above
+    vsSet.mode = menu.selection.mode;
+    vsSet.engine = mirrorMode ? 3u : engineClass;
+    menuEndedSet = false;
+    // The race's audio frame, filled each tick: its cues stay in it until a push
+    // reaches the audio thread, so beginRaceSound starts every race with it clear.
+    static mkw::RaceAudioFrame raceAudioActors;
     struct FlowState
     {
         unsigned stage = 0;
         bool preview = false, fall = false, respawn = false, finished = false;
     } flow;
+    // X (Mario Kart 7's rear view) or ZL held: the look-behind camera.
+    bool lookBehind = false;
     auto fillCameraInput = [&](mkw::RaceCameraInput &in)
     {
         auto *kart = K::Kart::KartObjectManager::Instance()->object(0);
         auto *race = K::System::RaceManager::Instance();
-        const auto &params = kart->param()->camera();
+        // The chase camera's entry (Balloon Battle's own) and boost add; chaseCamera.update fills the chase fields.
+        const auto &params = chaseCamera.param();
         const auto &status = kart->status();
         in.chaseEye = chaseCamera.eye();
         in.chasePivot = chaseCamera.pivot();
@@ -1414,7 +1667,7 @@ int main()
         in.cameraDistY = kart->cameraDistY();
         in.targetPosY = params.targetPosY;
         in.cameraFov = params.fov;
-        in.boostFov = boostFov;
+        in.boostFov = chaseCamera.boostFov();
         in.stage = unsigned(race->stage());
         in.previewActive = intro.active();
         in.beforeRespawn = status.onBit(K::Kart::eStatus::BeforeRespawn);
@@ -1432,8 +1685,8 @@ int main()
         size_t size = 0;
         const void *kmp = resources->getFile("course.kmp", &size, K::System::ArchiveId::Course);
         cameraDirector->setCourse(cameraCourse->load(kmp, size) ? cameraCourse.get() : nullptr);
-        // RaceCameraMgr::ctor (PAL 0x805A8468): race_camera.bcp, else start_camera.bcp.
-        const void *bcp = resources->getFile("race_camera.bcp", &size, K::System::ArchiveId::Core);
+        // RaceCameraMgr::ctor (PAL 0x805A8468): race_camera.bcp (battle_camera.bcp in a battle), else start_camera.bcp.
+        const void *bcp = resources->getFile(balloonBattleMode ? "battle_camera.bcp" : "race_camera.bcp", &size, K::System::ArchiveId::Core);
         if (!bcp || !startPan.load(bcp, size))
         {
             bcp = resources->getFile("start_camera.bcp", &size, K::System::ArchiveId::Core);
@@ -1443,8 +1696,12 @@ int main()
         auto *kart = K::Kart::KartObjectManager::Instance()->object(0);
         K::EGG::Vector3f startPos, startAngles;
         K::System::RaceManager::Instance()->findKartStartPoint(startPos, startAngles, 0);
+        chaseCamera.setup(*kart, balloonBattleMode);
         chaseCamera.init(*kart);
         boostFov = 0;
+        // RaceCamera::Init (PAL 0x805A2034 -> OnRespawn 0x805A49BC) runs on a new camera:
+        // nothing the chase camera wrote last race (explosion, half-pipe, falling) carries over.
+        cameraInput = mkw::RaceCameraInput{};
         fillCameraInput(cameraInput);
         cameraDirector->reset(startPan, vec(startPos), vec(startAngles), cameraInput);
         flow = {};
@@ -1460,7 +1717,8 @@ int main()
     auto fillResults = [&]()
     {
         const auto &scenario = K::System::RaceConfig::Instance()->raceScenario();
-        const unsigned n = std::min(raceGrid.count(), 12u);
+        // Time Trials list the player alone, not the ghost.
+        const unsigned n = timeTrial ? 1u : std::min(raceGrid.count(), 12u);
         std::array<unsigned, 12> order{};
         for (unsigned i = 0; i < n; ++i)
             order[i] = i;
@@ -1486,21 +1744,63 @@ int main()
         // Time Trials: Next returns to the course choice; no set to finish.
         results.fill(rows.data(), n, balloonBattleMode||(!timeTrial && vsSet.race >= mkw::RaceResultsFlow::VSRaces));
     };
-    auto startIntro = [&]()
+    // DemoPage_onInit (PAL 0x80855200): the course name, and the cup line by mode.
+    auto buildDemoCard = [&]()
+    {
+        demoCard = {};
+        const unsigned course = unsigned(Courses[courseChoice].id);
+        demoCard.course = course < mkw::FlowCourseNames.size() ? mkw::FlowCourseNames[course] : nullptr;
+        const char *engine = mkw::FlowEngineClassText[mirrorMode ? 3 : std::min(unsigned(engineClass), 2u)];
+        if (menu.selection.mode == mkw::UiMode::Battle)
+        {
+            const bool coin = menu.selection.coinRunners;
+            demoCard.icon = coin ? mkw::FlowIconCoin : mkw::FlowIconBalloon;
+            std::snprintf(demoCard.cup, sizeof demoCard.cup, "%s", mkw::FlowBattleText[coin ? 1 : 0]);
+        }
+        else if (menu.selection.mode == mkw::UiMode::GrandPrix && course < mkw::FlowCourseCup.size())
+        {
+            const int cup = mkw::FlowCourseCup[course];
+            demoCard.icon = mkw::FlowCupIcon[cup];
+            std::snprintf(demoCard.cup, sizeof demoCard.cup, mkw::FlowGpRaceText[std::min(std::max(vsSet.race, 1u), 4u) - 1], engine, mkw::FlowCupNames[cup]);
+        }
+        else
+        {
+            demoCard.icon = mkw::FlowIconFlag;
+            std::snprintf(demoCard.cup, sizeof demoCard.cup, mkw::FlowVsRaceText, engine, vsSet.race, mkw::RaceResultsFlow::VSRaces);
+        }
+    };
+    // Scene enter. `demoSection`: the Demo section with the course preview (GP,
+    // VS, Battle and Next Race); Time Trials and Restart (cameraMode 0) enter
+    // the race section directly.
+    auto startIntro = [&](bool demoSection)
     {
         intro.stop();
+        flowUi.unloadDemo();
         if (!fullRace)
             return;
-        size_t size = 0;
-        const void *kmp = K::System::ResourceManager::Instance()->getFile("course.kmp", &size, K::System::ArchiveId::Course);
-        if (intro.load(kmp, size))
-            intro.start();
+        if (demoSection)
+        {
+            size_t size = 0;
+            const void *kmp = K::System::ResourceManager::Instance()->getFile("course.kmp", &size, K::System::ArchiveId::Course);
+            if (intro.load(kmp, size))
+                intro.start();
+        }
+        demo.enter(intro.active());
+        if (intro.active())
+        {
+            buildDemoCard();
+            if (!flowUi.loadDemo(demoCard.icon))
+                report("Course title card unavailable");
+        }
         LOGF("course preview %s: %u frames", intro.active() ? "playing" : "absent", intro.frames());
         introTick = 0;
         introCaptured = ~0u;
+        demoOk = false;
         K::System::RaceManager::Instance()->setIntroHeld(intro.active());
         startCamera();
     };
+    // The title card's textures stay until startIntro / RaceFlowUi::unload free them
+    // after waitForGpu: the render thread may still replay this frame's drawDemo.
     auto endIntro = [&]()
     {intro.stop();K::System::RaceManager::Instance()->setIntroHeld(false); };
     // Race audio (docs/AUDIO_SOURCE.md "Race"): after the race's graphics, so its
@@ -1513,19 +1813,26 @@ int main()
         mkw::RaceSound::Setup setup;
         setup.course = unsigned(Courses[courseChoice].id);
         setup.engineClass = engineClass;
-        setup.mode = setup.course >= 0x20 && setup.course < 0x2a ? 3 : 1;
+        setup.mirror = mirrorMode;
+        // RaceConfig game mode: 0 GP, 1 VS, 2 TT, 3 battle (start fanfare, goal music, finish voice).
+        setup.mode = setup.course >= 0x20 && setup.course < 0x2a ? 3 : menu.selection.mode == mkw::UiMode::GrandPrix ? 0 : timeTrial ? 2 : 1;
         setup.preview = intro.active();
         setup.racers = std::min<unsigned>(scenario.playerCount, 12);
         for (unsigned i = 0; i < setup.racers; ++i)
         {
             const auto &p = scenario.players[i];
-            setup.racer[i] = {uint8_t(p.character), uint8_t(p.vehicle), p.type == K::System::RaceConfig::Player::Type::Local};
+            setup.racer[i] = {uint8_t(p.character), uint8_t(p.vehicle), p.type == K::System::RaceConfig::Player::Type::Local || (i == 0 && watchReplay)};
         }
         raceSound.quit();
         mkw::SoundSystem::instance().stop();
         if (mkw::SoundSystem::instance().start())
             menuSound.resetAfterEngineRestart();
         mkw::resetRaceAudioObjects();
+        // Cues the last race left undelivered (an object hit whose slot now means
+        // another object, a fall splash) would play on this race's first frame.
+        // Rebuilt in place: the frame is too large for a temporary on this stack.
+        raceAudioActors.~RaceAudioFrame();
+        new (&raceAudioActors) mkw::RaceAudioFrame();
         raceSound.begin(setup);
         raceSound.prepareScene();
     };
@@ -1576,8 +1883,15 @@ int main()
     auto remoteSmokeStorage = std::make_unique<mkw::RemoteKartSmoke>();
     auto &remoteSmoke = *remoteSmokeStorage;
     mkw::KartLandingEffects landingEffects;
+    // KartEffect's per-wheel floor effects (mkw/kart_terrain_effects.hpp).
+    auto terrainEffectsStorage = std::make_unique<mkw::KartTerrainEffects>();
+    auto &terrainEffects = *terrainEffectsStorage;
+    // KartEffect's drift group for each racer no local player drives (mkw/kart_drift_effects.hpp).
+    auto kartDriftStorage = std::make_unique<mkw::KartDriftEffects>();
+    auto &kartDrift = *kartDriftStorage;
     auto resetKartFx = [&]()
-    {for(unsigned i=0;i<kartFx.size();++i)kartFx[i].reset(i,i==0);kartFxLod=KartFxLod{};playerSmoke={};remoteSmoke.reset();landingEffects.reset(); };
+    {for(unsigned i=0;i<kartFx.size();++i)kartFx[i].reset(i,i==0);kartFxLod=KartFxLod{};playerSmoke={};remoteSmoke.reset();landingEffects.reset();kartDrift.reset();
+     terrainEffects.reset(K::System::RaceConfig::Instance() ? unsigned(K::System::RaceConfig::Instance()->raceScenario().course) : ~0u); };
     resetKartFx();
     bool raceVfxReady = false;
     auto loadRaceVfx = [&]()
@@ -1603,6 +1917,41 @@ int main()
             report(failure);
             return false;
         }
+        // The remote racers' drift emitters (mkw/kart_drift_effects.hpp) come from the full
+        // RKRace table that tools/cook_effect_archives.py puts on the SD card, appended to the
+        // race table when race-effects.bin lacks them. A refused merge keeps the race table.
+        if (!kartDrift.bind(raceEffects))
+        {
+            auto readAsset = [](const char *path, std::vector<uint8_t> &out)
+            {
+                if (mkw::pack::read(path, out))
+                    return true;
+                FILE *f = fopen(path, "rb");
+                if (!f)
+                    return false;
+                const long size = fseek(f, 0, SEEK_END) == 0 ? ftell(f) : -1;
+                bool ok = size > 0 && size <= 2 * 1024 * 1024 && fseek(f, 0, SEEK_SET) == 0;
+                if (ok)
+                {
+                    out.resize(size_t(size));
+                    ok = fread(out.data(), 1, out.size(), f) == out.size();
+                }
+                fclose(f);
+                return ok;
+            };
+            std::vector<uint8_t> table, archive;
+            unsigned appended = 0;
+            if (readAsset("textures/race-effects.bin", table) && readAsset("textures/fx/common_rkrace/common_rkrace_1.refx", archive))
+                appended = mkw::appendRefxEmitters(table, archive, mkw::KartDriftEffects::Names, mkw::KartDriftEffects::FxCount);
+            if (appended && !raceEffects.loadMemory(table.data(), table.size()) && !raceEffects.load("textures/race-effects.bin"))
+            {
+                report("FAIL race-effects.bin reload");
+                return false;
+            }
+            const bool bound = kartDrift.bind(raceEffects);
+            if (kQa)
+                LOGF("cpu drift fx: appended=%u emitters from common_rkrace_1 specs=%s", appended, bound ? "all" : "missing");
+        }
         for (unsigned i = 0; i < raceEffects.textures.size(); ++i)
         {
             auto &texture = (*effectTextures)[i];
@@ -1610,7 +1959,11 @@ int main()
                 continue;
             const char *name = raceEffects.textures[i].name;
             char path[64];
-            snprintf(path, sizeof path, "textures/%s.t3x", name);
+            // Textures of the appended archive emitters stay in the archive's folder.
+            if (!std::strncmp(name, "fx_common_rkrace_", 17))
+                snprintf(path, sizeof path, "textures/fx/common_rkrace/%s.t3x", name);
+            else
+                snprintf(path, sizeof path, "textures/%s.t3x", name);
             bool vram = false;
             for (const char *slip : {"fx_rk_wave0", "fx_rk_wave5_5", "fx_rk_wave2"})
                 vram |= !std::strcmp(name, slip);
@@ -1646,6 +1999,11 @@ int main()
         if (!landingEffects.bind(raceEffects))
         {
             report("FAIL required landing smoke roots");
+            return false;
+        }
+        if (!terrainEffects.bind(raceEffects))
+        {
+            report("FAIL required floor dust root");
             return false;
         }
         raceVfxReady = true;
@@ -1739,25 +2097,20 @@ int main()
         char path[128];
         snprintf(path, sizeof path, "models/%sdriver.dskm", prefix);
         bool ok = driver && driverAnimation.load(path, *driver);
-        driverController.reset();
+        {
+            // The retail driver model of player 0 (clip IDs, cannon and wait rules by vehicle).
+            const auto *local = K::Kart::KartObjectManager::Instance()->object(0);
+            const auto &racer = K::System::RaceConfig::Instance()->raceScenario().players[0];
+            const bool inside = local->param()->stats().driftType == K::Kart::KartParam::Stats::DriftType::Inside_Drift_Bike;
+            driverController.configure(local->isBike(), unsigned(racer.vehicle), unsigned(racer.character), inside, 0x2545f491u);
+        }
         driverPose = {};
         if (driver)
             driverAnimation.prepareLitSkinning(*driver);
         else
             driverAnimation.skinNormals(false);
-        for (unsigned i = 0; i < driverAnimation.count(); ++i)
-            driverController.setDuration(driverAnimation.name(i), driverAnimation.duration(i));
-        if (bike)
-        {
-            static const char *kartNames[] = {"sjump_a", "sjump_b", "sjump_c"};
-            static const char *bikeNames[] = {"sjump_ma", "sjump_mb", "sjump_mc"};
-            for (unsigned i = 0; i < 3; ++i)
-            {
-                int clip = driverAnimation.find(bikeNames[i]);
-                if (clip >= 0)
-                    driverController.setDuration(kartNames[i], driverAnimation.duration(clip));
-            }
-        }
+        driverController.registerBank(driverAnimation);
+        driverController.reset();
         LOGF("driver_loaded %s clips=%u animation=%d linear_free=%lu", prefix, driverAnimation.count(), ok, (unsigned long)linearSpaceFree());
         bool complete = ok && vehicle && (replay || vehicleShadow);
         for (unsigned i = 0; i < (bike ? 2u : 4u); ++i)
@@ -1779,14 +2132,53 @@ int main()
         return complete;
     };
     mkw::CourseObjects courseObjects;
+    // Bomb cars, fireballs and cannonballs blast like the Bob-omb, materials and all.
+    courseObjects.setBlastDrawer([&](mkw::Renderer &r, const C3D_Mtx &t, unsigned age) { raceHud.drawBombBlast(r, t, age); });
     bool trackLoadFailed = false;
     int trackCourse = -1; // Course whose scenery is completely resident, or -1.
+    int opponentGhost = -1; // the ghost's character/vehicle the opponents hold, -1 none
+    // The next race scene's CPU line-up and AI session (mkw::RaceGrid::Session): the retail
+    // game mode, vehicle rule (GP class page table 0x808AD148: 50cc karts, 100cc bikes; VS
+    // and battle offer no vehicle setting here: both), race number and points before this
+    // race. A new GP / VS set or a battle draws new CPUs; restarts and later races keep them.
+    auto setRaceSession = [&](bool restart)
+    {
+        using Session = mkw::RaceGrid::Session;
+        const auto &sel = menu.selection;
+        const bool gp = sel.mode == mkw::UiMode::GrandPrix, battle = sel.mode == mkw::UiMode::Battle;
+        Session session;
+        session.mode = gp ? Session::Mode::GrandPrix : battle ? Session::Mode::Battle : timeTrial ? Session::Mode::TimeTrial : Session::Mode::Versus;
+        session.vehicles = gp && !sel.mixedEngineTypes && sel.engineClass == mkw::UiEngineClass::CC50 ? 0u : gp && !sel.mixedEngineTypes && sel.engineClass == mkw::UiEngineClass::CC100 ? 1u : 2u;
+        session.raceNumber = battle ? 0u : std::max(vsSet.race, 1u) - 1;
+        session.points = vsSet.points;
+        session.newLineup = !restart && (battle || vsSet.race <= 1);
+        session.seed = uint32_t(svcGetSystemTick());
+        raceGrid.setSession(session);
+        // ItemSlot.bin tables (fn_1_2AAB94): a Grand Prix reads 0/1, VS 2/3.
+        raceItems->setGrandPrix(gp);
+        // RaceGlobals_init (PAL 0x807BD1D0): the item manager's Time Trial flag from RaceConfig
+        // +0xB70, which configure() sets to Time_Trial exactly when timeTrial is set.
+        raceItems->setTimeTrial(timeTrial);
+    };
     auto resetRaceSystems = [&](bool reload)
     {
         if (!fullRace)
             return;
+        const int ghostKey = timeTrial && ttGhost.ready() ? ttGhost.header().character << 8 | ttGhost.header().vehicle : -1;
+        reload |= ghostKey != opponentGhost;
+        opponentGhost = ghostKey;
         battleTicks = 0;
         balloonBattle.reset(raceGrid.count());
+        // Retail balloon battle calls from the kart code: falls and object hits lose a balloon,
+        // Mega crushes too, Star contact and mushroom bumps steal one.
+        K::Kart::KartCollide::SetBalloonHook([](void *, K::Kart::KartCollide::BalloonEvent event, size_t victim, size_t attacker)
+                                             {
+            if (!balloonBattleMode || battleTicks >= mkw::BalloonBattle::DurationTicks)
+                return;
+            if (event == K::Kart::KartCollide::BalloonEvent::Steal)
+                balloonBattle.stealBalloon(unsigned(victim), unsigned(attacker));
+            else
+                balloonBattle.loseBalloon(unsigned(victim), unsigned(attacker)); }, nullptr);
         if (!raceGrid.reset())
         {
             trackLoadFailed = true;
@@ -1802,6 +2194,37 @@ int main()
         {
             raceItems->reset({}, raceGrid.count());
             raceItems->give(0, mkw::ItemKind::TripleMushroom);
+            // The ghost's Triple Mushroom follows its recorded item button through
+            // the player's native inventory path; Kinoko's own stock stays unused.
+            for (unsigned i = 0; i < raceGrid.count(); ++i)
+                if (raceGrid.ghost(i))
+                {
+                    if (i)
+                        raceItems->give(i, mkw::ItemKind::TripleMushroom);
+                    K::Item::ItemDirector::Instance()->kartItem(i).clear();
+                }
+            ghostRun.reset();
+            ghostFrame = 0;
+            ghostRecording = !watchReplay;
+            ghostSaved = false;
+            ghostFinishLogged = false;
+            ghostTrace.clear();
+            ghostTraceRef.clear();
+            ghostDiverged = false;
+            if (kQa && ttGhost.ready())
+            {
+                char tracePath[96];
+                snprintf(tracePath, sizeof tracePath, "%s/pb-%02x.trace", mkw::TimeTrialGhost::Folder, unsigned(Courses[courseChoice].id));
+                if (FILE *f = fopen(tracePath, "rb"))
+                {
+                    GhostTraceRow row;
+                    while (fread(&row, sizeof row, 1, f) == 1)
+                        ghostTraceRef.push_back(row);
+                    fclose(f);
+                }
+            }
+            LOGF("ghost course=%u ready=%d time=%u character=%u vehicle=%u", unsigned(Courses[courseChoice].id), int(ttGhost.ready()),
+                 ttGhost.ready() ? mkw::rkgMilliseconds(ttGhost.header().finish) : 0u, unsigned(ttGhost.header().character), unsigned(ttGhost.header().vehicle));
             newRecord = false;
         }
         if (reload)
@@ -1811,6 +2234,8 @@ int main()
                 trackLoadFailed = true;
                 report("FAIL opponent graphics load");
             }
+            if (opponents.fallbacks())
+                LOGF("opponent graphics fallback racers=%u (class standard vehicle)", opponents.fallbacks());
         }
         else
             opponents.resetAnimation();
@@ -1959,6 +2384,8 @@ int main()
     decltype(driverPose) pausedDriverPose;
     decltype(bodyClock) pausedBodyClock;
     decltype(accessoryClocks) pausedAccessoryClocks;
+    // Heap: main's frame shares the 64 KiB main-thread stack.
+    auto pausedVehicleAnimation = std::make_unique<mkw::VehicleAnimation>();
     suspendRaceGraphics = [&]()
     {
         if (!raceResident || raceGraphicsSuspended)
@@ -1966,10 +2393,14 @@ int main()
         mkw::AssetLoader::instance().stop();
         mkw::jobWorker().finishAll();
         renderer.waitForGpu();
+        // Retail pause leaves PlayerModel and the kart model alone: every racer's
+        // driver model, clip clocks and vehicle animation come back as they were.
         pausedDriverController = driverController;
         pausedDriverPose = driverPose;
         pausedBodyClock = bodyClock;
         pausedAccessoryClocks = accessoryClocks;
+        *pausedVehicleAnimation = vehicleAnimation;
+        opponents.saveAnimation();
         menuModels.reset(renderer);
         menuIcons.reset(renderer);
         menuRenderer.release(renderer);
@@ -2046,6 +2477,8 @@ int main()
             driverPose = pausedDriverPose;
             bodyClock = pausedBodyClock;
             accessoryClocks = pausedAccessoryClocks;
+            vehicleAnimation = *pausedVehicleAnimation;
+            opponents.restoreAnimation();
             renderer.setRetailLighting(mkw::courseLighting(Courses[courseChoice].archive));
             moveCourseTexturesToVram();
             raceGraphicsSuspended = false;
@@ -2081,6 +2514,7 @@ int main()
         K::System::RaceConfig::RegisterInitCallback(configure, &raceGrid);
         stage("start");
         report(Courses[courseChoice].name);
+        setRaceSession(false);
         scenes.changeScene(0);
         report("Kinoko race initialized");
         stage("kinoko scene");
@@ -2160,7 +2594,7 @@ int main()
         raceResident = fullRace;
         if (!trackLoadFailed)
         {
-            startIntro();
+            startIntro(!timeTrial);
             beginRaceSound();
         }
         prepareGarageFixture();
@@ -2338,8 +2772,9 @@ int main()
     u32 lastRefresh = C3D_FrameCounter(0);
     // The presented camera of the current step: drawn each frame and handed to the NW4R
     // effects as their process camera after each step.
-    auto presentationCamera = [&](mkw::Vec3 &eye, mkw::Vec3 &target)
+    auto presentationCamera = [&](mkw::Vec3 &eye, mkw::Vec3 &target, mkw::Vec3 &up)
     {
+        up = {0, 1, 0};
         if (effectsTest && frames < 60)
         {
             eye = {-15800, 2700, 49500};
@@ -2354,9 +2789,11 @@ int main()
         }
         if (fullRace)
         {
+            // Retail shakes the look-at point along the camera's side and up axes (0x805A40D0 tail).
             const auto v = cameraDirector->view();
-            eye = v.eye + cameraShake.offset(v.eye, v.target);
-            target = v.target;
+            eye = v.eye;
+            target = v.target + v.side * cameraShake.side.output + v.up * cameraShake.lift.output;
+            up = v.up;
             return;
         }
         auto *camera = K::Render::KartCamera::Instance();
@@ -2377,6 +2814,9 @@ int main()
     // The animation fixtures read posed vertices back while racing: immediate.
     const bool deferredRace = !animationTest;
     renderer.setDeferred(deferredRace);
+    // The end-of-race menu's direction hold (UiDirectionRepeat, as the menus).
+    mkw::UiDirectionRepeat endMenuDirections;
+    u32 endMenuRefresh = C3D_FrameCounter(0);
     while (aptMainLoop())
     {
         // Poll controls and advance source state once per top-screen refresh.
@@ -2393,6 +2833,9 @@ int main()
         hidScanInput();
         auto held = hidKeysHeld(), down = hidKeysDown();
         const bool endMenu = menu.page == mkw::UiPage::Results && results.phase() == mkw::RaceFlowPhase::Menu;
+        // Page activation restarts the hold count (fn_1_DF5A4, PAL 805ef958).
+        if (!endMenu)
+            endMenuDirections.reset();
         if (autoplay)
         {
             if (intro.active())
@@ -2404,10 +2847,12 @@ int main()
         }
         if (fullRace)
         {
-            // A or START skips the course preview; that press does nothing else.
-            if (intro.active() && menu.page == mkw::UiPage::Race && (down & (KEY_A | KEY_START)))
+            // The Demo section has no RacePage: START cannot pause. A new OK
+            // press (A) is latched for DemoSection's skip rule.
+            if (demo.demo() && menu.page == mkw::UiPage::Race)
             {
-                endIntro();
+                if (down & KEY_A)
+                    demoOk = true;
                 down &= ~u32(KEY_A | KEY_START);
             }
             if (results.active())
@@ -2419,12 +2864,20 @@ int main()
                     resultsInput.advance = true;
                 if (endMenu)
                 {
-                    const u32 nav = down | (autoplay ? 0u : hidKeysDownRepeat());
-                    if (nav & (KEY_DUP | KEY_CPAD_UP))
+                    // RaceMenuPage owns a MultiControlInputManager (PAL ct 0x80858CA4,
+                    // +0x11C): directions repeat as on the other menu pages
+                    // (805ef898 / 805f0e94), counted in 60 Hz frames.
+                    const u32 refresh = C3D_FrameCounter(0);
+                    const mkw::UiInput nav = endMenuDirections.step(held & (KEY_DUP | KEY_CPAD_UP), held & (KEY_DDOWN | KEY_CPAD_DOWN), held & (KEY_DLEFT | KEY_CPAD_LEFT), held & (KEY_DRIGHT | KEY_CPAD_RIGHT), std::min<u32>(refresh - endMenuRefresh, 6));
+                    endMenuRefresh = refresh;
+                    if (autoplay ? (down & (KEY_DUP | KEY_CPAD_UP)) != 0 : nav.up)
                         menu.input({true});
-                    else if (nav & (KEY_DDOWN | KEY_CPAD_DOWN))
+                    else if (autoplay ? (down & (KEY_DDOWN | KEY_CPAD_DOWN)) != 0 : nav.down)
                         menu.input({false, true});
+                    const unsigned cursorBefore = results.cursor();
                     results.setCursor(menu.cursor);
+                    if (results.cursor() != cursorBefore)
+                        mkw::SoundSystem::instance().play(mkw::snd::id::SE_UI_BTN_IN); // PushButton select
                     if (down & KEY_A)
                         resultsInput.accept = true;
                 }
@@ -2433,9 +2886,6 @@ int main()
             }
             if (down & KEY_START)
                 menu.input({false, false, false, false, false, false, true});
-            // Mario Kart 7: a tap on the lower screen switches its map view.
-            if ((down & KEY_TOUCH) && menu.page == mkw::UiPage::Race)
-                bottomScreen.toggleView();
             if (menu.page != mkw::UiPage::Race && menu.page != mkw::UiPage::Results)
             {
                 if (menu.page == mkw::UiPage::Pause)
@@ -2473,6 +2923,7 @@ int main()
                     menuRenderer.release();
                     applySelection();
                     startVsRace(action == mkw::UiAction::RestartRace);
+                    setRaceSession(action == mkw::UiAction::RestartRace);
                     // A different or previously failed course reloads completely;
                     // restarting the same race keeps its scenery.
                     const bool reloadTrack = trackCourse != int(courseChoice);
@@ -2511,6 +2962,7 @@ int main()
                         wasTricking = false;
                         wasBoosting = false;
                         trickModel.reset();
+                        driverSignals.reset();
                         ++restarts;
                         if (!trackLoadFailed && !raceHud.load())
                         {
@@ -2533,7 +2985,7 @@ int main()
                     }
                     if (!trackLoadFailed)
                     {
-                        startIntro();
+                        startIntro(!timeTrial && action != mkw::UiAction::RestartRace);
                         beginRaceSound();
                     }
                     raceResident = true;
@@ -2625,6 +3077,7 @@ int main()
                 wasTricking = false;
                 wasBoosting = false;
                 trickModel.reset();
+                driverSignals.reset();
                 restarts++;
                 report("race restarted");
                 resetRaceSystems(bool(down & (KEY_X | KEY_Y)));
@@ -2636,6 +3089,10 @@ int main()
             if (autoplay)
                 pad = {0, 0};
             unsigned buttons = (held & KEY_A ? 1 : 0) | (held & KEY_B ? 2 : 0) | (held & KEY_L ? 4 : 0) | (held & KEY_R ? (held & KEY_A ? 10 : 2) : 0);
+            // After the goal RaceinfoPlayer_endRace (PAL 0x805347F4) points the racer's input at
+            // its KPad dummy, so the look-back gate (0x805A66D8) no longer sees the pad.
+            const bool raceOver = balloonBattleMode ? battleTicks >= mkw::BalloonBattle::DurationTicks : raceGrid.finished();
+            lookBehind = fullRace && !qaMode && !autoplay && !raceOver && (held & (KEY_X | KEY_ZL));
             if (fullRace)
                 buttons &= ~4u; // Inventory owns L in races; retain stock mushrooms in trace/QA.
             auto trick = K::System::Trick::None;
@@ -2661,27 +3118,33 @@ int main()
                     return K::System::Trick::Right;
                 return K::System::Trick::Up;
             };
-            // R on a trick ramp replaces the hop while Kinoko marks its
-            // trickable window; holding R early still works when the window opens.
-            // X/Y still trick and wheelie anywhere. QA owns X/Y.
-            const bool rampTrick = fullRace && (held & KEY_R) &&
-                                   K::Kart::KartObjectManager::Instance()->object(0)->status().onBit(K::Kart::eStatus::Trickable);
-            if (trick == K::System::Trick::None)
-            {
-                if (rampTrick)
-                {
-                    trick = padTrick();
-                    buttons = (buttons & ~10u) | (held & KEY_B ? 2u : 0u);
-                }
-                else if (!qaMode && (held & (KEY_X | KEY_Y)))
-                    trick = padTrick();
-            }
+            // Y tricks and wheelies anywhere (X looks behind). QA owns X/Y. R stays the
+            // drift button on trickable floor too: retail builds the buttons from the pad
+            // alone (KPadGCController::calcInput 0x805201B0) and KartJump::calcInput
+            // (0x80575B38) takes tricks only from the trick input.
+            if (trick == K::System::Trick::None && !qaMode && (held & KEY_Y))
+                trick = padTrick();
             // Preserve the Wii input lattice used by ghost records.
-            int stick = std::clamp(int(std::lround(pad.dx * 7.f / 156.f)), -7, 7);
+            // Full lock from about 83% of the Circle Pad's reach. Pads read their
+            // edge anywhere from ~145 to 156, so dividing by 156 asked for 93%.
+            constexpr float CirclePadFullLock = 140.f;
+            int stick = std::clamp(int(std::lround(pad.dx * 7.f / CirclePadFullLock)), -7, 7);
+            // Stick Y on the same 15-step lattice (Circle Pad up is +Y, as on the Wii):
+            // KartMove::calcDive (0x805869DC, Kinoko KartMove.cc) pitches the kart in the
+            // air by stickY * 0.005 per frame. Mirror mode does not flip it.
+            int stickY = std::clamp(int(std::lround(pad.dy * 7.f / CirclePadFullLock)), -7, 7);
+            // Mirror: the world is drawn flipped, so steering and side tricks flip with it.
+            if (fullRace && mirrorMode)
+            {
+                stick = -stick;
+                if (trick == K::System::Trick::Left || trick == K::System::Trick::Right)
+                    trick = trick == K::System::Trick::Left ? K::System::Trick::Right : K::System::Trick::Left;
+            }
             if (garageTest)
             {
                 buttons = 1;
                 stick = frames % fixtureFrames < 32 ? -4 : 4;
+                stickY = 0;
             }
             auto *controller = K::System::KPadDirector::Instance()->hostController();
             auto start = svcGetSystemTick();
@@ -2695,9 +3158,13 @@ int main()
             {
                 auto tick = svcGetSystemTick();
                 bool jumpAction = false;
+                // Ghost pads read one input frame per step from the step after the
+                // countdown starts (RaceManager::calc -> startGhostProxies).
+                const bool ghostStep = timeTrial && K::System::RaceManager::Instance()->isStageReached(K::System::RaceManager::Stage::Countdown);
+                bool playerItem = false;
                 // Restore current human input every simulation tick before any
                 // temporary autopilot override, including catch-up frame exits.
-                controller->setInputsRawStick(buttons, stick + 7, 7, trick);
+                controller->setInputsRawStick(buttons, stick + 7, stickY + 7, trick);
                 if (fullRace)
                 {
                     // After the goal retail hands the player to its AI
@@ -2735,9 +3202,19 @@ int main()
                             }
                         }
                     }
+                    // Watch the Replay: player 0's Triple Mushroom follows the ghost too.
+                    if (raceGrid.ghost(0))
+                        inputs[0] = {ghostStep && ttGhost.item(ghostFrame), false, false};
+                    playerItem = inputs[0].use;
                     // CPU items: retail AIItemRace commands from the previous AI tick.
                     for (unsigned i = 1; i < raceGrid.count(); ++i)
                     {
+                        // A ghost's item button, read one step ahead of its pad.
+                        if (raceGrid.ghost(i))
+                        {
+                            inputs[i] = {ghostStep && ttGhost.item(ghostFrame), false, false};
+                            continue;
+                        }
                         if (!raceGrid.ai().ready())
                         {
                             inputs[i] = raceItems->autoItemInput(i);
@@ -2753,6 +3230,13 @@ int main()
                         const bool held = h.deployed && h.heldCharges > 0;
                         raceGrid.ai().setItemView(i, {uint8_t(h.item), uint8_t(held ? h.heldCharges : 0), h.roulette != 0, held,
                                                       held && (h.heldKind == mkw::ItemKind::RedShell || h.heldKind == mkw::ItemKind::TripleRedShell), h.ink && !h.inkDelay});
+                    }
+                    {
+                        // The POW timer for the CPU POW avoider: the user's item window shows it.
+                        uint16_t pow = 0;
+                        for (unsigned i = 0; i < raceGrid.count(); ++i)
+                            pow = std::max(pow, raceItems->hud(i).pow);
+                        raceGrid.ai().setPowTimer(pow);
                     }
                     {
                         // Landed traps for the CPU obstacle avoider.
@@ -2776,6 +3260,15 @@ int main()
                     // Resolve item activation/expiry before choosing this tick's
                     // controller, including CPU Bullet Bills and the handoff back.
                     raceGrid.beforeStep(raceItems->bulletPlayers());
+                    // KartObjectProxy::isCpu: a CPU, or the player from its goal (fn_1_7EC98
+                    // 0x8058F04C). Its kart model and bike lean read this tick's AI sticks
+                    // (AI::getStick 0x80726204, KartMoveBike 0x80587E58) instead of the pad.
+                    for (unsigned i = 0; i < raceGrid.count(); ++i)
+                    {
+                        const auto &c = raceGrid.ai().command(i);
+                        const bool cpu = raceGrid.ai().ready() && !raceGrid.ghost(i) && (i || afterGoal);
+                        K::Kart::KartObjectManager::Instance()->object(i)->move()->setCpuSteer(cpu, c.animationStick, c.lean);
+                    }
                 }
                 if (autoplay && cpuLogEvery && fullRace && physicsSteps % cpuLogEvery == 0)
                 {
@@ -2811,6 +3304,43 @@ int main()
                     qaCollide->activateOob(false, nullptr, false, false);
                 }
                 scenes.calc();
+                if (ghostStep)
+                {
+                    // The run as a ghost: this step's input as Kinoko took it, with
+                    // the item button the native inventory took, through the goal.
+                    if (ghostRecording)
+                    {
+                        const auto &in = K::System::KPadDirector::Instance()->playerInput(0).currentState();
+                        ghostRun.push({uint8_t((in.buttons & ~4u) | (playerItem ? 4u : 0u)), uint8_t(std::lround(in.stick.x * 7.f) + 7),
+                                       uint8_t(std::lround(in.stick.y * 7.f) + 7), uint8_t(in.trick)});
+                        if (kQa)
+                            ghostTrace.push_back(ghostTraceRow(0));
+                        ghostRecording = !K::System::RaceManager::Instance()->player(0).finished();
+                    }
+                    // QA: a ghost in sync finishes on its file's time.
+                    const unsigned ghostSlot = raceGrid.ghost(0) ? 0 : 1;
+                    if (kQa && raceGrid.ghost(ghostSlot) && ghostFrame < ghostTraceRef.size())
+                    {
+                        // The first frame where the replay differs in anything, both rows in full.
+                        const GhostTraceRow g = ghostTraceRow(ghostSlot), &r = ghostTraceRef[ghostFrame];
+                        const bool same = !std::memcmp(&g, &r, sizeof g);
+                        if (ghostFrame % 600 == 0 || (!ghostDiverged && !same))
+                            for (const GhostTraceRow *row : {&r, &g})
+                                LOGF("ghost trace frame=%u %s pos=%.4f,%.4f,%.4f speed=%.5f rot=%.6f,%.6f,%.6f,%.6f in=%u stick=%d trick=%u flags=%05lx item=%d", ghostFrame,
+                                     row == &r ? "ref" : "got", row->x, row->y, row->z, row->speed, row->qx, row->qy, row->qz, row->qw, unsigned(row->buttons), int(row->stick),
+                                     unsigned(row->trick), (unsigned long)row->flags, int(ttGhost.item(ghostFrame)));
+                        ghostDiverged |= !same;
+                    }
+                    if (kQa && !ghostFinishLogged && raceGrid.ghost(ghostSlot) && K::System::RaceManager::Instance()->player(ghostSlot).finished())
+                    {
+                        ghostFinishLogged = true;
+                        LOGF("ghost finish slot=%u expected=%u actual=%u frame=%u", ghostSlot, mkw::rkgMilliseconds(ttGhost.header().finish),
+                             K::System::RaceManager::Instance()->player(ghostSlot).raceTimer().min * 60000u + K::System::RaceManager::Instance()->player(ghostSlot).raceTimer().sec * 1000u +
+                                 K::System::RaceManager::Instance()->player(ghostSlot).raceTimer().mil,
+                             ghostFrame);
+                    }
+                    ++ghostFrame;
+                }
                 {
                     // The player's driver model after the kart step: its trick animation,
                     // sparkle and sound start together (trick_presentation.hpp).
@@ -2822,18 +3352,50 @@ int main()
                                                      unsigned(local->move()->jump()->variant()), local->isBike());
                     }
                 }
+                if (fullRace)
+                {
+                    // RaceInfo_update polls before the camera calc sets the director's done flag.
+                    const auto event = demo.step(intro.finished(), demoOk);
+                    demoOk = false;
+                    if (event == mkw::DemoSection::Event::Leave)
+                        raceSound.previewLeave();
+                    else if (event == mkw::DemoSection::Event::EnterRace)
+                        endIntro(); // PreviewEnd follows: the race section's audio starts
+                }
                 if (intro.active())
                 {
                     intro.step();
                     ++introTick;
-                    if (!intro.active())
-                        endIntro();
                 }
                 if (fullRace)
                 {
                     raceGrid.afterStep();
+                    // QA: route driver, falls/respawns of player 0 and no-progress stalls (mkw::QaRaceWatch).
+                    if (kQa)
+                    {
+                        static mkw::QaRaceWatch qaRaceWatch;
+                        qaRaceWatch.step(physicsSteps, raceGrid, report);
+                    }
                     raceItems->afterStepNative(raceGrid.count());
-                    opponents.step(physicsSteps + 1);
+                    if (kQa && timeTrial)
+                        for (const auto &e : raceItems->events())
+                            if (e.effect == mkw::ItemEffect::Mushroom)
+                                LOGF("ghost mushroom racer=%u frame=%u", unsigned(e.player), ghostFrame);
+                    {
+                        // PlayerModel +0xB4 (fn_1_2BADE4 0x807CB2D4) from the presented camera
+                        // (one screen): CPUs 4000 units, the player and ghosts 100000.
+                        mkw::Vec3 eye, target, up;
+                        presentationCamera(eye, target, up);
+                        const float fovy = intro.active() ? intro.fov() : cameraDirector->view().fov;
+                        driverFar = 0;
+                        for (unsigned i = 0; i < raceGrid.count() && i < 32; ++i)
+                        {
+                            const mkw::Vec3 d = vec(K::Kart::KartObjectManager::Instance()->object(i)->pos()) - eye;
+                            if (mkw::DriverController::farFromCamera(dot(d, d), fovy, i && !raceGrid.ghost(i)))
+                                driverFar |= 1u << i;
+                        }
+                    }
+                    opponents.step(physicsSteps + 1, *raceItems, raceGrid, driverFar);
                     // Snapshot before fillRaceAudioFrame consumes the sound cues.
                     // Particle triggers must also work when audio is unavailable.
                     kartContacts = {};
@@ -2870,11 +3432,11 @@ int main()
                     const bool respawnStart = kart->status().onBit(K::Kart::eStatus::InRespawn) && !flow.respawn;
                     if (respawnStart)
                         chaseCamera.init(*kart);
-                    chaseCamera.calc(*kart);
                     fillCameraInput(cameraInput);
                     if (balloonBattleMode)
                         cameraInput.finished = battleTicks >= mkw::BalloonBattle::DurationTicks;
-                    cameraDirector->step(cameraInput);
+                    // RaceCamera::Update: the chase states and the director's phases in retail order.
+                    chaseCamera.update(*kart, *cameraDirector, cameraInput, lookBehind);
                     // Race-flow events for presentation subscribers (audio).
                     const unsigned stage = unsigned(race->stage());
                     if (balloonBattleMode && stage >= 2 && !results.active() && battleTicks < mkw::BalloonBattle::DurationTicks)
@@ -2894,7 +3456,7 @@ int main()
                     {
                         raceEvents.emit(mkw::RaceEvent::Finish, physicsSteps, int(balloonBattleMode ? balloonBattle.rank(0) : raceGrid.rank()));
                         results.finish();
-                        if (timeTrial && courseChoice < bestTimes.size())
+                        if (timeTrial && !watchReplay && courseChoice < bestTimes.size())
                         {
                             const auto &t = race->player(0).raceTimer();
                             const uint32_t ms = uint32_t(t.min) * 60000u + uint32_t(t.sec) * 1000u + uint32_t(t.mil);
@@ -2904,14 +3466,71 @@ int main()
                                 newRecord = true;
                                 saveBestTimes();
                             }
+                            // The run becomes the course's ghost when it beats the saved one.
+                            const unsigned course = unsigned(Courses[courseChoice].id);
+                            const uint32_t savedGhost = mkw::TimeTrialGhost::savedTime(course);
+                            if (ms && !ghostRun.full() && (!savedGhost || ms < savedGhost))
+                            {
+                                mkw::GhostInfo info;
+                                info.finish = {t.min, t.sec, t.mil};
+                                for (unsigned lap = 0; lap < info.laps.size(); ++lap)
+                                {
+                                    const auto split = race->player(0).getLapSplit(lap + 1);
+                                    info.laps[lap] = {split.min, split.sec, split.mil};
+                                }
+                                info.course = uint8_t(course);
+                                info.character = uint8_t(selectedVehicle().character);
+                                info.vehicle = uint8_t(selectedVehicle().vehicle);
+                                info.automaticDrift = automaticDrift;
+                                const time_t now = time(nullptr);
+                                if (const tm *date = gmtime(&now); date && date->tm_year >= 100 && date->tm_year < 200)
+                                {
+                                    info.year = uint8_t(date->tm_year - 100);
+                                    info.month = uint8_t(date->tm_mon + 1);
+                                    info.day = uint8_t(date->tm_mday);
+                                }
+                                ghostSaved = mkw::TimeTrialGhost::save(ghostRun, info);
+                                ghostTimesStale = true; // a failed save may still have removed the old ghost
+                                LOGF("ghost saved=%d time=%u frames=%u", int(ghostSaved), ms, ghostRun.frames());
+                                if (kQa && ghostSaved)
+                                {
+                                    char tracePath[96];
+                                    snprintf(tracePath, sizeof tracePath, "%s/pb-%02x.trace", mkw::TimeTrialGhost::Folder, course);
+                                    if (FILE *f = fopen(tracePath, "wb"))
+                                    {
+                                        fwrite(ghostTrace.data(), sizeof(GhostTraceRow), ghostTrace.size(), f);
+                                        fclose(f);
+                                    }
+                                }
+                            }
                         }
                     }
                     {
                         using Flow = mkw::RaceResultsFlow;
+                        using Phase = mkw::RaceFlowPhase;
+                        auto &sound = mkw::SoundSystem::instance();
+                        const int shownBefore = results.rowCount() ? results.count(0).shown : 0;
                         const uint32_t events = results.step(resultsInput);
                         resultsInput = {};
+                        // CtrlRaceResult rows (UIControl_setSfxIds, PAL 0x807F4F9C): SE_RSLT_IN
+                        // as each row starts sliding in, SE_RSLT_OUT as it starts leaving.
+                        const Phase phase = results.phase();
+                        const bool rowsIn = phase == Phase::UpdateIn || phase == Phase::TotalIn, rowsOut = phase == Phase::UpdateOut || phase == Phase::TotalOut;
+                        if (rowsIn || rowsOut)
+                            for (unsigned i = 0; i < results.rowCount(); ++i)
+                                if (results.pageFrame() == unsigned(mkw::FlowResultRows[i].delay) + 1)
+                                    sound.play(rowsIn ? mkw::snd::id::SE_RSLT_IN : mkw::snd::id::SE_RSLT_OUT);
+                        // The top row's count ticks SE_RSLT_POINT_UP (PAL 0x807F5A50).
+                        if (phase == Phase::Update && results.rowCount() && results.count(0).shown != shownBefore)
+                            sound.play(mkw::snd::id::SE_RSLT_POINT_UP);
+                        if (events & Flow::EventOptionChosen)
+                            sound.play(mkw::snd::id::SE_RC_PAUSE_EXIT_GAME); // RaceMenuPage_onButtonFront (PAL 0x8085A0F4)
+                        if (events & Flow::EventLeaveStart)
+                            raceSound.fadeOut();
                         if (events & Flow::EventFill)
                             fillResults();
+                        if ((events & Flow::EventResultsShown) && timeTrial && newRecord)
+                            sound.play(mkw::snd::id::SE_RSLT_NEW_RECORD); // PAL 0x80855DFC
                         if (events & Flow::EventResultsShown)
                             raceEvents.emit(mkw::RaceEvent::ResultsShown, physicsSteps, int(vsSet.race));
                         if (events & Flow::EventTotalsShown)
@@ -2930,7 +3549,9 @@ int main()
                         {
                             // The race has faded to black (RaceResultsFlow::Leaving).
                             sectionFadeIn = true;
-                            vsSet.next = results.chosen() == 0 && !results.finalRace();
+                            // Only a GP or VS Next counts on (0x8085A0F4 case 7); the
+                            // Time Trial Next is a course change, battle keeps no set here.
+                            vsSet.next = results.chosen() == 0 && !results.finalRace() && !timeTrial && !balloonBattleMode;
                             if (menu.page == mkw::UiPage::Results)
                             {
                                 menu.cursor = unsigned(std::max(0, results.chosen()));
@@ -2945,7 +3566,15 @@ int main()
                     flow.respawn = cameraInput.inRespawn;
                     flow.finished = finished;
                     const auto view = cameraDirector->view();
-                    raceHud.stepWorld(*raceItems, mkw::normalized(view.eye - view.target, {0, 0, 1}), stage >= 1);
+                    // CtrlRaceItemBalloon places its icon from the drawn race camera (shake included).
+                    mkw::HudCamera hudCamera{{}, {}, {}, view.fov, chaseCamera.lookBack()};
+                    presentationCamera(hudCamera.eye, hudCamera.target, hudCamera.up);
+                    raceHud.stepWorld(*raceItems, mkw::normalized(view.eye - view.target, {0, 0, 1}), stage >= 1, &hudCamera);
+                    // QA: each incoming-item icon that opens, with this race's counts by picture.
+                    if (kQa && raceHud.chaseOpened() >= 0)
+                        LOGF("hud chase icon %s step=%u shown red=%u blue=%u star=%u mega=%u bullet=%u cloud=%u", mkw::itemName(mkw::ItemKind(raceHud.chaseOpened())), physicsSteps,
+                             unsigned(raceHud.chaseShown()[1]), unsigned(raceHud.chaseShown()[7]), unsigned(raceHud.chaseShown()[9]),
+                             unsigned(raceHud.chaseShown()[11]), unsigned(raceHud.chaseShown()[15]), unsigned(raceHud.chaseShown()[14]));
                     // QA heartbeat: a freeze shows as the last line written.
                     if (kQa && physicsSteps % 300 == 0)
                     {
@@ -2961,6 +3590,7 @@ int main()
                     jugem.introHeld = intro.active();
                     jugem.finished = raceGrid.finished();
                     jugem.cameraForward = view.target - view.eye;
+                    jugem.visible = !chaseCamera.lookBack(); // JugemManager_setVisible from 0x805A66D8
                     lakitu.step(jugem);
                     {
                         // Race audio state (RaceRSARPlayer::Calc order: after the race step).
@@ -2972,18 +3602,23 @@ int main()
                         audio.timer = race->timer();
                         audio.currentLap = me.currentLap();
                         audio.finished = me.finished();
-                        audio.rank = me.finishOrder() ? me.finishOrder() : raceGrid.rank();
+                        // A ghost finishing first does not place the player second.
+                        audio.rank = timeTrial ? 1u : me.finishOrder() ? me.finishOrder() : raceGrid.rank();
                         audio.star = st.onBit(St::Star);
                         audio.mega = st.onBit(St::Mega);
                         audio.shocked = st.onBit(St::Shocked);
                         audio.introShot = intro.active() ? intro.shot() : -1;
                         audio.hudRank = fullRace && !intro.active() ? raceGrid.rank() : 0;
-                        static mkw::RaceAudioFrame actors;
+                        auto &actors = raceAudioActors;
                         if (raceSound.active())
                         {
+                            // The course preview is drawn with up {0, 1, 0}; the race camera rolls (0x805A40D0).
                             const mkw::Vec3 eye = intro.active() ? intro.eye() : view.eye, look = intro.active() ? intro.target() : view.target;
-                            mkw::fillRaceAudioFrame(actors, {eye.x, eye.y, eye.z}, {look.x, look.y, look.z});
+                            const mkw::Vec3 up = intro.active() ? mkw::Vec3{0, 1, 0} : view.up;
+                            mkw::fillRaceAudioFrame(actors, {eye.x, eye.y, eye.z}, {look.x, look.y, look.z}, {up.x, up.y, up.z}, intro.active());
                             mkw::fillRaceAudioItems(actors, *raceItems);
+                            actors.balloonAlarm = raceHud.chaseAlarm(actors.balloonX, actors.balloonRate);
+                            actors.mirror = mirrorMode;
                             mkw::fillRaceAudioObjects(actors);
                             if (jumpAction)
                                 actors.kart[0].cues |= mkw::cue::JumpAction;
@@ -3012,8 +3647,8 @@ int main()
                                 auto g = [&](int f)
                                 { return (unsigned long)n[f].load(); };
                                 using L = mkw::RaceAudioLayer;
-                                snprintf(line, sizeof line, "race sound karts voices=%lu result=%lu items=%lu drift_frames=%lu road=%lu slip=%lu spark=%lu brake=%lu landing=%lu wall=%lu car=%lu hop=%lu dash=%lu dashj=%lu jumppad=%lu horn=%lu cannon=%lu effect=%lu trick=%lu other=%lu",
-                                         (unsigned long)raceSound.layer().voiceStarts.load(), (unsigned long)raceSound.layer().resultVoice.load(), (unsigned long)raceSound.layer().itemSounds.load(), (unsigned long)raceSound.layer().driftFrames.load(), g(L::Road), g(L::Slip), g(L::Spark), g(L::Brake), g(L::Landing), g(L::Wall), g(L::Car), g(L::Hop), g(L::Dash), g(L::DashJ), g(L::JumpPad), g(L::Horn), g(L::Cannon), g(L::Effect), g(L::Trick), g(L::Other));
+                                snprintf(line, sizeof line, "race sound karts voices=%lu result=%lu items=%lu homing=%lu alarm=%lu alarm_dropped=%lu notes_dropped=%lu/%lu drift_frames=%lu road=%lu slip=%lu spark=%lu brake=%lu landing=%lu wall=%lu car=%lu hop=%lu dash=%lu dashj=%lu jumppad=%lu horn=%lu cannon=%lu effect=%lu trick=%lu other=%lu",
+                                         (unsigned long)raceSound.layer().voiceStarts.load(), (unsigned long)raceSound.layer().resultVoice.load(), (unsigned long)raceSound.layer().itemSounds.load(), (unsigned long)raceSound.layer().homingFrames.load(), (unsigned long)raceSound.layer().alarmFrames.load(), (unsigned long)raceSound.layer().alarmDropped.load(), (unsigned long)mkw::SoundSystem::instance().stats().notesDropped, (unsigned long)mkw::SoundSystem::instance().stats().lastDroppedSound, (unsigned long)raceSound.layer().driftFrames.load(), g(L::Road), g(L::Slip), g(L::Spark), g(L::Brake), g(L::Landing), g(L::Wall), g(L::Car), g(L::Hop), g(L::Dash), g(L::DashJ), g(L::JumpPad), g(L::Horn), g(L::Cannon), g(L::Effect), g(L::Trick), g(L::Other));
                                 menuProfile->event(line);
                                 const auto &m = raceSound.layer().itemStarted;
                                 auto h = [&](int k)
@@ -3064,14 +3699,16 @@ int main()
                                                                                                                                                                                      : 0.f;
                 if (effectsTest)
                     boost = (frames >= 30 && frames < 60) || (frames >= 280 && frames < 340) ? 1.f : 0.f;
-                boostFov += (boost * 10.f - boostFov) * (boost * 10.f > boostFov ? .25f : .1f);
+                // Races: RaceCamera +0x120, 12 degrees x the last boost's factor held until the boosts end
+                // (Kart::Link 0x80590E40 / 0x80590E58), eased into the FOV by the race director. The
+                // Kinoko trace camera keeps its own approximation.
+                boostFov = fullRace ? chaseCamera.boostFov() : boostFov + (boost * 10.f - boostFov) * (boost * 10.f > boostFov ? .25f : .1f);
                 maxFov = std::max(maxFov, boostFov);
                 bool inTrick = kart->status().onBit(K::Kart::eStatus::InATrick, K::Kart::eStatus::ZipperTrick);
                 const bool trickStarted = inTrick && !wasTricking;
                 if (trickStarted)
                     ++trickCount;
                 // Driver presentation reads simulation state at exactly 60 Hz.
-                mkw::DriverSignals signals;
                 vehicleAnimation.step(*kart);
                 if (garageTest)
                 {
@@ -3079,26 +3716,67 @@ int main()
                     for (unsigned i = 0; i < vehicleAnimation.wheelCount(); ++i)
                         fixtureRolling |= std::fabs(vehicleAnimation.roll(i)) > 0.02f;
                 }
-                signals.bike = bike;
-                signals.wheelie = kart->status().onBit(K::Kart::eStatus::Wheelie);
-                signals.airborne = kart->status().offBit(K::Kart::eStatus::TouchingGround);
-                signals.hopping = kart->status().onBit(K::Kart::eStatus::Hop);
-                signals.inCannon = kart->status().onBit(K::Kart::eStatus::InCannon);
-                signals.steering = kart->inputs()->currentState().stick.x;
-                signals.speed = kart->move()->speed();
-                signals.drift = kart->status().onBit(K::Kart::eStatus::DriftManual, K::Kart::eStatus::DriftAuto);
-                signals.driftDirection = kart->move()->hopStickX();
-                signals.boost = boost > 0;
-                signals.trick = inTrick;
-                signals.hit = kart->status().onBit(K::Kart::eStatus::InAction, K::Kart::eStatus::Burnout, K::Kart::eStatus::Shocked);
+                // The retail driver model (driver_controller.hpp) reads the kart after its step.
+                mkw::DriverSignals signals = driverSignals.read(*kart);
+                signals.countdown = K::System::RaceManager::Instance()->stage() < K::System::RaceManager::Stage::Race;
+                signals.lookBack = lookBehind;
                 signals.finished = fullRace ? raceGrid.finished() : K::System::RaceManager::Instance()->stage() == K::System::RaceManager::Stage::FinishGlobal;
+                signals.far = (driverFar & 1u) != 0;
+                // fn_1_27CBF0: Time Trial poses come from the result, set on the FINISH frame by
+                // RacePage_beforeCalc 0x80856CEC (fn_1_27D10C). Against a ghost other than the
+                // player's own best (0x808570AC): a time below the ghost file's (RacePage_onInit
+                // 0x80856324) -> 1st (YOU WIN!), else bad (YOU LOSE). Solo or the own ghost: the
+                // leaderboard slot, 0 -> 1st, 1..4 -> good, none -> bad; the port keeps only the
+                // best time, so a new record -> 1st and any other time counts as top five.
+                // A watched ghost is a Ghost-type player (0x805E1D5C), so 1st.
+                if (timeTrial)
+                {
+                    const auto &t = K::System::RaceManager::Instance()->player(0).raceTimer();
+                    const uint32_t ms = uint32_t(t.min) * 60000u + uint32_t(t.sec) * 1000u + uint32_t(t.mil);
+                    if (watchReplay)
+                        signals.finishType = 0;
+                    else if (ttGhost.ready() && !ttGhost.own())
+                        signals.finishType = ms < mkw::rkgMilliseconds(ttGhost.header().finish) ? 0 : 2;
+                    else
+                        signals.finishType = newRecord ? 0 : 1;
+                }
+                else
+                    signals.finishType = fullRace ? mkw::DriverController::finishTypeForRank(raceGrid.rank(), raceGrid.count()) : 0;
                 if (fullRace)
-                    signals.finishType = raceGrid.rank() <= 1 ? 0 : raceGrid.rank() <= 5 ? 1
-                                                                                         : 2;
-                signals.accelerating = kart->status().onBit(K::Kart::eStatus::Accelerate);
-                signals.braking = kart->status().onBit(K::Kart::eStatus::Brake);
-                signals.blink = physicsSteps % 180 == 0;
+                {
+                    signals.inkFrames = mkw::inkFrames(*raceItems, 0);
+                    mkw::readItemEvents(signals, *raceItems, 0);
+                }
                 driverPose = driverController.step(signals);
+                if (kQa && fullRace)
+                {
+                    // QA: each racer's one-shot driver clips (finish poses, throws, tricks, damage).
+                    static std::array<const char *, 12> loggedClip{};
+                    static std::array<unsigned, 12> goalStep{}; // QA: each racer's goal step (0 = racing)
+                    for (unsigned i = 0; i < raceGrid.count() && i < loggedClip.size(); ++i)
+                    {
+                        if (!raceGrid.finished(i))
+                            goalStep[i] = 0;
+                        else if (!goalStep[i])
+                        {
+                            goalStep[i] = physicsSteps;
+                            LOGF("driver goal racer=%u step=%u rank=%u far=%d", i, physicsSteps, raceGrid.rank(i), int((driverFar >> i) & 1u));
+                        }
+                        const char *clip = i ? opponents.driverClip(i) : driverPose.clipName;
+                        if (!clip || clip == loggedClip[i])
+                            continue;
+                        loggedClip[i] = clip;
+                        static const char *const watched[] = {"1st", "good", "bad", "gut", "throw_f", "throw_f_ed", "throw_b", "damage", "back", "jump", "jump_st", "jump_ed", "sjump_st", "sjump_ed"};
+                        bool show = !std::strncmp(clip, "sjump_", 6);
+                        for (const char *w : watched)
+                            show |= !std::strcmp(clip, w);
+                        if (show)
+                            LOGF("driver racer=%u clip=%s step=%u rank=%u finished=%d", i, clip, physicsSteps, raceGrid.rank(i), int(raceGrid.finished(i)));
+                        // QA: a finish pose's start, counted from the racer's goal.
+                        if (goalStep[i] && (!std::strcmp(clip, "1st") || !std::strcmp(clip, "good") || !std::strcmp(clip, "bad")))
+                            LOGF("driver pose racer=%u clip=%s step=%u goal=%u after_goal=%u far=%d", i, clip, physicsSteps, goalStep[i], physicsSteps - goalStep[i], int((driverFar >> i) & 1u));
+                    }
+                }
                 // Clip clocks observe every source tick, including the iterations
                 // where no graphics are submitted.
                 auto clockPart = [&](mkw::DriverAnimation *bank, PartClock &clock, bool handle)
@@ -3159,8 +3837,14 @@ int main()
                         raceEffects.attach(i, fx.flame, f, pipe && boosting);
                     }
                     wasBoosting = boosting;
-                    // Bike wheelie wind trail from the rear wheel.
-                    raceEffects.attach(4, fx.wheelie, kartFrame(left), (bike && signals.wheelie) || (effectsTest && frames >= 120 && frames < 180));
+                    // Bike wheelie wind trail from the rear wheel (0x80698F70): while the wheelie
+                    // bit is set and KartMove vt+0x3c allows it (bikes 0x80588FE0: speedRatioCapped
+                    // >= 0.3, speed >= 0), until the rear wheel has been off the floor 10 frames
+                    // (KartEffect +0x84 against +0xAE0 = 10, counted in 0x806946BC). The start grid
+                    // has the wheel down, so the first step clears the count as init (0x8068EA58) does.
+                    static unsigned rearAirFrames = 0;
+                    rearAirFrames = kart->hasFloorCollision(kart->tirePhysics(rearLeft)) ? 0 : rearAirFrames + 1;
+                    raceEffects.attach(4, fx.wheelie, kartFrame(left), (bike && signals.wheelie && kart->move()->canWheelie() && rearAirFrames < 10) || (effectsTest && frames >= 120 && frames < 180));
                     // Smoke and dust (KartEffect's rk_start*, rk_driftSmoke, rk_dirtSmokeA and
                     // rk_jumpSmoke* emitters), player 0 only. Startup follows the
                     // retail callback/input path; drift/off-road/landing thresholds
@@ -3182,11 +3866,13 @@ int main()
                                 for (unsigned layer = 0; layer < 3; ++layer)
                                     raceEffects.attach(mkw::KartFxSlots::FirstFreeSlot + 2 + wheel * 3 + layer, startSpec[layer], kartFrame(vec(kart->wheelEdgePos(wheel ? rearRight : rearLeft))), (startWheels & (1 << wheel)) != 0);
                         // Drift tyre smoke once the drift is held on the ground.
-                        const bool drifting = stageNow >= K::System::RaceManager::Stage::Race && signals.drift && grounded && !bike;
+                        const bool drifting = stageNow >= K::System::RaceManager::Stage::Race && signals.drifting && grounded && !bike;
                         raceEffects.attach(14, driftSmoke, kartFrame(left), drifting);
                         raceEffects.attach(15, driftSmoke, kartFrame(right), drifting);
-                        // Off-road dust: Kinoko's off-road speed factor below 1 on the ground.
-                        const bool offroad = grounded && kart->move()->kclSpeedFactor() < .95f && std::fabs(signals.speed) > 5.f && stageNow >= K::System::RaceManager::Stage::Race;
+                        // Off-road dust outside full races (QA fixtures): Kinoko's off-road speed
+                        // factor below 1 on the ground. Races use the retail floor-effect selector
+                        // (KartTerrainEffects in the shared racer presentation below).
+                        const bool offroad = !fullRace && grounded && kart->move()->kclSpeedFactor() < .95f && std::fabs(signals.speed) > 5.f && stageNow >= K::System::RaceManager::Stage::Race;
                         raceEffects.attach(mkw::KartFxSlots::FirstFreeSlot, dirt, kartFrame(left), offroad);
                         if (!bike)
                             raceEffects.attach(mkw::KartFxSlots::FirstFreeSlot + 1, dirt, kartFrame(right), offroad);
@@ -3217,7 +3903,7 @@ int main()
                         mkw::EffectFrame trickFrame;
                         trickFrame.origin = vec(kart->pos()); // KartObjectProxy::getPos (0x8068fa0c)
                         raceEffects.move(12, trickFrame);
-                        if ((jumpAction && !signals.hit) || (effectsTest && frames == 180))
+                        if ((jumpAction && !kart->status().onBit(K::Kart::eStatus::InAction, K::Kart::eStatus::Burnout, K::Kart::eStatus::Shocked)) || (effectsTest && frames == 180))
                             raceEffects.restart(12, fx.trick, trickFrame);
                     }
                     if (effectsTest && frames == 240)
@@ -3311,6 +3997,9 @@ int main()
                                 raceEffects.burst(fx.blueBlastSmoke, f);
                             }
                         }
+                    // Course explosions (Shy Guy Beach cannonballs, Bowser's Castle fireballs):
+                    // retail's rk_bombHei on their first explosion step, in every mode.
+                    mkw::courseExplosionEffects(raceEffects, fx.bombBlast);
                     // KartEffect power-ups for every racer: Star, Bullet, Mega, Lightning and Thunder
                     // Cloud bolts, the shocked crackle and the POW (KartItemEffects). Presentation
                     // reads of this step's kart state and item events only.
@@ -3346,6 +4035,12 @@ int main()
                         }
                         kartFxLod.lod.update(0, 0, local, kartFxLod.clip);
                         uint32_t calcGroups = ~0u, drawGroups = ~0u;
+                        kartDrift.beginStep();
+                        // This step's activateMushroom calls (item use, course Mushroom), for the boost flame.
+                        std::array<bool, mkw::KartDriftEffects::MaxRacers> mushroomUsed{};
+                        for (const auto &e : raceItems->events())
+                            if (e.effect == mkw::ItemEffect::Mushroom && e.player < mushroomUsed.size())
+                                mushroomUsed[e.player] = true;
                         for (unsigned i = 0; i < racers; ++i)
                         {
                             const auto *racer = K::Kart::KartObjectManager::Instance()->object(i);
@@ -3401,8 +4096,9 @@ int main()
                             for (unsigned w = 0; w < 2; ++w)
                             {
                                 const auto &c = racer->collisionData(w ? rearR : rearL);
-                                in.waterWheelKcl[w] = c.bFloor && (uint32_t(c.closestFloorFlags) & (1u << 11));
-                                in.waterKcl |= in.waterWheelKcl[w];
+                                // Moving water (KCL 0xB) under a rear wheel, for the splash and depth
+                                // tests; the wheel spray follows the floor-effect selector below.
+                                in.waterKcl |= c.bFloor && (uint32_t(c.closestFloorFlags) & (1u << 11));
                             }
                             if (in.hasSea)
                             {
@@ -3430,6 +4126,39 @@ int main()
                             for (unsigned j = 0; j < racers; ++j)
                                 if (kartContacts[i].bumpedBy & (1u << j))
                                     in.otherContactFast |= K::Kart::KartObjectManager::Instance()->object(j)->velocity().length() > 30.f;
+                            // Floor effects (KartTerrainEffects): each rear wheel's closest floor KCL
+                            // entry through the retail selector; the dust for player 0, and the Water
+                            // picks drive KartItemEffects' wheel spray (0x806AF768). Ghosts other than
+                            // a replayed one have no floor effects (KartEffect +0x12b).
+                            {
+                                mkw::TerrainInput t;
+                                for (unsigned w = 0; w < 2; ++w)
+                                {
+                                    const auto &c = racer->collisionData(w ? rearR : rearL);
+                                    t.types[w] = c.bFloor ? uint32_t(c.closestFloorFlags) : 0u;
+                                    t.variants[w] = c.bFloor ? int(c.closestFloorSettings) : -1;
+                                    t.edges[w] = in.waterRear[w];
+                                }
+                                t.bike = in.bike;
+                                t.chargedDrift = unsigned(move->driftState()) > 1;
+                                t.local = i == 0;
+                                t.lod = kartFxLod.lod.lod(i);
+                                t.startBoost = in.chargingSSMT || in.countdownAccelerate;
+                                t.scaled = mkw::KartItemEffects::effectScale(in, t.particleScale);
+                                t.speed = mkw::length(in.velocity);
+                                t.speedLimit = std::max(move->softSpeedLimit(), 50.f); // KartMove +0x18
+                                t.pose.origin = in.position;
+                                t.pose.x = in.right;
+                                t.pose.y = in.up;
+                                t.pose.z = in.forward;
+                                // 0x806ADEF4 on Dry Dry Ruins: dust colour 9 by the KMP type-1 area (0x80516808).
+                                if (t.local && K::System::RaceConfig::Instance()->raceScenario().course == K::Course::Dry_Dry_Ruins)
+                                    t.dryDryAreaOutside = K::System::CourseMap::Instance()->getCurrentAreaID(-1, racer->pos(), K::System::MapdataAreaBase::Type(1)) == -1;
+                                const bool ghostRacer = i != 0 && raceGrid.ghost(i);
+                                const auto &pick = terrainEffects.step(raceEffects, ghostRacer ? mkw::KartTerrainEffects::MaxRacers : i, t);
+                                for (unsigned w = 0; w < 2; ++w)
+                                    in.waterWheelKcl[w] = pick[w].effect == mkw::TerrainFx::Water;
+                            }
                             kartFxSlots.select(i, i == 0);
                             kartFx[i].step(in, kartFxSlots, kartFxLod.lod.lod(i));
                             mkw::EffectFrame landingFrame;
@@ -3458,6 +4187,53 @@ int main()
                                                  racer->inputs()->currentState().accelerate(), racer->collisionData(l).bFloor, racer->collisionData(r).bFloor,
                                                  bike, status.onBit(St::Burnout), in.beforeRespawn || in.bullet,
                                                  move->startEffectSerial(), move->startEffectDuration(), kartFxLod.lod.lod(i));
+                                // KartEffect's drift group (0x80698028 kart, 0x80698F70 bike): drift smoke and the
+                                // remote Spark01S sparks; and its boost flame (rk_miniTurboS, 0x806A3AC4). A ghost
+                                // (+0x12b) gets other handles (not ported).
+                                if (!raceGrid.ghost(i))
+                                {
+                                    mkw::KartDriftEffects::Input d;
+                                    d.pose = frame;
+                                    d.pose.scale = 1;
+                                    d.bike = bike;
+                                    d.insideBike = bike && racer->param()->stats().driftType == K::Kart::KartParam::Stats::DriftType::Inside_Drift_Bike;
+                                    // +0x7bc/+0x7c8 (0x80693E94): a kart's rear wheels, a bike's front and rear.
+                                    const unsigned w0 = bike ? 0 : l, w1 = bike ? 1 : r;
+                                    d.wheel[0] = vec(racer->wheelEdgePos(w0));
+                                    d.wheel[1] = vec(racer->wheelEdgePos(w1));
+                                    d.floor[0] = racer->hasFloorCollision(racer->tirePhysics(w0));
+                                    d.floor[1] = racer->hasFloorCollision(racer->tirePhysics(w1));
+                                    if (bike && d.floor[1])
+                                        d.rearFloorNormal = vec(racer->collisionData(w1).floorNrm);
+                                    d.driftState = unsigned(move->driftState());
+                                    d.driftAuto = status.onBit(St::DriftAuto);
+                                    d.hopStickX = move->hopStickX();
+                                    d.mtCharge = move->mtCharge();
+                                    d.scaled = mkw::KartItemEffects::effectScale(in, d.scale);
+                                    d.pressed = in.pressed;
+                                    d.vanished = status.onBit(St::Vanished);
+                                    d.bullet = in.bullet;
+                                    // The boost flame's inputs: this step's boost activations and the pipes.
+                                    d.boostVoice = (kartContacts[i].cues & uint32_t(K::Kart::KartMove::SoundCue::BoostVoice)) != 0;
+                                    d.allMtActive = move->boostActive(K::Kart::KartBoost::Type::AllMt);
+                                    d.miniTurbo = uint16_t(racer->param()->stats().miniTurbo);
+                                    d.startSerial = move->startEffectSerial();
+                                    d.startFrames = move->startEffectDuration();
+                                    d.mushroom = mushroomUsed[i];
+                                    d.beforeRespawn = in.beforeRespawn;
+                                    d.inAction = in.inAction;
+                                    if (K::System::RaceManager::Instance()->stage() >= K::System::RaceManager::Stage::Race)
+                                        for (unsigned w = 0; w < wheels; ++w)
+                                        {
+                                            const auto &c = racer->collisionData(w);
+                                            d.onBoostPanel |= c.bFloor && (uint32_t(c.closestFloorFlags) & ((1u << 6) | (1u << 7))) != 0;
+                                        }
+                                    d.exhaust = &mkw::VehicleExhausts[std::min(35u, unsigned(K::System::RaceConfig::Instance()->raceScenario().players[i].vehicle))];
+                                    d.diving = in.diving;
+                                    d.hasSea = in.hasSea;
+                                    d.seaHeight = in.seaHeight;
+                                    kartDrift.step(raceEffects, i, d, kartFxLod.lod.lod(i));
+                                }
                             }
                             // A racer's group calculates (0x80678818) and draws (0x80678aec)
                             // without +7 or with +9.
@@ -3467,19 +4243,24 @@ int main()
                             if (!kartFxLod.lod.draws(i, 0, keep))
                                 drawGroups &= ~mkw::KartFxSlots::groupBit(i);
                         }
+                        kartDrift.endStep();
+                        // QA: steps so far on which some CPU emitted drift sparks / drift smoke; CPU boost flame starts.
+                        if (kQa && physicsSteps % 600 == 0)
+                            LOGF("cpu drift fx step=%u spark_steps=%u smoke_steps=%u flame_starts=%u", physicsSteps, kartDrift.sparkFrames(), kartDrift.smokeFrames(), kartDrift.flameStarts());
                         raceEffects.setGroups(calcGroups, drawGroups);
                     }
                     raceEffects.step();
                     {
-                        mkw::Vec3 eye, target;
+                        mkw::Vec3 eye, target, up;
                         float sceneFov = intro.active() ? intro.fov() : cameraDirector->view().fov;
-                        presentationCamera(eye, target);
-                        raceEffects.setCamera(eye, target, {0, 1, 0});
+                        presentationCamera(eye, target, up);
+                        raceEffects.setCamera(eye, target, up);
                         // The clip manager (0x80783344) after the camera: each racer's sphere on
-                        // the presented camera, full vertical fovy, the top screen's aspect.
+                        // the presented camera (its view roll, calcUp 0x805A40D0), full vertical
+                        // fovy, the top screen's aspect.
                         if (fullRace)
                         {
-                            const auto clipCamera = mkw::EffectClipCamera::lookAt(eye, target, sceneFov, mkw::display::Aspect);
+                            const auto clipCamera = mkw::EffectClipCamera::lookAt(eye, target, sceneFov, mkw::display::Aspect, up);
                             const unsigned racers = std::min<unsigned>(raceGrid.count(), mkw::KartFxSlots::MaxRacers);
                             for (unsigned i = 0; i < racers; ++i)
                                 kartFxLod.clip[i] = clipCamera.clip(vec(K::Kart::KartObjectManager::Instance()->object(i)->pos()));
@@ -3512,8 +4293,9 @@ int main()
             auto *cameraKart = K::Kart::KartObjectManager::Instance()->object(0);
             renderer.animationFrame = physicsSteps;
             const auto raceView = cameraDirector->view();
-            renderer.setFov(intro.active() ? intro.fov() : fullRace ? raceView.fov
-                               : cameraKart->param()->camera().fov + boostFov);
+            const float fov = intro.active() ? intro.fov() : fullRace ? raceView.fov : cameraKart->param()->camera().fov + boostFov;
+            renderer.setFov(fov, fullRace && mirrorMode);
+            mkw::renderQuality().setFov(fov);
             if (fullRace)
             {
                 auto *race = K::System::RaceManager::Instance();
@@ -3568,8 +4350,8 @@ int main()
                               steps);
             }
             {
-                mkw::Vec3 eye, target;
-                presentationCamera(eye, target);
+                mkw::Vec3 eye, target, up;
+                presentationCamera(eye, target, up);
                 // Stereo (docs/STEREO_3D.md): Mario Kart 7's race camera on every race
                 // shot, intro and replays included. Its reference plane keeps a fixed
                 // view depth, a set fraction of the kart's depth along the chase
@@ -3582,7 +4364,7 @@ int main()
                 }
                 else if (renderer.stereoCapable())
                     renderer.setStereoSubject(mkw::stereo::Race, dot(vec(cameraKart->pos()) - eye, mkw::normalized(target - eye)));
-                renderer.begin(eye, target, {0, 1, 0});
+                renderer.begin(eye, target, up);
             }
             profiler->mark(Profile::Wait);
             // Opponent poses build on the job worker while the course draws.
@@ -3593,31 +4375,19 @@ int main()
             {
                 auto presentation = driverPose;
                 const char *clipName = presentation.clipName;
-                if (cameraKart->param()->isBike() && (std::strcmp(clipName, "sjump_a") == 0 || std::strcmp(clipName, "sjump_b") == 0 || std::strcmp(clipName, "sjump_c") == 0))
-                {
-                    static const char *bikeTricks[] = {"sjump_ma", "sjump_mb", "sjump_mc"};
-                    clipName = bikeTricks[(trickCount ? trickCount - 1 : 0) % 3];
-                }
                 float clipFrame = presentation.frame;
-                if (!std::strcmp(clipName, "jump") && driverAnimation.find(clipName) < 0)
-                {
-                    clipName = "jump_st";
-                    int clip = driverAnimation.find(clipName);
-                    clipFrame = clip >= 0 ? driverAnimation.duration(clip) - 1 : 0;
-                }
-                if (driverAnimation.face(clipName) >= 0)
-                {
-                    presentation.faceName = clipName;
-                    presentation.faceFrame = clipFrame;
-                }
+                // The retail crossfade: the outgoing clip keeps animating at its own frame.
+                mkw::DriverAnimation::ClipBlend from{presentation.fromClip ? driverAnimation.find(presentation.fromClip) : -1, presentation.fromFrame, presentation.weight};
                 if (effectsTest && frames >= 180)
                 {
                     static const char *fixture[] = {"sjump_a", "sjump_b", "sjump_c"};
                     clipName = fixture[(frames - 180) / 60];
                     clipFrame = (frames - 180) % 60;
+                    from = {};
                 }
                 if (animationTest)
                 {
+                    from = {};
                     unsigned local = frames % fixtureFrames, interval = garageTest ? 2 : 12;
                     unsigned index = driverAnimation.count() ? std::min(local / interval, driverAnimation.count() - 1) : 0;
                     clipName = driverAnimation.name(index);
@@ -3637,7 +4407,7 @@ int main()
                 playerClip = clipName;
                 if (driver)
                 {
-                    driverAnimation.apply(*driver, driverAnimation.find(clipName), clipFrame, animationTest ? physicsSteps * 6 : physicsSteps, driverAnimation.face(presentation.faceName), presentation.faceFrame);
+                    driverAnimation.apply(*driver, driverAnimation.find(clipName), clipFrame, from, animationTest ? physicsSteps * 6 : physicsSteps, driverAnimation.face(presentation.faceName), presentation.faceFrame);
                     if (animationTest)
                     {
                         for (unsigned i = 0; i < driver->vertexCount; ++i)
@@ -3679,7 +4449,10 @@ int main()
             // Snapshot the original chassis transform before the player pose
             // worker reads VehicleAnimation's lazy matrices.
             const C3D_Mtx playerShadowTransform = vehicleAnimation.body();
-            const bool playerCastsShadow = vehicleShadow && (!fullRace || !raceItems->hud(0).bullet);
+            // Watch the Replay: the replayed ghost is gone once its vanish ends (status bit 83;
+            // retail fn_1_71034 0x805813E8 hides the kart's parts, fn_1_806D8 0x80590A8C).
+            const bool playerGone = fullRace && K::Kart::KartObjectManager::Instance()->object(0)->status().onBit(K::Kart::eStatus::Vanished);
+            const bool playerCastsShadow = vehicleShadow && (!fullRace || !raceItems->hud(0).bullet) && !playerGone;
             // Test fixtures count clips while posing: they pose on this thread.
             playerJobQueued = fullRace && !animationTest && !effectsTest && mkw::jobWorker().running();
             if (playerJobQueued)
@@ -3700,8 +4473,12 @@ int main()
             profiler->mark(Profile::Scenery);
             renderer.setCourseLighting(false);
             if (fullRace)
+            {
+                // Item shadows resolve before any kart or item, as retail's (opa 0x35, race_hud.cpp).
+                raceHud.drawShadows(renderer, *raceItems, vec(cameraKart->pos()));
                 opponents.draw(renderer, *raceItems, vec(cameraKart->pos()), physicsSteps,
                                playerCastsShadow ? vehicleShadow.get() : nullptr, &playerShadowTransform);
+            }
             else if (playerCastsShadow)
             {
                 mkw::Renderer::ShadowVolume shadow{vehicleShadow.get(), playerShadowTransform};
@@ -3726,7 +4503,7 @@ int main()
                 renderer.setSkinPalette(nullptr, 0, 12);
             };
 
-            if (vehicle && (!fullRace || !raceItems->hud(0).bullet))
+            if (vehicle && (!fullRace || !raceItems->hud(0).bullet) && !playerGone)
             {
                 renderer.additiveColor = fullRace ? mkw::starMaterialColor(raceItems->hud(0).star) : 0;
                 transform = vehicleAnimation.body();
@@ -3770,6 +4547,12 @@ int main()
             renderer.setCourseLighting(true);
             courseObjects.drawWater(renderer);
             renderer.setCourseLighting(false);
+            // Time Trials composite the ghost after the course's translucent materials
+            // and before the effects: draw path 0's last step (ScnRenderer_createPath
+            // 0x8023BD38, flag 1 from fn_1_A112C 0x805B14E0) sits at xlu priority 0x4B,
+            // past course xlu 0x4A (group 0) and before the effect procs at 0x51 / 0x57.
+            if (fullRace)
+                opponents.drawGhosts(renderer);
             renderer.drawSparks(driftEffects, sparkTexture);
             renderer.drawEffects(raceEffects, effectTextures->data());
             mkw::jobWorker().finishAll();
@@ -3808,6 +4591,8 @@ int main()
                     renderer.drawScreenText(best, 392 - 6 * float(std::strlen(best)), 62, 1.f, 0xffffffffu);
                     if (newRecord)
                         renderer.drawScreenText("NEW RECORD!", 200 - 33 * 2, 84, 2.f, 0xffe040ffu);
+                    if (ghostSaved)
+                        renderer.drawScreenText("GHOST SAVED", 200 - 33, 108, 1.f, 0xffffffffu);
                 }
             }
             renderer.setScreenDepth(renderer.stereoLayer(mkw::stereo::HudLayer));
@@ -3819,13 +4604,19 @@ int main()
             profiler->mark(Profile::Hud);
             if (fullRace && menu.page != mkw::UiPage::Race)
                 menuRenderer.draw(renderer, raceQuads, false);
-            // Leaving after the end-of-race menu: the scene fader covers everything.
+            if (fullRace && demo.demo())
+                flowUi.drawDemo(renderer, demoCard);
+            // The scene fader covers everything: the Demo and race section enters,
+            // the Demo's fade-out, and leaving after the end-of-race menu.
+            const float sceneFade = fullRace ? std::max(results.leaveFade(), demo.black()) : 0.f;
             if (fullRace)
-                renderer.drawScreenFade(results.leaveFade(), false);
+                renderer.drawScreenFade(sceneFade, false);
             if (fullRace && bottomScreen.active())
             {
                 // The lower LCD: the race read, never written (src/race_bottom_screen.cpp).
-                mkw::fillBottomView(bottomView, raceGrid, *raceItems, intro.active(), physicsSteps, results.leaveFade());
+                mkw::fillBottomView(bottomView, raceGrid, *raceItems, intro.active(), physicsSteps, sceneFade);
+                bottomView.mirror = mirrorMode;
+                bottomView.exitSlide = results.hudSlide();
                 renderer.beginBottom();
                 bottomScreen.draw(renderer, bottomView);
             }
@@ -4051,6 +4842,7 @@ int main()
             wasTricking = false;
             wasBoosting = false;
             trickModel.reset();
+            driverSignals.reset();
             restarts++;
         }
         if (smoke && frames == 120)

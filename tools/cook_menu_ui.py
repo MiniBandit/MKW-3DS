@@ -118,7 +118,7 @@ def bake_border_loop(key,p,control,bindings,animations,animation_groups,render_a
   save(atlas_key,image,p)
  border_records.append(dict(key=key,control=control.stem,frames=period,duration=duration,rate=rate,center=[rect[0]+cx,rect[1]+cy,cw,ch],firstSlice=first_slice,sliceCount=len(border_slices)-first_slice,source=animations[index].relative_to(ROOT).as_posix(),frameHashes=[hashlib.sha256(image.tobytes()).hexdigest() for image in images]))
 
-def bake_panel(name,resource,states=('free','select'),exclude=(),bounds=None,overrides=None,hidden=(),group_states=None):
+def bake_panel(name,resource,states=('free','select'),exclude=(),bounds=None,overrides=None,hidden=(),group_states=None,window_frames=False):
  p=ROOT/'assets/menu-ui'/resource
  node_records[name]=pane_nodes(p)
  bindings=None;control=None
@@ -170,7 +170,7 @@ def bake_panel(name,resource,states=('free','select'),exclude=(),bounds=None,ove
    pane_overrides['black_base']={'alpha':128/255,'vertexColors':[vertex]*4}
   movie_panes=('black_base','black_base_00','black_base_01','black_base_02') if name=='mode' else ('black_base',) if name in ('main_button','main_multi','main_wifi','class','drift','vs','course','battle') else ()
   separate=tuple(sorted(dynamic_panes))
-  img,rect,panes=render_layout(p,source,animations,exclude=exclude,bounds=bounds,pane_overrides=pane_overrides,material_overrides=colors,animation_groups=animation_groups,exclude_exact=movie_panes+separate)
+  img,rect,panes=render_layout(p,source,animations,exclude=exclude,bounds=bounds,pane_overrides=pane_overrides,material_overrides=colors,animation_groups=animation_groups,exclude_exact=movie_panes+separate,window_frames=window_frames)
   # Split at independently animated pictures, in BRLYT submission order.
   # Excluded pictures still write source depth in render_layout. Later static
   # chunks therefore need both depth-film-present and film-absent variants.
@@ -180,7 +180,7 @@ def bake_panel(name,resource,states=('free','select'),exclude=(),bounds=None,ove
   first_dynamic=pictures.index(ordered[0]) if ordered else len(pictures)
   before=tuple(pictures[:first_dynamic])
   if ordered:
-   img,_,_=render_layout(p,source,animations,exclude=exclude,bounds=rect,pane_overrides=pane_overrides,material_overrides=colors,animation_groups=animation_groups,exclude_exact=movie_panes+separate,include=before)
+   img,_,_=render_layout(p,source,animations,exclude=exclude,bounds=rect,pane_overrides=pane_overrides,material_overrides=colors,animation_groups=animation_groups,exclude_exact=movie_panes+separate,include=before,window_frames=window_frames)
   key=name+('_'+state if state else '')
   save(key,img,p);panel_records[key]=rect
   pane_records[key]=panes
@@ -188,11 +188,11 @@ def bake_panel(name,resource,states=('free','select'),exclude=(),bounds=None,ove
   if movie_panes:
    movie_z=panes[movie_panes[0]]['z']
    for suffix,z_range in [('underlay',(-float('inf'),movie_z)),('overlay',(movie_z,float('inf')))]:
-    layer,_,_=render_layout(p,source,animations,exclude=exclude,bounds=rect,pane_overrides=pane_overrides,material_overrides=colors,animation_groups=animation_groups,exclude_exact=movie_panes+separate,z_range=z_range,include=before if ordered else None)
+    layer,_,_=render_layout(p,source,animations,exclude=exclude,bounds=rect,pane_overrides=pane_overrides,material_overrides=colors,animation_groups=animation_groups,exclude_exact=movie_panes+separate,z_range=z_range,include=before if ordered else None,window_frames=window_frames)
     save(key+'_'+suffix,layer,p);panel_records[key+'_'+suffix]=rect
     if suffix=='underlay':loop_key=key+'_'+suffix;loop_image=layer;loop_z=z_range
   bake_border_loop(loop_key,p,control,bindings,animations,animation_groups,
-                   dict(exclude=exclude,pane_overrides=pane_overrides,material_overrides=colors,animation_groups=animation_groups,exclude_exact=movie_panes+separate,z_range=loop_z,include=before if ordered else None),rect,loop_image)
+                   dict(exclude=exclude,pane_overrides=pane_overrides,material_overrides=colors,animation_groups=animation_groups,exclude_exact=movie_panes+separate,z_range=loop_z,include=before if ordered else None,window_frames=window_frames),rect,loop_image)
   for at,member in enumerate(ordered):
    begin=pictures.index(member)+1;end=pictures.index(ordered[at+1]) if at+1<len(ordered) else len(pictures)
    after=tuple(n for n in pictures[begin:end] if n not in movie_panes and not any(x in n for x in exclude))
@@ -202,7 +202,7 @@ def bake_panel(name,resource,states=('free','select'),exclude=(),bounds=None,ove
     for mask in range(1<<(at+1)):
      depth_overrides=dict(pane_overrides)
      for bit,film in enumerate(ordered[:at+1]):depth_overrides[film]={**depth_overrides.get(film,{}),'alpha':float(bool(mask&(1<<bit))),'visible':True}
-     tail,_,_=render_layout(p,source,animations,exclude=exclude,bounds=rect,pane_overrides=depth_overrides,material_overrides=colors,animation_groups=animation_groups,exclude_exact=movie_panes+separate,z_range=z_range,include=after)
+     tail,_,_=render_layout(p,source,animations,exclude=exclude,bounds=rect,pane_overrides=depth_overrides,material_overrides=colors,animation_groups=animation_groups,exclude_exact=movie_panes+separate,z_range=z_range,include=after,window_frames=window_frames)
      box=tail.getbbox()
      if not box:continue
      tail_key=f'panel_tail_{name}_{state}_{at}_{part}_{mask}'
@@ -232,6 +232,39 @@ def bake_panel(name,resource,states=('free','select'),exclude=(),bounds=None,ove
     focus_key='focus_'+name+'_'+member;save(focus_key,image,p);panel_records[focus_key]=focus_rect
     part=(1 if panes[member]['z']<movie_z else 2) if movie_panes else 0
     focus_records.append(dict(panel=name,pane=member,key=focus_key,rect=focus_rect,pivot=focus_panes[member]['pivot'],part=part,blend=int(blend[2]==1),depthBit=1<<ordered.index(member)))
+
+# Pages added after the original cook. Run after every other bake, so their
+# sprites, panel, panes and text styles append to the earlier records and no
+# existing index moves. TimeAttackBackPage_onReady (PAL 0x806393C8) opens
+# ConfirmPage (0x52, onInit 0x805C1EB8) for a course without ghosts: a
+# MessageWindowHalf window (message_window/common_w022_message_half) with BMG
+# 0xC1D, and ConfirmOK (common_w004_menu, the 'button' panel) with BMG 2000.
+def bake_late(menu_messages,labels,text_styles,text_unique):
+ bake_panel('message_half','MenuSingle/message_window/blyt/common_w022_message_half.brlyt',states=('',),exclude=('text',),window_frames=True)
+ late_roles={'message_half':[menu_messages[0xc1d]],'button':[menu_messages[0x7d0]]}
+ for panel,panes in pane_records.items():
+  role=re.sub(r'_(free|select|ok|selectin)$','',panel)
+  if role not in late_roles:continue
+  for name,pane in panes.items():
+   if pane.get('kind')!='txt1':continue
+   if 'textStyle' not in pane:
+    # As main(): SetMessage selects BMG font 1, kart_kanji_font (index 0).
+    pane.setdefault('authoredFont',pane['font']);pane['font']=0;pane['messageFontIndex']=1
+    style={'colors':pane['textColors'],'vertices':pane['textVertexColors']}
+    if style not in text_styles:text_styles.append(style)
+    pane['textStyle']=text_styles.index(style)+1
+   if not (panel.endswith(('_ok','_selectin')) or name not in ('text_light_01','text_light_02')):continue
+   for label in late_roles[role]:
+    i=labels.index(label)
+    for font_id,fontname in enumerate(['kart_kanji_font.brfnt','tt_kart_font_rodan_ntlg_pro_b.brfnt']):
+     key=f'text_style_{pane["textStyle"]}_{font_id}_{i}'
+     if key in records or (font_id,i) not in text_unique:continue
+     font=ROOT/'assets/race-ui/Font'/fontname
+     style=text_styles[pane['textStyle']-1];styled=font_style(font_strings(font,[label])[label],style['colors'],style['vertices'])
+     unique=text_unique[(font_id,i)];pixel_hash=hashlib.sha256(styled.tobytes()).digest()
+     if pixel_hash in unique:record=dict(unique[pixel_hash]);records[key]=record
+     else:record=save(key,styled,font);unique[pixel_hash]=record
+     record.update(text=label,font=font_id,style=pane['textStyle'])
 
 def bake_ok_glows(name,resource,drivers,cups,group_name='OK'):
  p=ROOT/'assets/menu-ui'/resource;binding=None
@@ -380,7 +413,9 @@ def main():
   ('ghost_arrow_right','MenuSingle/button/blyt/common_w021_yajirushi_right.brlyt',('text',)),
   ('confirm','MenuSingle/button/blyt/common_w109_go_button.brlyt',('text',)),
  ]
- for name,resource,exclude in specs:bake_panel(name,resource,exclude=exclude)
+ # The license cards' Window_00 is a one-frame nw4r window (frame drawing in
+ # menu_layout.render_layout, PAL 0x8007D520).
+ for name,resource,exclude in specs:bake_panel(name,resource,exclude=exclude,window_frames=name=='license')
  # PressStart is a real layout/control, with a separate expanding light
  # text pane and a squash/stretch confirmation animation. The fade group is
  # evaluated live; keep an opaque reference pose for the text textures.
@@ -390,7 +425,7 @@ def main():
  empty_license=['mii']+[f'{prefix}_{i:02d}' for prefix in ['cc50','cc100','cc150','cc_mirror'] for i in range(8)]
  empty_license+=['n_0_kinoko','n_1_flower','n_2_star','n_3_special','r_0_koura','r_1_banana','r_2_konoha','r_3_thunder','n_2_hatena','n_3_hatena','r_2_hatena','r_3_hatena']
  for position in ['top','bottom']:
-  bake_panel('license_'+position+'_empty','Title/button/blyt/common_w076_license_icon_tex_'+position+'.brlyt',hidden=empty_license)
+  bake_panel('license_'+position+'_empty','Title/button/blyt/common_w076_license_icon_tex_'+position+'.brlyt',hidden=empty_license,window_frames=True)
  bake_panel('background','MenuSingle/bg/blyt/bg.brlyt',states=('',),bounds=(-304,-228,304,228))
  bake_panel('header','MenuSingle/bg/blyt/obi_top.brlyt',states=('',),bounds=(-304,-228,304,-125),overrides={'RootPane':{'x':2.1972661,'y':210}})
  bake_panel('footer','MenuSingle/bg/blyt/obi_bottom.brlyt',states=('',),bounds=(-304,125,304,228))
@@ -519,7 +554,7 @@ def main():
    index=text_styles.index(style)+1;pane['textStyle']=index
    if panel.endswith(('_ok','_selectin')) or name not in ('text_light_01','text_light_02'):
     style_labels.setdefault(index,set()).update(roles.get(role,[]))
- font_cells=[]
+ font_cells=[];text_unique={}
  for font_id,fontname in enumerate(['kart_kanji_font.brfnt','tt_kart_font_rodan_ntlg_pro_b.brfnt']):
   font=ROOT/'assets/race-ui/Font'/fontname;source(font)
   data=font.read_bytes()
@@ -547,7 +582,7 @@ def main():
   for i,label in enumerate(labels):
    if label not in glyphs:continue
    r=save(('text_' if font_id==0 else 'text_rodan_')+str(i),glyphs[label],font);r.update(text=label,font=font_id)
-   unique={hashlib.sha256(glyphs[label].tobytes()).digest():r}
+   unique={hashlib.sha256(glyphs[label].tobytes()).digest():r};text_unique[(font_id,i)]=unique
    for style_id,required in style_labels.items():
     if label not in required:continue
     style=text_styles[style_id-1];styled=font_style(glyphs[label],style['colors'],style['vertices'])
@@ -594,6 +629,7 @@ def main():
      tri=vv[k:k+3];pts=[((v[0]-xmin)/(xmax-xmin)*(size-1),(v[2]-zmin)/(zmax-zmin)*(size-1)) for v in tri]
      color=tuple(round(sum(v[10+c] for v in tri)/3) for c in range(4));draw.polygon(pts,fill=color)
   r=save('map_'+str(i),img,path);maps.append({'bounds':[xmin,zmin,xmax,zmax],'sourceNodes':nodes,'sprite':'map_'+str(i),'course':course_names[i]})
+ bake_late(menu_messages,labels,text_styles,text_unique)
  # Recover selection magnification and entry duration from retail BRLAN.
  anim=UI/'button/anim/common_w004_menu_free_to_select.brlan';source(anim);dur,tracks=animation(anim)
  scales=[sample(tracks[('pause_w_fade_n','RLPA',6)],i) for i in range(dur)]

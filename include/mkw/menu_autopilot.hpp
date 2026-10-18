@@ -14,7 +14,9 @@ namespace mkw {
 //   wN               wait N presented frames
 //   race:N           wait for a race, drive (A held) for N simulation frames
 //   auto:N           as race:N, but player 0 follows the CPU route and uses items
-//                    (race:N and auto:N also end when the player finishes)
+//                    (race:N and auto:N also end when the player finishes; when an
+//                    auto:N runs out first, a following next/quit keeps player 0 on
+//                    the route until the end-of-race menu, which only the finish opens)
 //   in a race:  A    press A once (skips a result board once it stops counting)
 //               wN   wait N presented frames
 //               next / quit  wait for the end-of-race menu, choose that option
@@ -45,8 +47,9 @@ public:
   active_=!tokens_.empty();return active_;
  }
  bool active()const{return active_;}
- // QA: player 0 is driven by the CPU route during an auto:N token.
- bool routeDrive()const{return active_&&!done_&&racing_&&route_;}
+ // QA: player 0 is driven by the CPU route during an auto:N token, and after one that
+ // ran out before the finish while next/quit waits for the end-of-race menu.
+ bool routeDrive()const{return active_&&!done_&&route_;}
  bool finished()const{return done_;}
  bool passed()const{return done_&&!failed_;}
  unsigned racesStarted()const{return races_;}
@@ -85,7 +88,12 @@ public:
   if(!token->compare(0,5,"race:")||!token->compare(0,5,"auto:")){
    if(!racing_){racing_=true;raceStart_=simulationFrames;++races_;raceWait_=0;}
    route_=!token->compare(0,5,"auto:");
-   if(finished||simulationFrames-raceStart_>=unsigned(std::atoi(token->c_str()+5))){racing_=false;route_=false;++cursor_;}
+   if(finished||simulationFrames-raceStart_>=unsigned(std::atoi(token->c_str()+5))){
+    racing_=false;++cursor_;
+    // Out of frames before the finish: without the route driver (A held, stick centred)
+    // player 0 never reaches the line, so next/quit would wait in vain.
+    route_=route_&&!finished&&cursor_<tokens_.size()&&(tokens_[cursor_]=="next"||tokens_[cursor_]=="quit");
+   }
    return;
   }
   if(*token=="end"){done_=true;return;}
@@ -94,7 +102,7 @@ public:
   if((*token)[0]=='w'){if(++wait_>=unsigned(std::atoi(token->c_str()+1))){wait_=0;++cursor_;}return;}
   if(*token=="next"||*token=="quit"){
    if(!endMenu){if(++raceWait_>12000)fail("end-of-race menu did not appear");return;}
-   raceWait_=0;if(++gap_<8)return;gap_=0;
+   route_=false;raceWait_=0;if(++gap_<8)return;gap_=0;
    const unsigned wanted=*token=="quit"?1:0;
    if(endCursor!=wanted){down=KEY_DDOWN;return;}
    down=KEY_A;++cursor_;leaving_=true;return;

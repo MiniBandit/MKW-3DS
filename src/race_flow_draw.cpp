@@ -109,9 +109,8 @@ void occludedPicture(Batch& batch,const FlowPane& def,const FlowPanePose& pane,c
 // the text position places the line in the box; glyphs carry the top and
 // bottom vertex colours (per-glyph vertical gradient).
 template<class Batch>
-void textQuads(Batch& batch,const FlowPane& def,const FlowPanePose& pane,const Placement& at,const char* text){
+void textQuads(Batch& batch,const FlowPane& def,const FlowPanePose& pane,const Placement& at,const char* text,const FlowFont& font=FlowKanjiFont){
  if(!text||!*text)return;
- const auto& font=FlowKanjiFont;
  const float scaleX=def.fontW/float(font.width),scaleY=def.fontH/float(font.height);
  float width=0;unsigned n=0;
  for(const char* p=text;*p;++p)if(const auto* g=glyph(font,*p)){width+=float(g->advance)*scaleX;++n;}
@@ -173,6 +172,28 @@ void FlowDrawer::step(const RaceResultsFlow& flow){
   m.chosen=flow.chosen();m.buttons[m.chosen].plays[3]=flowPlay(def,"OK","OK");
  }
  for(unsigned b=0;b<count;++b)for(auto& p:m.buttons[b].plays)flowAdvance(def,p,1);
+}
+
+void FlowDrawer::drawDemo(const FlowDemoCard& card,FlowSink sink,void* context){
+ auto& m=*this;
+ // DemoPage's controls in insert order: course_name, then cup_name. Neither
+ // animates, so each draws its layout's own pane values.
+ auto control=[&](const FlowLayoutDef& def,const FlowControl& c){
+  const Placement at{c.x,c.y,c.sx,c.sy};
+  auto& pose=m.poses[0];pose.evaluate(def,nullptr,0);
+  for(unsigned p=0;p<def.paneCount&&p<FlowPose::MaxPanes;++p){
+   const auto& pane=def.panes[p];const auto& pp=pose.panes[p];
+   if(pane.kind==0||!pp.visible||pp.alpha<=0)continue;
+   const auto& material=pose.materials[pane.material];
+   if(pane.kind==1){if(card.icon<0)continue;pictureQuad(m.batch,pane,pp,material,at);}
+   else textQuads(m.batch,pane,pp,at,std::strcmp(pane.name,"cup_name")?card.course:card.cup,FlowDemoFont);
+   const int texture=pane.kind==2?FlowDemoFont.texture:def.materials[pane.material].texture;
+   m.flush(sink,context,texture,def.materials[pane.material].wrapS,def.materials[pane.material].wrapT,pack(material.c0),pack(material.c1));
+  }
+ };
+ if(card.course)control(FlowCourseNameLayout,FlowCourseNameControl);
+ // Section 0x1D hides cup_name (UIControl +0x80).
+ if(card.cupVisible)control(FlowCupNameLayout,FlowCupNameControl);
 }
 
 void FlowDrawer::draw(const RaceResultsFlow& flow,FlowSink sink,void* context){

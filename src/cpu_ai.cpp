@@ -5,11 +5,15 @@
 #include <game/kart/KartState.hh>
 #include <game/kart/KartDynamics.hh>
 #include <game/system/RaceManager.hh>
+#include <game/system/CourseMap.hh>
+#include <game/system/map/MapdataJugemPoint.hh>
 #include <game/field/ObjectDirector.hh>
 #include <game/field/obj/ObjectBase.hh>
+#include <egg/math/Quat.hh>
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <limits>
 
 namespace mkw {
 namespace {
@@ -24,6 +28,11 @@ constexpr float CurveThreshold=.3f;             // 808c7374, 808c7378
 constexpr float GoNextDistance=1000.f;          // 808c57b8
 constexpr float InsideFactor[3]={-.3f,0.f,.7f}; // 808c57bc, 805113d0, 808c57c0
 constexpr int SlotSearch[20]={2,-2,3,-3,1,-1,4,-4,5,-5,6,-6,7,-7,8,-8,9,-9,10,-10}; // 8089df58
+// fn_1_8148 (PAL 0x805184FC): the respawn point's ENPT link cone, 15 degrees (FIdx 0x8088FA7C),
+// and the initial nearest distance (0x8088FA80).
+constexpr float RespawnLinkCone=32.f/3.f,RespawnLinkFar=9999999.f;
+// AIPathHandler +0x28: the pass mode the handler is initialised with (fn_1_22B228).
+constexpr int InitialPassMode=2;
 // AIControlBase::setBasicDriveInfo_ and the kart controller.
 constexpr float DriveGain=.04f,DriftGain=.05f;  // 808c526c, 808c5270
 constexpr float DriftStartDistance=5000.f;      // 808c5274
@@ -52,6 +61,10 @@ constexpr float ChaseLow[3]={2.f,3.f,4.f},ChaseHigh[3]={8.f,10.f,12.f}; // 808c5
 constexpr float ChaseRankBonus[5]={12.f,4.f,-.5f,-2.f,-4.f}; // 808c5ee8
 constexpr float AdvantageValueDecay=.0008f;     // 8089e020
 constexpr int TopSwapEvery=600,MiddleHold=600,MiddleClamp=240; // 808c5d70..74
+// AIPowAvoider: dodge chance by CPU mode (Easy: bss 0x809C2BDC, zero (inferred: no store
+// found); Normal, Hard: 0x808CA57C), rolled when the POW timer is 46 (PowMgr timer-45 == 1).
+constexpr int PowAvoidChance[3]={0,20,40};
+constexpr uint16_t PowAvoidTimer=46;
 }
 
 bool readCpuActionParam(const void* data,size_t size,unsigned cpuMode,std::array<CpuActionParam,12>& out){
@@ -74,13 +87,13 @@ const CpuActionParam& CpuAi::action(const Racer& r) const{
 Vec3 CpuAi::pointPos(unsigned index) const{return route_->point(std::min(index,route_->size()-1)).position;}
 float CpuAi::widthOffset(unsigned index) const{return OffsetPerWidth*route_->point(std::min(index,route_->size()-1)).width;}
 
-unsigned CpuAi::chooseBranch(unsigned racer,unsigned from){
+unsigned CpuAi::chooseBranch(unsigned racer,unsigned from,bool allowMushroom){
     // AIPathPoint::chooseNext (fn_1_22D000): mushroom-only routes (successor
     // setting1 1) when holding a mushroom, otherwise a uniform ordinary route.
     const auto& p=route_->point(from);
     std::array<int,6> kinds{};unsigned mushrooms=0,normal=0;
     for(unsigned k=0;k<p.nextCount;++k){if(route_->point(p.next[k]).setting1==1){kinds[k]=1;++mushrooms;}else ++normal;}
-    const bool mushroom=mushrooms&&racers_[racer].mushroomRoute;
+    const bool mushroom=allowMushroom&&mushrooms&&racers_[racer].mushroomRoute;
     const uint32_t pick=rand(mushroom?mushrooms:normal);const int want=mushroom?1:0;
     for(unsigned k=0,n=0;k<p.nextCount;++k)if(kinds[k]==want){if(n==pick)return k;++n;}
     return 0;
@@ -173,6 +186,41 @@ void CpuAi::updatePath(unsigned racer,Vec3 kartPos){
     p.distance=length(p.target-kartPos);
     if(shouldGoNext(p,kartPos))goNext(racer,kartPos);
 }
+unsigned CpuAi::respawnLink(unsigned racer,Vec3 kartPos) const{
+    // The JGPT whose grid slot (fn_1_85B8, PAL 0x8051896C) PlayerSub10_doRespawn placed the
+    // racer at; the drop only lowers it, so its X/Z match. Its ENPT link, or an invalid point.
+    auto* map=System::CourseMap::Instance();
+    unsigned best=~0u;float bestDistance=std::numeric_limits<float>::max();
+    for(u16 k=0;map&&k<map->getJugemPointCount()&&k<respawnLinks_.size();++k){
+        EGG::Vector3f slot;map->getJugemPoint(k)->findRespawnPos(slot,u8(racer));
+        const float dx=slot.x-kartPos.x,dz=slot.z-kartPos.z,distance=dx*dx+dz*dz;
+        if(distance<bestDistance){bestDistance=distance;best=k;}
+    }
+    return best<respawnLinks_.size()?respawnLinks_[best]:route_->size();
+}
+void CpuAi::onOutOfBounds(unsigned racer,unsigned point){
+    // fn_1_22B79C (PAL 0x8073BB50): a valid ENPT link restarts the path there through goNext
+    // (fn_1_22BD5C 0x8073C110) in its out-of-bounds form: the default switch distance, offset
+    // (AIPathPoint +0x28) 0, the initial pass mode (+0x24 = +0x2c = +0x28) and no reached-point
+    // parameters (+0xc cleared).
+    if(point>=route_->size())return;
+    Path& p=racers_[racer].path;
+    p.goNext=p.goNextDefault;p.offset=0;p.passMode=p.passModeReset=InitialPassMode;p.currParam.clear();
+    // fn_1_22C988's out-of-bounds branch: the point and its log restart at the link, the branch
+    // is drawn from a zeroed chooser (no mushroom route), the offset is re-rolled with the slot
+    // spacing, and prev == cur gives curvature 0; the target uses inside factor 0.0 (0x808A27B4).
+    const auto& from=route_->point(point);
+    const unsigned choice=from.nextCount>1?chooseBranch(racer,point,false):0;
+    p.cur=p.prev=p.log2=p.log3=uint16_t(point);
+    p.next=uint16_t(from.next[std::min(choice,from.nextCount-1)]);p.branch=int(choice);
+    jitterOffset(racer,true);
+    p.curvature=0;
+    recalcTarget(p,0.f);
+    p.nextParam={int(from.setting1),int(from.driftSetting),from.flags,p.curvature};
+    // The switch distance is measured from the link point itself; the frame's update follows.
+    p.distance=length(p.target-from.position);
+    p.switching=true;
+}
 bool CpuAi::driftHere(const Path& p) const{
     // fn_1_22B530.
     if(p.nextParam.endDrift()||p.nextParam.forbidDrift())return false;
@@ -190,7 +238,29 @@ void CpuAi::reset(const Setup& setup){
     racers_={};groups_={};rng_=setup.seed?setup.seed:1;raceStarted_=false;
     rmState=0;rmFrame=0;rmDuration=0;rmPhase=0;rmInterval=-1;advantageEnabled=false;advantageState=0;advantageValue=0;
     topType=2;cpuCount=humanCount=0;
+    respawnLinks_.clear();
     if(!route_)return;
+    // CourseMap_init (PAL 0x80512AF4) runs fn_1_8148 (0x805184FC) on every JGPT: +0x28 is the
+    // ENPT nearest ahead along the point's rotation (rot * ez) inside a 15 degree cone around it
+    // (lateral in rot * ex / rot * ey), ENPT 0 when none is.
+    if(auto* map=System::CourseMap::Instance()){
+        const float tan=EGG::Mathf::SinFIdx(RespawnLinkCone)/EGG::Mathf::CosFIdx(RespawnLinkCone);
+        for(u16 k=0;k<map->getJugemPointCount();++k){
+            const auto* jugem=map->getJugemPoint(k);
+            EGG::Quatf rpy;rpy.setRPY(DEG2RAD*jugem->rot().x,DEG2RAD*jugem->rot().y,DEG2RAD*jugem->rot().z);
+            const EGG::Vector3f ez=rpy.rotateVector(EGG::Vector3f::ez),ex=rpy.rotateVector(EGG::Vector3f::ex),ey=rpy.rotateVector(EGG::Vector3f::ey);
+            unsigned link=0xff;float nearest=RespawnLinkFar;
+            for(unsigned n=0;n<route_->size()&&n<0xff;++n){
+                const Vec3 a=route_->point(n).position;
+                const float dx=a.x-jugem->pos().x,dy=a.y-jugem->pos().y,dz=a.z-jugem->pos().z;
+                const float ahead=ez.z*dz+ez.x*dx+ez.y*dy; // retail operand order
+                if(ahead<0.f)continue;
+                const float cone=ahead*tan,side=ex.z*dz+ex.x*dx+ex.y*dy,up=ey.z*dz+ey.x*dx+ey.y*dy;
+                if(side*side+up*up<cone*cone&&(link==0xff||ahead<nearest)){nearest=ahead;link=n;}
+            }
+            respawnLinks_.push_back(uint8_t(link==0xff?0:link));
+        }
+    }
     auto* objects=Kart::KartObjectManager::Instance();
     const unsigned engine=std::min(setup.engineClass,2u),mode=std::min(setup.cpuMode,2u);
     // Start order: grid slots along the start direction (front-most first).
@@ -208,27 +278,57 @@ void CpuAi::reset(const Setup& setup){
         r.rank.position=int(startRank[i]);
         // AIControlBase::initAfterManager / AIControlRace (fn_1_22015C, fn_1_2202F8).
         Path& p=r.path;
-        p.start=uint16_t(route_->nearest(native(kart->pos()),native(kart->bodyFront()),i));
+        // fn_1_22C244: a race starts every racer's route at ENPT point 0 (fn_1_26474).
+        p.start=setup.startAtPointZero?0:uint16_t(route_->nearest(native(kart->pos()),native(kart->bodyFront()),i));
         if(p.start>=route_->size())p.start=0;
         p.goNext=p.goNextDefault=GoNextDistance;p.inside=InsideFactor[mode];p.passMode=p.passModeReset=2;
         int lane=int((startRank[i]+2)%3)-1; // ((position-1)%3)-1
-        if(setup.mirror)lane=-lane;
+        // Negated for STGI pole position 1 (fn_1_22015C has no Mirror test).
+        if(setup.polePosition==1)lane=-lane;
         setPoint(i,float(lane)*.5f*widthOffset(p.start));
         p.nextParam={int(route_->point(p.cur).setting1),int(route_->point(p.cur).driftSetting),route_->point(p.cur).flags,p.curvature};
     }
-    // AIRankManager::init (fn_1_2311B4 / fn_1_23165C): groups filled by grid order.
+    // AIRankManager::init (fn_1_2311B4 -> fn_1_23165C). sortedCpus starts in grid order (the
+    // per-frame sort keeps it by position); the group selectors pick CPUs in player order.
     for(unsigned r=0;r<count;++r){const unsigned i=order[r];if(!racers_[i].human)sortedCpus[cpuCount++]=int(i);else sortedHumans[humanCount++]=int(i);}
-    const auto& sizes=GroupSizes[std::min(cpuCount,12)];int filled=0;
-    for(unsigned g=0;g<3;++g){auto& group=groups_[g];group.start=filled+1;group.count=0;
-        for(int k=0;k<sizes[g]&&filled<cpuCount;++k){auto& rank=racers_[sortedCpus[filled++]].rank;rank.group=int(g);rank.groupIndex=group.count;group.members[group.count++]=sortedCpus[filled-1];}
+    const auto& sizes=GroupSizes[std::min(cpuCount,12)];
+    const bool firstRace=setup.raceNumber==0;
+    std::array<bool,Capacity> taken{};
+    auto pick=[&](bool random)->int{
+        // fn_1_231E48: the best start position (first race); fn_1_231F18: the most points;
+        // fn_1_231FE4: a uniform pick among the CPUs not yet in a group.
+        if(random){
+            unsigned n=0;for(unsigned i=0;i<count;++i)n+=!racers_[i].human&&!taken[i];
+            if(!n)return -1;
+            unsigned k=rand(n);
+            for(unsigned i=0;i<count;++i)if(!racers_[i].human&&!taken[i]&&k--==0)return int(i);
+            return -1;
+        }
+        int best=-1;
+        for(unsigned i=0;i<count;++i){if(racers_[i].human||taken[i])continue;
+            if(best<0||(firstRace?racers_[i].rank.position<racers_[best].rank.position:setup.points[i]>setup.points[unsigned(best)]))best=int(i);}
+        return best;
+    };
+    int start=1;
+    for(unsigned g=0;g<3;++g){auto& group=groups_[g];group.start=start;group.count=0;
+        // Top: start position or points; middle and bottom: start position, else at random.
+        for(int k=0;k<sizes[g];++k){const int i=pick(g!=0&&!firstRace);if(i<0)continue;
+            taken[unsigned(i)]=true;auto& rank=racers_[unsigned(i)].rank;rank.group=int(g);rank.groupIndex=group.count;group.members[group.count++]=i;}
+        if(g==0&&group.count){
+            // Top: a random permutation of its target ranks (fn_1_22F494).
+            std::array<int,6> perm{};for(int k=0;k<group.count;++k)perm[k]=k;
+            for(int k=group.count-1;k>0;--k)std::swap(perm[k],perm[rand(uint32_t(k+1))]);
+            for(int k=0;k<group.count;++k)racers_[group.members[k]].rank.target=group.start+perm[k];
+        }
+        // Middle, bottom: targets in member order (fn_1_22F544).
+        else for(int k=0;k<group.count;++k)racers_[group.members[k]].rank.target=group.start+k;
+        start+=sizes[g];
     }
-    if(groups_[0].count){
-        // Top: a random permutation of its target ranks (fn_1_22F494).
-        std::array<int,6> perm{};for(int k=0;k<groups_[0].count;++k)perm[k]=k;
-        for(int k=groups_[0].count-1;k>0;--k)std::swap(perm[k],perm[rand(uint32_t(k+1))]);
-        for(int k=0;k<groups_[0].count;++k)racers_[groups_[0].members[k]].rank.target=groups_[0].start+perm[k];
-    }
-    for(unsigned g=1;g<3;++g)for(int k=0;k<groups_[g].count;++k)racers_[groups_[g].members[k]].rank.target=groups_[g].start+k;
+    // fn_1_2296C8 (AiHolder_init): the best human's points minus the best CPU's choose the
+    // top group's final-lap behaviour (no teams in this port).
+    int bestHuman=0,bestCpu=0;
+    for(unsigned i=0;i<count;++i)(racers_[i].human?bestHuman:bestCpu)=std::max<int>(racers_[i].human?bestHuman:bestCpu,setup.points[i]);
+    topType=bestHuman-bestCpu< -3?1:bestHuman-bestCpu<4?2:3;
     advantageEnabled=int(rand(100))<AdvantageChance[mode];
 }
 
@@ -250,9 +350,39 @@ void CpuAi::bump(unsigned racer,Vec3 direction){
 void CpuAi::swapTargets(Group& g){
     // Shared group helper: exchange the target ranks of two random members.
     if(g.count<2)return;
-    const int a=int(rand(uint32_t(g.count)));
+    swapWithOther(g,int(rand(uint32_t(g.count))));
+}
+void CpuAi::swapWithOther(Group& g,int a){
+    // The member's target rank goes to a random other member (groupIndex+1+rand(count-1)).
     const int b=(a+1+int(rand(uint32_t(g.count-1))))%g.count;
     std::swap(racers_[g.members[a]].rank.target,racers_[g.members[b]].rank.target);
+}
+void CpuAi::updateTopGroup(unsigned finalLap,const std::array<unsigned,Capacity>& laps){
+    // Top group calc (fn_1_230114). Type 2: a target swap every 600 frames. Types 1
+    // (fn_1_22F9D4, the CPUs lead the points by 4+) and 3 (fn_1_22FE00, the human leads by
+    // 4+): the same until the member holding target 1 reaches the final lap; then the
+    // timer restarts at 300 (type 1) / 120 (type 3), a swap follows each time it passes
+    // 600, and each such swap ends with the first member (the points leader after race 1)
+    // giving target 1 away (type 1) or taking it (type 3).
+    auto& top=groups_[0];
+    if(top.count<=0)return;
+    if(topType==2||top.phase==0){
+        if(++top.timer>TopSwapEvery){swapTargets(top);top.timer=0;}
+        if(topType==2)return;
+        int leader=-1;for(int k=0;k<top.count;++k)if(racers_[top.members[k]].rank.target==1){leader=top.members[k];break;}
+        if(leader>=0&&laps[unsigned(leader)]==finalLap){top.phase=1;top.timer=TopSwapEvery/(topType==1?2:5);}
+        return;
+    }
+    if(top.phase!=1||++top.timer<=TopSwapEvery)return;
+    swapTargets(top);
+    if(top.count>1){
+        auto& first=racers_[top.members[0]].rank;
+        if(topType==1){if(first.target==1)swapWithOther(top,0);}
+        else if(first.target!=1){
+            for(int k=0;k<top.count;++k){auto& other=racers_[top.members[k]].rank;if(other.target==1){std::swap(first.target,other.target);break;}}
+        }
+    }
+    top.timer=0;
 }
 void CpuAi::redistribute(){
     // fn_1_2324E4: middle takes the leading members of middle+bottom.
@@ -320,12 +450,7 @@ void CpuAi::updateRanks(const std::array<unsigned,Capacity>& ranks,const std::ar
             rmDuration=rmFrame+(NormalMin+int(rand(uint32_t(std::max(0,NormalMax[mode]-NormalMin)))))*60;}
         break;
     case 2:{ // Normal (fn_1_232914 / fn_1_232ACC)
-        auto& top=groups_[0];
-        if(top.count>0&&++top.timer>TopSwapEvery){swapTargets(top);top.timer=0;}
-        if(topType!=2&&top.count>1){
-            // EASY / HARD top groups reshuffle faster once their rank-1 member is on the final lap.
-            for(int k=0;k<top.count;++k)if(racers_[top.members[k]].rank.target==1&&laps[unsigned(top.members[k])]==finalLap&&top.phase==0){top.phase=1;top.timer=TopSwapEvery/(topType==1?2:5);}
-        }
+        updateTopGroup(finalLap,laps);
         auto& middle=groups_[1];
         if(middle.count>0){
             if(middle.phase==0){swapTargets(middle);middle.timer=0;middle.phase=1;}
@@ -349,6 +474,9 @@ void CpuAi::updateRanks(const std::array<unsigned,Capacity>& ranks,const std::ar
         if(rmPhase==0){if(rmDuration<rmFrame){if(advantageState==1)advantageState=2;rmPhase=1;}}
         else{for(int k=0;k<cpuCount;++k){auto& s=racers_[sortedCpus[k]].speed;s.advantage=std::max(0.f,s.advantage-AdvantageDecay);}
             if(rmDuration+1200<rmFrame){rmState=2;for(int g=0;g<3;++g)for(int k=0;k<groups_[g].count;++k)racers_[groups_[g].members[k]].rank.offset=0;
+                // Normal-state entry (fn_1_232914) also restarts the top and middle groups
+                // (fn_1_230104, fn_1_230448: phase and timer 0).
+                groups_[0].phase=groups_[0].timer=groups_[1].phase=groups_[1].timer=0;
                 redistribute();assignGroupTargets();rmDuration=rmFrame+(NormalMin+int(rand(uint32_t(std::max(0,NormalMax[mode]-NormalMin)))))*60;}}
         break;
     default:break;
@@ -397,14 +525,11 @@ void CpuAi::drive(unsigned racer){
     // (the stuck handler's recovery target while it slides back along the route).
     const Vec3 target=recoveryTarget(r);
     bool startDrift=false,endDrift=false,releaseMiniturbo=false;float driftDir=0;
-    if(d.state!=1&&driftHere(p)){
-        // fn_1_6E6E0: speed above 0.55 of the stat base speed (KartMove +0x14).
-        const bool fastEnough=kart->move()->speed()>kart->move()->statBaseSpeed()*.55f;
-        if(fastEnough&&p.distance<DriftStartDistance){
-            // AIProbabilityRace::getDrift(true): one roll per opportunity.
-            if(!r.driftRolled){r.driftRolled=true;if(int(rand(100))<int(action(r).drift)){startDrift=true;driftDir=p.nextParam.curvature>0?-1.f:1.f;}}
-        }
-    }else r.driftRolled=false;
+    // fn_1_6E6E0: speed above 0.55 of the stat base speed (KartMove +0x14).
+    if(d.state!=1&&driftHere(p)&&kart->move()->speed()>kart->move()->statBaseSpeed()*.55f&&p.distance<DriftStartDistance){
+        // AIProbabilityRace::getDrift(true): one roll per opportunity.
+        if(!r.driftRolled){r.driftRolled=true;if(int(rand(100))<int(action(r).drift)){startDrift=true;driftDir=p.nextParam.curvature>0?-1.f:1.f;}}
+    }else r.driftRolled=false; // getDrift(false) on every other frame re-arms the roll
     const bool switched=p.switching;
     if(switched){
         d.feedForward=FeedForward*p.currParam.curvature;
@@ -419,19 +544,30 @@ void CpuAi::drive(unsigned racer){
     avoid(racer);
     if(!r.human)stuckUpdate(racer);
     const Avoid& av=r.avoid;
-    uint16_t buttons=0;float stick=0;bool drifting=true;
+    // After the goal the run is no longer recorded: retail post-race driving.
+    const bool rotate=!(r.human&&setup_.inputOnlyHumans&&!driveFinished_);
+    uint16_t buttons=0;float stick=0,animationStick=0;bool drifting=true;
     if(d.state==0){
         drifting=false;buttons|=1;
-        // fn_1_220A00: curvature feed-forward, or full lock while avoiding.
-        stick=std::clamp(d.feedForward,-1.f,1.f);
-        if(av.active)stick=av.steer<0?1.f:-1.f;
-        if(startDrift){d.driftDir=driftDir;d.ramp=0;d.failFrames=0;d.timer=0;d.state=1;}
+        // fn_1_220A00: the curvature feed-forward, or full lock away from the avoid steer,
+        // goes only to the driver animation (AI +0x14) and the bike lean (KartMove +0x28C).
+        // The pad stick stays neutral (fn_1_2226BC); the body rotation below steers.
+        float feed=std::clamp(d.feedForward,-1.f,1.f);
+        if(av.active)feed=av.steer<0?1.f:-1.f;
+        animationStick=d.lean=feed;
+        // Time Trial QA autopilot only (no body rotation): it steers by its input.
+        if(!rotate)stick=feed;
+        // The drift timer (+0x14) is not reset here; ENPT switches reset it.
+        if(startDrift){d.driftDir=driftDir;d.ramp=0;d.failFrames=0;d.state=1;}
     }else{
         d.switched=switched;
         // fn_1_220AE8: hop and hold the turn direction.
         const bool hop=status.onBit(Kart::eStatus::Hop);
         stick=(!status.onBit(Kart::eStatus::TouchingGround)||hop)?-d.driftDir:d.driftDir*d.ramp;
         if(d.switched)d.timer=0;
+        // The driver animation sees the stick from 8 to 38 frames after an ENPT switch and
+        // from 48 on (0x808CA644/48/4C: 8, 30, 10).
+        animationStick=d.timer<8.f||(d.timer>=38.f&&d.timer<48.f)?0.f:stick;
         d.ramp=std::min(1.f,d.ramp+RampStep);d.timer=std::min(9999.9f,d.timer+1.f);
         buttons|=1|8;
         if(!status.onBit(Kart::eStatus::DriftManual)&&!hop){
@@ -455,11 +591,11 @@ void CpuAi::drive(unsigned racer){
             EGG::Quatf q;q.setAxisRotation(angle,egg(up));
             EGG::Quatf next=q*kart->dynamics()->mainRot();next.normalise();kart->dynamics()->setMainRot(next);
         };
-        bool track=groundDirs;
-        if(av.active){yaw(av.steer);track=false;}
+        bool track=groundDirs&&rotate;
+        if(av.active&&rotate){yaw(av.steer);track=false;}
         const float angle=DEG2RAD*kart->move()->outsideDriftAngle();
         const float turned=angle-d.lastAngle;
-        if(std::fabs(turned)>Epsilon&&status.onBit(Kart::eStatus::Hop))yaw(-std::clamp(turned,-.08f,.08f)*.5f);
+        if(rotate&&std::fabs(turned)>Epsilon&&status.onBit(Kart::eStatus::Hop))yaw(-std::clamp(turned,-.08f,.08f)*.5f);
         d.lastAngle=angle;
         if(track){
         const auto& rot=kart->dynamics()->mainRot();
@@ -473,7 +609,12 @@ void CpuAi::drive(unsigned racer){
         }
         }
     }
-    r.command={buttons,stick,trick};
+    // AIPowAvoider::update (0x8072A7A0), after the kart controller: one roll on the frame
+    // the POW timer reads 46 (fn_1_2A2AF8 == 1, the frame before the third stomp); a pass
+    // presses trick Up (AITrickHandler::avoidPow 0x807352F8). Without teams isSameTeam is
+    // false for every racer, the POW's user included.
+    if(!r.human&&powTimer_==PowAvoidTimer&&int(rand(100))<PowAvoidChance[std::min(setup_.cpuMode,2u)])trick=1;
+    r.command={buttons,stick,trick,animationStick,d.lean};
 }
 
 void CpuAi::step(uint32_t driveMask,const std::array<unsigned,Capacity>& ranks,const std::array<unsigned,Capacity>& laps,
@@ -487,20 +628,28 @@ void CpuAi::step(uint32_t driveMask,const std::array<unsigned,Capacity>& ranks,c
         auto& r=racers_[i];if(!r.active)continue;
         auto* kart=Kart::KartObjectManager::Instance()->object(i);
         const auto& status=kart->status();
-        // Respawned racers resume from the route point under their drop position.
         const bool dropping=status.onBit(Kart::eStatus::BeforeRespawn,Kart::eStatus::InRespawn);
-        if(r.dropping&&!dropping){
-            r.path.start=uint16_t(route_->nearest(native(kart->pos()),native(kart->bodyFront()),i));
-            if(r.path.start>=route_->size())r.path.start=0;
-            setPoint(i,0);r.drive={};
-            // AIControlRace::onOutOfBounds (fn_1_2203A4) re-inits the stuck
-            // handler and avoider and returns block line to Search.
+        // PlayerSub10_doRespawn (PAL 0x80584334) places the racer at its respawn point and calls
+        // Enemy::AI::onOutOfBounds (0x807263B0 -> AIControlRace fn_1_2203A4 0x80730758); the AI
+        // update later in the same PlayerSub_update (0x80596480) runs at the new position. Here:
+        // the first tick that sees InRespawn, before this tick's update.
+        const bool respawning=status.onBit(Kart::eStatus::InRespawn);
+        if(respawning&&!r.respawning){
+            onOutOfBounds(i,respawnLink(i,native(kart->pos())));
+            r.drive={};
+            // onOutOfBoundsInner (0x8072A2A8) re-inits the stuck handler (fn_1_234870) and the
+            // avoider (fn_1_216834); fn_1_2203A4 returns block line to Search (fn_1_21936C).
+            if(r.stuck.state==1)kart->move()->setStuckRecovery(false); // state 1 exit, fn_1_2352A4
             r.stuck={};r.avoid={};r.block.next=1;
         }
-        r.dropping=dropping;
+        r.respawning=respawning;
         if(!((driveMask>>i)&1)){
             // Humans still advance their route state for rank bookkeeping.
-            updatePath(i,native(kart->pos()));r.command={};continue;
+            updatePath(i,native(kart->pos()));
+            // A CPU leaves the mask only for a Bullet: AIControlBase::doUpdate_ (0x8072A570)
+            // then skips the kart controller, so AI +0x14 and KartMove +0x28C keep their values.
+            r.command=r.human?CpuCommand{}:CpuCommand{0,0,0,r.command.animationStick,r.command.lean};
+            continue;
         }
         if(!racing&&!r.human&&!r.startDecided&&manager->stage()==System::RaceManager::Stage::Countdown){
             // AIControlBase::setStartDashTypeToKart (8072310c) with
@@ -516,7 +665,11 @@ void CpuAi::step(uint32_t driveMask,const std::array<unsigned,Capacity>& ranks,c
         // 0x80728C28): AISpeedRace vt_0x14 (0x80733F54) holds 0.8 x the
         // kart's base speed (0x808C600C) instead of the race speed manager.
         if(racing&&!r.human){if(finished[i])kart->move()->setCpuBaseSpeed(PostRaceSpeed*kart->move()->statBaseSpeed());else updateSpeed(i,laps[i]);}
+        // The player is isCpu from its goal (fn_1_7EC98), so its ground limit reads the same
+        // post-race speed (0x8057BD08; PAL writer 0x8074392C, 0.8 at 0x808CB514).
+        else if(racing&&finished[i])kart->move()->setCpuBaseSpeed(PostRaceSpeed*kart->move()->statBaseSpeed());
         if(!racing||dropping){updatePath(i,native(kart->pos()));r.command={};r.itemCommand={};continue;}
+        driveFinished_=finished[i];
         drive(i);
         if(!r.human){r.item.goal=r.item.goal||finished[i];stepItems(i);}
     }
@@ -618,11 +771,11 @@ void CpuAi::stuckUpdate(unsigned i){
     if(!s.primed){s.primed=true;s.last=s.sample=pos;}
     s.gainScale=1;
     if(s.next>=0){
-        if(s.state==1){p.goNext=p.goNextDefault;s.rate=0;} // fn_1_2352A4
+        if(s.state==1){p.goNext=p.goNextDefault;s.rate=0;kart->move()->setStuckRecovery(false);} // fn_1_2352A4
         s.state=s.next;s.next=-1;
         switch(s.state){
         case 0:s.counter=0;s.timer=0;s.phase=0;break;                       // fn_1_234BC4
-        case 1:p.goNext=RecoverGoNext;s.rate=0;s.timer=0;s.phase=0;break;  // fn_1_234DB0
+        case 1:p.goNext=RecoverGoNext;s.rate=0;s.timer=0;s.phase=0;kart->move()->setStuckRecovery(true);break;  // fn_1_234DB0
         case 2:kart->collide()->activateOob(false,nullptr,true,false);s.next=0;break; // fn_1_23530C
         }
     }

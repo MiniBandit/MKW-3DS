@@ -23,8 +23,17 @@ public:
     unsigned count() const {return count_;}
     float duration(unsigned clip) const {return clip<count_?clips_[clip].duration:0;}
     bool loop(unsigned clip) const {return clip<count_&&clips_[clip].loop;}
+    unsigned faceCount() const {return faceCount_;}
+    const char* faceName(unsigned face) const {return face<faceCount_?faces_[face].name:"none";}
+    float faceDuration(unsigned face) const {return face<faceCount_?faces_[face].duration:0;}
+    bool faceLoop(unsigned face) const {return face<faceCount_&&faces_[face].loop;}
     // A rejected current-pose bound skips only skinning/upload; palette transitions still advance.
     bool apply(Model& model,int clip,float frame,unsigned tick=0,int expression=-1,float expressionFrame=0,const ClipFrustum* frustum=nullptr);
+    // Gameplay driver pose with the retail crossfade (PlayerModel blend, fn_1_49114
+    // 0x805594C8): `from` keeps animating at its own frame while `clip` takes
+    // `weight` of the pose. Replaces apply()'s automatic six-frame transition.
+    struct ClipBlend {int clip=-1;float frame=0,weight=1;};
+    bool apply(Model& model,int clip,float frame,const ClipBlend& from,unsigned tick,int expression=-1,float expressionFrame=0,const ClipFrustum* frustum=nullptr);
     // Choose whether CPU fallback skins normals. Unlit course objects can
     // share each (position, matrix) pair instead (call after load).
     void skinNormals(bool on);
@@ -80,6 +89,8 @@ private:
     void write(Model& model,const uint32_t* shown,const int32_t* textures,const float* uv,const float* palette);
     // Shared by apply() and pose(): interpolated (and blended) palette.
     void evaluate(const Clip& c,unsigned a,unsigned b,float t,unsigned tick,float blend);
+    // apply() after the transition weight is known: cache, skinning and face writes.
+    bool applyPose(Model& model,int clip,float frame,unsigned tick,int expression,float expressionFrame,const ClipFrustum* frustum,float blend);
     std::vector<std::vector<RigidPart>> rigidParts_;
     std::array<int,64> baseTextures_{};
     uint8_t* data_=nullptr;bool dataLinear_=false;const SourceVertex* source_=nullptr;const Range* ranges_=nullptr;

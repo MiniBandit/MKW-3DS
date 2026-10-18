@@ -52,6 +52,27 @@ void adpcmAdvance(const u8* data, u32 samples, const s16* coef, s16& yn1, s16& y
   data += 7;
  }
 }
+// Samples [from, to) of a DSP-ADPCM channel, decoded as AX does (adpcmAdvance's
+// arithmetic). `ps` is the predictor/scale in force at `from`: a loop that starts
+// mid-frame restarts with its loop context's; later frames read their header.
+void adpcmDecode(const u8* data, u32 from, u32 to, u16 ps, s16 yn1, s16 yn2, const s16* coef, s16* out) {
+ for (u32 i = from; i < to; ++i) {
+  const u8* frame = data + i / 14 * 8;
+  const u32 k = i % 14;
+  if (k == 0) ps = frame[0];
+  const int scale = 1 << (ps & 15), pred = (ps >> 4) & 7;
+  const int nib = (k & 1) ? (frame[1 + (k >> 1)] & 15) : (frame[1 + (k >> 1)] >> 4);
+  const int n = nib >= 8 ? nib - 16 : nib;
+  int v = ((n * scale) << 11) + 1024 + coef[pred * 2] * yn1 + coef[pred * 2 + 1] * yn2; v >>= 11;
+  v = std::clamp(v, -32768, 32767); yn2 = yn1; yn1 = s16(v);
+  *out++ = s16(v);
+ }
+}
+// set() clamps a voice to 192 kHz: at most this many source samples per DSP frame.
+constexpr u32 MaxFrameSamples = (160u * 192000u + 32727u) / 32728u;   // 939
+// A loop starting mid-frame that two queued bridge + body passes cannot carry
+// through one DSP frame at that rate is unrolled; 0 for any other loop.
+constexpr u32 unrolledCopies(u32 loopSamples) { return loopSamples && 2 * loopSamples < MaxFrameSamples ? (MaxFrameSamples + loopSamples - 1) / loopSamples : 0; }
 
 // ------------------------------------------------------------ BRSTM feed
 // NW4R StrmPlayer data path: blocks of every channel are read together into
@@ -335,26 +356,73 @@ public:
   // stream
   StreamFeed* feed = nullptr; int feedChannel = 0; IoFeed* ownFeed = nullptr;
   f32 rate = -1, left = -1, right = -1, lpf = -1;
+  f32 targetLeft = 0, targetRight = 0, stepLeft = 0, stepRight = 0;  // mix moves in commit()
+  u8 fading = 0;   // passes left of a de-pop fade after stop()
+  // A start on a fading channel runs once the fade is over.
+  struct Next { bool wave = false, stream = false, set = false, paused = false; const WaveData* w = nullptr; StreamFeed* feed = nullptr; int channel = 0; u32 offset = 0; f32 rate = -1, left = 0, right = 0, lpf = 0; } next;
  };
+ // AX de-pops a voice stopped mid-waveform (__AXDepopVoice / __AXDepopFadeMain,
+ // PAL 0x801270E4 / 0x80126E3C) and ramps every gain across its frame
+ // (0x8008BE00). NDSP cuts at full gain and holds one gain per frame, so a
+ // stopped channel fades linearly over DepopPasses audio passes before its
+ // reset, and a fall of more than 12 dB at once (release 127, Stop(0)) is
+ // spread over the same number of passes.
+ static constexpr u8 DepopPasses = 3;
+ static constexpr f32 Silent = 1.0f / 1024;
  std::array<Chan, VoiceMax> ch{};
  u8* bridgePool = nullptr; u32 bridgeUsed = 0;
  static constexpr u32 BridgePoolBytes = 4096;
+ // Per hardware like the pool it points into (a new engine starts with a new pool).
+ struct BridgeEntry { const LoopBridge* key; const u8* data; };
+ std::vector<BridgeEntry> bridgeMap;
+ // Short mid-frame loops decoded to PCM16 (unrolledLoop), kept for this hardware's life.
+ struct Unrolled { const LoopBridge* key = nullptr; const s16* pcm = nullptr; u32 loopSamples = 0; };
+ std::vector<Unrolled> unrolled;
+ u32 unrolledBytes = 0;
+ static constexpr u32 UnrollBudget = 32 * 1024;
  u32 underruns = 0;
 
  NdspHardware() { bridgePool = static_cast<u8*>(linearAlloc(BridgePoolBytes)); }
- ~NdspHardware() override { for (int v = 0; v < VoiceMax; ++v) hardStop(v); if (bridgePool) linearFree(bridgePool); }
+ ~NdspHardware() override {
+  for (int v = 0; v < VoiceMax; ++v) hardStop(v);
+  if (bridgePool) linearFree(bridgePool);
+  for (auto& u : unrolled) linearFree(const_cast<s16*>(u.pcm));
+ }
  int voiceCount() const override { return VoiceMax; }
 
  const u8* bridgeData(const LoopBridge* b) {
   // Copy each distinct bridge frame once into DSP-visible memory.
-  struct Entry { const LoopBridge* key; const u8* data; };
-  static std::vector<Entry> map;
-  for (auto& e : map) if (e.key == b) return e.data;
+  for (auto& e : bridgeMap) if (e.key == b) return e.data;
   if (!bridgePool || bridgeUsed + 8 > BridgePoolBytes) return nullptr;
   u8* d = bridgePool + bridgeUsed; bridgeUsed += 8;
   std::memcpy(d, b->frame, 8); DSP_FlushDataCache(d, 8);
-  map.push_back({b, d});
+  bridgeMap.push_back({b, d});
   return d;
+ }
+ // AX plays a mid-frame ADPCM loop natively: at the loop end it restarts at
+ // loopStart with the loop context (ps, yn1, yn2). NDSP starts buffers only on
+ // frame boundaries, so the bridge path queues bridge + body passes and refills
+ // them each audio pass; a short loop at a high pitch (SE_RC_GOAL's whistle,
+ // 43 samples read up to 4x) runs dry inside every DSP frame. Such a channel
+ // plays as PCM16 instead, with AX's own samples: the head, then the loop
+ // repeated to at least MaxFrameSamples in one hardware-looping buffer, which
+ // never waits for a refill and wraps at most once per frame.
+ Unrolled unrolledLoop(const WaveData& w, int channel) {
+  const auto& wc = w.channel[channel];
+  const u32 length = w.loopEnd - w.loopStart, copies = unrolledCopies(length);
+  if (!wc.bridge || !copies || w.loopStart >= w.loopEnd) return {};
+  for (const auto& u : unrolled) if (u.key == wc.bridge) return u;
+  const u32 samples = w.loopStart + copies * length, bytes = samples * 2;
+  if (unrolledBytes + bytes > UnrollBudget) return {};
+  auto* pcm = static_cast<s16*>(linearAlloc(bytes));
+  if (!pcm) return {};
+  adpcmDecode(wc.data, 0, w.loopStart, wc.adpcm.ps, wc.adpcm.yn1, wc.adpcm.yn2, wc.adpcm.coef, pcm);
+  adpcmDecode(wc.data, w.loopStart, w.loopEnd, wc.loopParam.ps, wc.loopParam.yn1, wc.loopParam.yn2, wc.adpcm.coef, pcm + w.loopStart);
+  for (u32 i = 1; i < copies; ++i) std::memcpy(pcm + w.loopStart + i * length, pcm + w.loopStart, length * 2);
+  DSP_FlushDataCache(pcm, bytes);
+  unrolledBytes += bytes;
+  unrolled.push_back({wc.bridge, pcm, copies * length});
+  return unrolled.back();
  }
  void hardStop(int v) {
   ndspChnWaveBufClear(v); ndspChnReset(v);
@@ -362,7 +430,21 @@ public:
   if (c.ownFeed) { if (retireFeed) retireFeed(feedCtx, c.ownFeed); else delete c.ownFeed; c.ownFeed = nullptr; }
   c.mode = Chan::Idle; c.bufCount = 0; c.lastBuf = -1; c.feed = nullptr; c.manualLoop = false; c.pendingStart = false; c.paused = false;
   c.rate = c.left = c.right = c.lpf = -1;
+  c.targetLeft = c.targetRight = c.stepLeft = c.stepRight = 0; c.fading = 0; c.next = {};
   for (auto& b : c.buf) b = ndspWaveBuf{};
+ }
+ static f32 toward(f32 cur, f32 target, f32& step) {
+  if (cur < 0 || target >= cur) { step = 0; return target; }
+  if (step == 0 && target >= cur * 0.25f) return target;
+  step = std::max(step, (cur - target) / DepopPasses);
+  const f32 next = cur - step;
+  if (next <= target + Silent) { step = 0; return target; }
+  return next;
+ }
+ void setMix(int v, f32 left, f32 right) {
+  Chan& c = ch[v];
+  if (left == c.left && right == c.right) return;
+  float mix[12] = {}; mix[0] = left; mix[1] = right; ndspChnSetMix(v, mix); c.left = left; c.right = right;
  }
  void setupChannel(int v, u8 format, const s16* coef, u32 rate) {
   ndspChnWaveBufClear(v); ndspChnReset(v);
@@ -388,6 +470,7 @@ public:
  }
  void start(int v, const WaveData& w, int channel, u32 offset) override {
   Chan& c = ch[v]; if (c.reserved) return;
+  if (c.fading) { c.next = {}; c.next.wave = true; c.next.w = &w; c.next.channel = channel; c.next.offset = offset; return; }
   hardStop(v);
   const auto& wc = w.channel[channel];
   if (w.streamed) {
@@ -398,11 +481,20 @@ public:
    refillStream(v);
    return;
   }
-  setupChannel(v, w.format, wc.adpcm.coef, w.rate);
+  const Unrolled pcm = w.format == 2 && w.loop && w.loopStart % 14 ? unrolledLoop(w, channel) : Unrolled{};
+  setupChannel(v, pcm.pcm ? 1 : w.format, wc.adpcm.coef, w.rate);
   c.mode = Chan::Wave; c.pendingStart = true;
   const u8* data = wc.data; const u32 end = w.loopEnd;
   ndspAdpcmData start{wc.adpcm.ps, wc.adpcm.yn1, wc.adpcm.yn2};
   if (offset >= end) offset = 0;
+  if (pcm.pcm) {
+   // The head (or, from an offset in the loop, the rest of its first pass), then
+   // the unrolled loop forever.
+   const u32 first = offset < w.loopStart ? w.loopStart : end;
+   queue(v, reinterpret_cast<const u8*>(pcm.pcm + offset), first - offset, false, nullptr);
+   queue(v, reinterpret_cast<const u8*>(pcm.pcm + w.loopStart), pcm.loopSamples, true, nullptr);
+   return;
+  }
   if (offset) {
    if (w.format == 2) {
     offset = offset / 14 * 14; s16 yn1 = wc.adpcm.yn1, yn2 = wc.adpcm.yn2;
@@ -442,6 +534,7 @@ public:
  }
  void startStream(int v, StreamFeed* feed, int channel) override {
   Chan& c = ch[v]; if (c.reserved) return;
+  if (c.fading) { c.next = {}; c.next.stream = true; c.next.feed = feed; c.next.channel = channel; return; }
   hardStop(v);
   setupChannel(v, feed->format(), feed->adpcm(channel).coef, feed->rate());
   c.mode = Chan::Stream; c.feed = feed; c.feedChannel = channel; c.pendingStart = true;
@@ -459,17 +552,32 @@ public:
    ++queued;
   }
  }
- void stop(int v) override { if (!ch[v].reserved) { if (ch[v].feed) releaseStreamBufs(v); hardStop(v); } }
+ void stop(int v) override {
+  Chan& c = ch[v]; if (c.reserved) return;
+  if (c.fading) { c.next = {}; return; }   // a deferred start is cancelled; the fade goes on
+  // A stream's ring goes back to its player now; silent, paused or unstarted
+  // channels have nothing to de-pop.
+  const bool audible = c.mode != Chan::Idle && !c.paused && !c.pendingStart && std::max(c.left, c.right) > Silent;
+  if (!audible || (c.feed && !c.ownFeed)) { if (c.feed) releaseStreamBufs(v); hardStop(v); return; }
+  c.fading = DepopPasses;
+ }
+ bool busy(int v) const override { return ch[v].fading != 0; }
  void releaseStreamBufs(int v) {
   Chan& c = ch[v];
   ndspChnWaveBufClear(v);
   for (int i = 0; i < c.bufCount; ++i) if (c.buf[i].data_vaddr && c.buf[i].status != NDSP_WBUF_FREE) { c.feed->consumed(c.feedChannel, static_cast<const u8*>(c.buf[i].data_vaddr)); c.buf[i].data_vaddr = nullptr; }
  }
- void pause(int v, bool p) override { if (!ch[v].reserved) { ch[v].paused = p; if (!ch[v].pendingStart) ndspChnSetPaused(v, p); } }
+ void pause(int v, bool p) override {
+  Chan& c = ch[v]; if (c.reserved) return;
+  if (c.fading) { c.next.paused = p; return; }
+  c.paused = p; if (!c.pendingStart) ndspChnSetPaused(v, p);
+ }
  void set(int v, f32 rate, f32 left, f32 right, f32 lpfHz) override {
-  Chan& c = ch[v]; if (c.reserved || c.mode == Chan::Idle) return;
+  Chan& c = ch[v]; if (c.reserved) return;
+  if (c.fading) { if (c.next.wave || c.next.stream) { c.next.set = true; c.next.rate = rate; c.next.left = left; c.next.right = right; c.next.lpf = lpfHz; } return; }
+  if (c.mode == Chan::Idle) return;
   if (rate != c.rate) { ndspChnSetRate(v, std::clamp(rate, 1.0f, 192000.0f)); c.rate = rate; }
-  if (left != c.left || right != c.right) { float mix[12] = {}; mix[0] = left; mix[1] = right; ndspChnSetMix(v, mix); c.left = left; c.right = right; }
+  c.targetLeft = left; c.targetRight = right;
   if (lpfHz != c.lpf) {
    if (lpfHz > 0) { ndspChnIirMonoSetParamsLowPassFilter(v, lpfHz); ndspChnIirMonoSetEnable(v, true); }
    else ndspChnIirMonoSetEnable(v, false);
@@ -478,8 +586,10 @@ public:
  }
  bool finished(int v) override {
   const Chan& c = ch[v];
+  if (c.fading) return !c.next.wave && !c.next.stream;
   if (c.reserved || c.mode == Chan::Idle) return true;
-  if (c.pendingStart || c.manualLoop) return false;
+  // A paused voice is frozen in place (retail AX state 0), not over.
+  if (c.pendingStart || c.manualLoop || c.paused) return false;
   if (c.mode == Chan::Stream) {
    if (!c.feed->ended()) return false;
    for (int i = 0; i < c.bufCount; ++i) if (c.buf[i].status == NDSP_WBUF_QUEUED || c.buf[i].status == NDSP_WBUF_PLAYING) return false;
@@ -491,7 +601,20 @@ public:
  void commit() override {
   for (int v = 0; v < VoiceMax; ++v) {
    Chan& c = ch[v]; if (c.reserved || c.mode == Chan::Idle) continue;
+   if (c.fading) {
+    // Linear to zero: 2/3, 1/3, then the reset.
+    if (--c.fading) { setMix(v, c.left - c.left / (c.fading + 1), c.right - c.right / (c.fading + 1)); continue; }
+    if (c.feed) releaseStreamBufs(v);
+    const Chan::Next next = c.next;
+    hardStop(v);
+    if (next.wave) start(v, *next.w, next.channel, next.offset);
+    else if (next.stream) startStream(v, next.feed, next.channel);
+    else continue;
+    if (next.set) set(v, next.rate, next.left, next.right, next.lpf);
+    if (next.paused) pause(v, true);
+   }
    if (c.mode == Chan::Stream) refillStream(v); else if (c.manualLoop) refillManual(v);
+   setMix(v, toward(c.left, c.targetLeft, c.stepLeft), toward(c.right, c.targetRight, c.stepRight));
    if (c.pendingStart) { c.pendingStart = false; if (!c.paused) ndspChnSetPaused(v, false); }
   }
  }
@@ -819,7 +942,7 @@ struct SoundSystem::Impl {
   Handle* h = c.slot && c.slot < slots.size() ? &slots[c.slot] : nullptr;
   Handle temp{};
   switch (c.type) {
-  case SoundCommand::Start: engine.startSound(h ? *h : temp, c.id); break;
+  case SoundCommand::Start: engine.startSound(h ? *h : temp, c.id); if (c.variable >= 0) engine.setSeqVariable(h ? *h : temp, c.variable, s16(c.value)); break;
   case SoundCommand::Hold: if (h) engine.holdSound(*h, c.id); break;
   case SoundCommand::Stop: if (h) engine.stop(*h, c.frames); break;
   case SoundCommand::Pause: if (h) engine.pause(*h, c.value != 0, c.frames); break;
@@ -914,7 +1037,9 @@ struct SoundSystem::Impl {
     Stats st; st.voices = es.voicesActive; st.sounds = es.soundsActive; st.dropped = es.voicesDropped; st.missing = es.missingData; st.failed = es.startsFailed;
     st.underruns = hw->underruns; st.audioMs = audioMs; st.audioPeakMs = audioPeak; st.frames = statFrames.load();
     st.cacheBytes = cache.arenaBytes; st.cacheUsed = cache.used(); st.cacheLoads = cache.loads; st.cacheEvictions = cache.evictions;
-    st.lastMissingSound = es.lastMissingSound; st.lastMissingFile = es.lastMissingFile; st.lastMissingWave = es.lastMissingWave;
+    st.notesDropped = es.notesDropped; st.lastDroppedSound = es.lastDroppedSound;
+    st.failedAlloc = es.failedAlloc; st.failedWait = es.failedWait; st.lastFailedAlloc = es.lastFailedAlloc; st.lastFailedWait = es.lastFailedWait; st.lastMissingSound = es.lastMissingSound; st.lastMissingFile = es.lastMissingFile; st.lastMissingWave = es.lastMissingWave;
+    st.firstFull[0] = es.firstFull[0]; st.firstFull[1] = es.firstFull[1]; st.lastFull = es.lastFull;
     LightLock_Lock(&statLock); published = st; LightLock_Unlock(&statLock);
    }
    LightEvent_Signal(&ioEvent);

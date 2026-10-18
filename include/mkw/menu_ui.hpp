@@ -4,7 +4,10 @@
 #include <vector>
 #include <cstdint>
 namespace mkw {
-enum class UiPage {Title,MainMenu,Mode,Character,Vehicle,Drift,Cup,Course,Confirm,Race,Pause,QuitConfirm,Results,Error,Strap,License,EngineClass,VSMode,BattleMode,BattleCup,BattleStage,Ghost,Intro};
+// NoGhosts: ConfirmPage (retail page 0x52) as TimeAttackBackPage (0x70) opens
+// it for a Time Trials course without ghosts. TimeAttackBack: that empty page,
+// on screen only while the section fades out after its OK.
+enum class UiPage {Title,MainMenu,Mode,Character,Vehicle,Drift,Cup,Course,Confirm,Race,Pause,QuitConfirm,Results,Error,Strap,License,EngineClass,VSMode,BattleMode,BattleCup,BattleStage,Ghost,Intro,NoGhosts,TimeAttackBack};
 enum class UiAction {None,StartRace,RestartRace,ResumeRace,Exit};
 enum class UiMode {GrandPrix,TimeTrials,VS,Battle};
 enum class UiEngineClass {CC50,CC100,CC150,Mirror};
@@ -16,10 +19,24 @@ inline constexpr std::array<UiMainMenuControl,7> UiMainMenuControls{{
  {2,-172.8f,-93.2f},{2,-97.2f,-93.2f},{3,135.f,-93.2f}
 }};
 struct UiInput {bool up=false,down=false,left=false,right=false,accept=false,back=false,start=false,switchType=false;};
+// MultiControlInputManager's direction hold: fn_1_DF4E4 (PAL 805ef898) counts
+// the 60 Hz frames one direction set is held, MultiControlInputManager_calc
+// (805f0e94) moves on frame 0 and on frames 15, 30, 45... Counted in display
+// frames, not loop passes. reset() is the page activation (fn_1_DF5A4).
+class UiDirectionRepeat {
+public:
+ // The directions held now; frames: 60 Hz frames since the previous step.
+ UiInput step(bool up,bool down,bool left,bool right,unsigned frames);
+ void reset(){mask_=0;held_=0;}
+private:
+ unsigned mask_=0,held_=0;
+};
 struct UiSelection {
  unsigned driver=0,vehicle=0,course=0;bool automatic=false;
  UiMode mode=UiMode::GrandPrix;UiEngineClass engineClass=UiEngineClass::CC150;
  unsigned license=0,battleStage=0;bool teams=false,coinRunners=false;
+ // Time Trials ghost page: 0 Race This Ghost, 1 Watch the Replay, 2 Solo.
+ unsigned ghostChoice=2;
  // The retail unlocked engine-class page switches both 50cc/100cc entries
  // together between their restricted type and the combined kart/bike list.
  bool mixedEngineTypes=false;
@@ -52,7 +69,13 @@ inline constexpr const char* UiBattleStageNames[]={"Block Plaza","Delfino Pier",
 class MenuState {
 public:
  UiPage page=UiPage::Strap;UiSelection selection{};
+ // The fastest usable ghost per course in milliseconds (0: none), filled in
+ // by the race runtime before the Time Trial ghost page.
+ std::array<uint32_t,32> ghostTimes{};
  unsigned cursor=0,age=0,focusAge=0;bool unavailable=false;
+ // Frames since the menu section began: the section's MenuBG keeps running
+ // across its pages (MenuTransition carries it over each page change).
+ unsigned sectionAge=0;
  // Results is the retail VS end-of-race menu (VSRaceEnd): Next Race / Quit
  // Game, or only Next after the final race of a VS set (IsFinalRace).
  bool finalRace=false;
@@ -72,17 +95,22 @@ public:
  unsigned vehicleChoice(unsigned slot)const;
  unsigned vehicleSlot(unsigned choice)const;
  unsigned engineClassMovie(unsigned slot)const;
+ // The Time Trials page after the course: the ghost list, or the no-ghost
+ // popup (TimeAttackBackPage_onReady, PAL 0x806393C8) when the list is empty.
+ UiPage ghostPage()const{return ghostTimes[selection.course%ghostTimes.size()]?UiPage::Ghost:UiPage::NoGhosts;}
  // The race runtime starts races with all 24 retail drivers and all twelve
  // machines each. Other choices stay browsable, but accepting one reports
  // "Not available" on its own page rather than at the final confirmation.
  static bool raceMode(UiMode mode){return mode==UiMode::VS||mode==UiMode::GrandPrix||mode==UiMode::TimeTrials||mode==UiMode::Battle;}
  // Only the original 150cc physics runs (Kinoko's class rate 1.0).
- static bool raceEngineClass(UiEngineClass c){return c!=UiEngineClass::Mirror;}
+ static bool raceEngineClass(UiEngineClass){return true;}
  static bool raceDriver(unsigned driver){return driver<24;}
  static bool raceVehicle(unsigned choice){return choice<12;}
  bool supportsRace()const;
 };
-struct UiQuad {unsigned sprite;float x,y,w,h,alpha=1;uint32_t tint=0xffffffff;bool bottom=false;float u0=0,v0=0,u1=1,v1=1;unsigned movie=~0u;std::array<uint32_t,4> corners{{0xffffffff,0xffffffff,0xffffffff,0xffffffff}};bool additive=false;unsigned vehicleIcon=~0u;uint32_t vehicleColor0=0,vehicleColor1=0xffffffff;};
+// material: the NW4R default material, lerp(color0,color1,texture) times the
+// corner colours (pane TEV C0/C1 applied live, e.g. a white glow silhouette).
+struct UiQuad {unsigned sprite;float x,y,w,h,alpha=1;uint32_t tint=0xffffffff;bool bottom=false;float u0=0,v0=0,u1=1,v1=1;unsigned movie=~0u;std::array<uint32_t,4> corners{{0xffffffff,0xffffffff,0xffffffff,0xffffffff}};bool additive=false;unsigned vehicleIcon=~0u;uint32_t vehicleColor0=0,vehicleColor1=0xffffffff;bool material=false;uint32_t color0=0,color1=0xffffffff;};
 struct UiRacer {unsigned driver=0,rank=1,lap=1;bool finished=false;float x=0,z=0;};
 struct UiRaceView {std::array<UiRacer,12> racers{};unsigned count=0;unsigned milliseconds=0;};
 // The same command list is consumed by Citro3D and the host layout preview.

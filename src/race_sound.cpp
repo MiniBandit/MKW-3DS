@@ -46,8 +46,10 @@ bool battleCourse(unsigned c) { return c >= 0x20 && c < 0x2a; }
 // Section::GetSoundId (80600db4) for the intro and race sections of a mode
 // (RaceMgr::SetRaceState 2: 0x1e GP/TT, 0x20 VS, 0x28 battle, ...).
 std::uint32_t introFanfare(unsigned course) { return battleCourse(course) ? 0x57 : 0x56; }   // STRM_O_(B_)CRS_IN_FAN
+// GetSoundId (PAL 0x80631C68) of the race section: GP 0x1E and VS 0x20-0x27
+// STRM_O_START_FAN, Time Trials 0x1F and battle 0x28+ STRM_O_START2_FAN.
 std::uint32_t startFanfare(unsigned mode) {
- switch (mode) { case 0: case 1: case 2: return 0x59; default: return 0x5a; }            // STRM_O_START(2)_FAN
+ switch (mode) { case 0: case 1: return 0x59; default: return 0x5a; }
 }
 // fn_1_201E0C (8070a71c): goal music row by mode (table 8089d490), column by
 // result: 1st; up to the threshold (table 808cd0b8 by racer count); worse.
@@ -160,18 +162,22 @@ void RaceSound::begin(const Setup& s) {
  setup_ = s;
  budget_ = {};
  if (!sys.available()) return;
- active_ = true; paused_ = false; state_ = 0; countdown_ = 0; tick_ = 0; maxLap_ = 1; finished_ = false; rank_ = 1;
+ active_ = true; paused_ = false; leaving_ = false; state_ = 0; countdown_ = 0; tick_ = 0; maxLap_ = 1; finished_ = false; rank_ = 1;
  goalVoice_[0] = goalVoice_[1] = goalVoice_[2] = 0;
  alteration_ = 3; wasMega_ = wasStar_ = false; wobble_ = 0;
  alterVolume_ = fanfareVolume_ = bgmVolume_ = bgmPitch_ = 1; postedBgmVolume_ = postedBgmPitch_ = -1; postedSlot_ = -1;
  bgm_ = Bgm{};
- triggers_.reset(s.course, false);   // no mirror mode in this port
+ triggers_.reset(s.course, s.mirror);
  introLoaded_ = false; introShot_ = -1;
  for (auto& t : stems_) t = AudioTrack{};
  stemCount_ = 0; stemSound_ = 0xFFFFFFFFu;
  bgmValue_ = AudioTrack{}; bgmValue_.value = bgmValue_.target = 1;
  rankShown_ = 0; rankAnim_ = 2; rankFrame_ = 0;
 
+ // Audio::Manager's init (PAL 0x80717150 -> SeqSoundHandle::WriteGlobalVariable):
+ // global sequence variable 0 is the output mode (0 mono, 1 stereo, 2 Dolby Pro
+ // Logic II). The 3DS is stereo; the crowds and stadium cheers pick their mix by it.
+ post(SoundCommand::GlobalVariable, 0, 0, 1.0f);
  planPending_ = true; lastFree_ = std::uint32_t(linearSpaceFree()); stableTicks_ = waitTicks_ = 0;
  // RaceRSARPlayer::OnLoad -> PlayersVolumeMgr::Reset (80716c6c): BGM and UI
  // at full volume, every other player from silence over 120 frames.
@@ -285,7 +291,15 @@ void RaceSound::planScene() {
  }
  scene.cacheBytes = budget_.cache;
  sys.loadScene(scene);
-
+#ifndef MKW_RELEASE
+ // QA: the plan, also when prepareScene() makes it before the first tick.
+ if (trace_) {
+  char line[160];
+  std::snprintf(line, sizeof line, "race sound plan tick=%u linear_free=%lu budget=%lu resident=%lu cache=%lu demoted=%u", tick_,
+                (unsigned long)budget_.linearFree, (unsigned long)budget_.budget, (unsigned long)budget_.resident, (unsigned long)budget_.cache, budget_.demoted);
+  trace_(line, traceContext_);
+ }
+#endif
 }
 
 void RaceSound::trace(const char* what, unsigned value) {
@@ -300,6 +314,7 @@ void RaceSound::trace(const char* what, unsigned value) {
 }
 void RaceSound::setRaceState(int n) {
  // RaceMgr::SetRaceState (8070a020).
+ if (leaving_) return;   // the scene is fading out: no new music
  if (n == 5 && state_ == 6) {
   // The final lap reached again over the fast music: the fanfare plays on its own handle.
   SoundSystem::instance().stopSlot(FanfareSlot, 0);
@@ -404,7 +419,10 @@ void RaceSound::rankHud(unsigned rank) {
  // (race_hud.cpp: close 16 frames, open 11): a new position closes the
  // number, and SE_RC_RANK_UP / _DOWN play as the new number is shown.
  auto show = [&]() {
-  SoundSystem::instance().play(rank < rankShown_ ? id::SE_RC_RANK_UP : id::SE_RC_RANK_DOWN);
+  // RaceRSARPlayer's start (PAL 0x80716608) writes local variable 0 = 12 - rank,
+  // which the sequence transposes by: higher positions sound higher. It drops
+  // both sounds while RaceMgr's state is below 4 (the countdown and start pan).
+  if (state_ >= 4) SoundSystem::instance().play(rank < rankShown_ ? id::SE_RC_RANK_UP : id::SE_RC_RANK_DOWN, 0, std::int16_t(12 - int(rank)));
   rankShown_ = rank;
  };
  if (!rankShown_) rankShown_ = rank;
@@ -414,9 +432,26 @@ void RaceSound::rankHud(unsigned rank) {
  else if (rankAnim_ == 1 && rankFrame_ >= 11) { rankAnim_ = 2; rankFrame_ = 0; }
 }
 
+void RaceSound::previewLeave() {
+ if (!active_ || state_ != 2) return;
+ // The Demo section's fade-out starts with RaceRSARPlayer::Stop (PAL 0x80715E64):
+ // the intro fanfare over 20 frames, PlayersVolumeMgr::Stop (players 2-10 stop
+ // over 20 frames, their volume to 0.0 over the same 20) and the intro
+ // ambience handle over 20 (fn_1_1EBA60).
+ auto& sys = SoundSystem::instance();
+ bgm_.stop(0x14);
+ if (bgm_.prepared >= 0) { sys.stopSlot(bgm_.slot[bgm_.prepared], 0); bgm_.prepared = -1; }
+ race_ = Track{};
+ for (std::uint32_t p = 2; p < 11; ++p) { players_[p].set(0.0f, 0x14); post(SoundCommand::StopPlayer, 0, p, 0, 0x14); }
+ triggers_.ambience.push_back({AmbienceOp::GlobalStop, 0, 0x14, 0, -1});
+}
+
 void RaceSound::previewEnded() {
  if (!active_ || state_ != 2) return;
- // The race section starts: RaceRSARPlayer::Prepare -> RaceMgr::Init -> state 3.
+ // The race section's scene enter: RaceRSARPlayer::Prepare -> RaceMgr::Init ->
+ // state 3 (the start fanfare), then OnLoad's PlayersVolumeMgr::Reset brings
+ // players 2-10 from 0 to 1 over 120 frames.
+ for (std::uint32_t p = 2; p < 11; ++p) { players_[p].value = 0.0f; players_[p].set(1.0f, 0x78); }
  setRaceState(3);
 }
 
@@ -473,7 +508,11 @@ void RaceSound::step(const Frame& f, RaceAudioFrame* actors) {
  auto& sys = SoundSystem::instance();
  ++tick_;
  // Bounded release diagnostics for silent race actors; no per-frame file I/O.
+#ifdef MKW_RELEASE
  if (tick_ == 300 || tick_ == 900 || tick_ == 1800) {
+#else
+ if (tick_ == 300 || tick_ == 900 || tick_ == 1800 || tick_ == 6000) {   // QA: once more late in the race
+#endif
   const auto st = sys.stats();
   if (FILE* log = std::fopen("sdmc:/3ds/mkw-3ds/audio-race-status.txt", "a")) {
    std::fprintf(log, "tick=%u course=%u ready=%d actor_frames=%lu actor_sounds=%lu voices=%lu missing=%lu failed=%lu last=%lu/%lu/%lu cache=%lu/%lu waves=%lu linear=%lu\n",
@@ -482,6 +521,23 @@ void RaceSound::step(const Frame& f, RaceAudioFrame* actors) {
     (unsigned long)st.failed, (unsigned long)st.lastMissingSound, (unsigned long)st.lastMissingFile,
     (unsigned long)st.lastMissingWave, (unsigned long)st.cacheUsed, (unsigned long)st.cacheBytes,
     (unsigned long)sys.residentWaveBytes(), (unsigned long)linearSpaceFree());
+#ifndef MKW_RELEASE
+   // QA: item-hit voices, started/requested: the attacker's ITM_SCES and the victim's damage voice.
+   std::fprintf(log, "  voices hit_success=%lu/%lu damage=%lu/%lu\n", (unsigned long)layer_.hitVoices.load(),
+                (unsigned long)layer_.hitVoiceRequests.load(), (unsigned long)layer_.damageVoices.load(),
+                (unsigned long)layer_.damageVoiceRequests.load());
+   // QA: what failed to start (no sound slot on its player / waves not loaded in time).
+   std::fprintf(log, "  failed alloc=%lu last=%ld wait=%lu last=%ld\n", (unsigned long)st.failedAlloc, long(st.lastFailedAlloc),
+                (unsigned long)st.failedWait, long(st.lastFailedWait));
+   // QA: the player each no-slot start found full, and its sounds as id:priority.
+   for (const snd::FullPlayer* fp : {&st.firstFull[0], &st.firstFull[1], &st.lastFull}) {
+    if (!fp->failure) continue;
+    std::fprintf(log, "  full #%lu sound=%lu player=%lu start=%u held", (unsigned long)fp->failure, (unsigned long)fp->sound,
+                 (unsigned long)fp->player, unsigned(fp->start));
+    for (int k = 0; k < fp->count; ++k) std::fprintf(log, " %u:%u", unsigned(fp->held[k]), unsigned(fp->heldPriority[k]));
+    std::fputc('\n', log);
+   }
+#endif
    std::fclose(log);
   }
  }
@@ -491,16 +547,6 @@ void RaceSound::step(const Frame& f, RaceAudioFrame* actors) {
   stableTicks_ = free == lastFree_ ? stableTicks_ + 1 : 0; lastFree_ = free;
   if (stableTicks_ >= 45 || ++waitTicks_ >= 150) {
    planScene();
-   if (trace_) {
-    char line[160];
-
-#ifndef MKW_RELEASE
-    std::snprintf(line, sizeof line, "race sound plan tick=%u linear_free=%lu budget=%lu resident=%lu cache=%lu demoted=%u", tick_,
-                  (unsigned long)budget_.linearFree, (unsigned long)budget_.budget, (unsigned long)budget_.resident, (unsigned long)budget_.cache, budget_.demoted);
-    trace_(line, traceContext_);
-#endif
-
-   }
   }
  }
  // KartActor::UpdateLapSounds (USA 80704980): crossing the line plays
@@ -520,9 +566,18 @@ void RaceSound::step(const Frame& f, RaceAudioFrame* actors) {
  if (!finished_ && f.stage >= 1 && countdown_ < 4 && f.timer == unsigned(countdown_ + 1) * 60) {
   const bool go = countdown_ == 3;
   const bool battle = battleCourse(setup_.course);
+  if (go) {
+   // RaceRSARPlayer::PlaySound(SE_RC_GO) (PAL 0x80716608 -> fn_1_201064 0x80711418):
+   // RaceMgr::StartRace, then the stadium and castle loops started by the first zone
+   // fade out over 300 frames.
+   setRaceState(4);   // RaceMgr::StartRace (80709974)
+   for (std::uint16_t loop : {std::uint16_t(id::SE_CR_GCW_ENV_AUD), std::uint16_t(id::SE_CR_GBK_ENV), std::uint16_t(id::SE_CB_SKT_CHEER)})
+    triggers_.ambience.push_back({AmbienceOp::GlobalStopIf, loop, 300, 0, -1});
+  }
   sys.play(go ? (battle ? id::SE_RC_GO_BTL : id::SE_RC_GO) : (battle ? id::SE_RC_321_BTL : id::SE_RC_321));
+  // RacePage::afterCalc (PAL 0x808577A0): GBA Bowser Castle 3's thunder with GO.
+  if (go && setup_.course == 0x1e) sys.play(id::SE_CR_GBK_START_THUNDER);
   trace(go ? "go" : "count", f.timer);
-  if (go) setRaceState(4);   // RaceMgr::StartRace (80709974)
   ++countdown_;
  }
  // KartActor::UpdateLapSounds (807048ac): Raceinfo maxLap of the local player.
@@ -572,11 +627,14 @@ void RaceSound::step(const Frame& f, RaceAudioFrame* actors) {
   a.soundZone = std::int8_t(triggers_.zone()); a.introCount = std::uint8_t(std::min(triggers_.introCount(), 255u));
   for (int k = 0; k < 3; ++k) a.goalVoice[k] = goalVoice_[k];
   // Retail loads the race groups before the scene runs; here course object
-  // calls wait until they are in rather than failing each frame.
-  if (!introLoaded_) a.objectSounds = 0;
+  // calls wait until they are in rather than failing each frame (also when
+  // a restart skips the course preview, which is where introLoaded_ is set).
+  const bool groupsIn = introLoaded_ || (!planPending_ && sys.sceneReady());
+  if (!groupsIn) a.objectSounds = 0;
+  a.objectsReady = groupsIn;
   a.raceState = std::uint8_t(state_); a.alteration = std::uint8_t(alteration_); a.engineClass = std::uint8_t(std::min(setup_.engineClass, 2u));
   // A frame dropped by a full ring keeps its cues for the next one.
-  if (layer_.push(a)) { for (auto& k : a.kart) { k.cues = 0; k.bumpedBy = 0; } a.itemSounds = 0; a.ambienceOps = 0; a.objectSounds = 0; }
+  if (layer_.push(a)) { for (auto& k : a.kart) { k.cues = 0; k.bumpedBy = 0; k.objectHits = 0; k.fallBoundary = 0xff; k.kartSounds = 0; } a.itemSounds = 0; a.ambienceOps = 0; a.objectSounds = 0; }
  }
  SoundCommand c; c.type = SoundCommand::Layer; sys.post(c);
 }
@@ -586,8 +644,10 @@ void RaceSound::pause(bool paused) {
  if (!active_ || paused == paused_) return;
  paused_ = paused;
  auto& sys = SoundSystem::instance();
- // Resume cue is posted at accepted menu input; this only resumes players.
- if(paused)sys.play(id::SE_RC_PAUSE_ON);
+ // Resume (PAL 0x80715F60) plays SE_RC_PAUSE_OFF on the resume frame, which in
+ // retail is the Continue press. The port reloads the course before it gets
+ // here, so MenuSound::input plays it when Continue is accepted.
+ if (paused) sys.play(id::SE_RC_PAUSE_ON);
  if (bgm_.delay < 1 && bgm_.active >= 0) post(SoundCommand::Pause, bgm_.slot[bgm_.active], 0, paused ? 1.0f : 0.0f, 0);
  // PlayersVolumeMgr::PauseAllButTrackUI: every player but BGM and menu UI.
  for (std::uint32_t p = 2; p < 11; ++p) post(SoundCommand::PausePlayer, 0, p, paused ? 1.0f : 0.0f, 10);
@@ -603,6 +663,21 @@ void RaceSound::quit() {
  sys.stopSlot(FanfareSlot, 0x14); sys.stopSlot(AlterationSlot, 0x14);
  for (std::uint32_t p = 2; p < 11; ++p) { post(SoundCommand::StopPlayer, 0, p, 0, 0x14); post(SoundCommand::PausePlayer, 0, p, 0.0f, 0); }
  sys.setLayer(nullptr);
- active_ = false; paused_ = false;
+ active_ = false; paused_ = false; leaving_ = false;
+}
+
+void RaceSound::fadeOut() {
+ // RaceRSARPlayer::Stop (PAL 0x80715E64) on the fade-out's first frame: the
+ // BGM over 20 frames, and PlayersVolumeMgr::Stop - players 2-10 (engines,
+ // voices, items, objects, ambience) stop over 20 frames with their volume
+ // going to 0.0 over the same 20. quit() later finds them silent.
+ if (!active_ || leaving_) return;
+ auto& sys = SoundSystem::instance();
+ bgm_.stop(0x14);
+ if (bgm_.prepared >= 0) { sys.stopSlot(bgm_.slot[bgm_.prepared], 0); bgm_.prepared = -1; }
+ sys.stopSlot(FanfareSlot, 0x14); sys.stopSlot(AlterationSlot, 0x14);
+ race_ = Track{};
+ for (std::uint32_t p = 2; p < 11; ++p) { players_[p].set(0.0f, 0x14); post(SoundCommand::StopPlayer, 0, p, 0, 0x14); }
+ leaving_ = true;
 }
 }
