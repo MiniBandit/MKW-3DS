@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <string>
 
 namespace mkw
@@ -348,7 +349,29 @@ namespace mkw
                     driverFace_ = driver->animation->face(name);
             }
             driverClip_ = clip;
+            // Seated set (driver_anim.brres, fn_1_30E710 8081eac4): channel 0 is
+            // PAT0 "wink" and there is no SRT0, so the eyes keep their bind
+            // textures/UVs and look ahead, not at the camera (that is sel_wait's
+            // PAT0/SRT0, channels 1-2 of the standing set, fn_1_30E3D8). State
+            // 2/3 (fn_1_31F7C4) restarts the wink at frame 0 when the shown
+            // machine changes (and on the Vehicle OK, see draw); DriverModel
+            // calc (fn_1_31FB58 8082ff0c) restarts it on a 1-in-100 roll a frame.
+            if (shownMachine_ >= 0)
+            {
+                const int wink = driver->animation->face("wink");
+                if (wink != driverFace_ || shownMachine_ != winkMachine_)
+                {
+                    driverFace_ = wink;
+                    winkFrame_ = winkTicks_ = 0;
+                    winkMachine_ = shownMachine_;
+                }
+                for (; winkTicks_; --winkTicks_)
+                    winkFrame_ = std::rand() % 100 ? winkFrame_ + 1 : 0;
+            }
         }
+        if (shownMachine_ < 0)
+            winkMachine_ = -1;
+        winkTicks_ = 0;
         for (auto &e : entries_)
         {
             const bool shown = (e->kind == Driver && e->id == shownDriver_) || (e->kind == Background && e->id == shownBackground_) || (e->kind == Machine && e->id == shownMachine_);
@@ -431,6 +454,9 @@ namespace mkw
         shownDriver_ = shownBackground_ = shownMachine_ = -1;
         driverClip_ = driverFace_ = backgroundClip_ = -1;
         driverConfirm_ = false;
+        winkMachine_ = -1;
+        winkFrame_ = winkTicks_ = 0;
+        vehicleOk_ = false;
         // MenuModelManager init (fn_1_8DE48, PAL 8059e1fc) -> fn_1_322BE4.
         kartTicks_ = kartCount_ = 0;
         kartRotation_ = 0;
@@ -494,6 +520,11 @@ namespace mkw
         // A confirmed character keeps its sel_gut until the page has left;
         // B (back) never confirms. Read by the next update().
         driverConfirm_ = state.page == UiPage::Character && motion.active && !motion.entering && !motion.back && *motion.selectedControl;
+        // The Vehicle OK (fn_1_336868 -> fn_1_31F7C4 state 3) restarts the wink.
+        const bool vehicleOk = state.page == UiPage::Vehicle && motion.active && !motion.entering && !motion.back && *motion.selectedControl;
+        if (vehicleOk && !vehicleOk_)
+            winkFrame_ = 0;
+        vehicleOk_ = vehicleOk;
         turnKart(state, motion);
         if (auto *background = shownBackground_ >= 0 ? find(Background, shownBackground_) : nullptr; background && background->resident())
         {
@@ -547,7 +578,7 @@ namespace mkw
         {
             const auto t0 = svcGetSystemTick();
             if (driver->animation)
-                driver->animation->apply(*driver->model, driverClip_, float(driverFrame_), driverFrame_, driverFace_, float(driverFrame_));
+                driver->animation->apply(*driver->model, driverClip_, float(driverFrame_), driverFrame_, driverFace_, float(shownMachine_ >= 0 ? winkFrame_ : driverFrame_));
             renderMetrics.skinMs += float((svcGetSystemTick() - t0) * 1000.0 / SYSCLOCK_ARM11);
         }
         auto *machine = shownMachine_ >= 0 ? find(Machine, shownMachine_) : nullptr;

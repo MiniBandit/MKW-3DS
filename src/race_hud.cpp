@@ -996,11 +996,16 @@ void RaceHud::drawOverlay(Renderer& renderer,const RaceItems& items,unsigned sta
     // It takes MK7's countdown layer, MK7's one top-screen 2D layer over the
     // near road, so it is never behind the road it covers.
     renderer.setScreenDepth(renderer.stereoLayer(stereo::CountdownLayer));
-    // CtrlRaceRankNum_1_0 (y -150, scale 1.6) leaves downward. The retail
-    // drop shadow (HudRankShadow) is left out: it read as a stray grey copy.
-    const float cx=HudRank.x+HudRank.w*.5f,cy=HudRank.y+HudRank.h*.5f+exitLift(1.6f);
+    // CtrlRaceRankNum_1_0 (y -150, scale 1.6) leaves downward. Drop shadow
+    // position_sha (game_image_position.brlyt): drawn first, a race_null child
+    // at (-6,-7), pane alpha 150, material C0/C1 black, same texture pattern;
+    // it spins and scales with race_null and slides with it (rest offset).
+    const float cx=HudRank.x+HudRank.w*.5f,restY=HudRank.y+HudRank.h*.5f,cy=restY+exitLift(1.6f);
     if(scale>0.01f){
+        const float sdx=HudRankShadow.x+HudRankShadow.w*.5f-cx,sdy=HudRankShadow.y+HudRankShadow.h*.5f-restY;
+        const float c=std::cos(angle),sn=std::sin(angle),sx=(sdx*c-sdy*sn)*scale,sy=(sdx*sn+sdy*c)*scale;
         const float w=HudRank.w*scale,h=HudRank.h*scale;
+        renderer.drawScreenSpriteRegion(impl_->ranks[shown],cx+sx-w*.5f,cy+sy-h*.5f,w,h,0,0,art.u,art.v,150.f/255.f,0x000000ffu,nullptr,false,angle);
         renderer.drawScreenSpriteRegion(impl_->ranks[shown],cx-w*.5f,cy-h*.5f,w,h,0,0,art.u,art.v,1.f,0xffffffffu,nullptr,false,angle);
     }
     if(echoAlpha>0){

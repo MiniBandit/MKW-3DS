@@ -13,11 +13,12 @@ const char* phaseName(UiFocusPhase phase){
  switch(phase){case UiFocusPhase::Free:return "Free";case UiFocusPhase::FreeToSelect:return "FreeToSelect";
  case UiFocusPhase::Select:return "Select";case UiFocusPhase::SelectToFree:return "SelectToFree";}return "Free";
 }
-unsigned mainGroup(unsigned cursor){return cursor==0?0:cursor<4?1:cursor<6?2:3;}
-bool selected(const MenuState& state,unsigned cursor,unsigned slot){
- return slot<UiFocusButtonCount?slot==cursor:
-     state.page==UiPage::MainMenu&&slot==UiFocusMainParentBase+mainGroup(cursor);
-}
+// MainMenuPage never selects its four waku frames (TopMenu*Waku): fn_1_3401CC
+// (PAL 80850580) sets their Select group to Free, the button select handler
+// fn_1_341168 (8085151c) only sets the instruction text, and the deselect
+// handler fn_1_3411EC (808515a0) only reverses a FreeToSelect/Select nothing
+// starts. So they stay in Free; the looping 10-frame Select (text_light) never runs.
+bool selected(const MenuState&,unsigned cursor,unsigned slot){return slot<UiFocusButtonCount&&slot==cursor;}
 void play(UiFocusControl& entry,const char* control,UiFocusPhase phase,float percent=0){
  entry.phase=phase;entry.clip=uiFindAnimationClip(control,"Select",phaseName(phase));
  entry.frame=entry.clip?entry.clip->duration*std::clamp(percent,0.f,1.f):0;

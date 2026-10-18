@@ -82,11 +82,13 @@ private:
  // Flag 1 (0x805A4DEC .. 0x805A4E20) with its rate (+0x190) and frame counter (+0x194).
  bool explosion_=false;float explosionRate_=1;int explosionFrames_=0;
  bool cannonLock_=false;                  // flag 0x40 (Rainbow Road cannon, 0x80590EA4)
+ // Flag 0x200 with its frame counter (+0x33c): a car hit (ObjectCarTGE::onCollision -> 0x805A6DCC).
+ bool carHit_=false;int16_t carHitTimer_=0;
  float halfPipeEase_=0;                   // +0x118
  V3 lookBackEye_,lookBackTarget_;         // +0xb8, +0xc4
  float boostAdd_=0,boostFactor_=0;        // RaceCamera +0x120, KartMove +0x124
  HalfPipe halfPipe_;
  // The kart at the end of the previous step: what this step's KartHalfPipe::calc read.
- struct Prev {V3 dir,up,bodyUp;float speed=0,vel1DirY=0;bool overZipper=false,stop=false,ramp=false;bool boost[3]{};uint32_t actionStarts=0;bool largeFlip=false,inCannon=false;} prev_;
+ struct Prev {V3 dir,up,bodyUp;float speed=0,vel1DirY=0;bool overZipper=false,stop=false,ramp=false;bool boost[3]{};uint32_t actionStarts=0,carHits=0;bool largeFlip=false,inCannon=false;} prev_;
 };
 }

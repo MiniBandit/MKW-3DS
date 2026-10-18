@@ -10,6 +10,7 @@
 #include <game/field/obj/ObjectEscalator.hh>
 #include <game/field/obj/ObjectHeyhoBall.hh>
 #include <game/field/obj/ObjectKoopaBall.hh>
+#include <game/field/obj/ObjectObakeManager.hh>
 #include <mkw/race_effects.hpp>
 #include <game/system/CourseMap.hh>
 #include <game/system/RaceManager.hh>
@@ -267,8 +268,13 @@ void CourseObjects::Impl::link(){
     // registered for a placement is the one created from it.
     std::unordered_map<const K::System::MapdataGeoObj*,std::vector<const K::Field::ObjectBase*>> owner;
     for(const auto* obj:objects->objects())if(obj->mapObj())owner[obj->mapObj()].push_back(obj);
-    if(const auto* drivable=K::Field::ObjectDrivableDirector::Instance())
+    if(const auto* drivable=K::Field::ObjectDrivableDirector::Instance()){
         for(const auto* obj:drivable->objects())if(obj->mapObj())owner[obj->mapObj()].push_back(obj);
+        // SNES Ghost Valley 2's blocks live only in Kinoko's ObakeManager: each
+        // placement's block is its object (after the manager on the first one).
+        if(const auto* obake=drivable->obakeManager())
+            for(const auto* block:obake->blocks())if(block->mapObj())owner[block->mapObj()].push_back(block);
+    }
     const auto& flow=objects->flowTable();
     for(unsigned i=0;i<map->getGeoObjCount();++i){
         const auto* geo=map->getGeoObj(i);

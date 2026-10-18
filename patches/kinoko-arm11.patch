@@ -301,10 +301,10 @@ index edcbbda..5bfeb8e 100644
          return EGG::egg_new<ObjectNoImpl>(params);
      }
 diff --git a/source/game/field/ObjectDirector.hh b/source/game/field/ObjectDirector.hh
-index 9634abd..7f86310 100644
+index 9634abd..808255b 100644
 --- a/source/game/field/ObjectDirector.hh
 +++ b/source/game/field/ObjectDirector.hh
-@@ -34,11 +34,19 @@ public:
+@@ -34,15 +34,27 @@ public:
  
      size_t checkKartObjectCollision(Kart::KartObject *kartObj,
              ObjectCollisionConvexHull *convexHull);
@@ -324,7 +324,15 @@ index 9634abd..7f86310 100644
      [[nodiscard]] const ObjectHitTable &hitTableKart() const {
          return m_hitTableKart;
      }
-@@ -101,6 +109,9 @@ private:
+ 
++    [[nodiscard]] const ObjectHitTable &hitTableKartObject() const {
++        return m_hitTableKartObject;
++    }
++
+     [[nodiscard]] const ObjectCollidable *collidingObject(size_t idx) const {
+         ASSERT(idx < m_collidingObjects.size());
+         return m_collidingObjects[idx];
+@@ -101,6 +113,9 @@ private:
      ObjectFlowTable m_flowTable;
      ObjectHitTable m_hitTableKart;
      ObjectHitTable m_hitTableKartObject;
@@ -744,6 +752,22 @@ index fe20a13..ec11cd5 100644
  private:
      [[nodiscard]] f32 calcDirSwitchVelocity(u32 t) const;
  
+diff --git a/source/game/field/obj/ObjectBreakable.hh b/source/game/field/obj/ObjectBreakable.hh
+index 456eb59..f6cd62a 100644
+--- a/source/game/field/obj/ObjectBreakable.hh
++++ b/source/game/field/obj/ObjectBreakable.hh
+@@ -28,6 +28,11 @@ public:
+         m_state = 1;
+     }
+ 
++    /// Presentation only: retail +0xB0. 0 is hidden (retail hides the model), 1 and 2 show it.
++    [[nodiscard]] u32 state() const {
++        return m_state;
++    }
++
+ protected:
+     u32 m_state;
+ };
 diff --git a/source/game/field/obj/ObjectBulldozer.cc b/source/game/field/obj/ObjectBulldozer.cc
 index f592e7f..4d8ae43 100644
 --- a/source/game/field/obj/ObjectBulldozer.cc
@@ -815,7 +839,7 @@ index 0b38874..8f34e85 100644
      const f32 m_finalVel;
      const f32 m_accel;
 diff --git a/source/game/field/obj/ObjectCarTGE.cc b/source/game/field/obj/ObjectCarTGE.cc
-index bd434d7..c922727 100644
+index bd434d7..5eba9ba 100644
 --- a/source/game/field/obj/ObjectCarTGE.cc
 +++ b/source/game/field/obj/ObjectCarTGE.cc
 @@ -6,17 +6,32 @@
@@ -1012,18 +1036,24 @@ index bd434d7..c922727 100644
      if (!m_hasAuxCollision) {
          EGG::Vector3f hitDepthNorm = hitDepth;
          hitDepthNorm.normalise2();
-@@ -218,14 +298,20 @@ Kart::Reaction ObjectCarTGE::onCollision(Kart::KartObject *kartObj, Kart::Reacti
+@@ -218,14 +298,26 @@ Kart::Reaction ObjectCarTGE::onCollision(Kart::KartObject *kartObj, Kart::Reacti
          }
      }
  
 -    if (m_highwayMgr && m_highwayMgr->squashTimer() < SQUASH_INVULNERABILITY) {
 +    // Retail USA 0x806C84E8 reads and marks the colliding player's own squash state.
 +    const size_t playerIdx = kartObj->param()->playerIdx();
++    // The object reaction retail goes on with (the dummy's too inside the squash window).
++    // Port: read only by the camera cue below.
++    Kart::Reaction objReaction = reactionOnObj;
 +
 +    if (m_highwayMgr && m_highwayMgr->squashTimer(playerIdx) < SQUASH_INVULNERABILITY) {
          const auto &hitTable = ObjectDirector::Instance()->hitTableKart();
 -        reactionOnKart = hitTable.reaction(hitTable.slot(static_cast<ObjectId>(m_dummyId)));
 +        reactionOnKart = hitTable.reaction(hitTable.slot(static_cast<ObjectId>(m_dummyId)),
++                ObjectHitTable::KartColumn(kartObj));
++        const auto &objTable = ObjectDirector::Instance()->hitTableKartObject();
++        objReaction = objTable.reaction(objTable.slot(static_cast<ObjectId>(m_dummyId)),
 +                ObjectHitTable::KartColumn(kartObj));
      }
  
@@ -1036,7 +1066,23 @@ index bd434d7..c922727 100644
          calcTransform();
          EGG::Vector3f v2 = transform().base(2);
          v2.y = 0.0f;
-@@ -249,7 +335,7 @@ bool ObjectCarTGE::checkCollision(ObjectCollisionBase *lhs, EGG::Vector3f &dist)
+@@ -241,6 +333,15 @@ Kart::Reaction ObjectCarTGE::onCollision(Kart::KartObject *kartObj, Kart::Reacti
+         hitDepth.setZero();
+     }
+ 
++    // Retail 0x806D7760 (port: a camera cue only, no physics): Kart::Link 0x80590F58 dips the
++    // kart's race camera when the object reaction is none and the kart reaction is neither
++    // LaunchSpin nor WallAllSpeed (a squash, or none inside the squash window); the cue
++    // checks retail's last condition, the kart not already in action 5.
++    if (objReaction == Kart::Reaction::None && reactionOnKart != Kart::Reaction::LaunchSpin &&
++            reactionOnKart != Kart::Reaction::WallAllSpeed) {
++        kartObj->collide()->cueCarCamera();
++    }
++
+     return reactionOnKart;
+ }
+ 
+@@ -249,7 +350,7 @@ bool ObjectCarTGE::checkCollision(ObjectCollisionBase *lhs, EGG::Vector3f &dist)
      dist = EGG::Vector3f::zero;
      bool hasCol = lhs->check(*m_collision, dist);
  
@@ -1045,7 +1091,7 @@ index bd434d7..c922727 100644
          hasCol = lhs->check(*m_auxCollision, dist);
          m_hasAuxCollision = hasCol;
      }
-@@ -338,4 +424,122 @@ void ObjectCarTGE::calcPos() {
+@@ -338,4 +439,122 @@ void ObjectCarTGE::calcPos() {
      setMatrixTangentTo(m_up, m_tangent);
  }
  
@@ -2715,6 +2761,22 @@ index e5d4d18..c8ffbf3 100644
              block->calc();
              m_calcBlocks.push_back(block);
          }
+diff --git a/source/game/field/obj/ObjectObakeManager.hh b/source/game/field/obj/ObjectObakeManager.hh
+index cf6ad25..4806385 100644
+--- a/source/game/field/obj/ObjectObakeManager.hh
++++ b/source/game/field/obj/ObjectObakeManager.hh
+@@ -89,6 +89,11 @@ public:
+ 
+     void addBlock(const System::MapdataGeoObj &params);
+ 
++    /// Presentation only: every block, in placement order (retail +0xDDD8).
++    [[nodiscard]] const fixed_vector<ObjectObakeBlock *> &blocks() const {
++        return m_blocks;
++    }
++
+ private:
+     static constexpr size_t CACHE_SIZE_X = 122;
+     static constexpr size_t CACHE_SIZE_Z = 116;
 diff --git a/source/game/field/obj/ObjectOilSFC.hh b/source/game/field/obj/ObjectOilSFC.hh
 index a24ebd1..e1e8de1 100644
 --- a/source/game/field/obj/ObjectOilSFC.hh
@@ -4431,7 +4493,7 @@ index 9d706df..4213ce0 100644
      m_timer = 0;
      m_phase = 0;
 diff --git a/source/game/kart/KartCollide.cc b/source/game/kart/KartCollide.cc
-index 5ac1c77..1cbb689 100644
+index 5ac1c77..9a9ef32 100644
 --- a/source/game/kart/KartCollide.cc
 +++ b/source/game/kart/KartCollide.cc
 @@ -1,7 +1,12 @@
@@ -4980,8 +5042,24 @@ index 5ac1c77..1cbb689 100644
  
      EGG::Vector3f crossVec = colData.relPos.cross(colData.floorNrm);
      crossVec = tmp.multVector(crossVec);
+@@ -1105,6 +1525,15 @@ Action KartCollide::handleReactLaunchSpin(size_t idx) {
+     return Action::UNK_5;
+ }
+ 
++/// Port, camera only (no physics): ObjectCarTGE::onCollision's tail (retail 0x806D7760)
++/// calls Kart::Link 0x80590F58 unless the kart is already in action 5 (fn_1_809F0, the
++/// launch spin); counted for the presentation race camera.
++void KartCollide::cueCarCamera() {
++    if (action()->currentAction() != Action::UNK_5) {
++        ++m_carCameraHits;
++    }
++}
++
+ /// @addr{0x805736C8}
+ Action KartCollide::handleReactWallSpark(size_t idx) {
+     m_totalReactionWallNrm += Field::ObjectCollisionKart::GetHitDirection(idx);
 diff --git a/source/game/kart/KartCollide.hh b/source/game/kart/KartCollide.hh
-index 714bada..c0ce798 100644
+index 714bada..38f6368 100644
 --- a/source/game/kart/KartCollide.hh
 +++ b/source/game/kart/KartCollide.hh
 @@ -8,9 +8,13 @@
@@ -5084,7 +5162,7 @@ index 714bada..c0ce798 100644
      /// Object collision functions
      Action handleReactNone(size_t idx);
      Action handleReactWallAllSpeed(size_t idx);
-@@ -203,6 +272,17 @@ public:
+@@ -203,8 +272,26 @@ public:
      [[nodiscard]] f32 colPerpendicularity() const {
          return m_colPerpendicularity;
      }
@@ -5099,10 +5177,19 @@ index 714bada..c0ce798 100644
 +    [[nodiscard]] u8 kartBumpAttacker() const {
 +        return m_kartBumpAttacker;
 +    }
++    /// Port, camera only: retail ObjectCarTGE::onCollision's Kart::Link calls (0x80590F58 ->
++    /// RaceCamera 0x805A6DCC, flag 0x200 for 60 frames). Never read by the simulation.
++    [[nodiscard]] u32 carCameraHits() const {
++        return m_carCameraHits;
++    }
      /// @endGetters
  
++    void cueCarCamera();
++
  private:
-@@ -226,8 +306,32 @@ private:
+     typedef Action (KartCollide::*ObjectCollisionHandler)(size_t idx);
+ 
+@@ -226,8 +313,33 @@ private:
      s16 m_poleAngVelTimer;
      f32 m_poleYaw;
      f32 m_colPerpendicularity;
@@ -5113,6 +5200,7 @@ index 714bada..c0ce798 100644
 +    EGG::Vector3f m_kartBumpForce;
 +    u16 m_oobCameraPending = 0; ///< Port hook: camera request for the next activation.
 +    u16 m_oobCameraRequest = 0; ///< Port hook: request of the current out-of-bounds.
++    u32 m_carCameraHits = 0;    ///< Port hook: car-hit camera calls (camera only).
 +    /// mkw-3ds: applySomeFloorMoment's world-space inverse inertia tensor for the
 +    /// last (mainRot, invInertiaTensor) bit pattern; every wheel of one suspension
 +    /// pass shares those inputs, so the same product is reused bit for bit.

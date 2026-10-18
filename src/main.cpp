@@ -1015,8 +1015,12 @@ int main()
                     menu.ghostTimes[i] = times[unsigned(Courses[i].id) % times.size()];
             }
             const auto beforeInput = menu;
+            // Retail pages ignore input during In/Out animations: a press the
+            // transition drops plays no sound (MenuSound::input contract).
+            const bool inputOpen = !transition.active();
             auto action = transition.input(menu, input);
-            menuSound.input(beforeInput, menu, input, action);
+            if (inputOpen)
+                menuSound.input(beforeInput, menu, input, action);
             if (menu.page == mkw::UiPage::Mode || menu.page == mkw::UiPage::MainMenu)
                 menuEndedSet = true;
             if (action != mkw::UiAction::None)
@@ -4473,8 +4477,23 @@ int main()
             for (auto &model : sky)
                 renderer.draw(*model, transform, true);
             courseObjects.drawSky(renderer, physicsSteps, renderer.cameraPosition());
+            // NW4R draws every opaque shape, then the translucent list. The course model
+            // (group 6, CourseModel ctor 0x8078E404) is opa 0x25 and its XLU materials
+            // (Submesh flag 2) xlu 0x33: after the objects, karts and items (opa 0x4E-0x5A),
+            // ahead of their own xlu (0x34), the ghost (0x4B) and the effects (0x51/0x57).
+            struct TrackPass
+            {
+                const mkw::Model *model;
+                bool xlu;
+            };
+            const auto trackPass = [](void *context, std::size_t i)
+            {
+                const auto &pass = *static_cast<const TrackPass *>(context);
+                return bool(pass.model->submeshes[i].flags & 2) == pass.xlu;
+            };
+            const C3D_Mtx courseTransform = transform;
             for (auto &model : track)
-                renderer.draw(*model, transform);
+                renderer.draw(*model, courseTransform, false, nullptr, TrackPass{model.get(), false}, trackPass);
             profiler->mark(Profile::Course);
             courseObjects.draw(renderer, physicsSteps, renderer.cameraPosition());
             profiler->mark(Profile::Scenery);
@@ -4552,6 +4571,9 @@ int main()
             renderer.additiveColor = 0;
             profiler->mark(Profile::Player);
             renderer.setCourseLighting(true);
+            // The course's translucent list (xlu 0x33) opens the translucent pass.
+            for (auto &model : track)
+                renderer.draw(*model, courseTransform, false, nullptr, TrackPass{model.get(), true}, trackPass);
             courseObjects.drawWater(renderer);
             renderer.setCourseLighting(false);
             // Time Trials composite the ghost after the course's translucent materials

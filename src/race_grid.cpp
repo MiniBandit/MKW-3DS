@@ -480,7 +480,11 @@ void RaceGrid::afterStep(){
         return a<b;
     });
     for(unsigned rank=0;rank<count_;++rank)ranks_[order[rank]]=rank+1;
-    for(unsigned i=0;i<count_;++i){const auto& p=manager->player(i);finished_[i]=p.finished();laps_[i]=unsigned(std::clamp<int>(p.currentLap(),1,3));}
+    // Raceinfo maxLap (RaceinfoPlayer+0x26), not currentLap (+0x24): CtrlRaceLap
+    // (0x807EF810), JugemSwitchLap (0x80725BD8) and the AI all read it. endLap
+    // (0x805349B8) raises it only past the old max, so backing over the line
+    // (decrementLap) never lowers it. Running max of currentLap = maxLap.
+    for(unsigned i=0;i<count_;++i){const auto& p=manager->player(i);finished_[i]=p.finished();laps_[i]=std::max(laps_[i],unsigned(std::clamp<int>(p.currentLap(),1,3)));}
 }
 void RaceGrid::forwardBumps(){
     using namespace Kinoko;

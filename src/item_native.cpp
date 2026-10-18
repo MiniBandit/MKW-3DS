@@ -190,7 +190,9 @@ void RaceItems::stepMovers(){
         if(--line.timer>0||line.movers.empty())continue;
         line.timer=line.period;
         auto& m=movers_[line.movers[line.next]];
-        m.riding=true;m.rail->init(0.f,0);
+        // 0x8076CB08: init at the start, then rail +0x17 = 1: the box rides the route's
+        // per-point speeds (the minecarts' profile), setting 0 only where a point has none.
+        m.riding=true;m.rail->init(0.f,0);m.rail->setPerPointVelocities(true);
         auto& box=boxes_[m.box];box.active=true;box.respawn=0;box.appearance=ItemBoxAppearanceFrames+1;
         line.next=uint16_t((line.next+1)%line.movers.size());
     }

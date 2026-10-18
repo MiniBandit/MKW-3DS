@@ -111,6 +111,7 @@ void RaceChaseCamera::setup(const K::Kart::KartObject& kart,bool battle){
  }
  course_=int(K::System::RaceConfig::Instance()->raceScenario().course);
  explosion_=cannonLock_=false;explosionRate_=1;explosionFrames_=0;
+ carHit_=false;carHitTimer_=0;  // RaceCamera::Init clears +0x334 and +0x33c
  boostAdd_=0;boostFactor_=0;halfPipe_={};halfPipeEase_=0;lookBack_=false;
  lookBackEye_=lookBackTarget_=Vector3f::zero;hopPosY_=0;
  // The step before the race camera exists: no event is pending.
@@ -118,7 +119,7 @@ void RaceChaseCamera::setup(const K::Kart::KartObject& kart,bool battle){
  const auto* move=kart.move();
  const auto* action=kart.action();
  prev_={};
- prev_.actionStarts=action->startCount();
+ prev_.actionStarts=action->startCount();prev_.carHits=kart.collide()->carCameraHits();
  prev_.largeFlip=action->currentAction()==K::Kart::Action::UNK_7||action->currentAction()==K::Kart::Action::UNK_8;
  prev_.inCannon=st.onBit(St::InCannon);prev_.ramp=st.onBit(St::RampBoost);prev_.overZipper=st.onBit(St::OverZipper);
  for(unsigned t=0;t<3;++t)prev_.boost[t]=move->boostActive(K::Kart::KartBoost::Type(t));
@@ -140,7 +141,8 @@ void RaceChaseCamera::resetState(State& s){
 // RaceCamera::OnRespawn (PAL 0x805A49BC), chase part: drift yaw and flags
 // cleared, both states reset, the forward one recomputed at rate 1.
 void RaceChaseCamera::init(const K::Kart::KartObject& kart){
- driftYaw_=0;explosion_=cannonLock_=false;
+ // +0x334 = 0 clears the car-hit flag too; its counter +0x33c is left as it was.
+ driftYaw_=0;explosion_=cannonLock_=carHit_=false;
  for(auto& s:state_){resetState(s);s.dist=param_.dist;}
  calcForward(1.0f,kart);
  calcCamera(1.0f,1.0f,1.0f,state_[0],false,kart,kart.pos(),kart.pos());
@@ -160,6 +162,11 @@ void RaceChaseCamera::events(const K::Kart::KartObject& kart,float shownEyeY){
   boostAdd_=0;explosion_=false;
   if(course_==int(K::Course::Rainbow_Road))cannonLock_=true;
  }else if(!inCannon&&prev_.inCannon)cannonLock_=false;
+ // ObjectCarTGE::onCollision (0x806D7328) -> Kart::Link 0x80590F58 -> 0x805A6DCC: a car
+ // squashed the kart, or touched it inside its squash window: flag 0x200, counter 60.
+ const uint32_t carHits=kart.collide()->carCameraHits();
+ if(carHits!=prev_.carHits){carHit_=true;carHitTimer_=60;}
+ prev_.carHits=carHits;
  // startLargeFlipAction (0x805690A0) -> 0x805A4DEC: both states hold the shown
  // eye height, flag 1, rate 1. Actions 7 and 8 are the large flips.
  const bool largeFlip=action->currentAction()==K::Kart::Action::UNK_7||action->currentAction()==K::Kart::Action::UNK_8;
@@ -233,6 +240,8 @@ void RaceChaseCamera::update(const K::Kart::KartObject& kart,RaceCameraDirector&
  calcDriftOffset(kart);
  // fn_1_930B4 (0x805A3468): the explosion's vertical rate decays to 0.07.
  if(explosion_&&++explosionFrames_>0){explosionRate_-=0.05f;if(explosionRate_<0.07f)explosionRate_=0.07f;}
+ // The car-hit counter runs down before calcCamera: the flag holds for 60 updates.
+ if(carHit_&&--carHitTimer_<0){carHitTimer_=0;carHit_=false;}
  const Vector3f camTarget=egg(director.target());
  for(bool backward:{false,true})
   calcCamera(HORIZ_POS_INTERP_RATE,VERT_POS_INTERP_RATE,FAST_VERT_POS_INTERP_RATE,state_[backward],backward,kart,targetPos,camTarget);
@@ -336,6 +345,8 @@ void RaceChaseCamera::calcCamera(float horizInterpRate,float vertInterpRate,floa
   const float posY=status.onBit(St::InCannon)?200.f:param_.posY;
   float height=(posY-kart.cameraDistY())+s.bigAirHeight;
   height*=status.onBit(St::ZipperBoost)?0.6f:1.0f;
+  // A car hit (flag 0x200) drops the eye to minus the BSP's initial Y, at vertical rate 0.25 (0x80892394).
+  if(carHit_){vertInterpRate=0.25f;height=-kart.bsp().initialYPos;}
   s.pos+=targetPos-s.targetPos;
   Vector3f posOffset=s.dist*orbitDir;
   posOffset.y+=height;

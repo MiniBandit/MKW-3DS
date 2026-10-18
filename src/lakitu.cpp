@@ -195,7 +195,8 @@ void Lakitu::step(const LakituInput& in){
     }else if(in.finished&&!m.wasFinished){
         m.mode=Mode::Goal;m.phase=Phase::Drop;m.interp.init(60);m.attachment=Flag;m.forward=forwardH*-1.f;m.clips("jg_wy","wait");
         m.goalFrom=m.cameraFrame(forwardH,{0,2000,700});m.goalTo=m.cameraFrame(forwardH,{0,120,700});m.pos=m.goalFrom;
-    }else if(in.lap!=m.lastLap&&in.lap>=2&&in.lap<=in.lapCount&&!in.finished&&m.mode!=Mode::Start&&m.mode!=Mode::Rescue){
+    }else if(in.lap>m.lastLap&&in.lap>=2&&in.lap<=in.lapCount&&!in.finished&&m.mode!=Mode::Start&&m.mode!=Mode::Rescue){
+        // JugemSwitchLap (0x80725BD8): fires only when Raceinfo maxLap rises.
         m.begin(Mode::Lap,Phase::Drop,10,m.cameraFrame(forwardH,{-10,2000,0}));
         m.attachment=in.lap==in.lapCount?LapFinal:LapBoard;
         constexpr int frames[6]={0,0,0,1,2,3};m.digit=frames[std::min(in.lap,5u)];m.clips("wait","wait");

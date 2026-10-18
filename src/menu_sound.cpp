@@ -127,9 +127,11 @@ void MenuSound::input(const MenuState& before, const MenuState& after, const UiI
   return;
  }
  // The no-ghost ConfirmPage's OK starts the race from its own page too
- // (PushButton default SE_UI_BTN_OK, PAL 0x805C21C0).
+ // (PushButton default SE_UI_BTN_OK, PAL 0x805C21C0). Only the accepted
+ // press, which starts the exit (action None): the frame the finished exit
+ // hands over StartRace reads no input, so a press then plays nothing.
  const bool samePageOk=(before.page==UiPage::Confirm||before.page==UiPage::NoGhosts)&&key.accept&&!key.back&&
-                       !after.unavailable&&before.supportsRace();
+                       action==UiAction::None&&!after.unavailable&&before.supportsRace();
  if ((pageChanged||samePageOk) && (key.accept || key.start)) {
   // PushButton::HandleClick (805b66b4): the button's selection sound,
   // SE_UI_BTN_OK unless the page set another. MainMenu (80831af8): SE_UI_TITLE_OUT.
