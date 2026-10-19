@@ -23,6 +23,8 @@ namespace cue { enum : std::uint32_t {
  // Presentation cues added on the main thread (not Kinoko's):
  JumpAction = 1u << 27,   // the local driver model starts its trick (fn_1_18BE08: SE_VCL_JUMP_ACTION)
  ZipperTrick = 1u << 28,  // a half-pipe trick starts (fn_1_64AAC 0x805AF9E8: voice 0xb, stadium cheers)
+ LavaSplash = 1u << 30, // Original lava impact (USA 806a7a5c), separate from driver voice.
+ WaterSplash = 1u << 29, // Effects::Player::CreatePochaEffect (806a7870)
 }; }
 struct RaceAudioKart {
  snd::Vec3f position;
@@ -69,11 +71,14 @@ struct RaceAudioObject { snd::Vec3f position; float scale = 1; std::uint16_t id 
 struct RaceAudioObjectSound {
  enum Call : std::uint8_t { Start, Hold, StartNew, Voice, Animation };
  std::uint16_t slot = 0, sound = 0; std::uint8_t call = Start; float value = 0;
+ float animationPitch = 1;
 };
 class RaceItems;
 struct RaceAudioFrame {
  std::uint32_t tick = 0;
  std::uint8_t course = 0;        // retail course id
+ bool mirror = false;
+ bool traceObjects = false; // QA only; drained on the main thread, never audio-thread file I/O
  snd::Vec3f eye, target;         // camera view; listener = eye + (target - eye) * 0.99
  std::uint8_t raceState = 0;     // RaceMgr state from RaceSound
  std::uint8_t alteration = 3;    // ItemAlterationMgr state (0 Mega, 1 Star, 2 shrunk, 3 none)
@@ -139,6 +144,16 @@ public:
  // sounds of object actors (Lakitu).
  enum ItemQa { QaShot, QaLoop, QaDecide, QaGlobal, QaScreen, QaCloud, QaAmbience, QaObject, QaKinds };
  std::array<std::atomic<std::uint32_t>, QaKinds> itemStarted{};
+ struct ObjectTrace {
+  std::uint32_t tick=0, sound=0, userParam=0;
+  std::uint16_t object=0;
+  std::uint8_t course=0, index=0, mode=0;
+  bool initial=false, started=false, muted=false;
+  snd::Vec3f position{}, listener{};
+  float distance=0, volume=0, pan=0; // Engine ambient gain, before sequence/envelope/player gain
+ };
+ bool takeObjectTrace(ObjectTrace& out); // sole consumer: main thread
+ std::atomic<std::uint32_t> objectTraceDropped{0};
  struct Impl;
  RaceAudioLayer();
  ~RaceAudioLayer() override;
@@ -146,6 +161,10 @@ private:
  static constexpr int Ring = 4;
  std::array<RaceAudioFrame, Ring> ring_{};
  std::atomic<std::uint32_t> head_{0}, tail_{0};
+ static constexpr unsigned TraceRing=64;
+ std::array<ObjectTrace,TraceRing> objectTrace_{};
+ std::atomic<std::uint32_t> traceHead_{0}, traceTail_{0};
+ void recordObjectTrace(const ObjectTrace& trace); // sole producer: audio thread
  Impl* impl_;
 };
 }

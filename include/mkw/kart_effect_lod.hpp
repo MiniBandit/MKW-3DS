@@ -61,6 +61,26 @@ struct EffectClipCamera {
         for(const Vec3& n:planes)if((d.x*n.x+d.y*n.y)+d.z*n.z>KartRadius){out.culled=true;break;}
         return out;
     }
+    // Object::LoadClipInfo mode1/2 (USA8080d614/8080d890): authored sphere
+    // and far distance, no AREA masking (entry mode2). Mode2 also accepts
+    // the horizontal sector formed by rotating the side planes to world up.
+    bool objectCulled(Vec3 centre,float radius,float far,bool horizontal) const {
+        const Vec3 d=centre-position;
+        if(distanceScale*((d.z*d.z+d.x*d.x)+d.y*d.y)>far*far)return true;
+        auto outside=[&](Vec3 n){return (d.x*n.x+d.y*n.y)+d.z*n.z>radius;};
+        const bool side=outside(planes[0])||outside(planes[1]);
+        if(!horizontal)return side||outside(planes[2])||outside(planes[3]);
+        if(!side)return false;
+        // USA807ce5ac: shortest-arc rotation of a vector from the side
+        // planes' cross product to Y; dot below the original threshold
+        // negates the vector. This preserves the original tilted-camera OR.
+        Vec3 from=cross(planes[0],planes[1]);const float length=dot(from,from);
+        if(length>0)from=from*(1.f/std::sqrt(length));
+        const Vec3 to{0,1,0},axis=cross(from,to);const float co=dot(from,to);
+        if(co==-1.f)return false; // original 0/0 yields no positive outside test
+        auto turn=[&](Vec3 v){return co< -1.f?v*-1.f:v*co+cross(axis,v)+axis*(dot(axis,v)/(1.f+co));};
+        return outside(turn(planes[0]))||outside(turn(planes[1]));
+    }
 };
 
 // EffectManager's per-kart effect LOD (KartEffect +7) for one screen: every frame before the

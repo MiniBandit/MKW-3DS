@@ -77,14 +77,21 @@ struct RaceCameraInput {
  // Retail RaceCamera forward state (+0x19c): eye and target position (kart
  // position less the smoothed hop), from the presentation chase camera.
  Vec3 chaseEye,chasePivot;
+ Vec3 rearEye,rearPivot;
+ bool lookBack=false;
  Vec3 kartPos,kartForward;     // KartMove smoothed forward (+0x80)
  float cameraDistY=0,targetPosY=0,cameraFov=60,boostFov=0;
  unsigned stage=0;             // Kinoko RaceManager::Stage
  bool previewActive=false;     // KMP course preview owns the screen
  bool beforeRespawn=false,inRespawn=false,finished=false;
+ int respawnTimer=0;          // KartCollide countdown after its physics tick
  uint16_t oobRequest=0;        // KartCollide::oobCameraRequest
  // Camera AREA lookup (KMP::Manager::FindAREA, type 0): current id or -1.
  int (*findArea)(void* context,int current,Vec3 position)=nullptr;void* areaContext=nullptr;
+ // Isolated presentation query: retail auto-camera sphere and wall classification.
+ bool (*collideEye)(void* context,float radius,Vec3 eye,Vec3 previous,
+                    Vec3& push,bool& wall)=nullptr;
+ void* collisionContext=nullptr;
 };
 
 struct RaceCameraView {Vec3 eye,target;float fov=60;};
@@ -115,10 +122,13 @@ public:
  float wipeProgress()const{return wipe_<0?-1.f:std::min(1.f,float(wipe_)/float(WipeFrames));}
  int autoCamera()const{return auto_.camera;}
  int autoArea()const{return auto_.area;}
+ // Demo CAME chain supplies shot IDs directly; use the same original
+ // action handlers without goal/AREA selection or the race opening pan.
+ bool selectDemoShot(unsigned shot,const RaceCameraInput&);
+ void stepDemoShot(const RaceCameraInput&);
  bool goalHeld()const{return auto_.suppress;}
  static constexpr unsigned PanFrames=170;     // OpeningPan::Calc 0xaa
  static constexpr unsigned WipeFrames=180;    // wipe table 0x808b1c68[0]
- static constexpr unsigned WipeStart=40;      // respawn timer 130 reaches 90
  static constexpr unsigned GoalHoldFrames=300;// 0x808b21dc
 private:
  struct Auto {
@@ -145,7 +155,7 @@ private:
  float riseEye_=0,riseTarget_=0;           // +0x124, +0x128
  uint16_t flags_=0;
  bool wasBeforeRespawn_=false,wasInRespawn_=false;
- int oobFrames_=-1,wipe_=-1;
+ int wipe_=-1;
  // OpeningPan (+0x198).
  std::array<Vec3,16> panPoints_{};std::array<float,16> panSpeeds_{};unsigned panCount_=0;
  float panTension_=.2f,panFov_=55;uint16_t panFlags_=0;unsigned panFrame_=0;bool panStarted_=false;

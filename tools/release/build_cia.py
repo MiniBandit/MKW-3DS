@@ -23,7 +23,7 @@ sys.path[:0]=[str(ROOT/'tools'),str(HERE)]
 SD='sd-card/3ds/mkw-3ds'
 DISC_MANIFEST=json.loads((HERE/'usa-disc.json').read_text())
 MENU_ARCHIVES=['MenuSingle','MenuSingle_U','MenuOther','MenuOther_U','Title','Title_U','Award','Award_U','Globe']
-COURSE_OVERLAY_IDS=['1','5','7','8','10','15','19','27','29','31']
+COURSE_OVERLAY_IDS=[str(i) for i in range(42)]
 COURSE_OBJECT_OUTPUTS=[SD+f'/models/course_{course_id:02d}_visuals.list' for course_id in range(32)]
 
 # (name, command, outputs that mean the step is done). {py} is this Python,
@@ -45,14 +45,22 @@ COOK_STEPS=[
  ('Coconut Mall sky',['{py}','tools/cook_model.py','assets/cooked-coconut-sky',SD,'--prefix','coconut_sky'],[SD+'/models/coconut_sky.list']),
  ('race courses and arenas',['{py}','tools/import_courses.py','--jobs','{jobs}'],[SD+'/models/course-catalog.json']),
  ('course objects',['{py}','tools/cook_course_objects.py','--jobs','{jobs}'],COURSE_OBJECT_OUTPUTS),
+ ('Wiggler effect joints',['{py}','tools/cook_hanachan_joints.py'],['include/mkw/hanachan_joint_assets.hpp']),
+ ('Pokey effect joints',['{py}','tools/cook_pokey_joints.py'],['include/mkw/pokey_joint_assets.hpp']),
  ('Coconut Mall escalators and palms',['{py}','tools/cook_coconut_objects.py'],[SD+'/models/coconut_escalator_000.gmdl',SD+'/models/coconut_palm_000.gmdl']),
  ('course lighting',['{py}','tools/lighting/recook_courses.py','--jobs','{jobs}','--no-pack'],[]),
  ('course material overlay',['{py}','tools/cook_course_overlay.py','--ids',*COURSE_OVERLAY_IDS,'--objects'],['build/course-materials/models']),
+ ('world mipmaps',['{py}','tools/cook_world_mipmaps.py','--jobs','{jobs}'],['build/world-mipmaps/receipt.json']),
  ('water mipmaps',['{py}','tools/cook_water_mipmaps.py'],['build/water-mipmaps/receipt.json']),
  ('drivers',['{py}','tools/cook_roster.py','{disc}',SD],[SD+'/models/roster.json']),
  ('karts and bikes',['{py}','tools/cook_garage.py','{disc}',SD],[SD+'/models/garage.json']),
  ('full roster',['{py}','tools/cook_full_roster.py','--jobs','{jobs}'],['build/roster']),
  ('race racer lighting',['{py}','tools/cook_racer_lighting.py'],['build/roster/models/garage.json']),
+ ('team vehicles',['{py}','tools/cook_team_vehicles.py','{disc}','--jobs','{jobs}'],['build/team-vehicles/team-vehicles.json']),
+ ('driver effect roots',['{py}','tools/cook_driver_effects.py','--jobs','{jobs}'],['build/driver-effects/receipt.json']),
+ ('driver look data',['{py}','tools/cook_driver_look.py'],['include/mkw/driver_look_data.hpp']),
+ ('vehicle rest poses',['{py}','tools/cook_vehicle_rest.py'],['include/mkw/vehicle_rest_data.hpp']),
+ ('GP grade reference times',['{py}','tools/cook_gp_rank.py'],['include/mkw/gp_rank_times.hpp']),
  ('vehicle shadows',['{py}','tools/cook_vehicle_shadows.py','--jobs','{jobs}'],['build/vehicle-shadows/models/vehicle-shadows.json']),
  ('kart effects',['{py}','tools/cook_effects.py','assets/common/Effect/RKRace.breft',SD+'/textures'],[SD+'/textures/drift-effects.bin']),
  ('bike effects',['{py}','tools/cook_effects.py','assets/common/Effect/RKRace.breft',SD+'/textures','--bike'],[SD+'/textures/drift-effects-bike.bin']),
@@ -60,8 +68,12 @@ COOK_STEPS=[
  ('Luigi Circuit archive',['{py}','tools/unpack_szs.py','data/extracted/Race/Course/beginner_course.szs','assets/luigi'],['assets/luigi/itembox.brres']),
  ('items and HUD',['{py}','tools/cook_race_items.py',SD,'--disc','{disc}'],[SD+'/models/race-items.json']),
  ('world item lighting',['{py}','tools/cook_item_lighting.py'],['build/item-lighting/receipt.json']),
- ('race effects',['{py}','tools/cook_race_effects.py','--output','build/vfx/textures'],['build/vfx/textures/race-effects.bin']),
+ ('race effects',['{py}','tools/cook_race_effects.py','--output','build/vfx/textures','--course-only'],['build/vfx/textures/course-effects.json','include/mkw/cannon_effect_assets.hpp']),
  ('blast effects',['{py}','tools/cook_blast.py'],['build/vfx/models/bomb_blast.gmdl']),
+ ('item shadows',['{py}','tools/cook_item_shadows.py'],['build/item-shadows/models/item-shadows.json']),
+ ('Blooper model',['{py}','tools/cook_blooper.py'],['build/blooper/receipt.json']),
+ ('Rosalina companion',['{py}','tools/cook_luma.py'],['build/vfx/models/luma.dskm']),
+ ('Firebar phase stream',['{py}','tools/cook_firebar_phases.py'],['build/firebar/textures/firebar-indirect.ftan']),
  ('Lakitu',['{py}','tools/cook_lakitu.py'],['build/vfx/models/lakitu_body.dskm']),
  ('award ceremony',['{py}','tools/cook_ceremony.py','{disc}'],[SD+'/models/ceremony.json']),
  ('battle and award screens',['{py}','tools/cook_battle.py'],[SD+'/models/battle.json']),

@@ -106,6 +106,21 @@ struct VisibleRanges {
   --count;
  }
 };
+// GPU-skinned geometry retains a small bone-local box per index block.
+// This includes mixed-bone triangles without approximating their animation.
+struct SkinBounds {unsigned matrix;Bounds bounds;};
+struct SkinVisibilityBlock {IndexRange indices;std::vector<SkinBounds> bones;};
+inline Bounds posedSkinBounds(const SkinVisibilityBlock& block,const float* palette,unsigned stride){
+ Bounds out{};bool first=true;
+ for(const auto& bone:block.bones){const auto b=transformBoundsPadded(bone.bounds,palette+bone.matrix*stride);
+  if(first){out=b;first=false;}else{out.include(b.minimum);out.include(b.maximum);}}
+ return out;
+}
+inline VisibleRanges selectSkinVisible(const std::vector<SkinVisibilityBlock>& blocks,const float* palette,unsigned stride,const ClipFrustum& frustum){
+ VisibleRanges out;
+ for(const auto& block:blocks)if(frustum.intersects(posedSkinBounds(block,palette,stride)))out.append(block.indices);
+ return out;
+}
 // Bounds whose radius/distance from eye (same space) is below minRatio.
 inline bool tinyFrom(const Bounds& b,Vec3 eye,float minRatio){
  const Vec3 h=(b.maximum-b.minimum)*.5f,d=(b.maximum+b.minimum)*.5f-eye;

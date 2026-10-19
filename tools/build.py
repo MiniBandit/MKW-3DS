@@ -42,6 +42,10 @@ def main():
     kinoko = ROOT / "vendor/kinoko"
     cxx = arm("arm-none-eabi-g++")
 
+    from shader_outputs import check as check_shader_outputs
+    for shader in ("mkw.v.pica", "effect.v.pica"):
+        check_shader_outputs((ROOT / "src" / shader).read_text())
+
     # DVLE 0: scene shader; DVLE 1: NW4R EF particles (src/effect.v.pica).
     subprocess.run(
         [

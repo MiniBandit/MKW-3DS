@@ -26,6 +26,7 @@ WORLD = {
     1: ("koura_red", "koura_red", None),
     2: ("banana", "banana", None),
     3: ("itemBoxNiseRtpa", "itemBoxNise", None),
+    4: ("kinoko", "kinoko", None),
     6: ("bomb", "bomb", "wait_a"),
     7: ("togezo_koura", "togezo_koura", "fly"),
     9: ("star", "star", None),

@@ -1,4 +1,5 @@
 #pragma once
+#include <mkw/race_teams.hpp>
 #include "mkw/math.hpp"
 #include <array>
 #include <cstdint>
@@ -60,6 +61,7 @@ inline constexpr ItemKartLoss kartActionLoss(int action) {
 
 /// Kart state the item system reads each step (native: Kinoko snapshot).
 struct ItemRacer {
+    RaceTeam team=RaceTeam::None;
     Vec3 position{}, forward{0,0,1};
     float progress=0, speed=0, radius=65;
     bool grounded=true, unavailable=false, finished=false, controlLocked=false, inCannon=false, wallCollision=false;
@@ -67,6 +69,8 @@ struct ItemRacer {
     // action and the stopped/vanished bits; AfterCannon (102) holds an existing lock.
     bool itemLocked=false, afterCannon=false;
     Vec3 up{0,1,0},scale{1,1,1};
+    // KartMove +0x74 and +0x38: shell orbit basis, independent of body lean.
+    Vec3 movementDirection{0,0,1},smoothedUp{0,1,0};
     // kartParam.bin itemUnk170/174/178/17c, exposed for held-item geometry.
     std::array<float,4> itemGeometry{100,80,-12,-15};
     float speedRatio=0,hop=0;
@@ -74,6 +78,7 @@ struct ItemRacer {
     Vec3 velocity{};
     bool haveVelocity=false;
     bool shellTargetUnavailable=false,shellAcquireUnavailable=false,shellTargetProtected=false,mushroomBoost=false;
+    bool inkCleaningBoost=false; // Accepted Mushroom/boost-panel boost, including loose mushrooms.
     /// Retail fn_1_2AD3B4 (0x807aed08): status 47 (ZipperTrick) or 54 (TrickRot), which
     /// slows a pursuing Red's turn onto the racer's back axis.
     bool trickRotating=false;
@@ -91,6 +96,13 @@ struct ItemRacer {
 /// host tests substitute item_kart_model.hpp.
 class ItemKarts {
 public:
+    // The native course phase first collects object callbacks, then delivers
+    // their original item-side responses. Returning false stops delivery.
+    using CourseItemVisitor = bool (*)(void *, uint8_t response, Vec3 penetration);
+    virtual void courseContacts(unsigned /*retailType*/, unsigned /*owner*/, Vec3 /*position*/, Vec3 /*velocity*/,
+            float /*radius*/, bool /*held*/, CourseItemVisitor /*visitor*/, void * /*context*/) {}
+    // Original ObjectsMgr notification with no physical Item::Obj/depth.
+    virtual void globalCourseItem(unsigned /*retailType*/) {}
     virtual ~ItemKarts() = default;
     /// True when item contacts run inside the kart pass (RMCU 0x805905e4), false when the
     /// item controller resolves them itself at the start of its step.

@@ -39,6 +39,8 @@ namespace retail {
 enum : uint32_t {
     Retail=1u<<0,          // submesh uses retail course lighting
     Menu=1u<<21,           // racer material alpha/reflection path (menu or race)
+    PrimaryEnvironment=1u<<22, // GX EnvCamera feeds texture 0; v5 stores its authored SRT
+    CoplanarLayer=1u<<23, // source translucent course decal sharing an earlier surface
     Fog=1u<<1,             // material fog index 0 (G3D fog 0)
     ChannelShift=2,        // 0 unlit (raster = vertex/register colour), 1 GX lit, 2 GX lit + light textures
     ChannelMask=3u<<2,
@@ -58,6 +60,7 @@ enum : uint32_t {
     AlbedoLerp=1u<<17,     // albedo stage is lerp(C2 = submesh constant, albedo, P)
     AlbedoScaleShift=18,   // GX colour scale of the albedo stage
     AlbedoScaleMask=3u<<18,
+    AlbedoTint=1u<<24,     // Mii C0 multiplies lit albedo before the lm_1 specular add
     AlbedoAdd=1u<<20,      // albedo stage adds Submesh::add (GX C1, Thwomps)
 };
 }

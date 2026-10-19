@@ -26,6 +26,19 @@ int RaceItems::blueTarget(const ItemActor& a)const{
     // 295718: ascending race rank, skip finishers until the owner has led;
     // the owner is eligible only in first place. Immunity does not change rank.
     int result=-1;unsigned best=MaxRacers+1;
+    const RaceTeam ownerTeam=a.owner>=0&&unsigned(a.owner)<count_?racers_[unsigned(a.owner)].team:RaceTeam::None;
+    if(ownerTeam!=RaceTeam::None){
+        // RMCU 807A1680: first eligible opponent in race order. If all
+        // opponents are excluded, retain the highest eligible own-team racer.
+        int own=-1;unsigned ownRank=MaxRacers+1;
+        for(unsigned i=0;i<count_;++i){
+            if(racers_[i].finished&&!a.guidance.ownerLed)continue;
+            const unsigned position=rank(i);
+            if(sameRaceTeam(ownerTeam,racers_[i].team)){if(position<ownRank){ownRank=position;own=int(i);}}
+            else if(position<best){best=position;result=int(i);}
+        }
+        return result>=0?result:own;
+    }
     for(unsigned i=0;i<count_;++i){unsigned r=rank(i);
         if(racers_[i].finished&&!a.guidance.ownerLed)continue;
         if(int(i)==a.owner&&r!=1)continue;
@@ -38,7 +51,8 @@ int RaceItems::redTarget(const ItemActor& a,bool ranked)const{
     // floor-normal height [-1500,1000], source rank and protection filters.
     int result=-1;float best=16000000.f;unsigned ownerRank=rank(unsigned(a.owner));
     for(unsigned i=0;i<count_;++i){const auto& r=racers_[i];unsigned candidateRank=rank(i);
-        if(int(i)==a.owner||r.finished||missing(r))continue;
+        // RMCU 807a4eec calls 8079a3d4 before acquiring: ignore same-team racers.
+        if(int(i)==a.owner||r.finished||missing(r)||(a.owner>=0&&unsigned(a.owner)<count_&&sameRaceTeam(racers_[unsigned(a.owner)].team,r.team)))continue;
         if(ranked&&ownerRank<=candidateRank){if(ownerRank!=1||candidateRank>3||(candidateRank==1&&count_>1))continue;}
         if(candidateRank!=1&&(r.shellTargetProtected||r.controlLocked||r.inCannon||invincible(i)||hud_[i].mega))continue;
         Vec3 d=r.position-a.position;float xz=shellXZ2(d);if(xz>best)continue;
@@ -213,12 +227,16 @@ void RaceItems::updateShell(ItemActor& a,ItemWorldQuery query){
             if(a.target<0||unsigned(a.target)>=count_){a.active=false;return;}
             const auto& r=racers_[a.target];
             if(missing(r))s.targetLive=false;if(s.targetLive)s.lastTarget=r.position;
-            Vec3 up=normalized(r.up,{0,1,0}),right=normalized(cross(up,r.forward),{1,0,0});
+            // USA807a55d8..807a5734 reads KartMove::vel1Dir (+0x74),
+            // then crosses it with smoothedUp (+0x38). This is an orbit
+            // in the road plane, not a vertical circle around the kart.
+            const Vec3 forward=r.movementDirection;
+            const Vec3 side=cross(forward,r.smoothedUp);
             if(s.phase==2||s.phase==3){
                 s.approachSpeed=shellMoveToward(s.approachSpeed,130,8);
                 if(s.phase==3){s.height-=7.5f;s.orbitStep=uint16_t(s.orbitStep+35);s.orbitRadius-=s.orbitAngle<0x8000?4:8;s.orbitAngle+=s.orbitStep;}
-                s.orbitOffset=(right*sinAngle(s.orbitAngle)+up*cosAngle(s.orbitAngle))*s.orbitRadius;
-                Vec3 d=s.lastTarget+up*300+s.orbitOffset-a.position;
+                s.orbitOffset=(side*cosAngle(s.orbitAngle)+forward*sinAngle(s.orbitAngle))*s.orbitRadius;
+                Vec3 d=s.lastTarget+forward*300+s.orbitOffset-a.position;
                 bool cannonOrbit=s.phase==3&&r.inCannon&&shellCourse_!=29;
                 Vec3 desired=d*(s.phase==2||cannonOrbit?.5f:.3f);
                 if(s.phase==2&&a.velocity.x*desired.x+a.velocity.z*desired.z<0){
@@ -234,7 +252,7 @@ void RaceItems::updateShell(ItemActor& a,ItemWorldQuery query){
             }else{
                 s.height+=s.phase==4?3:-70;
                 float response=r.inCannon&&shellCourse_!=29?.5f:s.phase==4?s.amplitude:(s.dodge?.25f:.7f);
-                Vec3 destination=s.lastTarget+up*210+Vec3{0,s.height,0};a.velocity=(destination-a.position)*response;a.position+=a.velocity;
+                Vec3 destination=s.lastTarget+forward*210+Vec3{0,s.height,0};a.velocity=(destination-a.position)*response;a.position+=a.velocity;
                 // 296f80 moves with the old response, updates it, then
                 // detects a dodge for the next tick (150cc response floor .25).
                 if(s.phase==4){

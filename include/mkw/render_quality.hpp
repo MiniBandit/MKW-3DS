@@ -14,6 +14,7 @@ namespace mkw {
 // keep every draw, so captures can still prove nothing else changed.
 struct RenderQuality {
     bool reduced=false;
+    bool mipmaps=true; // authored per-material filters/LOD bias; LOD0 fallback remains available
     // Objects whose bounding sphere spans less than this radius/distance
     // ratio (about 4 px of the 240 px screen at the race FOV) are not drawn.
     float minScreenRatio=0;

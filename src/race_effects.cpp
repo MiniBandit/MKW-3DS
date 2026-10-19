@@ -93,7 +93,7 @@ bool RaceEffects::loadMemory(const void* bytes,size_t size){
     if(size<20)return false;
     const auto* file=static_cast<const uint8_t*>(bytes);
     uint32_t h[5]{};std::memcpy(h,file,sizeof h);
-    bool ok=!std::memcmp(h,"REFX",4)&&h[1]==3&&h[2]>0&&h[2]<=255&&h[3]<=96&&h[4]<=(1u<<20);
+    bool ok=!std::memcmp(h,"REFX",4)&&h[1]==3&&h[2]>0&&h[2]<=512&&h[3]<=160&&h[4]<=(1u<<20);
     struct Record { char name[32]; uint32_t desc,ptcl; uint16_t texture[3],ptclTracks,ptclInit,emitTracks,emitInit,ptclSize,pad[2]; uint32_t list; };
     static_assert(sizeof(Record)==64,"REFX record");
     if(!ok)return false;
@@ -157,7 +157,7 @@ ef::Effect* RaceEffects::start(int spec,const EffectFrame& frame,uint8_t group){
     // effects. One line per local/shared root per race; no per-frame I/O.
     if(group==0||group==2){
         const char* name=system_->resources[size_t(spec)].name;
-        constexpr const char* names[]={"rk_itemBox","rk_bananaSmk","rk_miniTurbo","rk_spinHalfL","rk_spinHalfR","rk_spinL","rk_spinR"};
+        constexpr const char* names[]={"rk_itemBox","rk_bananaSmk","rk_miniTurbo","rk_spinHalfL","rk_spinHalfR","rk_spinL","rk_spinR","rk_driftSpark1LB_Spark00","rk_driftSpark1LB_Spark01","rk_driftSpark1RB_Spark00","rk_driftSpark1RB_Spark01","rk_driftSpark1CB_Spark00","rk_driftSpark1CB_Spark01"};
         for(unsigned i=0;i<std::size(names);++i)if(!std::strcmp(name,names[i])&&!(diagnosticMask_&(1u<<i))){
             diagnosticMask_|=1u<<i;
             if(FILE* log=std::fopen("sdmc:/3ds/mkw-3ds/effects-state.txt","a")){
@@ -172,6 +172,7 @@ ef::Effect* RaceEffects::start(int spec,const EffectFrame& frame,uint8_t group){
     return e;
 }
 void RaceEffects::burst(int spec,const EffectFrame& frame){start(spec,frame);}
+void RaceEffects::burst(int spec,const EffectFrame& frame,float velocity){if(auto* e=start(spec,frame))system_->setSpecificVelocity(*e,velocity);}
 bool RaceEffects::alive(unsigned slot) const {
     return slot<SlotCount&&system_->alive(slots_[slot].effect,slots_[slot].serial);
 }
@@ -205,6 +206,19 @@ void RaceEffects::setEmissionRatio(unsigned slot,float ratio){
 }
 void RaceEffects::setSpecificVelocity(unsigned slot,float speed){
     if(alive(slot))system_->setSpecificVelocity(*slots_[slot].effect,speed);
+}
+void RaceEffects::setVelocity(unsigned slot,Vec3 velocity){
+    if(alive(slot))system_->setVelocity(*slots_[slot].effect,{velocity.x,velocity.y,velocity.z});
+}
+void RaceEffects::stopParticleTrack(unsigned slot,unsigned track,bool stop){
+    if(!alive(slot)||track>=32)return;
+    auto& mask=slots_[slot].effect->stoppedParticleTracks;
+    if(stop)mask|=1u<<track;else mask&=~(1u<<track);
+}
+void RaceEffects::setDisabled(unsigned slot,bool calc,bool draw){
+    if(!alive(slot))return;
+    auto& flags=slots_[slot].effect->flags;
+    flags=(flags&~3u)|(calc?1u:0u)|(draw?2u:0u);
 }
 void RaceEffects::kill(unsigned slot){
     if(alive(slot))system_->retireEffect(*slots_[slot].effect);

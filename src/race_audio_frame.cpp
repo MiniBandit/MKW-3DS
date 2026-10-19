@@ -12,11 +12,13 @@
 #include <game/kart/KartSuspensionPhysics.hh>
 #include <game/kart/Status.hh>
 #include <game/kart/KartAction.hh>
+#include <game/kart/KartCollide.hh>
 #include <game/field/ObjectDirector.hh>
 #include <game/field/ObjectDrivableDirector.hh>
 #include <game/field/obj/ObjectBase.hh>
 #include <game/system/RaceConfig.hh>
 #include <game/system/RaceManager.hh>
+#include <game/system/CourseMap.hh>
 #include <algorithm>
 #include <cstring>
 
@@ -48,6 +50,7 @@ void fillRaceAudioFrame(RaceAudioFrame& f, snd::Vec3f eye, snd::Vec3f target) {
  f.eye = eye; f.target = target;
  const auto* manager = K::Kart::KartObjectManager::Instance();
  const auto& scenario = K::System::RaceConfig::Instance()->raceScenario();
+ f.mirror=scenario.mirror;
  f.karts = std::uint8_t(std::min<unsigned>(scenario.playerCount, 12));
  for (unsigned i = 0; i < f.karts; ++i) {
   RaceAudioKart& k = f.kart[i];
@@ -66,6 +69,27 @@ void fillRaceAudioFrame(RaceAudioFrame& f, snd::Vec3f eye, snd::Vec3f target) {
   // setting ZipperTrick): Kinoko cues no sound there, so take the rising edge.
   const bool zipperTrick = kart->status().onBit(K::Kart::eStatus::ZipperTrick);
   if (zipperTrick && !(k.status[47 / 32] & (1u << (47 % 32)))) k.cues |= cue::ZipperTrick;
+  // The same entry edge as KartItemEffects::WaterFall. Static pocha
+  // surfaces use the captured collision slot; Psea uses Diving. A plain
+  // cliff fall must not gain a water sound merely from its fall voice.
+  const bool beforeRespawn = kart->status().onBit(K::Kart::eStatus::BeforeRespawn);
+  if (beforeRespawn && !(k.status[0] & (1u << 4))) {
+   const auto* objects = K::Field::ObjectDirector::Instance();
+   bool water = objects && objects->psea() && kart->status().onBit(K::Kart::eStatus::Diving);
+   if (kart->collide()->oobWaterHeightSlot() >= 0)
+    if (const auto* map = K::System::CourseMap::Instance())
+     for (std::uint16_t j = 0; j < map->getGeoObjCount(); ++j) {
+      const auto* object = map->getGeoObj(j);
+      if (object->id() == 7 && (object->presenceFlag() & 1)) { water = true; break; }
+     }
+   if (water) k.cues |= cue::WaterSplash;
+   if (kart->collide()->oobLavaHeightSlot() >= 0)
+    if (const auto* map = K::System::CourseMap::Instance())
+     for (std::uint16_t j = 0; j < map->getGeoObjCount(); ++j) {
+      const auto* object = map->getGeoObj(j);
+      if (object->id() == 17 && (object->presenceFlag() & 1)) { k.cues |= cue::LavaSplash; break; }
+     }
+  }
   std::memcpy(k.status, &kart->status(), sizeof k.status);
   k.moveFlags = move->ssmtCharged() ? 4 : 0;
   k.driftState = std::uint8_t(move->driftState());
@@ -178,7 +202,7 @@ void fillRaceAudioObjects(RaceAudioFrame& f) {
   int slot = registry.find(c.object);
   if (slot < 0) { const int m = dir->flowTable().soundMode(c.object->id()); slot = registry.add(c.object, m == 3 ? 3 : 1); }
   if (slot < 0 || f.objectSounds >= f.objectSound.size()) continue;
-  f.objectSound[f.objectSounds++] = {std::uint16_t(slot), c.sound, std::uint8_t(c.call), c.value};
+  f.objectSound[f.objectSounds++] = {std::uint16_t(slot), c.sound, std::uint8_t(c.call), c.value, c.animationPitch};
  }
  f.objects = registry.count;
  for (int i = 0; i < registry.count; ++i) {

@@ -28,12 +28,21 @@ inline uint32_t bloomDisplayTint(const CourseBloom& b){
  for(unsigned i=0;i<3;++i)out|=uint32_t(rgb[i]*gain)<<(24-i*8);
  return out;
 }
+// Fill the complete power-of-two textures: hardware edge clamping must act
+// at the rendered boundary, not at the edge of unused texture allocation.
+inline constexpr unsigned BloomNearWidth=128,BloomNearHeight=64;
+inline constexpr unsigned BloomFarWidth=64,BloomFarHeight=32;
+inline float bloomTapRadius(float strength,unsigned band,unsigned sourceExtent,unsigned originalExtent){
+ // Restore a broader source-style halo on the small LCD, without adding
+ // blur passes, changing light sets or lifting the unblurred scene itself.
+ return strength*(band?2.f:1.f)*float(sourceExtent)*4.f/float(originalExtent);
+}
 // PostEffectBlur's uniformly spaced ring, with angle zero at the first tap.
 inline constexpr float BloomRing[16][2]={
  {0,1},{.3826834324f,.9238795325f},{.7071067812f,.7071067812f},{.9238795325f,.3826834324f},
  {1,0},{.9238795325f,-.3826834324f},{.7071067812f,-.7071067812f},{.3826834324f,-.9238795325f},
  {0,-1},{-.3826834324f,-.9238795325f},{-.7071067812f,-.7071067812f},{-.9238795325f,-.3826834324f},
  {-1,0},{-.9238795325f,.3826834324f},{-.7071067812f,.7071067812f},{-.3826834324f,.9238795325f}};
-inline constexpr unsigned BloomFullQuads=4+8+8+16+2;
-inline constexpr unsigned BloomReducedQuads=4+4+4+8+2;
+inline constexpr unsigned BloomFullQuads=4+1+8+1+8+16+2;
+inline constexpr unsigned BloomReducedQuads=4+1+4+1+4+8+2;
 }

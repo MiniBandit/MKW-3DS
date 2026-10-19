@@ -122,9 +122,39 @@ def material_state(shape):
             extended |= (PICA_SOURCE[source]+1)<<24 | (PICA_DESTINATION[destination]+1)<<28
     if rop['depthTest']: flags |= 1<<23
     if rop['depthWrite']: flags |= 1<<24
+    reflection = shape.get('reflection') or {}
+    stages = material['gxMaterial']['tevStages']
+    if reflection.get('mode') == 18 and len(stages) == 2 and \
+            [stages[0]['alphaIn'+c] for c in 'ABCD'] == [4,7,7,7] and \
+            [stages[1]['alphaIn'+c] for c in 'ABCD'] == [4,7,7,0] and \
+            all(s['alphaOp'] == 0 and s['alphaBias'] == 0 and s['alphaScale'] == 0 and s['alphaClamp'] and s['alphaRegId'] == 0 for s in stages) and \
+            stages[0]['texMap'] == shape['primaryMap'] and stages[1]['texMap'] == shape['secondaryMap']:
+        # The core's clamped texture-alpha sum is set by mode18 itself.
+        return flags, 1., True, limitation, None, extended
+    if reflection.get('mode') == 11 and len(stages) == 2 and \
+            [stages[0]['alphaIn'+c] for c in 'ABCD'] == [7,4,5,6] and \
+            [stages[1]['alphaIn'+c] for c in 'ABCD'] == [0,7,7,7] and \
+            all(s['alphaOp'] == 0 and s['alphaBias'] == 0 and s['alphaScale'] == 0 and s['alphaClamp'] and s['alphaRegId'] == 0 for s in stages) and \
+            stages[0]['texMap'] == shape['secondaryMap'] and stages[0]['channelId'] == 0 and \
+            16 <= stages[0]['konstAlphaSel'] < 32:
+        # Sherbet: clamp(projected glow alpha * raster alpha + K0.a),
+        # retained by stage1. This sum saturates and cannot be reduced to the
+        # polynomial path below. Mode7 preserves that saturation on PICA.
+        selector = stages[0]['konstAlphaSel']
+        weight = material['colorConstants'][selector%4]['rgba'[(selector-16)//4]]
+        return flags|(7<<20), 1., True, limitation, round(weight*255), extended
     expression, alpha_scale = alpha_expression(material, shape['primaryMap'], shape['secondaryMap'], shape.get('constantTextures'))
+    if reflection.get('mode') == 14 and reflection.get('constant', 0) & 1:
+        # Raster alpha is a colour weight; retain it independently of opacity.
+        if expression != {('p','q'): 1.} or alpha_scale not in (1, 2):
+            raise ValueError('Boble raster-alpha variant needs texture-product opacity')
+        return flags|((6 if alpha_scale == 2 else 3)<<20), 1., True, limitation, None, extended
     modes = {('p',):1, ('q',):2, ('p','q'):3, ():4}
     if alpha_scale != 1:
+        if alpha_scale == 2 and expression == {('p',): 1.} and shape['secondaryMap'] < 0:
+            # Single-map additive fire planes: mode6's missing secondary is
+            # the renderer's white texture, giving exactly clamp(2*T0.a).
+            return flags|(6<<20), 1., False, limitation, None, extended
         # Doubled texture product (sea sparkles): alpha mode 6.
         if alpha_scale == 2 and expression == {('p','q'): 1.}:
             return flags|(6<<20), 1., False, limitation, None, extended
@@ -169,10 +199,12 @@ def retail_lighting(shape):
     if not retail:
         return [0, 0, 0]
     word, ambient, add = retail['word'], retail['ambient'], retail.get('add', 0)
-    if not word & 1 or word >> 22:
+    if not word & 1 or word >> 25:
         raise ValueError('Invalid retail lighting word: ' + shape['material'])
     channel = word >> 2 & 3
-    if channel == 3 or (channel == 0 and word & ~(3 | (1 << 21))):
+    if word & (1 << 24) and (channel != 2 or word & ((1 << 17) | (1 << 20))):
+        raise ValueError("Invalid Mii albedo tint: " + shape["material"])
+    if channel == 3 or (channel == 0 and word & ~(3 | (1 << 21) | (1 << 22) | (1 << 23))):
         raise ValueError('Invalid retail lighting channel: ' + shape['material'])
     # Renderer::retailLight takes the ambient from the register; no retail
     # course material sources it from the vertex colour.

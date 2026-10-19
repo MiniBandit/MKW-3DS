@@ -19,7 +19,8 @@ public:
     unsigned shapeCount() const {return shapes_;}
     bool skinned() const {return vertices_>0;}
     // Weighted shapes (a triangle spanning several matrices) need CPU skinning.
-    bool weighted() const {return weighted_;}
+    bool weighted() const {return weighted_||!morph_.empty();}
+    bool morphing() const {return !morph_.empty();}
     int clip(const char* name) const;
     int pattern(const char* name) const;
     int scroll(const char* name) const;
@@ -32,6 +33,13 @@ public:
     unsigned colorFrames(int i) const {return i>=0&&unsigned(i)<clr_.size()?clr_[i].frames:0;}
     // Row-major 3x4 palette (matrixCount*12 floats). Loops wrap; others clamp.
     void pose(int clip,float frame,float* out) const;
+    struct JointCallback {const char* node;const float* matrix;};
+    bool hasJointCallbacks() const {return !callbackSteps_.empty();}
+    // Original CalcWorld callback B: postmultiply the node, then evaluate
+    // children, final geometry scale and envelope blends. Scratch is reused
+    // per instance; animation banks remain immutable across recording jobs.
+    bool poseCallbacks(int clip,float frame,const JointCallback* callbacks,unsigned count,
+            float* out,std::vector<float>& scratch) const;
     const float* bind() const {return bind_;}
     const std::vector<Node>& nodes() const {return nodes_;}
     int node(const char* name) const;
@@ -55,7 +63,7 @@ public:
     // CPU skinning into a per-instance copy of the model's vertex buffer.
     // normals=false leaves normals untouched, for meshes whose materials
     // never read them (unlit, not environment-mapped).
-    void skin(const float* palette,Model& model,bool normals=true) const;
+    void skin(const float* palette,Model& model,bool normals=true,int clip=-1,float frame=0) const;
     // Positions-only skinning transforms each shared (position, matrix) pair once.
     void shareSkinnedPositions(){shared_.build(source_,vertices_);}
     // Load-only preparation for lit CPU skinning. Reuses exact position,
@@ -72,6 +80,11 @@ private:
     struct Pat {char name[32];uint32_t frames,loop;const int32_t* data;};
     struct Srt {char name[32];uint32_t frames,loop,step,count;const uint32_t* shapes;const float* data;};
     struct Clr {char name[32];uint32_t frames,loop,count;const uint32_t* shapes;const uint32_t* flags;const uint32_t* data;};
+    struct Morph {uint32_t clip,count,frames;const uint32_t* vertices;const float* deltas;const float* weights;};
+    struct CallbackStep {char name[32];int32_t parent;};
+    struct CallbackTerm {uint32_t step;float weight,inverse[12];};
+    struct CallbackRecipe {unsigned count;const CallbackTerm* terms;};
+    struct CallbackClip {unsigned frames,loop,step;const float* data;};
     uint8_t* data_=nullptr;
     unsigned vertices_=0,matrices_=0,shapes_=0;
     bool weighted_=false;
@@ -80,8 +93,13 @@ private:
     SkinRepresentatives sharedVertices_;
     std::vector<Node> nodes_;
     std::vector<Chr> chr_;std::vector<Pat> pat_;std::vector<Srt> srt_;std::vector<Clr> clr_;
+    std::vector<Morph> morph_;
     std::vector<std::vector<RigidPart>> rigidParts_;
     std::vector<uint8_t> registerAlpha_;
+    std::vector<CallbackStep> callbackSteps_;
+    std::vector<CallbackRecipe> callbackRecipes_;
+    std::vector<CallbackClip> callbackClips_;
+    const float* callbackBind_=nullptr;
 };
 // Sample position for a stepped clip: samples a,b and blend t.
 struct ClipSample {unsigned a,b;float t;};

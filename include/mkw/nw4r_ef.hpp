@@ -248,6 +248,8 @@ struct Effect {
     List<Emitter> emitters,closing;
     ParticleManager* drawHead=nullptr; // ParticleManagers by weight (DrawOrder::Add)
     Mtx34 root=Mtx34::identity();
+    Vec3 velocity{}; // EGG SetVelocity: world velocity inherited at particle birth.
+    u32 stoppedParticleTracks=0; // EGG SetAnimStop, scoped to this instance.
     u32 flags=0; // 0x10000: an object still has calcRemain
     u16 slot=0xffff,serial=0;
     u8 group=0; // EffectSystem group (CreateEffect's groupID)

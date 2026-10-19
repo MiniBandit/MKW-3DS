@@ -1,4 +1,6 @@
+#include "mkw/env_animation.hpp"
 #include "mkw/renderer.hpp"
+#include "mkw/stadium_screen.hpp"
 #include "mkw/render_quality.hpp"
 #include "mkw/bloom_math.hpp"
 #include "mkw/race_effects.hpp"
@@ -18,6 +20,27 @@
 #include <cstdlib>
 #include <cstddef>
 namespace mkw {
+namespace {
+GPU_CULLMODE cameraCull(GPU_CULLMODE mode,const C3D_Mtx& v){
+    const float determinant=v.r[0].x*(v.r[1].y*v.r[2].z-v.r[1].z*v.r[2].y)
+        -v.r[0].y*(v.r[1].x*v.r[2].z-v.r[1].z*v.r[2].x)
+        +v.r[0].z*(v.r[1].x*v.r[2].y-v.r[1].y*v.r[2].x);
+    if(determinant<0){
+        if(mode==GPU_CULL_FRONT_CCW)return GPU_CULL_BACK_CCW;
+        if(mode==GPU_CULL_BACK_CCW)return GPU_CULL_FRONT_CCW;
+    }
+    return mode;
+}
+void uploadProjection(int location,const C3D_Mtx& p){
+    C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER,location,&p);
+}
+void sceneDepthMap(const C3D_Mtx&,bool layer=false){
+    // HW08 factorization did not fix the physical-console symptom. Keep
+    // GX's finite perspective/near/far clipping, not that failed workaround.
+    constexpr float layerStep=32.f/16777215.f;
+    C3D_DepthMap(true,-1.f,layer?layerStep:0.f);
+}
+}
 // Translated combiner programs and texture sizes for the loaded RaceEffects table.
 struct EffectDrawState {
     const RaceEffects* owner=nullptr;
@@ -25,6 +48,7 @@ struct EffectDrawState {
     std::vector<ef::Material> materials;
     std::vector<ef::TextureSize> sizes;
     ef::DrawList list;
+    unsigned generation=~0u,diagnosticMask=0;
 };
 }
 
@@ -74,7 +98,27 @@ constexpr u32 TopTransfer=GX_TRANSFER_FLIP_VERT(0)|GX_TRANSFER_OUT_TILED(0)|GX_T
 Texture::~Texture() { reset(); }
 void Texture::reset() {
     if(ready) C3D_TexDelete(&gpu);
-    gpu={};ready=false;
+    gpu={};noMipSampler={};materialSamplers={};ready=false;
+}
+C3D_Tex* Texture::sampledGpu(){
+    if(renderQuality().mipmaps||!gpu.maxLevel)return &gpu;
+    // A sampler view, not a smaller allocation. Keep gpu.maxLevel unchanged
+    // for byte accounting, VRAM moves and deletion of the actual full chain.
+    noMipSampler=gpu;noMipSampler.maxLevel=noMipSampler.minLevel=0;
+    C3D_TexSetFilterMipmap(&noMipSampler,GPU_NEAREST);
+    return &noMipSampler;
+}
+C3D_Tex* Texture::sampledGpu(const MaterialSampler* s,unsigned unit){
+    if(!s||!s->valid)return sampledGpu();
+    auto& view=materialSamplers[unit];view=gpu;
+    C3D_TexSetFilter(&view,s->magFilter?GPU_LINEAR:GPU_NEAREST,
+                    s->minFilter&1?GPU_LINEAR:GPU_NEAREST);
+    C3D_TexSetFilterMipmap(&view,s->minFilter>=4?GPU_LINEAR:GPU_NEAREST);
+    C3D_TexSetLodBias(&view,s->lodBias);
+    // GX NEAR/LINEAR have no mip sampling, even when another material shares
+    // this texture and needs its chain. The allocation always retains it.
+    if(!renderQuality().mipmaps||s->minFilter<2)view.minLevel=view.maxLevel=0;
+    return &view;
 }
 bool Texture::load(const char* path) {
     std::vector<uint8_t> file;
@@ -91,11 +135,20 @@ bool Texture::loadMemory(const void* data,size_t size,bool vram) {
     Tex3DS_TextureFree(t);
     C3D_TexFlush(&gpu); // Make decoded LINEAR pixels visible before first sampling.
     C3D_TexSetFilter(&gpu,GPU_LINEAR,GPU_LINEAR);
-    if(gpu.maxLevel)C3D_TexSetFilterMipmap(&gpu,GPU_LINEAR);
+    // HW10: retain the full mip chain and bilinear texel filtering, but
+    // sample one bounded mip level instead of the hardware's two-level
+    // interpolation path. HW09 LOD0 removes the physical-console corruption;
+    // this isolates inter-level filtering without discarding mip reduction.
+    if(gpu.maxLevel)C3D_TexSetFilterMipmap(&gpu,GPU_NEAREST);
     C3D_TexSetWrap(&gpu,GPU_REPEAT,GPU_REPEAT);
     ready=true; return true;
 }
 uint32_t Texture::bytes() const { return ready?C3D_TexCalcTotalSize(gpu.size,gpu.maxLevel):0; }
+void Renderer::clearUnusedTextureCache(){
+    auto& cache=textureCache();LightLock_Lock(&cache.lock);
+    std::erase_if(cache.entries,[](const auto& entry){return entry.second.expired();});
+    LightLock_Unlock(&cache.lock);
+}
 bool Texture::initMovieEtc1(std::uint16_t width, std::uint16_t height) {
     if (ready || width == 0 || height == 0 || !C3D_TexInit(&gpu, width, height, GPU_ETC1))
         return false;
@@ -104,9 +157,42 @@ bool Texture::initMovieEtc1(std::uint16_t width, std::uint16_t height) {
     ready = true;
     return true;
 }
+
 void Model::enableStaticCulling(){
     visibility.clear();visibility.reserve(submeshes.size());
     for(const auto& s:submeshes)visibility.push_back(buildVisibility(vertices,indices,s.first,s.count));
+}
+void Model::enableSkinCulling(unsigned bones){
+    skinVisibility.clear();skinVisibility.resize(submeshes.size());
+    for(size_t n=0;n<submeshes.size();++n){const auto& sub=submeshes[n];
+        for(unsigned at=sub.first;at<sub.first+sub.count;at+=384){
+            SkinVisibilityBlock block;block.indices={at,std::min<uint32_t>(384,sub.first+sub.count-at)};
+            for(unsigned k=at;k<at+block.indices.count;++k){unsigned i=indices[k];
+                unsigned matrix=unsigned(skinBoneIndices?skinBoneIndices[i]:vertices[i].normal.x)/3;
+                if(matrix>=bones){skinVisibility.clear();return;}
+                auto found=std::find_if(block.bones.begin(),block.bones.end(),[&](const SkinBounds& b){return b.matrix==matrix;});
+                if(found==block.bones.end())block.bones.push_back({matrix,{vertices[i].position,vertices[i].position}});
+                else found->bounds.include(vertices[i].position);
+            }
+            skinVisibility[n].push_back(std::move(block));
+        }
+    }
+}
+void Model::freezeLighting(const float* palette,unsigned stride){
+    if(fixedLighting)return;
+    fixedLighting=true;
+    for(unsigned i=0;i<vertexCount;++i){auto& v=vertices[i];Vec3 n=v.normal;
+        if(palette&&skinBoneIndices){const auto* m=palette+unsigned(skinBoneIndices[i]/3)*stride;
+            n={m[12]*n.x+m[13]*n.y+m[14]*n.z,m[15]*n.x+m[16]*n.y+m[17]*n.z,m[18]*n.x+m[19]*n.y+m[20]*n.z};}
+        n=normalized(n);const float shade=.78f+.22f*std::max(0.f,dot(n,Vec3{-.35f,.8f,.4873397f}));
+        for(unsigned c=0;c<3;++c)v.color[c]=uint8_t(std::clamp(std::lround(v.color[c]*shade),0l,255l));
+        // Unlit skinning only needs the position palette; omit inverse-transpose normals.
+        if(skinBoneIndices)v.normal={skinBoneIndices[i],0,0};
+    }
+    for(auto& sub:submeshes){
+        sub.lighting&=~(retail::ChannelMask|retail::PrimaryEnvironment|retail::AlphaLit);
+    }
+    flushGpuData(vertices,vertexCount*sizeof(Vertex));
 }
 Model::~Model() { if(vertices)linearFree(vertices);if(indices)linearFree(indices);if(skinBoneIndices)linearFree(skinBoneIndices); }
 bool Model::load(const char* path) {
@@ -127,7 +213,11 @@ bool Model::load(const char* path) {
             if(size>packed.size()-offset)return false;
             std::memcpy(p,packed.data()+offset,size);offset+=size;return true;
         }
-        bool atEnd(){return f?std::fgetc(f)==EOF:offset==packed.size();}
+        bool atEnd(){
+            if(!f)return offset==packed.size();
+            const int next=std::fgetc(f);if(next!=EOF)std::ungetc(next,f);
+            return next==EOF;
+        }
     };
     auto file=std::make_unique<File>(path);auto& f=*file;
     if(!f.open()){
@@ -143,9 +233,11 @@ return false;}
     for(auto& s:submeshes)if(!f.read(&s,record))return false;
     for(const auto& s:submeshes) if(s.first>indexCount||s.count>indexCount-s.first||s.count%3||s.texture< -1||s.texture>=static_cast<int32_t>(h[5])||s.secondary< -1||s.secondary>=static_cast<int32_t>(h[5]))return false;
     for(const auto& s:submeshes){
-        if(s.menuReflection>6||s.menuReflection==5||(s.menuReflection&&!(s.lighting&retail::Menu)))return false;
-        if(s.menuReflection&&s.menuReflection!=3&&s.secondary<0)return false;
+        if(s.menuReflection>22||s.menuReflection==5||(s.menuReflection&&s.menuReflection<7&&!(s.lighting&retail::Menu)))return false;
+        if(s.menuReflection&&s.menuReflection!=3&&s.menuReflection!=7&&s.menuReflection!=16&&s.menuReflection!=21&&s.menuReflection!=22&&s.secondary<0)return false;
+        if(s.menuReflection==8&&(!(s.reflectionConstant&0xffff)||(s.reflectionConstant&0xffff)>h[5]||(s.reflectionConstant>>20)))return false;
         for(float x:s.reflectionUv)if(!std::isfinite(x))return false;
+        if((s.lighting&retail::PrimaryEnvironment)&&(h[1]!=5||(s.menuReflection&&s.menuReflection!=16&&s.menuReflection!=18)||s.texture<0))return false;
     }
     for(uint32_t i=0;i<h[5];++i){
         char name[64]; if(!f.read(name,sizeof name)||!std::memchr(name,0,sizeof name)||std::strchr(name,'/')||std::strchr(name,'\\')||std::strstr(name,".."))return false;
@@ -178,6 +270,35 @@ return false;}
     vertices=static_cast<Vertex*>(linearAlloc(vertexCount*sizeof(Vertex)));
     indices=static_cast<uint16_t*>(linearAlloc(indexCount*sizeof(uint16_t)));
     if(!vertices||!indices||!f.read(vertices,vertexCount*sizeof(Vertex))||!f.read(indices,indexCount*sizeof(uint16_t)))return false;
+    if(std::any_of(submeshes.begin(),submeshes.end(),[](const Submesh& s){return s.menuReflection==11;})){
+        uint32_t header[2];
+        if(!f.read(header,sizeof header)||std::memcmp(header,"WIN2",4)||!header[1]||header[1]>32)return false;
+        waterIndirect.resize(header[1]);
+        for(auto& field:waterIndirect)if(!field.read(f))return false;
+        for(const auto& s:submeshes)if(s.menuReflection==11&&(!s.reflectionConstant||s.reflectionConstant>waterIndirect.size()))return false;
+    }
+    while(!f.atEnd()){
+        uint32_t header[2];
+        if(!f.read(header,sizeof header)||!header[1]||header[1]>submeshes.size())return false;
+        if(!std::memcmp(header,"SMP1",4)){
+            if(!samplers.empty()||header[1]!=submeshes.size())return false;
+            samplers.resize(header[1]);
+            if(!f.read(samplers.data(),samplers.size()*sizeof(samplers[0])))return false;
+            for(const auto& row:samplers)for(const auto& s:row)
+                if(!std::isfinite(s.lodBias)||s.lodBias< -16||s.lodBias>=16||s.minFilter>5||s.magFilter>1||s.valid>1||s.reserved)return false;
+            continue;
+        }
+        if(std::memcmp(header,"UVM1",4)||!uvTracks.empty())return false;
+        uvTracks.resize(submeshes.size());
+        for(unsigned n=0;n<header[1];++n){
+            uint32_t h[3];
+            if(!f.read(h,sizeof h)||h[0]>=uvTracks.size()||!h[1]||h[1]>65535||h[2]>1)return false;
+            auto& t=uvTracks[h[0]];if(t.frames)return false;
+            t.frames=h[1];t.loop=h[2];t.samples.resize(size_t(t.frames)*12);
+            if(!f.read(t.samples.data(),t.samples.size()*sizeof(float)))return false;
+            for(float v:t.samples)if(!std::isfinite(v))return false;
+        }
+    }
     if(!f.atEnd())return false;
     file.reset();
     for(uint32_t i=0;i<indexCount;++i)if(indices[i]>=vertexCount)return false;
@@ -219,7 +340,7 @@ bool Renderer::init(){
     // target and no LINEAR. It is transferred only in frames that draw it.
     if(stereoScreen(stereoDisplay_)&&(targetRight_=C3D_RenderTargetCreate(240,400,GPU_RB_RGBA8,GPU_RB_DEPTH24_STENCIL8)))
         C3D_RenderTargetSetOutput(targetRight_,GFX_TOP,GFX_RIGHT,TopTransfer);
-    {C3D_Mtx tilt;Mtx_PerspTilt(&tilt,C3D_AngleFromDegrees(90.f),1.f,1.f,2.f,false);horizontalSign_=tilt.r[1].x<0?-1.f:1.f;}
+    {C3D_Mtx tilt;Mtx_PerspTilt(&tilt,C3D_AngleFromDegrees(90.f),1.f,1.f,2.f,false);horizontalSign_=tilt.r[1].x<0?-1.f:1.f;verticalSign_=tilt.r[0].y<0?-1.f:1.f;}
     shader_=DVLB_ParseFile(reinterpret_cast<u32*>(const_cast<uint8_t*>(mkw_shader)),sizeof mkw_shader);if(!shader_)return fail();
     shaderProgramInit(&program_);programReady_=true;
     if(R_FAILED(shaderProgramSetVsh(&program_,&shader_->DVLE[0])))return fail();
@@ -231,6 +352,8 @@ bool Renderer::init(){
     envRowLoc_[1]=shaderInstanceGetUniformLocation(program_.vertexShader,"envRow1");
     envRowLoc_[2]=shaderInstanceGetUniformLocation(program_.vertexShader,"envRow2");
     envParamLoc_=shaderInstanceGetUniformLocation(program_.vertexShader,"envParam");
+    projectedWaterLoc_=shaderInstanceGetUniformLocation(program_.vertexShader,"projectedWater");
+    if(projectedWaterLoc_<0)return fail();
     static const char* uvRows[]={"uvRow0","uvRow1","uvRow2","uvRow3"};
     for(int i=0;i<4;++i)uvRowLoc_[i]=shaderInstanceGetUniformLocation(program_.vertexShader,uvRows[i]);
     tintLoc_=shaderInstanceGetUniformLocation(program_.vertexShader,"tint");
@@ -247,7 +370,7 @@ bool Renderer::init(){
     if(!C3D_TexInit(&white_,8,8,GPU_RGBA8))return fail();
     // Blackout, cinema bars and fades may all submit in one frame. Each draw
     // keeps distinct vertices until the next FrameBegin drains GPU use.
-    overlay_=static_cast<Vertex*>(linearAlloc(kOverlayCapacity*sizeof(Vertex)));if(!overlay_)return fail();
+    overlay_=static_cast<Vertex*>(linearAlloc(2*kOverlayCapacity*sizeof(Vertex)));if(!overlay_)return fail();
     sprites_=static_cast<Vertex*>(linearAlloc(kSpriteCapacity*6*sizeof(Vertex)));if(!sprites_)return fail();
     text_=static_cast<Vertex*>(linearAlloc(kTextVertices*sizeof(Vertex)));if(!text_)return fail();
     particles_=static_cast<Vertex*>(linearAlloc(DriftEffects::Capacity*12*sizeof(Vertex)));if(!particles_)return fail();
@@ -261,7 +384,7 @@ bool Renderer::init(){
     C3D_TexSetFilter(&effectLookup_,GPU_NEAREST,GPU_NEAREST);C3D_TexSetWrap(&effectLookup_,GPU_CLAMP_TO_EDGE,GPU_CLAMP_TO_EDGE);
     effectDraw_=new EffectDrawState;
     std::memset(white_.data,255,8*8*4);C3D_TexFlush(&white_);
-    Mtx_PerspTilt(&projection_,C3D_AngleFromDegrees(55.f),C3D_AspectRatioTop,10.f,400000.f,false);
+    Mtx_PerspTilt(&projection_,C3D_AngleFromDegrees(55.f),mkw::display::Aspect,10.f,400000.f,false);
     mainProjection_=cullProjection_=projection_;
     ready_=true;return true;
 }
@@ -316,8 +439,13 @@ bool Renderer::loadVramTexture(Texture& texture,const char* path,GPU_TEXTURE_WRA
     bool ok=read(header,5)&&(header[0]|header[1]<<8)==1&&read(sub,12)&&read(compression,4)&&compression[0]==0;
     const unsigned width=8u<<(header[2]&7),height=8u<<((header[2]>>3)&7),format=header[3];
     const std::size_t bytes=std::size_t(compression[1])|std::size_t(compression[2])<<8|std::size_t(compression[3])<<16;
-    ok=ok&&!(header[2]&0x40)&&header[4]==0&&width<=1024&&height<=1024&&(format==GPU_ETC1||format==GPU_RGBA8)&&
-        bytes==C3D_TexCalcTotalSize(format==GPU_ETC1?width*height/2:width*height*4,0);
+    // Offline minimap object atlases use RGBA4 (two bytes per texel).
+    // Validate its payload before allocating, just like the existing HUD formats.
+    const std::size_t baseBytes=format==GPU_ETC1?width*height/2:
+        format==GPU_RGBA4?width*height*2:width*height*4;
+    ok=ok&&!(header[2]&0x40)&&header[4]==0&&width<=1024&&height<=1024&&
+        (format==GPU_ETC1||format==GPU_RGBA8||format==GPU_RGBA4)&&
+        bytes==C3D_TexCalcTotalSize(baseBytes,0);
     // VRAM only: a failure leaves the texture empty and never falls back to LINEAR.
     ok=ok&&C3D_TexInitVRAM(&texture.gpu,uint16_t(width),uint16_t(height),GPU_TEXCOLOR(format));
     if(!ok){texture.gpu={};if(f)std::fclose(f);return false;}
@@ -341,11 +469,14 @@ bool Renderer::loadVramTexture(Texture& texture,const char* path,GPU_TEXTURE_WRA
 bool Renderer::moveToVram(Texture& texture,std::size_t reserve){
     auto& t=texture.gpu;
     const u32 at=reinterpret_cast<u32>(t.data);
-    if(!texture.ready||!t.data||(at>=OS_VRAM_VADDR&&at<OS_VRAM_VADDR+OS_VRAM_SIZE)||t.maxLevel)return false;
-    const std::size_t bytes=C3D_TexCalcTotalSize(t.size,0);
+    if(!texture.ready||!t.data||(at>=OS_VRAM_VADDR&&at<OS_VRAM_VADDR+OS_VRAM_SIZE))return false;
+    const std::size_t bytes=C3D_TexCalcTotalSize(t.size,t.maxLevel);
     if(vramSpaceFree()<bytes+reserve)return false;
     C3D_Tex moved{};
-    if(!C3D_TexInitVRAM(&moved,t.width,t.height,t.fmt))return false;
+    // Keep the full mip chain in VRAM too. Refusing mipmapped textures
+    // would undo the Old 3DS LINEAR-memory optimization for world assets.
+    const C3D_TexInitParams params{t.width,t.height,t.maxLevel,t.fmt,GPU_TEX_2D,true};
+    if(!C3D_TexInitWithParams(&moved,nullptr,params))return false;
     // The LINEAR copy was flushed when it was loaded; the copy engine reads it.
     C3D_SyncTextureCopy(static_cast<u32*>(t.data),0,static_cast<u32*>(moved.data),0,u32(bytes),8);
     moved.param=t.param;moved.border=t.border;moved.lodParam=t.lodParam;
@@ -390,7 +521,7 @@ void Renderer::shutdown(){
     shader_=nullptr;
     if(bottomTarget_)C3D_RenderTargetDelete(bottomTarget_);
     bottomTarget_=nullptr;
-    freeBloom();
+    freeBloom();freeStadiumScreen();
     if(targetRight_)C3D_RenderTargetDelete(targetRight_);
     targetRight_=nullptr;
     if(stereoShown_)gfxSet3D(false);
@@ -414,6 +545,19 @@ void Renderer::beginNow(const C3D_Mtx& view,const C3D_Mtx& projection,bool sync,
     const bool stereo=execStereo_.active()&&targetRight_;
     if(stereo!=stereoShown_){gfxSet3D(stereo);stereoShown_=stereo;}
     eye_=0;
+    // Dad's capture cadence: one sample per two rendered frames, independently
+    // of simulation ticks, eye replays and the lower-screen intro pass.
+    stadiumCaptureFrame_=stadiumRequested_&&((stadiumRenderFrames_++&1u)==0);
+    stadiumVisible_=true;
+    if(stadiumRequested_&&!stadiumScreens_.empty()&&true){
+        stadiumVisible_=false;C3D_Mtx identity;Mtx_Identity(&identity);
+        for(unsigned eye=0;eye<(execStereo_.active()?2u:1u)&&!stadiumVisible_;++eye){
+            eye_=eye;
+            const auto clip=ViewFrustum{view,eyeProjection(projection)}.model(identity);
+            for(const auto& bounds:stadiumScreens_)if(clip.intersects(bounds)){stadiumVisible_=true;break;}
+        }
+        eye_=0;
+    }
     view_=view;projection_=eyeProjection(projection);
     beginFrame();
 }
@@ -423,6 +567,7 @@ void Renderer::beginEyeNow(const C3D_Mtx& view,const C3D_Mtx& projection){
     view_=view;projection_=eyeProjection(projection);
     beginFrame();
 }
+
 C3D_Mtx Renderer::eyeProjection(const C3D_Mtx& center) const{
     if(!execStereo_.active())return center;
     float m[4][4];
@@ -435,7 +580,7 @@ C3D_Mtx Renderer::eyeProjection(const C3D_Mtx& center) const{
 // Top-screen pixels (origin top-left). A stereo layer moves each eye by half its disparity.
 C3D_Mtx Renderer::screenProjection(float parallax) const{
     C3D_Mtx out;Mtx_OrthoTilt(&out,0,screenWidth_,240,0,-1,1,false);
-    if(!execStereo_.active()||parallax==0)return out;
+    if(!execStereo_.active()||bottomPass_||parallax==0)return out;
     float m[4][4];
     for(unsigned r=0;r<4;++r)for(unsigned c=0;c<4;++c)m[r][c]=out.r[r].c[3-c];
     stereo::screenEye(m,1,horizontalSign_,eye_?1.f:-1.f,parallax);
@@ -452,19 +597,24 @@ void Renderer::beginFrame(){
     // The right eye repeats the left eye's buffer offsets: its sprites, text,
     // overlays, sparks and effect vertices reuse the data the left eye wrote.
     screenWidth_=400.f;screenParallax_=0;
-    spriteBase_=sprites_;spriteCapacity_=kSpriteCapacity;topSpriteCount_=0;bottomPass_=false;
+    spriteBase_=sprites_;
+    spriteCapacity_=kSpriteCapacity;
+    topSpriteCount_=0;bottomPass_=false;
     spriteCount_=0;spriteRunFirst_=0;spriteRunTexture_=nullptr;spriteStateReady_=false;
     menuIconDrawCount_=0;
-    textCount_=0;
+    if(true)textCount_=0;
     overlayCount_=0;
     // The local SDK permits unbinding all units, including inherited samplers.
     for(int unit=0;unit<3;++unit)C3D_TexBind(unit,nullptr);
-    if(!eye_){
+    if(!eye_&&true){
         C3D_RenderTargetClear(target_,C3D_CLEAR_ALL,0x071326FF,0);
         if(execStereo_.active())C3D_RenderTargetClear(targetRight_,C3D_CLEAR_ALL,0x071326FF,0);
+        if(bottomTarget_)C3D_RenderTargetClear(bottomTarget_,C3D_CLEAR_ALL,0x071326FF,0);
     }
-    bloomFrame_=bloomRequested_&&initBloom();bloomRequested_=false;bloomCount_=0;
-    if(bloomFrame_){
+    stadiumFrame_=true&&stadiumRequested_&&stadiumCaptureFrame_&&stadiumVisible_&&stadiumTex_[0].data;stadiumRequested_=false;
+    bloomFrame_=true&&bloomRequested_&&initBloom();bloomRequested_=false;bloomCount_=0;
+    if(stadiumFrame_&&!initBloom())stadiumFrame_=false;
+    if(bloomFrame_||stadiumFrame_){
         if(!eye_){
             // Memory fills run in queue order, ahead of this frame's command list.
             C3D_RenderTargetClear(sceneTarget_,C3D_CLEAR_ALL,0x071326FF,0);
@@ -480,7 +630,8 @@ void Renderer::beginFrame(){
         C3D_FrameDrawOn(sceneTarget_);C3D_SetViewport(0,0,240,400);
     }else C3D_FrameDrawOn(topTarget());
     C3D_BindProgram(&program_);
-    C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER,projectionLoc_,&projection_);
+    sceneDepthMap(projection_);
+    uploadProjection(projectionLoc_,projection_);
     // Environment rows stay finite; mix zero keeps every vertex's own UV1.
     C3D_FVUnifSet(GPU_VERTEX_SHADER,envRowLoc_[0],1,0,0,0);C3D_FVUnifSet(GPU_VERTEX_SHADER,envRowLoc_[1],0,1,0,0);
     C3D_FVUnifSet(GPU_VERTEX_SHADER,envRowLoc_[2],0,0,1,0);C3D_FVUnifSet(GPU_VERTEX_SHADER,envParamLoc_,1,0,0,0);
@@ -496,7 +647,7 @@ void Renderer::beginFrame(){
     for(int i=0;i<6;++i)C3D_TexEnvInit(C3D_GetTexEnv(i));
     auto* env=C3D_GetTexEnv(0);C3D_TexEnvSrc(env,C3D_Both,GPU_TEXTURE0,GPU_PRIMARY_COLOR);C3D_TexEnvFunc(env,C3D_Both,GPU_MODULATE);
     C3D_DepthTest(true,GPU_GEQUAL,GPU_WRITE_ALL);C3D_AlphaBlend(GPU_BLEND_ADD,GPU_BLEND_ADD,GPU_SRC_ALPHA,GPU_ONE_MINUS_SRC_ALPHA,GPU_ONE,GPU_ONE_MINUS_SRC_ALPHA);
-    if(!eye_)stats_.triangles=stats_.drawCalls=stats_.culledTriangles=stats_.culledSubmeshes=0;
+    if(!eye_&&true)stats_.triangles=stats_.drawCalls=stats_.culledTriangles=stats_.culledSubmeshes=0;
 }
 C3D_Mtx ViewFrustum::cameraFacing(Vec3 position,float scale) const {
     C3D_Mtx transform;Mtx_Identity(&transform);
@@ -542,6 +693,7 @@ void Renderer::drawAtScreenNow(const Model& model,const Vertex* vertices,const C
     modelBrightness_=originalBrightness;
     projection_=original;
 }
+
 void Renderer::drawMenuIconNow(const Model& model,const Vertex* vertices,const C3D_Mtx& transform,const UiQuad& q){
     if(q.bottom||q.alpha<=0||q.w<=0||q.h<=0||q.u1<=q.u0||q.v1<=q.v0)return;
     flushSprites();
@@ -603,14 +755,23 @@ void Renderer::resetMaterialUniforms(){
     if(tintDirty_){C3D_FVUnifSet(GPU_VERTEX_SHADER,tintLoc_,1,1,1,1);tintDirty_=false;}
 }
 void Renderer::drawNow(const Model& model,const Vertex* vertices,const C3D_Mtx& transform,bool backdrop,MaterialBinder material,void* context,ShapeVisible visible){
+    // Reject immutable world models before uploading matrices or lighting.
+    // Player meshes never opt into static visibility.
+    if(!backdrop&&!model.visibility.empty()){
+        C3D_Mtx mv,clip;Mtx_Multiply(&mv,&view_,&transform);Mtx_Multiply(&clip,&projection_,&mv);float rows[16];
+        for(unsigned r=0;r<4;++r)for(unsigned c=0;c<4;++c)rows[r*4+c]=clip.r[r].c[3-c];
+        if(!ClipFrustum(rows).intersects({model.minimum,model.maximum})){stats_.culledTriangles+=model.indexCount/3;return;}
+    }
     flushSprites();
-    const uint32_t animationFrame=execFrame_,additiveColor=execAdditive_;
-    C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER,projectionLoc_,&projection_);
+    const uint32_t animationFrame=execFrame_,additiveColor=execAdditive_&0xffffff00u;
+    const bool inkBlack=(execAdditive_&InkBlack)!=0;
+    uploadProjection(projectionLoc_,projection_);
     C3D_Mtx mv;Mtx_Multiply(&mv,&view_,&transform);C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER,modelViewLoc_,&mv);
+    if(!model.fixedLighting)normalMatrixNow(mv);
     auto* attr=C3D_GetAttrInfo();AttrInfo_Init(attr);
     AttrInfo_AddLoader(attr,0,GPU_FLOAT,3);AttrInfo_AddLoader(attr,1,GPU_FLOAT,3);AttrInfo_AddLoader(attr,2,GPU_FLOAT,4);AttrInfo_AddLoader(attr,3,GPU_UNSIGNED_BYTE,4);
     auto* buf=C3D_GetBufInfo();BufInfo_Init(buf);BufInfo_Add(buf,vertices,sizeof(Vertex),4,0x3210);
-    const bool litSkin=skinPalette_&&model.skinBoneIndices;
+    const bool litSkin=skinPalette_&&model.skinBoneIndices&&!model.fixedLighting;
     if(litSkin){AttrInfo_AddLoader(attr,4,GPU_FLOAT,1);BufInfo_Add(buf,model.skinBoneIndices,sizeof(float),1,4);}
     C3D_BoolUnifSet(GPU_VERTEX_SHADER,skinnedNormalsLoc_,litSkin);
     if(skinPalette_){
@@ -623,11 +784,12 @@ void Renderer::drawNow(const Model& model,const Vertex* vertices,const C3D_Mtx& 
     // Rigid parts (one bone each: a stand of Mii spectators spread over the
     // whole course is one model) are tested one by one against the same planes.
     const bool partCull=!backdrop&&rigid_&&rigid_->parts;
+    const bool skinCull=!backdrop&&skinPalette_&&model.skinVisibility.size()==model.submeshes.size();
     ClipFrustum frustum;
     // Reduced quality: course-object parts under minScreenRatio from the eye
     // (model space). Menu models keep every part.
     float partTiny=0;Vec3 eye{};
-    if(cull||partCull){
+    if(cull||partCull||skinCull){
         C3D_Mtx clip;Mtx_Multiply(&clip,&projection_,&mv);float rows[16];
         for(unsigned r=0;r<4;++r)for(unsigned c=0;c<4;++c)rows[r*4+c]=clip.r[r].c[3-c];
         frustum=ClipFrustum(rows);
@@ -639,6 +801,7 @@ void Renderer::drawNow(const Model& model,const Vertex* vertices,const C3D_Mtx& 
     // The last drawn submesh whose material state is still bound, and its end
     // of submesh (retailEndSubmesh), deferred while the next one repeats it.
     const Submesh* last=nullptr;bool lastRetail=false,lastEnvironment=false,pendingEnd=false;
+    C3D_Tex projectedWaterTexture{};
     for(std::size_t i=0;i<model.submeshes.size();++i){
         if(visible && !visible(context,i))continue;
         const auto& s=model.submeshes[i];
@@ -658,34 +821,49 @@ void Renderer::drawNow(const Model& model,const Vertex* vertices,const C3D_Mtx& 
             if(!shownParts&&parts->size()<=64){++stats_.culledSubmeshes;continue;}
         }
         VisibleRanges ranges;
-        if(cull){
+        if(skinCull){
+            ranges=selectSkinVisible(model.skinVisibility[i],skinPalette_,skinStride_,frustum);unsigned submitted=0;
+            for(unsigned n=0;n<ranges.count;++n)submitted+=ranges.ranges[n].count;
+            stats_.culledTriangles+=(s.count-submitted)/3;
+            if(!ranges.count){++stats_.culledSubmeshes;continue;}
+        }else if(cull){
             ranges=selectVisible(model.visibility[i],frustum);unsigned submitted=0;
             for(unsigned n=0;n<ranges.count;++n)submitted+=ranges.ranges[n].count;
             stats_.culledTriangles+=(s.count-submitted)/3;
             if(!ranges.count){++stats_.culledSubmeshes;continue;}
         }else ranges.append({s.first,s.count});
         const SubmeshOverride* o=overrides_&&i<overrideCount_&&overrides_[i].flags?&overrides_[i]:nullptr;
-        if(o&&(o->flags&SubmeshOverride::Uv)){
+        // Reset inherited state before applying this submesh's overrides. The
+        // reset clears both uniforms: doing it after UV setup when tint ends
+        // also erased the new SRT/mirror matrix (including a Boo at full alpha).
+        const bool overrideUv=o&&(o->flags&SubmeshOverride::Uv);
+        const auto* track=i<model.uvTracks.size()&&model.uvTracks[i].frames?&model.uvTracks[i]:nullptr;
+        const float* uv=overrideUv?o->uv:track?track->samples.data()+12*(track->loop?animationFrame%track->frames:std::min(animationFrame,track->frames-1)):nullptr;
+        const bool hasUv=uv!=nullptr;
+        const bool hasTint=o&&(o->flags&SubmeshOverride::Tint);
+        if((uvDirty_&&!hasUv)||(tintDirty_&&!hasTint))resetMaterialUniforms();
+        if(hasUv){
             // An SRT0 track replaces the authored constant-rate scroll.
-            for(unsigned row=0;row<4;++row)C3D_FVUnifSet(GPU_VERTEX_SHADER,uvRowLoc_[row],o->uv[row*3],o->uv[row*3+1],o->uv[row*3+2],0);
+            for(unsigned row=0;row<4;++row)C3D_FVUnifSet(GPU_VERTEX_SHADER,uvRowLoc_[row],uv[row*3],uv[row*3+1],uv[row*3+2],0);
             C3D_FVUnifSet(GPU_VERTEX_SHADER,uvScrollLoc_,0,0,0,0);uvDirty_=true;
         }else{
-            if(uvDirty_)resetMaterialUniforms();
             const uint32_t frames=s.animationFrames&0xffff;
             const float frame=frames?float(animationFrame%frames):0.f;
             C3D_FVUnifSet(GPU_VERTEX_SHADER,uvScrollLoc_,s.uvVelocity[0]*frame,s.uvVelocity[1]*frame,s.uvVelocity[2]*frame,s.uvVelocity[3]*frame);
         }
-        if(o&&(o->flags&SubmeshOverride::Tint)){C3D_FVUnifSet(GPU_VERTEX_SHADER,tintLoc_,o->tint[0],o->tint[1],o->tint[2],o->tint[3]);tintDirty_=true;}
-        else if(tintDirty_)resetMaterialUniforms();
+        if(hasTint){C3D_FVUnifSet(GPU_VERTEX_SHADER,tintLoc_,o->tint[0],o->tint[1],o->tint[2],o->tint[3]);tintDirty_=true;}
         // The previous drawn submesh's material and textures, without overrides
         // or a binder: its whole state is still bound, only UVs and draws differ.
-        const bool repeat=last&&!o&&!material&&sameMaterial(*last,s);
+        const bool repeat=last&&!o&&!material&&sameMaterial(*last,s)&&
+            (model.samplers.empty()||!std::memcmp(model.samplers[i].data(),
+                model.samplers[std::size_t(last-model.submeshes.data())].data(),sizeof(model.samplers[i])));
         bool retail=lastRetail,retailEnvironment=lastEnvironment;
         if(!repeat){
         if(pendingEnd){retailEndSubmesh();pendingEnd=false;}
         const uint32_t constant=o&&(o->flags&SubmeshOverride::Constant)?o->constant:s.constant;
         const GPU_TEVSCALE scales[]={GPU_TEVSCALE_1,GPU_TEVSCALE_2,GPU_TEVSCALE_4,GPU_TEVSCALE_1};
         if(!material){
+            C3D_TexEnvBufUpdate(C3D_Both,0);
             for(int stage=0;stage<6;++stage)C3D_TexEnvInit(C3D_GetTexEnv(stage));
             auto* e0=C3D_GetTexEnv(0);auto* e1=C3D_GetTexEnv(1);
             C3D_TexEnvSrc(e0,C3D_Both,GPU_TEXTURE0,GPU_PRIMARY_COLOR);
@@ -767,7 +945,205 @@ void Renderer::drawNow(const Model& model,const Vertex* vertices,const C3D_Mtx& 
                 C3D_TexEnvOpRgb(e1,GPU_TEVOP_RGB_SRC_COLOR,GPU_TEVOP_RGB_ONE_MINUS_SRC_COLOR,GPU_TEVOP_RGB_SRC_COLOR);
                 C3D_TexEnvFunc(e1,C3D_RGB,GPU_MULTIPLY_ADD);
             }
-            if(s.menuReflection){
+            if(!(s.flags&1)&&((s.animationFrames>>16)&255)==3){
+                // GX single-stage raster + texture, including Daisy's sky.
+                C3D_TexEnvSrc(e0,C3D_RGB,GPU_TEXTURE0,GPU_PRIMARY_COLOR);
+                C3D_TexEnvFunc(e0,C3D_RGB,GPU_ADD);
+            }
+            if(s.menuReflection==20){
+                // Retail treehouse: clamp(2*T0*raster), then + T1*K1 RGB.
+                C3D_TexEnvSrc(e0,C3D_RGB,GPU_TEXTURE0,GPU_PRIMARY_COLOR);
+                C3D_TexEnvFunc(e0,C3D_RGB,GPU_MODULATE);C3D_TexEnvScale(e0,C3D_RGB,GPU_TEVSCALE_2);
+                C3D_TexEnvColor(e1,constant);
+                C3D_TexEnvSrc(e1,C3D_RGB,GPU_TEXTURE1,GPU_CONSTANT,GPU_PREVIOUS);
+                C3D_TexEnvFunc(e1,C3D_RGB,GPU_MULTIPLY_ADD);
+            }else if(s.menuReflection==19){
+                // Earth: clamp(2 * lerp(clamp(surface*raster),raster,cloud)).
+                C3D_TexEnvSrc(e0,C3D_RGB,GPU_TEXTURE0,GPU_PRIMARY_COLOR);
+                C3D_TexEnvFunc(e0,C3D_RGB,GPU_MODULATE);
+                C3D_TexEnvScale(e0,C3D_RGB,GPU_TEVSCALE_1);
+                C3D_TexEnvSrc(e1,C3D_RGB,GPU_PRIMARY_COLOR,GPU_PREVIOUS,GPU_TEXTURE1);
+                C3D_TexEnvFunc(e1,C3D_RGB,GPU_INTERPOLATE);
+                C3D_TexEnvScale(e1,C3D_RGB,GPU_TEVSCALE_2);
+            }else if(s.menuReflection==18){
+                // Fire Snake's two independently sampled ramps and raster.
+                // The cooker stores C0-C1, raster+C1, and the final C1.
+                C3D_TexEnvColor(e0,constant);
+                C3D_TexEnvSrc(e0,C3D_RGB,GPU_TEXTURE0,GPU_CONSTANT,GPU_PRIMARY_COLOR);
+                C3D_TexEnvFunc(e0,C3D_RGB,GPU_MULTIPLY_ADD);C3D_TexEnvScale(e0,C3D_RGB,GPU_TEVSCALE_1);
+                C3D_TexEnvColor(e1,constant);
+                C3D_TexEnvSrc(e1,C3D_RGB,GPU_TEXTURE1,GPU_CONSTANT,GPU_PREVIOUS);
+                C3D_TexEnvFunc(e1,C3D_RGB,GPU_MULTIPLY_ADD);
+                auto* cold=C3D_GetTexEnv(2);C3D_TexEnvColor(cold,s.reflectionAdd);
+                C3D_TexEnvSrc(cold,C3D_RGB,GPU_PREVIOUS,GPU_CONSTANT);C3D_TexEnvFunc(cold,C3D_RGB,GPU_ADD);
+                auto* opacity=C3D_GetTexEnv(3);
+                C3D_TexEnvSrc(opacity,C3D_Alpha,GPU_TEXTURE0,GPU_TEXTURE1);C3D_TexEnvFunc(opacity,C3D_Alpha,GPU_ADD);
+            }else if(s.menuReflection==17){
+                // StarRing: clamp(2*(environment*K0 + surface*lit raster)).
+                C3D_TexEnvColor(e0,s.reflectionConstant);
+                C3D_TexEnvSrc(e0,C3D_RGB,GPU_TEXTURE1,GPU_CONSTANT);
+                C3D_TexEnvFunc(e0,C3D_RGB,GPU_MODULATE);C3D_TexEnvScale(e0,C3D_RGB,GPU_TEVSCALE_1);
+                C3D_TexEnvSrc(e1,C3D_RGB,GPU_TEXTURE0,GPU_PRIMARY_COLOR,GPU_PREVIOUS);
+                C3D_TexEnvFunc(e1,C3D_RGB,GPU_MULTIPLY_ADD);C3D_TexEnvScale(e1,C3D_RGB,GPU_TEVSCALE_2);
+            }else if(s.menuReflection==16){
+                // StarPiece: 2*(clamp(4*T0*raster) + raster*konst).
+                C3D_TexEnvSrc(e0,C3D_RGB,GPU_TEXTURE0,GPU_PRIMARY_COLOR);
+                C3D_TexEnvFunc(e0,C3D_RGB,GPU_MODULATE);C3D_TexEnvScale(e0,C3D_RGB,GPU_TEVSCALE_4);
+                C3D_TexEnvColor(e1,s.reflectionConstant);
+                C3D_TexEnvSrc(e1,C3D_RGB,GPU_PRIMARY_COLOR,GPU_CONSTANT,GPU_PREVIOUS);
+                C3D_TexEnvFunc(e1,C3D_RGB,GPU_MULTIPLY_ADD);C3D_TexEnvScale(e1,C3D_RGB,GPU_TEVSCALE_2);
+            }else if(s.menuReflection==15){
+                // GX toll display: clamp(2*(T0.rgb + T1.alpha)).
+                C3D_TexEnvSrc(e0,C3D_RGB,GPU_TEXTURE0);
+                C3D_TexEnvFunc(e0,C3D_RGB,GPU_REPLACE);
+                C3D_TexEnvScale(e0,C3D_RGB,GPU_TEVSCALE_1);
+                C3D_TexEnvSrc(e1,C3D_RGB,GPU_PREVIOUS,GPU_TEXTURE1);
+                C3D_TexEnvOpRgb(e1,GPU_TEVOP_RGB_SRC_COLOR,GPU_TEVOP_RGB_SRC_ALPHA);
+                C3D_TexEnvFunc(e1,C3D_RGB,GPU_ADD);
+                C3D_TexEnvScale(e1,C3D_RGB,GPU_TEVSCALE_2);
+            }else if(s.menuReflection==14){
+                // Original pillar/splash: lerp(Cn,endpoint,T0)+C2*T1.
+                C3D_TexEnvColor(e0,constant);
+                C3D_TexEnvSrc(e0,C3D_RGB,GPU_PRIMARY_COLOR,GPU_CONSTANT,GPU_TEXTURE0);
+                C3D_TexEnvFunc(e0,C3D_RGB,GPU_INTERPOLATE);
+                C3D_TexEnvScale(e0,C3D_RGB,GPU_TEVSCALE_1);
+                C3D_TexEnvColor(e1,o&&(o->flags&SubmeshOverride::Add)?o->add:s.reflectionAdd);
+                const bool rasterAlpha=s.reflectionConstant&1;
+                C3D_TexEnvSrc(e1,C3D_RGB,rasterAlpha?GPU_PRIMARY_COLOR:GPU_TEXTURE1,GPU_CONSTANT,GPU_PREVIOUS);
+                if(rasterAlpha)C3D_TexEnvOpRgb(e1,GPU_TEVOP_RGB_SRC_ALPHA,GPU_TEVOP_RGB_SRC_COLOR,GPU_TEVOP_RGB_SRC_COLOR);
+                C3D_TexEnvFunc(e1,C3D_RGB,GPU_MULTIPLY_ADD);
+            }else if(s.menuReflection==13){
+                // FlamePole: preserve saturation of 2*T0*raster before
+                // blending the gradient texture toward white.
+                C3D_TexEnvScale(e0,C3D_RGB,GPU_TEVSCALE_2);
+                C3D_TexEnvColor(e1,0xffffffffu);
+                C3D_TexEnvSrc(e1,C3D_RGB,GPU_CONSTANT,GPU_TEXTURE1,GPU_PREVIOUS);
+                C3D_TexEnvFunc(e1,C3D_RGB,GPU_INTERPOLATE);
+            }else if(s.menuReflection==12){
+                // Authored lava ramp, with the waterfall's signed bias before
+                // scaling/clamping, followed by the alpha-weighted mesh layer.
+                C3D_TexEnvColor(e0,constant);
+                C3D_TexEnvSrc(e0,C3D_RGB,GPU_PRIMARY_COLOR,GPU_CONSTANT,GPU_TEXTURE0);
+                C3D_TexEnvFunc(e0,C3D_RGB,GPU_INTERPOLATE);
+                C3D_TexEnvScale(e0,C3D_RGB,GPU_TEVSCALE_1);
+                const bool waterfall=s.reflectionConstant&1;
+                if(waterfall){
+                    C3D_TexEnvColor(e1,0);
+                    C3D_TexEnvSrc(e1,C3D_RGB,GPU_PREVIOUS,GPU_CONSTANT);
+                    C3D_TexEnvFunc(e1,C3D_RGB,GPU_ADD_SIGNED);
+                    C3D_TexEnvScale(e1,C3D_RGB,GPU_TEVSCALE_2);
+                }
+                auto* layer=C3D_GetTexEnv(waterfall?2:1);
+                C3D_TexEnvSrc(layer,C3D_RGB,GPU_TEXTURE1,GPU_TEXTURE0,GPU_PREVIOUS);
+                C3D_TexEnvOpRgb(layer,GPU_TEVOP_RGB_SRC_COLOR,GPU_TEVOP_RGB_SRC_ALPHA,GPU_TEVOP_RGB_SRC_COLOR);
+                C3D_TexEnvFunc(layer,C3D_RGB,GPU_MULTIPLY_ADD);
+            }else if(s.menuReflection==11){
+                // GX water: P=C0+(1-C0)*glow, then lerp(C0,B,wave)+P.
+                // B is P (factory), C2 (DS garden), or ONE (N64 jungle).
+                // Save P in the delayed buffer so the last addition does not
+                // replace it with the second stage's interpolation result.
+                const bool halfGlow=(s.reflectionAdd&2)!=0;
+                C3D_TexEnvBufUpdate(C3D_RGB,halfGlow?2:1);
+                C3D_TexEnvColor(e0,constant);
+                C3D_TexEnvSrc(e0,C3D_RGB,GPU_CONSTANT,GPU_TEXTURE0,GPU_CONSTANT);
+                C3D_TexEnvOpRgb(e0,GPU_TEVOP_RGB_ONE_MINUS_SRC_COLOR,GPU_TEVOP_RGB_SRC_COLOR,GPU_TEVOP_RGB_SRC_COLOR);
+                C3D_TexEnvFunc(e0,C3D_RGB,GPU_MULTIPLY_ADD);
+                C3D_TexEnvScale(e0,C3D_RGB,GPU_TEVSCALE_1);
+                if(s.reflectionAdd&4){
+                    // Sherbet uses HALF, rather than ONE, as the glow endpoint.
+                    C3D_TexEnvColor(e0,(constant&0xffffffu)|0x80000000u);
+                    C3D_TexEnvSrc(e0,C3D_RGB,GPU_CONSTANT,GPU_CONSTANT,GPU_TEXTURE0);
+                    C3D_TexEnvOpRgb(e0,GPU_TEVOP_RGB_SRC_ALPHA,GPU_TEVOP_RGB_SRC_COLOR,GPU_TEVOP_RGB_SRC_COLOR);
+                    C3D_TexEnvFunc(e0,C3D_RGB,GPU_INTERPOLATE);
+                }
+                if(halfGlow){
+                    // N64 jungle's first GX stage has DIVIDE_2 scale.
+                    C3D_TexEnvColor(e1,0x80808080u);
+                    C3D_TexEnvSrc(e1,C3D_RGB,GPU_PREVIOUS,GPU_CONSTANT);
+                    C3D_TexEnvFunc(e1,C3D_RGB,GPU_MODULATE);
+                }
+                auto* wave=C3D_GetTexEnv(halfGlow?2:1);
+                C3D_TexEnvColor(wave,constant);
+                C3D_TexEnvSrc(wave,C3D_RGB,(s.reflectionAdd&1)?GPU_PRIMARY_COLOR:GPU_PREVIOUS,GPU_CONSTANT,GPU_TEXTURE1);
+                C3D_TexEnvFunc(wave,C3D_RGB,GPU_INTERPOLATE);
+                auto* sum=C3D_GetTexEnv(halfGlow?3:2);
+                C3D_TexEnvSrc(sum,C3D_RGB,GPU_PREVIOUS,GPU_PREVIOUS_BUFFER);
+                C3D_TexEnvFunc(sum,C3D_RGB,GPU_ADD);
+            }else if(s.menuReflection==10){
+                // Keep albedo in the delayed TEV buffer while weighting the
+                // environment. Adding before subtracting the bias must not
+                // clamp the unbiassed sum (which may be greater than one).
+                C3D_TexEnvBufUpdate(C3D_RGB,1);
+                C3D_TexEnvColor(e0,constant);
+                C3D_TexEnvSrc(e0,C3D_RGB,GPU_TEXTURE0,GPU_CONSTANT);
+                C3D_TexEnvFunc(e0,C3D_RGB,GPU_MODULATE);
+                C3D_TexEnvScale(e0,C3D_RGB,GPU_TEVSCALE_1);
+                const uint32_t weight=s.reflectionConstant&255;
+                C3D_TexEnvColor(e1,weight*0x010101u);
+                C3D_TexEnvSrc(e1,C3D_RGB,GPU_TEXTURE1,GPU_CONSTANT);
+                C3D_TexEnvFunc(e1,C3D_RGB,GPU_MODULATE);
+                auto* sum=C3D_GetTexEnv(2);
+                C3D_TexEnvSrc(sum,C3D_RGB,GPU_PREVIOUS_BUFFER,GPU_PREVIOUS);
+                C3D_TexEnvFunc(sum,C3D_RGB,s.reflectionConstant&256?GPU_ADD_SIGNED:GPU_ADD);
+                auto* lit=C3D_GetTexEnv(3);
+                C3D_TexEnvSrc(lit,C3D_RGB,GPU_PREVIOUS,GPU_PRIMARY_COLOR);
+                C3D_TexEnvFunc(lit,C3D_RGB,GPU_MODULATE);
+                auto* lift=C3D_GetTexEnv(4);
+                C3D_TexEnvColor(lift,s.reflectionAdd);
+                C3D_TexEnvSrc(lift,C3D_RGB,GPU_PREVIOUS,GPU_CONSTANT);
+                C3D_TexEnvFunc(lift,C3D_RGB,GPU_ADD);
+                C3D_TexEnvScale(lift,C3D_RGB,scales[(s.flags>>4)&3]);
+            }else if(s.menuReflection==22){
+                // Original union_D00a: atlas albedo (unit1) plus a camera-
+                // projected highlight (unit0). Clamp the doubled first stage.
+                C3D_TexEnvColor(e0,constant);
+                C3D_TexEnvSrc(e0,C3D_RGB,GPU_TEXTURE1,GPU_CONSTANT);
+                C3D_TexEnvFunc(e0,C3D_RGB,GPU_MODULATE);C3D_TexEnvScale(e0,C3D_RGB,GPU_TEVSCALE_2);
+                C3D_TexEnvColor(e1,s.reflectionAdd);
+                C3D_TexEnvSrc(e1,C3D_RGB,GPU_TEXTURE0,GPU_CONSTANT,GPU_PREVIOUS);
+                C3D_TexEnvFunc(e1,C3D_RGB,GPU_MULTIPLY_ADD);
+            }else if(s.menuReflection==21){
+                // Sun halo: clamp(scale*(lerp(C1,C0,T)-bias)).
+                // In particular ef_sunFlare subtracts 1/2 BEFORE doubling;
+                // the grayscale albedo fallback discarded this authored colour ramp.
+                C3D_TexEnvColor(e0,s.reflectionConstant);
+                C3D_TexEnvSrc(e0,C3D_RGB,GPU_CONSTANT);C3D_TexEnvFunc(e0,C3D_RGB,GPU_REPLACE);
+                C3D_TexEnvScale(e0,C3D_RGB,GPU_TEVSCALE_1);
+                C3D_TexEnvColor(e1,s.reflectionAdd);
+                C3D_TexEnvSrc(e1,C3D_RGB,GPU_CONSTANT,GPU_PREVIOUS,GPU_TEXTURE0);
+                C3D_TexEnvFunc(e1,C3D_RGB,GPU_INTERPOLATE);
+                auto* finish=C3D_GetTexEnv(2);C3D_TexEnvColor(finish,0);
+                C3D_TexEnvSrc(finish,C3D_RGB,GPU_PREVIOUS,GPU_CONSTANT);
+                C3D_TexEnvFunc(finish,C3D_RGB,s.reflectionUv[0]>0?GPU_ADD_SIGNED:GPU_ADD);
+                C3D_TexEnvScale(finish,C3D_RGB,scales[(s.flags>>4)&3]);
+            }else if(s.menuReflection==7){
+                // GX pylon ramp: C0*(1-T0)+C1*T0, then lit raster colour.
+                // CLR0 C1 is an absolute Add override, not a vertex tint.
+                C3D_TexEnvColor(e0,constant);
+                C3D_TexEnvSrc(e0,C3D_RGB,GPU_CONSTANT);C3D_TexEnvFunc(e0,C3D_RGB,GPU_REPLACE);
+                C3D_TexEnvScale(e0,C3D_RGB,GPU_TEVSCALE_1);
+                C3D_TexEnvColor(e1,o&&(o->flags&SubmeshOverride::Add)?o->add:s.reflectionAdd);
+                C3D_TexEnvSrc(e1,C3D_RGB,GPU_CONSTANT,GPU_PREVIOUS,GPU_TEXTURE0);
+                C3D_TexEnvFunc(e1,C3D_RGB,GPU_INTERPOLATE);
+                C3D_TexEnvScale(e1,C3D_RGB,scales[(s.flags>>14)&3]);
+                auto* lit=C3D_GetTexEnv(2);
+                C3D_TexEnvSrc(lit,C3D_RGB,GPU_PREVIOUS,GPU_PRIMARY_COLOR);C3D_TexEnvFunc(lit,C3D_RGB,GPU_MODULATE);
+                C3D_TexEnvScale(lit,C3D_RGB,scales[(s.flags>>4)&3]);
+            }else if(s.menuReflection==8){
+                // GX statue: P0=T0*ras/2; P1=lerp(P0,T1,C0)/2;
+                // result=2*(P1+C1*T2). PICA's half is an 8-bit constant.
+                C3D_TexEnvSrc(e0,C3D_RGB,GPU_TEXTURE0,GPU_PRIMARY_COLOR);
+                C3D_TexEnvFunc(e0,C3D_RGB,GPU_MODULATE);C3D_TexEnvScale(e0,C3D_RGB,GPU_TEVSCALE_1);
+                C3D_TexEnvColor(e1,0x80808080u);
+                C3D_TexEnvSrc(e1,C3D_RGB,GPU_PREVIOUS,GPU_CONSTANT);C3D_TexEnvFunc(e1,C3D_RGB,GPU_MODULATE);
+                auto* marble=C3D_GetTexEnv(2);C3D_TexEnvColor(marble,constant);
+                C3D_TexEnvSrc(marble,C3D_RGB,GPU_TEXTURE1,GPU_PREVIOUS,GPU_CONSTANT);C3D_TexEnvFunc(marble,C3D_RGB,GPU_INTERPOLATE);
+                auto* half=C3D_GetTexEnv(3);C3D_TexEnvColor(half,0x80808080u);
+                C3D_TexEnvSrc(half,C3D_RGB,GPU_PREVIOUS,GPU_CONSTANT);C3D_TexEnvFunc(half,C3D_RGB,GPU_MODULATE);
+                auto* reflection=C3D_GetTexEnv(4);C3D_TexEnvColor(reflection,o&&(o->flags&SubmeshOverride::Add)?o->add:s.reflectionAdd);
+                C3D_TexEnvSrc(reflection,C3D_RGB,GPU_TEXTURE2,GPU_CONSTANT,GPU_PREVIOUS);C3D_TexEnvFunc(reflection,C3D_RGB,GPU_MULTIPLY_ADD);
+                C3D_TexEnvScale(reflection,C3D_RGB,GPU_TEVSCALE_2);
+            }else if(s.menuReflection){
                 // GX: clamp(albedo*rasC + C1), then + reflection*APREV
                 // (APREV = albedo alpha * authored konst) or * konst RGB.
                 // Keep the intermediate alpha until stage 3 applies the
@@ -775,6 +1151,7 @@ void Renderer::drawNow(const Model& model,const Vertex* vertices,const C3D_Mtx& 
                 C3D_TexEnvColor(e0,s.reflectionAdd);
                 C3D_TexEnvSrc(e0,C3D_RGB,GPU_TEXTURE0,GPU_PRIMARY_COLOR,GPU_CONSTANT);
                 C3D_TexEnvFunc(e0,C3D_RGB,GPU_MULTIPLY_ADD);
+                if(s.menuReflection==9)C3D_TexEnvScale(e0,C3D_RGB,GPU_TEVSCALE_1);
                 C3D_TexEnvSrc(e0,C3D_Alpha,GPU_TEXTURE0,GPU_CONSTANT);
                 C3D_TexEnvFunc(e0,C3D_Alpha,GPU_MODULATE);
                 if(s.menuReflection==4){
@@ -791,6 +1168,7 @@ void Renderer::drawNow(const Model& model,const Vertex* vertices,const C3D_Mtx& 
                     C3D_TexEnvSrc(e1,C3D_RGB,GPU_TEXTURE1,mask?GPU_PREVIOUS:GPU_CONSTANT,GPU_PREVIOUS);
                     C3D_TexEnvOpRgb(e1,GPU_TEVOP_RGB_SRC_COLOR,mask?GPU_TEVOP_RGB_SRC_ALPHA:GPU_TEVOP_RGB_SRC_COLOR);
                     C3D_TexEnvFunc(e1,C3D_RGB,GPU_MULTIPLY_ADD);
+                    if(s.menuReflection==9)C3D_TexEnvScale(e1,C3D_RGB,scales[(s.flags>>4)&3]);
                 }
             }
             // Alpha is a separate GX equation: lighting's secondary texture
@@ -798,27 +1176,33 @@ void Renderer::drawNow(const Model& model,const Vertex* vertices,const C3D_Mtx& 
             const unsigned alphaMode=(s.flags>>20)&7;
             auto* alpha=C3D_GetTexEnv(3);
             if(alphaMode==1||alphaMode==2){
-                C3D_TexEnvSrc(alpha,C3D_Alpha,alphaMode==1?GPU_TEXTURE0:GPU_TEXTURE1,GPU_PRIMARY_COLOR);
+                C3D_TexEnvSrc(alpha,C3D_Alpha,alphaMode==1&&s.menuReflection!=22?GPU_TEXTURE0:GPU_TEXTURE1,GPU_PRIMARY_COLOR);
                 C3D_TexEnvFunc(alpha,C3D_Alpha,GPU_MODULATE);
             }else if(alphaMode==3||alphaMode==6){
                 // Mode 6 doubles the texture product (GX alpha scale 2).
                 C3D_TexEnvSrc(alpha,C3D_Alpha,GPU_TEXTURE0,GPU_TEXTURE1);C3D_TexEnvFunc(alpha,C3D_Alpha,GPU_MODULATE);
                 if(alphaMode==6)C3D_TexEnvScale(alpha,C3D_Alpha,GPU_TEVSCALE_2);
-                auto* vertexAlpha=C3D_GetTexEnv(4);C3D_TexEnvSrc(vertexAlpha,C3D_Alpha,GPU_PREVIOUS,GPU_PRIMARY_COLOR);C3D_TexEnvFunc(vertexAlpha,C3D_Alpha,GPU_MODULATE);
+                if(!(s.menuReflection==14&&(s.reflectionConstant&1))){
+                    auto* vertexAlpha=C3D_GetTexEnv(4);C3D_TexEnvSrc(vertexAlpha,C3D_Alpha,GPU_PREVIOUS,GPU_PRIMARY_COLOR);C3D_TexEnvFunc(vertexAlpha,C3D_Alpha,GPU_MODULATE);
+                }
+            }else if(alphaMode==7){
+                C3D_TexEnvColor(alpha,constant);
+                C3D_TexEnvSrc(alpha,C3D_Alpha,s.menuReflection==11?GPU_TEXTURE0:GPU_TEXTURE1,GPU_PRIMARY_COLOR,GPU_CONSTANT);
+                C3D_TexEnvFunc(alpha,C3D_Alpha,GPU_MULTIPLY_ADD);
             }else if(alphaMode==4&&o&&(o->flags&SubmeshOverride::Alpha)){
                 // A CLR0-animated register is the whole alpha (the cooked vertex alpha is its static 0).
-                C3D_TexEnvColor(alpha,uint32_t(std::lround(std::clamp(o->tint[3],0.f,1.f)*255.f))<<24);
+                C3D_TexEnvColor(alpha,(s.menuReflection==8?0x00808080u:0u)|(uint32_t(std::lround(std::clamp(o->tint[3],0.f,1.f)*255.f))<<24));
                 C3D_TexEnvSrc(alpha,C3D_Alpha,GPU_CONSTANT);C3D_TexEnvFunc(alpha,C3D_Alpha,GPU_REPLACE);
             }else if(alphaMode==4){
                 const bool menu=s.lighting&mkw::retail::Menu;
                 if(menu)C3D_TexEnvColor(alpha,constant);
                 C3D_TexEnvSrc(alpha,C3D_Alpha,menu?GPU_CONSTANT:GPU_PRIMARY_COLOR);C3D_TexEnvFunc(alpha,C3D_Alpha,GPU_REPLACE);
             }else if(alphaMode==5){
-                C3D_TexEnvColor(alpha,constant);
+                C3D_TexEnvColor(alpha,s.menuReflection==8?(constant&0xff000000u)|0x00808080u:constant);
                 C3D_TexEnvSrc(alpha,C3D_Alpha,GPU_TEXTURE0,GPU_TEXTURE1,GPU_CONSTANT);C3D_TexEnvFunc(alpha,C3D_Alpha,GPU_INTERPOLATE);
             }
         }
-        if(additiveColor||(o&&(o->flags&SubmeshOverride::Add))){
+        if(additiveColor||((s.menuReflection!=7&&s.menuReflection!=8&&s.menuReflection!=14)&&o&&(o->flags&SubmeshOverride::Add))){
             // The shared retail Star CLR0 animates GX C1, added to the textured
             // driver/vehicle colour. Keep the source alpha equation untouched.
             // Course-object CLR0 glows use the same stage (already 0xAABBGGRR).
@@ -849,7 +1233,7 @@ void Renderer::drawNow(const Model& model,const Vertex* vertices,const C3D_Mtx& 
                           ambient*(courseLighting_?1.25f:1.f),1.f);
         }
         // Imported GX triangles wind clockwise relative to their outward normals.
-        C3D_CullFace((s.flags&4)||backdrop?GPU_CULL_NONE:GPU_CULL_FRONT_CCW);
+        C3D_CullFace(cameraCull((s.flags&4)||backdrop?GPU_CULL_NONE:GPU_CULL_FRONT_CCW,mv));
         const bool sourceState=s.flags&(1u<<31),blended=s.flags&2;
         const GPU_TESTFUNC alphaComparisons[]={GPU_NEVER,GPU_LESS,GPU_EQUAL,GPU_LEQUAL,GPU_GREATER,GPU_NOTEQUAL,GPU_GEQUAL,GPU_ALWAYS};
         const uint8_t alphaReferences[]={0,128,165,255};
@@ -868,25 +1252,81 @@ void Renderer::drawNow(const Model& model,const Vertex* vertices,const C3D_Mtx& 
         const bool depthTest=!backdrop&&(!sourceState||(s.flags&(1u<<23)));
         const bool depthWrite=!backdrop&&(sourceState?bool(s.flags&(1u<<24)):!blended);
         C3D_DepthTest(depthTest,GPU_GEQUAL,depthWrite?GPU_WRITE_ALL:GPU_WRITE_COLOR);
+        // Retain authored layer order without reverting distant geometry to
+        // nonlinear depth. The same mapping is used by actors and shadows.
+
+        sceneDepthMap(projection_,!backdrop&&(s.lighting&retail::CoplanarLayer));
         const bool swap=o&&(o->flags&SubmeshOverride::Texture);
         const int32_t primaryIndex=swap&&o->texture[0]>=0&&size_t(o->texture[0])<model.textures.size()?o->texture[0]:s.texture;
         const int32_t secondaryIndex=swap&&o->texture[1]>=0&&size_t(o->texture[1])<model.textures.size()?o->texture[1]:s.secondary;
-        auto* texture=primaryIndex>=0?&model.textures[primaryIndex]->gpu:&white_;
+        const bool stadium=stadiumTex_[0].data&&model.stadiumTexture>=0&&primaryIndex==model.stadiumTexture;
+        const auto* samplers=i<model.samplers.size()?model.samplers[i].data():nullptr;
+        auto* texture=stadium?&stadiumTex_[stadiumRead_]:primaryIndex>=0?model.textures[primaryIndex]->sampledGpu(samplers):&white_;
         const GPU_TEXTURE_WRAP_PARAM wraps[]={GPU_CLAMP_TO_EDGE,GPU_REPEAT,GPU_MIRRORED_REPEAT,GPU_CLAMP_TO_EDGE};
         C3D_TexSetWrap(texture,wraps[(s.flags>>8)&3],wraps[(s.flags>>10)&3]);
         C3D_TexBind(0,texture);
-        auto* secondary=secondaryIndex>=0?&model.textures[secondaryIndex]->gpu:&white_;
+        if(stadium){
+            // Landscape authored UVs to the cropped portrait texture region.
+            constexpr auto origin=stadium::displayUv(0,0),dx=stadium::displayUv(1,0),dy=stadium::displayUv(0,1);
+            C3D_FVUnifSet(GPU_VERTEX_SHADER,uvRowLoc_[0],dx.u-origin.u,dy.u-origin.u,origin.u,0);
+            C3D_FVUnifSet(GPU_VERTEX_SHADER,uvRowLoc_[1],dx.v-origin.v,dy.v-origin.v,origin.v,0);
+            C3D_FVUnifSet(GPU_VERTEX_SHADER,uvScrollLoc_,0,0,0,0);uvDirty_=true;
+        }
+        auto* secondary=secondaryIndex>=0?model.textures[secondaryIndex]->sampledGpu(samplers?samplers+1:nullptr,1):&white_;
         C3D_TexSetWrap(secondary,wraps[(s.flags>>16)&3],wraps[(s.flags>>18)&3]);
         C3D_TexBind(1,secondary);
+        if(s.menuReflection==11||s.menuReflection==22){
+            projectedWaterTexture=*secondary;
+            projectedWaterTexture.param=(projectedWaterTexture.param&~GPU_TEXTURE_MODE(7))|GPU_TEXTURE_MODE(GPU_TEX_PROJECTION);
+            C3D_TexBind(0,&projectedWaterTexture);
+            C3D_TexBind(1,texture);
+        }
+        if(s.menuReflection==8){
+            auto* third=model.textures[(s.reflectionConstant&0xffff)-1]->sampledGpu(samplers?samplers+2:nullptr,2);
+            C3D_TexSetWrap(third,wraps[(s.reflectionConstant>>16)&3],wraps[(s.reflectionConstant>>18)&3]);
+            C3D_TexBind(2,third);
+        }
         // Retail course lighting: fog stage, light textures (after the generic setup).
-        retailEnvironment=retail&&retailCombiners(s,mv,backdrop,additiveColor||(o&&(o->flags&SubmeshOverride::Add)),
-            additiveColor?(additiveColor>>24)|((additiveColor>>8)&0xff00)|((additiveColor<<8)&0xff0000):o&&(o->flags&SubmeshOverride::Add)?o->add&0xffffff:0);
+        retailEnvironment=retail&&retailCombiners(s,mv,backdrop,additiveColor||((s.menuReflection!=7&&s.menuReflection!=8&&s.menuReflection!=14)&&o&&(o->flags&SubmeshOverride::Add)),
+            additiveColor?(additiveColor>>24)|((additiveColor>>8)&0xff00)|((additiveColor<<8)&0xff0000):o&&(o->flags&SubmeshOverride::Add)?o->add&0xffffff:0,constant);
         // A material binder owns the combiners and may replace any state above.
         if(material)material(context,i);
+        if(inkBlack){auto* ink=C3D_GetTexEnv(5);C3D_TexEnvColor(ink,ink->color&0xff000000u);
+            C3D_TexEnvOpRgb(ink,GPU_TEVOP_RGB_SRC_COLOR,GPU_TEVOP_RGB_SRC_COLOR,GPU_TEVOP_RGB_SRC_COLOR);
+            C3D_TexEnvSrc(ink,C3D_RGB,GPU_CONSTANT);C3D_TexEnvFunc(ink,C3D_RGB,GPU_REPLACE);C3D_TexEnvScale(ink,C3D_RGB,GPU_TEVSCALE_1);}
         last=o?nullptr:&s;lastRetail=retail;lastEnvironment=retailEnvironment;
         } // !repeat
-        const bool menuEnvironment=s.menuReflection&&s.menuReflection!=3;
-        if(menuEnvironment)environmentUvNow(transform,s.reflectionUv);
+        C3D_BoolUnifSet(GPU_VERTEX_SHADER,projectedWaterLoc_,s.menuReflection==11||s.menuReflection==22);
+        if(s.menuReflection==11||s.menuReflection==22){
+            // Undo display tilt, map clip [-w,w] to GX texture [0,w],
+            // apply the authored SRT, then flip texture T into PICA V.
+            // envRow uniforms are exclusive with normal-based EnvCamera.
+            float rows[3][4];const float* uv=s.reflectionUv;
+            for(unsigned c=0;c<4;++c){
+                const float q=projection_.r[3].c[3-c];
+                const float u=.5f*(horizontalSign_*projection_.r[1].c[3-c]+q);
+                const float t=.5f*(-projection_.r[0].c[3-c]+q);
+                rows[0][c]=uv[0]*u+uv[1]*t+uv[2]*q;
+                rows[1][c]=q-(uv[3]*u+uv[4]*t+uv[5]*q);
+                rows[2][c]=q;
+            }
+            for(unsigned r=0;r<3;++r)C3D_FVUnifSet(GPU_VERTEX_SHADER,envRowLoc_[r],rows[r][0],rows[r][1],rows[r][2],rows[r][3]);
+            // 3DS water uses the authored flat mesh and scrolling textures.
+            // No CPU tessellation or indirect displacement: source UV1 holds
+            // texture coordinates, not sampled texel offsets.
+            C3D_FVUnifSet(GPU_VERTEX_SHADER,envParamLoc_,0,0,0,0);
+        }
+        const bool primaryEnvironment=s.lighting&retail::PrimaryEnvironment;
+        const bool menuEnvironment=!model.fixedLighting&&(primaryEnvironment||(s.menuReflection&&s.menuReflection!=3&&s.menuReflection!=7&&s.menuReflection!=11&&s.menuReflection!=12&&s.menuReflection!=13&&s.menuReflection!=14&&s.menuReflection!=15&&s.menuReflection!=19&&s.menuReflection!=21&&s.menuReflection!=22&&
+            !((s.menuReflection==10||s.menuReflection==20)&&(s.reflectionConstant&512))));
+        if(menuEnvironment){
+            float animatedUv[6];
+            if((s.menuReflection==17||primaryEnvironment)&&uv){
+                animatedEnvironment(s.reflectionUv,uv+(primaryEnvironment?0:6),animatedUv);
+                environmentUvNow(transform,animatedUv,false);
+            }else environmentUvNow(transform,s.reflectionUv,s.menuReflection==8);
+            C3D_BoolUnifSet(GPU_VERTEX_SHADER,environmentPrimaryLoc_,primaryEnvironment);
+        }
         if(parts){
             const bool environment=(s.flags&(1u<<25))&&((s.flags>>12)&3)==3&&rigid_->stride>=21;
             for(size_t n=0;n<parts->size();++n){
@@ -897,7 +1337,8 @@ void Renderer::drawNow(const Model& model,const Vertex* vertices,const C3D_Mtx& 
                 for(unsigned row=0;row<3;++row)for(unsigned col=0;col<4;++col)bone.r[row].c[3-col]=m[row*4+col];
                 C3D_Mtx local,partView;Mtx_Multiply(&local,&transform,&bone);Mtx_Multiply(&partView,&view_,&local);
                 C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER,modelViewLoc_,&partView);
-                if(retailEnvironment)this->retailEnvironment(partView);
+                if(retailEnvironment||menuEnvironment)this->retailEnvironment(partView);
+                else if(retail&&!model.fixedLighting)normalMatrixNow(partView);
                 if(environment){
                     for(unsigned row=0;row<3;++row)C3D_FVUnifSet(GPU_VERTEX_SHADER,envRowLoc_[row],m[12+row*3],m[13+row*3],m[14+row*3],0);
                     C3D_FVUnifSet(GPU_VERTEX_SHADER,envParamLoc_,std::cos(rigid_->environmentYaw),std::sin(rigid_->environmentYaw),1,0);
@@ -910,6 +1351,7 @@ void Renderer::drawNow(const Model& model,const Vertex* vertices,const C3D_Mtx& 
                 C3D_FVUnifSet(GPU_VERTEX_SHADER,envParamLoc_,1,0,0,0);
                 C3D_BoolUnifSet(GPU_VERTEX_SHADER,environmentMappedLoc_,false);
             }
+            if(menuEnvironment)clearEnvironmentUvNow();
             pendingEnd=retail;
             continue;
         }
@@ -922,6 +1364,9 @@ void Renderer::drawNow(const Model& model,const Vertex* vertices,const C3D_Mtx& 
         pendingEnd=retail;
     }
     if(pendingEnd)retailEndSubmesh();
+    sceneDepthMap(projection_);
+    C3D_BoolUnifSet(GPU_VERTEX_SHADER,projectedWaterLoc_,false);
+    C3D_BoolUnifSet(GPU_VERTEX_SHADER,environmentTexture2Loc_,false);
     // Later draws (sprites, sparks, other models) expect identity UV rows/tint.
     resetMaterialUniforms();
     if(skinPalette_)C3D_BoolUnifSet(GPU_VERTEX_SHADER,skinnedLoc_,false);
@@ -930,9 +1375,13 @@ void Renderer::drawNow(const Model& model,const Vertex* vertices,const C3D_Mtx& 
         C3D_BoolUnifSet(GPU_VERTEX_SHADER,skinnedNormalsLoc_,false);
     }
 }
+void Renderer::setMaterialCullNow(GPU_CULLMODE mode){
+    C3D_CullFace(cameraCull(mode,view_));
+}
 void Renderer::shadowVolumesNow(const ShadowVolume* volumes,unsigned count,float darkness){
     flushSprites();
-    C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER,projectionLoc_,&projection_);
+    sceneDepthMap(projection_);
+    uploadProjection(projectionLoc_,projection_);
     resetMaterialUniforms();
     for(int stage=0;stage<6;++stage)C3D_TexEnvInit(C3D_GetTexEnv(stage));
     const uint32_t shade=uint32_t(std::round(std::clamp(darkness,0.f,1.f)*255.f));
@@ -941,7 +1390,7 @@ void Renderer::shadowVolumesNow(const ShadowVolume* volumes,unsigned count,float
     C3D_FVUnifSet(GPU_VERTEX_SHADER,lightLoc_,1,1,1,1);C3D_FVUnifSet(GPU_VERTEX_SHADER,uvScrollLoc_,0,0,0,0);
     C3D_AlphaTest(false,GPU_ALWAYS,0);
     auto drawAll=[&](GPU_CULLMODE cull){
-        C3D_CullFace(cull);
+        C3D_CullFace(cameraCull(cull,view_));
         for(unsigned i=0;i<count;++i){
             const auto& v=volumes[i];if(!v.model||!v.model->indexCount)continue;
             C3D_Mtx mv;Mtx_Multiply(&mv,&view_,&v.transform);C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER,modelViewLoc_,&mv);
@@ -969,20 +1418,22 @@ void Renderer::shadowVolumesNow(const ShadowVolume* volumes,unsigned count,float
     screenFadeNow(1.f-float(shade)/255.f,false);
     // The fullscreen shade temporarily binds an orthographic projection.
     // Consecutive volume groups must return to this eye's perspective.
-    C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER,projectionLoc_,&projection_);
+    uploadProjection(projectionLoc_,projection_);
+    sceneDepthMap(projection_);
     C3D_StencilTest(false,GPU_ALWAYS,0,0xff,0);
     C3D_StencilOp(GPU_STENCIL_KEEP,GPU_STENCIL_KEEP,GPU_STENCIL_KEEP);
     C3D_DepthTest(true,GPU_GEQUAL,GPU_WRITE_ALL);
     C3D_AlphaBlend(GPU_BLEND_ADD,GPU_BLEND_ADD,GPU_SRC_ALPHA,GPU_ONE_MINUS_SRC_ALPHA,GPU_ONE,GPU_ONE_MINUS_SRC_ALPHA);
 }
-void Renderer::environmentUvNow(const C3D_Mtx& transform,const float (&uv)[6]){
+void Renderer::environmentUvNow(const C3D_Mtx& transform,const float (&uv)[6],bool texture2){
     // GX EnvCamera: normalize(view-space normal) -> (0.5+0.5x, 0.5-0.5y) in
     // GX texture space, then the material SRT. The shader yields that point in
     // this renderer's V-up convention (v=1-t); convert the SRT rows to match.
     C3D_Mtx mv;Mtx_Multiply(&mv,&view_,&transform);
-    for(unsigned row=0;row<3;++row)C3D_FVUnifSet(GPU_VERTEX_SHADER,envRowLoc_[row],mv.r[row].x,mv.r[row].y,mv.r[row].z,0);
+    normalMatrixNow(mv,true);
     C3D_FVUnifSet(GPU_VERTEX_SHADER,envParamLoc_,1,0,1,0);
     C3D_BoolUnifSet(GPU_VERTEX_SHADER,environmentMappedLoc_,true);
+    C3D_BoolUnifSet(GPU_VERTEX_SHADER,environmentTexture2Loc_,texture2);
     uv1TransformNow(uv);
 }
 void Renderer::uv1TransformNow(const float (&uv)[6]){
@@ -992,13 +1443,18 @@ void Renderer::uv1TransformNow(const float (&uv)[6]){
     C3D_FVUnifSet(GPU_VERTEX_SHADER,uv1RowLoc_[1],-c,d,0,1-d-ty);
 }
 void Renderer::clearEnvironmentUvNow(){
+    C3D_BoolUnifSet(GPU_VERTEX_SHADER,projectedWaterLoc_,false);
     C3D_BoolUnifSet(GPU_VERTEX_SHADER,environmentMappedLoc_,false);
+    C3D_BoolUnifSet(GPU_VERTEX_SHADER,environmentTexture2Loc_,false);
+    C3D_BoolUnifSet(GPU_VERTEX_SHADER,environmentPrimaryLoc_,false);
     for(unsigned row=0;row<3;++row)C3D_FVUnifSet(GPU_VERTEX_SHADER,envRowLoc_[row],row==0,row==1,row==2,0);
     C3D_FVUnifSet(GPU_VERTEX_SHADER,envParamLoc_,1,0,0,0);
     C3D_FVUnifSet(GPU_VERTEX_SHADER,uv1RowLoc_[0],1,0,0,0);C3D_FVUnifSet(GPU_VERTEX_SHADER,uv1RowLoc_[1],0,1,0,0);
 }
 void Renderer::drawSparksNow(const SparkSpec* specs,unsigned specCount,const Spark* sparks,unsigned sparkCount,const Texture* textures){
     flushSprites();
+    uploadProjection(projectionLoc_,projection_);
+    sceneDepthMap(projection_);
     const Vec3 right{view_.r[0].x,view_.r[0].y,view_.r[0].z},up{view_.r[1].x,view_.r[1].y,view_.r[1].z};
     const Vec3 viewForward{view_.r[2].x,view_.r[2].y,view_.r[2].z};
     C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER,modelViewLoc_,&view_);
@@ -1011,7 +1467,7 @@ void Renderer::drawSparksNow(const SparkSpec* specs,unsigned specCount,const Spa
     // Every quad is written first and flushed once; binds and draws follow in
     // the same order as when each particle flushed its own quad.
     unsigned offset=0;
-    for(unsigned pass=eye_?1:0;pass<2;++pass){offset=0;
+    for(unsigned pass=(eye_)?1:0;pass<2;++pass){offset=0;
     for(unsigned id=0;id<specCount;++id){
         const auto& s=specs[id];if(!textures[s.texture].ready)continue;
         if(pass){
@@ -1081,6 +1537,7 @@ bool Renderer::projectTop(Vec3 p,float& x,float& y,float& viewZ) const{
     x=(rx*d-b*ry)/det;y=(a*ry-c*rx)/det;
     return true;
 }
+
 namespace {
 GPU_TEVSRC tevSource(ef::Src s){
     switch(s){
@@ -1137,7 +1594,7 @@ GPU_TESTFUNC depthTest(u8 gx){
     return map[gx&7];
 }
 }
-void Renderer::updateEffectState(RaceEffects& effects){
+void Renderer::updateEffectState(const RaceEffects& effects){
     EffectDrawState& state=*effectDraw_;
     auto& system=effects.system();
     if(state.owner==&effects&&state.resources==system.resources.size()&&state.sizes.size()==effects.textures.size())return;
@@ -1154,7 +1611,12 @@ void Renderer::buildEffectList(RaceEffects& effects,const C3D_Mtx& viewMatrix,ef
     ef::Mtx34 view;
     for(int row=0;row<3;++row)for(int col=0;col<4;++col)view.m[row][col]=viewMatrix.r[row].c[3-col];
     list.clear();
-    ef::buildDrawList(effects.system(),state.materials,state.sizes.data(),uint32_t(state.sizes.size()),view,list,kEffectVertices);
+    // Keep the accepted dual-LCD ceremony path intact. Ordinary race effects
+    // use the centre camera's conservative stereo frustum in eye coordinates.
+    float rows[16];for(unsigned r=0;r<4;++r)for(unsigned c=0;c<4;++c)rows[r*4+c]=cullProjection_.r[r].c[3-c];
+    const ClipFrustum frustum(rows);
+    ef::buildDrawList(effects.system(),state.materials,state.sizes.data(),uint32_t(state.sizes.size()),view,list,kEffectVertices,
+        &frustum);
 }
 // The immediate path; recorded frames build the list in drawEffects (render_thread.cpp).
 void Renderer::drawEffectsImmediate(RaceEffects& effects,const Texture* textures){
@@ -1162,14 +1624,23 @@ void Renderer::drawEffectsImmediate(RaceEffects& effects,const Texture* textures
     buildEffectList(effects,view_,effectDraw_->list);
     effectListNow(effects,effectDraw_->list,textures);
 }
+
+
+
+
+
 void Renderer::effectListNow(const RaceEffects& effects,const ef::DrawList& list,const Texture* textures){
+    // Award world and driving banks can coexist in one recorded frame.
+    updateEffectState(effects);
     EffectDrawState& state=*effectDraw_;
+    if(state.generation!=effects.generation()){state.generation=effects.generation();state.diagnosticMask=0;}
     // Submit only complete triangles within the existing 8192-vertex allocation.
     const size_t vertexCount=ef::triangleVertexCount(list.vertices.size(),kEffectVertices);
     if(!vertexCount)return;
     flushSprites();
-    // Both eyes draw the list built from the centre camera; the left eye uploads it.
-    if(!eye_){
+    // Both eyes and the intro's lower view reuse the centre camera list;
+    // only its first top pass writes buffers that the GPU will read.
+    if(!eye_&&true){
     std::memcpy(effectVertices_,list.vertices.data(),vertexCount*sizeof(ef::DrawVertex));
     flushGpuData(effectVertices_,vertexCount*sizeof(ef::DrawVertex));
     // Lookup texels in index order are already in tiled order (8x8 Morton tiles).
@@ -1181,7 +1652,8 @@ void Renderer::effectListNow(const RaceEffects& effects,const ef::DrawList& list
     C3D_TexFlush(&effectLookup_);
     }
     C3D_BindProgram(&effectProgram_);
-    C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER,effectProjectionLoc_,&projection_);
+    uploadProjection(effectProjectionLoc_,projection_);
+    sceneDepthMap(projection_);
     C3D_AttrInfo* attr=C3D_GetAttrInfo();AttrInfo_Init(attr);
     static_assert(sizeof(ef::DrawVertex)==44,"position 3f, unit 0 3f, units 1 and 2 4f, colour 4ub");
     AttrInfo_AddLoader(attr,0,GPU_FLOAT,3);AttrInfo_AddLoader(attr,1,GPU_FLOAT,3);AttrInfo_AddLoader(attr,2,GPU_FLOAT,4);AttrInfo_AddLoader(attr,3,GPU_UNSIGNED_BYTE,4);
@@ -1211,6 +1683,14 @@ void Renderer::effectListNow(const RaceEffects& effects,const ef::DrawList& list
                 g=&projected;
             }
             C3D_TexBind(u,g);
+        }
+        constexpr const char* diagnosed[]={"rk_itemBox","rk_bananaSmk","rk_miniTurbo","rk_spinHalfL","rk_spinHalfR","rk_spinL","rk_spinR","rk_driftSpark1LB_Spark00","rk_driftSpark1LB_Spark01","rk_driftSpark1RB_Spark00","rk_driftSpark1RB_Spark01","rk_driftSpark1CB_Spark00","rk_driftSpark1CB_Spark01"};
+        for(unsigned i=0;i<std::size(diagnosed);++i)if(!std::strcmp(b.res->name,diagnosed[i])&&!(state.diagnosticMask&(1u<<i))){
+            state.diagnosticMask|=1u<<i;
+            if(FILE* log=std::fopen("sdmc:/3ds/mkw-3ds/effects-state.txt","a")){
+                std::fprintf(log,"draw generation=%u root=%s vertices=%lu missingTexture=%u linear=%lu\n",effects.generation(),b.res->name,(unsigned long)count,missing,(unsigned long)linearSpaceFree());
+                std::fclose(log);
+            }
         }
         if(missing)continue;
         int rgbBuffer=0,alphaBuffer=0;
@@ -1242,7 +1722,7 @@ void Renderer::effectListNow(const RaceEffects& effects,const ef::DrawList& list
         else C3D_AlphaTest(true,alphaTest(d.acmpComp1),b.alphaRef1);
         // GX front faces wind clockwise here, as for models (GX_CULL_BACK keeps them under
         // GPU_CULL_FRONT_CCW): GX_CULL_FRONT (1) is GPU_CULL_BACK_CCW, GX_CULL_BACK (2) the other.
-        C3D_CullFace(b.cull==1?GPU_CULL_BACK_CCW:b.cull==2?GPU_CULL_FRONT_CCW:GPU_CULL_NONE);
+        C3D_CullFace(cameraCull(b.cull==1?GPU_CULL_BACK_CCW:b.cull==2?GPU_CULL_FRONT_CCW:GPU_CULL_NONE,view_));
         C3D_DrawArrays(GPU_TRIANGLES,int(b.first),int(count));
         stats_.triangles+=count/3;++stats_.drawCalls;
     }
@@ -1257,7 +1737,7 @@ void Renderer::effectListNow(const RaceEffects& effects,const ef::DrawList& list
 }
 Vertex* Renderer::reserveOverlay(int count){
     if(count<=0 || count>kOverlayCapacity-overlayCount_)std::abort();
-    Vertex* vertices=overlay_+overlayCount_;
+    Vertex* vertices=overlay_+(bottomPass_?kOverlayCapacity:0)+overlayCount_;
     overlayCount_+=count;
     return vertices;
 }
@@ -1480,22 +1960,82 @@ void Renderer::textNow(const char* text,float x,float y,float size,uint32_t rgba
 }
 // Every modified vertex/texture range is explicitly flushed by its writer.
 // Citro3D may flush the command list without redundantly flushing the LINEAR heap.
+bool Renderer::configureStadiumScreen(bool enabled){
+    if(enabled&&stadiumTex_[0].data)return true;
+    waitForGpu();
+    if(!enabled){freeStadiumScreen();return true;}
+    // Allocate capture/composite scratch at scene load, never at first visibility.
+    if(!initBloom())return false;
+    for(unsigned i=0;i<2;++i){
+        auto& t=stadiumTex_[i];
+        if(!C3D_TexInitVRAM(&t,stadium::TextureWidth,stadium::TextureHeight,GPU_RGBA8)||
+           !(stadiumTarget_[i]=C3D_RenderTargetCreateFromTex(&t,GPU_TEXFACE_2D,0,-1))){freeStadiumScreen();return false;}
+        C3D_TexSetFilter(&t,GPU_LINEAR,GPU_LINEAR);C3D_TexSetWrap(&t,GPU_CLAMP_TO_EDGE,GPU_CLAMP_TO_EDGE);
+        C3D_RenderTargetClear(stadiumTarget_[i],C3D_CLEAR_COLOR,0x000000FF,0);
+    }
+    return true;
+}
+void Renderer::freeStadiumScreen(){
+    for(auto*& target:stadiumTarget_){if(target)C3D_RenderTargetDelete(target);target=nullptr;}
+    for(auto& t:stadiumTex_){if(t.data)C3D_TexDelete(&t);t={};}
+    stadiumRead_=0;
+    stadiumRequested_=stadiumFrame_=stadiumPending_=false;stadiumVisible_=true;stadiumScreens_.clear();
+    stadiumRenderFrames_=0;stadiumCaptureFrame_=false;
+}
+void Renderer::captureStadiumScreenNow(){
+    stadiumFrame_=false;
+    if(eye_||!sceneTarget_)return;
+    // Retail WLscreenGC copies the scene EFB before HUD. Keep that ordering
+    // and the existing half-render-frame/visible-screen policy. Rendering a
+    // crop directly into the next native target avoids LCD cache invalidation,
+    // CPU pixel conversion, a synchronous readback and all captured UI.
+    flushSprites();
+    auto replace=[](){
+        C3D_TexEnvBufUpdate(C3D_Both,0);
+        for(unsigned i=0;i<6;++i)C3D_TexEnvInit(C3D_GetTexEnv(i));
+        auto* e=C3D_GetTexEnv(0);C3D_TexEnvSrc(e,C3D_Both,GPU_TEXTURE0);
+        C3D_TexEnvFunc(e,C3D_Both,GPU_REPLACE);
+        C3D_AlphaBlend(GPU_BLEND_ADD,GPU_BLEND_ADD,GPU_ONE,GPU_ZERO,GPU_ONE,GPU_ZERO);
+    };
+    bloomPass(stadiumTarget_[stadiumRead_^1],stadium::CaptureWidth,stadium::CaptureHeight);
+    replace();
+    constexpr float cropY=184.f*10.f/19.f;
+    bloomQuad(sceneTex_,stadium::CaptureWidth,stadium::CaptureHeight,
+              stadium::CaptureWidth,stadium::CaptureHeight,
+              float(stadium::CaptureWidth)-400.f+stadium::CaptureX,
+              float(stadium::CaptureHeight)-240.f+cropY);
+    C3D_TexBind(0,nullptr);
+    stadiumPending_=true; // both eyes still sample the previous complete image
+    if(!bloomFrame_){
+        bloomPass(topTarget(),400,240);replace();
+        bloomQuad(sceneTex_,400,240,400,240,0,0);
+        C3D_TexBind(0,nullptr);
+        C3D_AlphaBlend(GPU_BLEND_ADD,GPU_BLEND_ADD,GPU_SRC_ALPHA,GPU_ONE_MINUS_SRC_ALPHA,GPU_ONE,GPU_ONE_MINUS_SRC_ALPHA);
+        uploadProjection(projectionLoc_,projection_);
+        spriteStateReady_=false;
+    }
+}
+
 void Renderer::requestBloomNow(const CourseBloom& settings){
     bloomRequested_=settings.enabled();bloomSettings_=&settings;
 }
 bool Renderer::initBloomTargets(){
     if(sceneTarget_)return true;
     if(bloomFailed_)return false;
-    // 240x400 scene in a 256x512 VRAM texture; 60x100 bright/blur buffers.
+    // Portrait targets: full 64x128 near and 32x64 far bloom textures.
+    // The scene still occupies its native 240x400 region in 256x512.
     bool ok=C3D_TexInitVRAM(&sceneTex_,256,512,GPU_RGBA8)&&
         (sceneTarget_=C3D_RenderTargetCreateFromTex(&sceneTex_,GPU_TEXFACE_2D,0,GPU_RB_DEPTH24_STENCIL8))!=nullptr;
-    for(unsigned i=0;ok&&i<3;++i)
-        ok=C3D_TexInitVRAM(&bloomTex_[i],64,128,GPU_RGBA8)&&(bloomTarget_[i]=C3D_RenderTargetCreateFromTex(&bloomTex_[i],GPU_TEXFACE_2D,0,-1))!=nullptr;
+    for(unsigned i=0;ok&&i<std::size(bloomTex_);++i){
+        const unsigned width=i>=2?BloomFarWidth:BloomNearWidth,height=i>=2?BloomFarHeight:BloomNearHeight;
+        ok=C3D_TexInitVRAM(&bloomTex_[i],height,width,GPU_RGBA8)&&(bloomTarget_[i]=C3D_RenderTargetCreateFromTex(&bloomTex_[i],GPU_TEXFACE_2D,0,-1))!=nullptr;
+    }
     if(!ok){freeBloom();bloomFailed_=true;return false;}
-    for(auto* t:{&sceneTex_,&bloomTex_[0],&bloomTex_[1],&bloomTex_[2]}){C3D_TexSetFilter(t,GPU_LINEAR,GPU_LINEAR);C3D_TexSetWrap(t,GPU_CLAMP_TO_EDGE,GPU_CLAMP_TO_EDGE);}
+    for(auto* t:{&sceneTex_,&bloomTex_[0],&bloomTex_[1],&bloomTex_[2],&bloomTex_[3]}){C3D_TexSetFilter(t,GPU_LINEAR,GPU_LINEAR);C3D_TexSetWrap(t,GPU_CLAMP_TO_EDGE,GPU_CLAMP_TO_EDGE);}
     return true;
 }
 bool Renderer::initBloom(){
+    static_assert(kBloomVertices>=6*BloomFullQuads);
     if(!initBloomTargets())return false;
     if(bloomVertices_)return true;
     // The quad vertices are LINEAR: allocated with the first bloom request,
@@ -1523,7 +2063,7 @@ void Renderer::bloomPass(C3D_RenderTarget* target,unsigned width,unsigned height
     C3D_FVUnifSet(GPU_VERTEX_SHADER,uvScrollLoc_,0,0,0,0);
     C3D_CullFace(GPU_CULL_NONE);C3D_AlphaTest(false,GPU_ALWAYS,0);C3D_DepthTest(false,GPU_ALWAYS,GPU_WRITE_COLOR);
 }
-void Renderer::bloomQuad(const C3D_Tex& source,unsigned sourceWidth,unsigned sourceHeight,float width,float height,float du,float dv,unsigned secondWidth,unsigned secondHeight){
+void Renderer::bloomQuad(const C3D_Tex& source,unsigned sourceWidth,unsigned sourceHeight,float width,float height,float du,float dv,unsigned secondWidth,unsigned secondHeight,const C3D_Tex* secondSource){
     // A landscape point (X,Y) of a WxH region lies at window (H-Y, W-X) of its
     // portrait target; texture-backed targets store window (x,y) at texel (x,y).
     if(bloomCount_+6>kBloomVertices)return;
@@ -1536,8 +2076,8 @@ void Renderer::bloomQuad(const C3D_Tex& source,unsigned sourceWidth,unsigned sou
         quad[i]={{corners[i][0],corners[i][1],0},{0,0,1},{0,0},{0,0},{255,255,255,255}};
         uv(corners[i][0],corners[i][1],quad[i].uv);
         if(secondWidth){
-            quad[i].uv1[0]=(float(secondHeight)-corners[i][1]*float(secondHeight)/height)/tw;
-            quad[i].uv1[1]=(float(secondWidth)-corners[i][0]*float(secondWidth)/width)/th;
+            quad[i].uv1[0]=(float(secondHeight)-corners[i][1]*float(secondHeight)/height)/float(secondSource?secondSource->width:source.width);
+            quad[i].uv1[1]=(float(secondWidth)-corners[i][0]*float(secondWidth)/width)/float(secondSource?secondSource->height:source.height);
         }
     }
     // Each frame repeats the same quads in the same slots: rewrite (and flush)
@@ -1553,20 +2093,37 @@ void Renderer::applyBloomNow(){
     auto pica=[](uint32_t rgba){return ((rgba>>24)&255)|((rgba>>8)&0xff00)|((rgba<<8)&0xff0000)|((rgba<<24)&0xff000000);};
     auto env=[](){C3D_TexEnvBufUpdate(C3D_Both,0);for(int i=0;i<6;++i)C3D_TexEnvInit(C3D_GetTexEnv(i));return C3D_GetTexEnv(0);};
     auto blend=[](bool add){C3D_AlphaBlend(GPU_BLEND_ADD,GPU_BLEND_ADD,GPU_ONE,add?GPU_ONE:GPU_ZERO,GPU_ONE,add?GPU_ONE:GPU_ZERO);};
-    // USA EGG threshold filter: subtract the threshold constant, double with
-    // scene alpha, then modulate by the original scene. Tint belongs to the
-    // final composite, so coloured light can spread before being tinted.
-    bloomPass(bloomTarget_[0],100,60);
-    auto* e0=env();C3D_TexEnvColor(e0,pica(bloomThresholdColor(settings)));
+    // Retail DrawPathBloom captures GX IA8 before thresholding (USA
+    // 8021cdd0), then colours that intensity mask with the full scene.
+    // GX copy intensity is .257 R + .504 G + .098 B + 16/255.
+    // Reuse the near target before its blur pass; no extra texture allocation.
+    bloomPass(bloomTarget_[1],BloomNearWidth,BloomNearHeight);
+    auto* e0=env();
+    const GPU_TEVOP_RGB channels[]={GPU_TEVOP_RGB_SRC_R,GPU_TEVOP_RGB_SRC_G,GPU_TEVOP_RGB_SRC_B};
+    const unsigned coefficients[]={66,128,25}; // 219/255 luma range, plus 16/255 pedestal.
+    for(unsigned i=0;i<3;++i){
+        auto* e=C3D_GetTexEnv(i);C3D_TexEnvColor(e,coefficients[i]*0x01010101u);
+        C3D_TexEnvSrc(e,C3D_RGB,GPU_TEXTURE0,GPU_CONSTANT,GPU_PREVIOUS);
+        C3D_TexEnvOpRgb(e,channels[i],GPU_TEVOP_RGB_SRC_COLOR,GPU_TEVOP_RGB_SRC_COLOR);
+        C3D_TexEnvFunc(e,C3D_RGB,i?GPU_MULTIPLY_ADD:GPU_MODULATE);
+        C3D_TexEnvSrc(e,C3D_Alpha,i?GPU_PREVIOUS:GPU_TEXTURE0);C3D_TexEnvFunc(e,C3D_Alpha,GPU_REPLACE);
+    }
+    auto* e3=C3D_GetTexEnv(3);C3D_TexEnvColor(e3,0x10101010u);
+    C3D_TexEnvSrc(e3,C3D_RGB,GPU_PREVIOUS,GPU_CONSTANT);C3D_TexEnvFunc(e3,C3D_RGB,GPU_ADD);
+    auto* e4=C3D_GetTexEnv(4);C3D_TexEnvColor(e4,0x40404040u);
+    C3D_TexEnvSrc(e4,C3D_Both,GPU_PREVIOUS,GPU_CONSTANT);C3D_TexEnvFunc(e4,C3D_Both,GPU_MODULATE);
+    constexpr float taps[4][2]={{-1,-1},{1,-1},{-1,1},{1,1}};
+    for(unsigned i=0;i<4;++i){blend(i>0);bloomQuad(sceneTex_,400,240,BloomNearWidth,BloomNearHeight,taps[i][0],taps[i][1]);}
+    bloomPass(bloomTarget_[0],BloomNearWidth,BloomNearHeight);
+    e0=env();C3D_TexEnvColor(e0,pica(bloomThresholdColor(settings)));
     C3D_TexEnvSrc(e0,C3D_Both,GPU_TEXTURE0,GPU_CONSTANT);C3D_TexEnvFunc(e0,C3D_Both,GPU_SUBTRACT);
     auto* e1=C3D_GetTexEnv(1);
     C3D_TexEnvSrc(e1,C3D_Both,GPU_PREVIOUS,GPU_TEXTURE0);C3D_TexEnvFunc(e1,C3D_Both,GPU_MODULATE);
     C3D_TexEnvOpRgb(e1,GPU_TEVOP_RGB_SRC_COLOR,GPU_TEVOP_RGB_SRC_ALPHA);C3D_TexEnvScale(e1,C3D_Both,GPU_TEVSCALE_2);
-    auto* e2=C3D_GetTexEnv(2);C3D_TexEnvSrc(e2,C3D_Both,GPU_PREVIOUS,GPU_TEXTURE0);C3D_TexEnvFunc(e2,C3D_Both,GPU_MODULATE);
-    auto* e3=C3D_GetTexEnv(3);C3D_TexEnvColor(e3,0x40404040u);
-    C3D_TexEnvSrc(e3,C3D_Both,GPU_PREVIOUS,GPU_CONSTANT);C3D_TexEnvFunc(e3,C3D_Both,GPU_MODULATE);
-    constexpr float taps[4][2]={{-1,-1},{1,-1},{-1,1},{1,1}};
-    for(unsigned i=0;i<4;++i){blend(i>0);bloomQuad(sceneTex_,400,240,100,60,taps[i][0],taps[i][1]);}
+    auto* e2=C3D_GetTexEnv(2);C3D_TexEnvSrc(e2,C3D_Both,GPU_PREVIOUS,GPU_TEXTURE1);C3D_TexEnvFunc(e2,C3D_Both,GPU_MODULATE);
+    C3D_TexBind(1,&sceneTex_);blend(false);
+    bloomQuad(bloomTex_[1],BloomNearWidth,BloomNearHeight,BloomNearWidth,BloomNearHeight,0,0,400,240,&sceneTex_);
+    C3D_TexBind(1,nullptr);
     // EGG keeps a near band (8 taps) and a far band (8 + 16 taps). Reduced
     // quality halves spatial samples, doubling their weights to keep energy.
     // Radii are original low-resolution texels, converted to the 3DS canvas.
@@ -1579,23 +2136,32 @@ void Renderer::applyBloomNow(){
         C3D_TexEnvSrc(e,C3D_Both,GPU_TEXTURE0,GPU_CONSTANT);C3D_TexEnvFunc(e,C3D_Both,GPU_MODULATE);
         if(reduction==2)C3D_TexEnvScale(e,C3D_Both,GPU_TEVSCALE_2);
         const unsigned nativeTaps=stage?16:8,count=nativeTaps/reduction;
-        // The far source is downsampled by two; sampling its parent texture
-        // directly with bilinear filtering saves an extra copy and target.
-        const float radius=settings.strength[band]*(band?2.f:1.f);
+        // Convert the authored radius to this source's texel dimensions.
+        const float radiusX=bloomTapRadius(settings.strength[band],band,sourceWidth,608);
+        const float radiusY=bloomTapRadius(settings.strength[band],band,sourceHeight,456);
         for(unsigned i=0;i<count;++i){
             const auto& tap=BloomRing[i*(16/count)];blend(preserve||i>0);
             bloomQuad(bloomTex_[source],sourceWidth,sourceHeight,float(width),float(height),
-                tap[0]*radius*(400.f/608.f),tap[1]*radius*(240.f/456.f));
+                tap[0]*radiusX,tap[1]*radiusY);
         }
     };
-    ring(0,100,60,1,100,60,0,0,false);
-    ring(1,100,60,2,50,30,1,0,false);
-    ring(1,100,60,2,50,30,1,1,true);
+    ring(0,BloomNearWidth,BloomNearHeight,1,BloomNearWidth,BloomNearHeight,0,0,false);
+    // DrawPathBloom (USA 8021d3c4..8021d41c) captures a half-size copy
+    // before the far rings. Sampling the near texture directly at displaced
+    // coordinates omits that low-pass filter and retains sharp bright specks.
+    // Keep the entire 64x32 source valid for hardware edge clamping.
+    bloomPass(bloomTarget_[3],BloomFarWidth,BloomFarHeight);
+    e0=env();C3D_TexEnvSrc(e0,C3D_Both,GPU_TEXTURE0);C3D_TexEnvFunc(e0,C3D_Both,GPU_REPLACE);
+    blend(false);bloomQuad(bloomTex_[1],BloomNearWidth,BloomNearHeight,BloomFarWidth,BloomFarHeight,0,0);
+    ring(3,BloomFarWidth,BloomFarHeight,2,BloomFarWidth,BloomFarHeight,1,0,false);
+    ring(3,BloomFarWidth,BloomFarHeight,2,BloomFarWidth,BloomFarHeight,1,1,true);
     bloomPass(topTarget(),400,240);
     e0=env();C3D_TexEnvSrc(e0,C3D_Both,GPU_TEXTURE0);C3D_TexEnvFunc(e0,C3D_Both,GPU_REPLACE);
     blend(false);bloomQuad(sceneTex_,400,240,400,240,0,0);
     // Preserve the two authored composite weights and their alpha. Retail
-    // output mode 1 selects blend preset 5: inverse-source-colour / one.
+    // output mode 1 uses screen blending: bloom * (1 - scene) + scene.
+    // GX source factor INVSRCCLR aliases INVDSTCLR in this position; PICA
+    // has distinct enums, so using ONE_MINUS_SRC_COLOR here is incorrect.
     e0=env();unsigned w0=unsigned(std::clamp(settings.weight[0],0.f,1.f)*255.f),w1=unsigned(std::clamp(settings.weight[1],0.f,1.f)*255.f);
     C3D_TexEnvColor(e0,w0*0x01010101u);C3D_TexEnvSrc(e0,C3D_Both,GPU_TEXTURE0,GPU_CONSTANT);C3D_TexEnvFunc(e0,C3D_Both,GPU_MODULATE);
     C3D_TexEnvBufUpdate(C3D_Both,1);
@@ -1605,15 +2171,16 @@ void Renderer::applyBloomNow(){
     e3=C3D_GetTexEnv(3);C3D_TexEnvColor(e3,pica(bloomDisplayTint(settings)));
     C3D_TexEnvSrc(e3,C3D_Both,GPU_PREVIOUS,GPU_CONSTANT);C3D_TexEnvFunc(e3,C3D_Both,GPU_MODULATE);
     C3D_TexBind(1,&bloomTex_[2]);
-    C3D_AlphaBlend(GPU_BLEND_ADD,GPU_BLEND_ADD,GPU_ONE_MINUS_SRC_COLOR,GPU_ONE,GPU_ONE_MINUS_SRC_ALPHA,GPU_ONE);
-    bloomQuad(bloomTex_[1],100,60,400,240,0,0,50,30);
+    C3D_AlphaBlend(GPU_BLEND_ADD,GPU_BLEND_ADD,GPU_ONE_MINUS_DST_COLOR,GPU_ONE,GPU_ONE_MINUS_DST_ALPHA,GPU_ONE);
+    bloomQuad(bloomTex_[1],BloomNearWidth,BloomNearHeight,400,240,0,0,BloomFarWidth,BloomFarHeight,&bloomTex_[2]);
     for(int unit=0;unit<3;++unit)C3D_TexBind(unit,nullptr);
     auto* env0=env();C3D_TexEnvSrc(env0,C3D_Both,GPU_TEXTURE0,GPU_PRIMARY_COLOR);C3D_TexEnvFunc(env0,C3D_Both,GPU_MODULATE);
     C3D_AlphaBlend(GPU_BLEND_ADD,GPU_BLEND_ADD,GPU_SRC_ALPHA,GPU_ONE_MINUS_SRC_ALPHA,GPU_ONE,GPU_ONE_MINUS_SRC_ALPHA);
-    C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER,projectionLoc_,&projection_);
+    uploadProjection(projectionLoc_,projection_);
     spriteStateReady_=false;
 }
 void Renderer::endEyeNow(){
+    if(stadiumFrame_)captureStadiumScreenNow();
     if(bloomFrame_)applyBloomNow();
     flushSprites();
     if(bottomPass_){
@@ -1641,7 +2208,9 @@ void Renderer::endNow(){
     endEyeNow();
     // FrameEnd transfers each eye to these (the right half only in 3D mode).
     if(execStereo_.active())for(unsigned eye=0;eye<2;++eye)presented_[eye]=gfxGetFramebuffer(GFX_TOP,eye?GFX_RIGHT:GFX_LEFT,nullptr,nullptr);
+
     stats_.commandUsage=C3D_GetCmdBufUsage();C3D_FrameEnd(GX_CMDLIST_FLUSH);
+    if(stadiumPending_){stadiumRead_^=1;stadiumPending_=false;}
 }
 bool Renderer::captureTop(uint8_t* rgb,unsigned eye){
     if(!ready_||!rgb||(eye&&!stereoShown_))return false;
@@ -1665,6 +2234,7 @@ bool Renderer::captureTop(uint8_t* rgb,unsigned eye){
     linearFree(linear);
     return true;
 }
+
 bool Renderer::captureBottom(uint8_t* rgb){
     if(!ready_||!rgb||!bottomTarget_)return false;
     drain();

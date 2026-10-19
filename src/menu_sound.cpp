@@ -153,6 +153,7 @@ void MenuSound::applyLayer(int layer, int frames) {
 }
 
 void MenuSound::startBgm(UiPage page) {
+ SoundSystem::instance().finishCarriedMusic(20);
  // MenuRSARPlayer::OnLoad (8070e130) -> SinglePlayer::PlayBGSound -> PlaySound(Section::GetSoundId).
  const std::uint32_t sound = section_ == Section::Title ? std::uint32_t(id::W_BGM_TITLE) : std::uint32_t(id::SEQ_O_SELECT);
  slot_ = slot_ == BgmSlots[0] ? BgmSlots[1] : BgmSlots[0];

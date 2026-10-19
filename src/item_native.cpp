@@ -1,10 +1,15 @@
 #include "mkw/race_items.hpp"
 #include "mkw/item_box.hpp"
+#include "mkw/item_road_follow.hpp"
+#include "mkw/item_rules.hpp"
 #ifndef MKW_ITEMS_HOST_TEST
 #include <game/field/CollisionDirector.hh>
 #include <game/field/ObjectCollisionKart.hh>
 #include <game/field/ObjectCollisionSphere.hh>
 #include <game/field/ObjectDirector.hh>
+#include <game/field/ObjectDrivableDirector.hh>
+#include <game/field/obj/ObjectTwistedWay.hh>
+#include <game/field/obj/ObjectAurora.hh>
 #include <game/field/obj/ObjectItemboxPress.hh>
 #include <game/field/RailInterpolator.hh>
 #include <game/field/RailManager.hh>
@@ -35,11 +40,22 @@ ItemSurface nativeSurface(Vec3 previous,Vec3 position,float radius){
     // Includes item-only walls/floors and moving course collision.
     const auto flags=K::Field::KCLTypeMask(KCL_TYPE_64EBDFFF);
     if(!K::Field::CollisionDirector::Instance()->checkSphereFull(radius,sourceVec(position),sourceVec(previous),flags,&info,&mask,0))return {};
-    return {nativeVec(info.tangentOff),nativeVec(info.floorNrm),nativeVec(info.wallNrm),bool(mask&(KCL_TYPE_BIT(COL_TYPE_FALL_BOUNDARY)|KCL_TYPE_BIT(COL_TYPE_SOLID_OOB))),bool(mask&KCL_TYPE_BIT(COL_TYPE_CANNON_TRIGGER))};
+    return {nativeVec(info.tangentOff),nativeVec(info.floorNrm),nativeVec(info.wallNrm),bool(mask&(KCL_TYPE_BIT(COL_TYPE_FALL_BOUNDARY)|KCL_TYPE_BIT(COL_TYPE_SOLID_OOB))),bool(mask&KCL_TYPE_BIT(COL_TYPE_CANNON_TRIGGER)),uint32_t(mask)};
 }
 // The patched Kinoko KartAction/KartMove carry the retail gates; this only forwards.
 class NativeKarts final:public ItemKarts{
 public:
+    void globalCourseItem(unsigned type)override{
+        if(auto* objects=K::Field::ObjectDirector::Instance())objects->broadcastItemCollision(int16_t(type));
+    }
+    void courseContacts(unsigned type,unsigned owner,Vec3 position,Vec3 velocity,float radius,bool held,
+            CourseItemVisitor visitor,void* context)override{
+        auto* objects=K::Field::ObjectDirector::Instance();if(!objects||!visitor)return;
+        const auto count=objects->checkItemObjectCollision(int16_t(type),uint8_t(owner),sourceVec(position),
+                sourceVec(velocity),radius,held);
+        for(unsigned i=0;i<count;++i)
+            if(!visitor(context,uint8_t(objects->reaction(i)),nativeVec(objects->hitDepth(i))))break;
+    }
     bool contactsInKartPass()const override{return true;}
     int startAction(unsigned player,int action,bool force,unsigned attacker,Vec3 hitDepth)override{
         auto* k=kart(player);auto* a=k->action();
@@ -99,12 +115,15 @@ ItemRacer snapshot(unsigned i){
     using S=K::Kart::eStatus;
     ItemRacer r{};
     r.position=nativeVec(k->pos());r.forward={pose[0,2],pose[1,2],pose[2,2]};
+    r.movementDirection=nativeVec(k->move()->vel1Dir());r.smoothedUp=nativeVec(k->move()->smoothedUp());
     r.progress=player.raceCompletion();r.speed=k->move()->speed();
     // ItemObj_checkPlayerCollision reads KartCollide's bounding radius (fn_80698).
     r.radius=k->collide()->boundingRadius();
     r.grounded=status.onBit(S::TouchingGround);
     r.unavailable=status.onBit(S::BeforeRespawn,S::InRespawn,S::TriggerRespawn,S::InCannon);
     r.finished=player.finished();
+    const auto& scenario=K::System::RaceConfig::Instance()->raceScenario();
+    r.team=scenario.teams?RaceTeam(scenario.players[i].team):RaceTeam::None;
     r.controlLocked=status.onBit(S::InAction,S::Burnout);
     r.itemLocked=status.onBit(S::BeforeRespawn,S::InAction,S::TriggerRespawn,S::CannonStart,S::InCannon)||
         status.onBit(static_cast<S>(72),static_cast<S>(82),static_cast<S>(83),static_cast<S>(89));
@@ -122,6 +141,7 @@ ItemRacer snapshot(unsigned i){
     r.shellAcquireUnavailable=r.shellTargetUnavailable||bit(40)||bit(82)||bit(89);
     r.shellTargetProtected=r.shellAcquireUnavailable||bit(4)||bit(32)||bit(35)||bit(36)||bit(63)||bit(79)||bit(91);
     r.mushroomBoost=status.onBit(S::MushroomBoost);
+    r.inkCleaningBoost=k->move()->boostActive(K::Kart::KartBoost::Type::MushroomAndBoostPanel);
     r.trickRotating=status.onBit(S::ZipperTrick,S::TrickRot);
     r.damageAction=int8_t(k->action()->currentAction());r.zipperStick=status.onBit(S::ZipperStick);
     // KartAction::start's respawn family, read for item eligibility; the kart applies the
@@ -149,16 +169,60 @@ void RaceItems::nativeKartBump(void* context,size_t attacker,size_t victim){
 void RaceItems::unhookNative(){
     K::Kart::KartCollide::SetItemCollisionHook(nullptr,nullptr);
     K::Kart::KartCollide::SetKartBumpHook(nullptr,nullptr);
+    K::Item::ItemDirector::ClearCoursePickupHook(this);
+    K::Item::ItemDirector::ClearCourseDropHook(this);
+}
+void RaceItems::nativeCoursePickup(void* context,Vec3 position,Vec3 velocity,uint8_t owner){
+    auto& items=*static_cast<RaceItems*>(context);
+    if(!items.active_||owner>=items.count_||owner>=12)return;
+    const auto type=ItemObjects[unsigned(ItemKind::Mushroom)].type;
+    // GenerateItemDirect (USA80791120) declines when its original type pool
+    // is full; a course pickup must never evict a live item to make room.
+    if(items.objectCount(type)>=itemObjectCapacity(type)||
+            std::none_of(items.actors_.begin(),items.actors_.end(),[](const ItemActor& a){return !a.active;}))return;
+    auto& a=items.spawn(owner,ItemKind::Mushroom,false,&position);
+    // Direct generation starts at .7 (808a0810). Its scatter initializer
+    // 8079df68 adds35 along world up, then the caller adds the authored
+    // lateral velocity. Damage-ejected inventory instead starts at .05.
+    a.velocity=velocity+Vec3{0,35,0};a.scattered=true;a.up={0,1,0};
+    a.yaw=std::atan2(velocity.x,velocity.z);
+    a.scale=.7f;a.radius=33.f*a.scale;a.terrainRadius=27.f*a.scale;a.ownerImmunity=7;
+}
+namespace {
+float roadBoxAngle(const K::Field::ObjectDrivable& road,float z){
+    const auto* race=K::System::RaceManager::Instance();
+    const unsigned frame=race->isStageReached(K::System::RaceManager::Stage::Race)?race->timer():
+        static_cast<const K::Field::ObjectTwistedWay&>(road).introTimer();
+    const float u=-z/7500.f,lo=u-1.f,hi=u+1.f;
+    const float wave=K::EGG::Mathf::SinFIdx(((frame%120)*2.f*3.14159265358979323846f/120.f+4.f*u)*40.74366543f);
+    return .2f*hi*hi*lo*lo*wave;
+}
 }
 void RaceItems::stepMovers(){
     using Status=K::Field::RailInterpolator::Status;
+    // s_itembox updates its bound road point even while its box is respawning.
+    for(const auto& binding:roadBoxes_){
+        auto& box=boxes_[binding.box];Vec3 local=binding.local;
+        if(unsigned(binding.road->id())==0x1fe){
+            const auto sc=K::EGG::Mathf::SinCosFIdx(roadBoxAngle(*binding.road,local.z)*40.74366543f);
+            local=followTwistedItem(local,sc.first,sc.second);
+        }else{
+            const float time=float(K::System::RaceManager::Instance()->timer());
+            const float mins=(time/60.f-30.f)/60.f;
+            const float phase=2.f*3.14159265358979323846f*local.z/15000.f;
+            local.y=phase*80.f*K::EGG::Mathf::SinFIdx((phase*std::min(1.f+mins*mins,4.f)+3.14159265358979323846f*time/50.f)*40.74366543f);
+        }
+        box.position=nativeVec(binding.road->pos())+local+Vec3{0,binding.lift,0};
+    }
     for(auto& p:presses_){
         auto& box=boxes_[p.box];const auto* rail=p.object->railInterpolator();
         if(p.object->state()==0||!rail){p.taken=false;box.active=false;box.respawn=0;continue;}
         if(!box.active&&box.respawn){p.taken=true;box.respawn=0;}
         const bool revealed=unsigned(rail->curPointIdx())>=p.reveal;
-        if(revealed&&!box.active&&!p.taken){box.active=true;box.appearance=0;}
-        if(!revealed)box.active=false;
+        // Retail USA8075b6bc: a brick broken before the press cannot reveal a box.
+        const bool intact=!p.object->brickBroken();
+        if(revealed&&intact&&!box.active&&!p.taken){box.active=true;box.appearance=0;}
+        if(!revealed||!intact)box.active=false;
         box.position=nativeVec(p.object->pos());
     }
     for(auto& m:movers_)if(m.kind==ItemBoxMover::Kind::Line){
@@ -202,7 +266,7 @@ void RaceItems::stepMovers(){
 }
 void RaceItems::resetFromCourse(unsigned count,uint32_t seed){
     std::vector<ItemBox> boxes;const auto* map=K::System::CourseMap::Instance();
-    std::vector<ItemBoxMover> movers;std::vector<ItemBoxLine> lines;
+    std::vector<ItemBoxMover> movers;std::vector<ItemBoxLine> lines;std::vector<RoadBox> roadBoxes;
     for(unsigned i=0;i<map->getGeoObjCount();++i){const auto* obj=map->getGeoObj(i);if(!(obj->presenceFlag()&1))continue;
         const unsigned id=obj->id();
         if(id==0x65){
@@ -222,6 +286,16 @@ void RaceItems::resetFromCourse(unsigned count,uint32_t seed){
                 at.y-=50;
             }
             boxes.push_back(courseItemBox(at,int16_t(obj->setting(6)),i));
+            // Retail S_Itembox OnStart binds an eligible drivable surface;
+            // Update then follows that surface, not the original KMP height.
+            if(const auto* roads=K::Field::ObjectDrivableDirector::Instance())for(const auto* road:roads->objects()){
+                const unsigned rid=unsigned(road->id());Vec3 local=at-nativeVec(road->pos());
+                const bool twisted=rid==0x1fe&&std::abs(local.z)<=7500.f&&std::abs(local.x)<=2000.f;
+                const bool aurora=rid==0x204&&local.z>=0&&local.z<=15000.f&&std::abs(local.x)<=2000.f;
+                if(!twisted&&!aurora)continue;
+                if(twisted){const auto sc=K::EGG::Mathf::SinCosFIdx(roadBoxAngle(*road,local.z)*40.74366543f);local=bindTwistedItem(local,sc.first,sc.second);}
+                roadBoxes.push_back({road,local,uint16_t(boxes.size()-1),ItemBoxHeight+int16_t(obj->setting(6))});break;
+            }
         }else if(id==0xc9||id==0xee||id==0xd4){
             const unsigned path=obj->pathId();
             const auto addMover=[&](ItemBoxMover::Kind kind,unsigned start)->bool{
@@ -269,16 +343,30 @@ void RaceItems::resetFromCourse(unsigned count,uint32_t seed){
     static NativeKarts native;
     setKarts(&native);
     reset(boxes,count,seed);
-    movers_=std::move(movers);lines_=std::move(lines);presses_=std::move(presses);
+    movers_=std::move(movers);lines_=std::move(lines);presses_=std::move(presses);roadBoxes_=std::move(roadBoxes);
     for(const auto& p:presses_)boxes_[p.box].active=false;
     for(const auto& m:movers_)if(m.kind==ItemBoxMover::Kind::Line)boxes_[m.box].active=false;
     size_t kmpSize=0;const void* kmp=K::System::ResourceManager::Instance()->getFile("course.kmp",&kmpSize,K::System::ArchiveId::Course);
     loadShellRoute(kmp,kmpSize,unsigned(K::System::RaceConfig::Instance()->raceScenario().course));
     size_t oddsSize=0;const auto* odds=K::System::ResourceManager::Instance()->getFile("ItemSlot.bin",&oddsSize,K::System::ArchiveId::Core);
-    loadOdds(odds,oddsSize);
+    const unsigned itemMode=K::System::RaceConfig::Instance()->raceScenario().itemMode;
+    loadOdds(odds,oddsSize,itemMode);
+    if(itemMode==3){boxes_.clear();movers_.clear();lines_.clear();presses_.clear();}
     for(unsigned i=0;i<count_;++i){K::Item::ItemDirector::Instance()->kartItem(i).clear();(void)K::Item::ItemDirector::Instance()->kartItem(i).takeLossRequests();}
     K::Kart::KartCollide::SetItemCollisionHook(&RaceItems::nativeKartPass,this);
     K::Kart::KartCollide::SetKartBumpHook(&RaceItems::nativeKartBump,this);
+    K::Item::ItemDirector::SetCoursePickupHook([](void* context,const K::EGG::Vector3f& position,
+            const K::EGG::Vector3f& velocity,K::u8 owner){
+        RaceItems::nativeCoursePickup(context,nativeVec(position),nativeVec(velocity),uint8_t(owner));
+    },this);
+    K::Item::ItemDirector::SetCourseDropHook([](void* context,K::u16 slot,
+            const K::EGG::Vector3f& position,const K::EGG::Vector3f& velocity,K::u8 owner){
+        auto& items=*static_cast<RaceItems*>(context);
+        // DecideItem advances NextLimited even for a zero-weight row.
+        const uint32_t word=K::System::RaceManager::Instance()->random().getU32();
+        const bool tt=static_cast<unsigned>(K::System::RaceConfig::Instance()->raceScenario().gameMode)==2;
+        items.createCourseDrop(slot,nativeVec(position),nativeVec(velocity),uint8_t(owner),word,tt);
+    },this);
 }
 void RaceItems::snapshotNative(unsigned count,std::array<ItemRacer,MaxRacers>& out) const{
     for(unsigned i=0;i<std::min(count,MaxRacers);++i)out[i]=snapshot(i);
@@ -290,6 +378,8 @@ void RaceItems::beforeStepNative(const ItemInput* inputs,unsigned count,bool act
     for(unsigned i=0;i<count_;++i)K::Item::ItemDirector::Instance()->kartItem(i).inventory().clear();
 }
 void RaceItems::afterStepNative(unsigned count){
+    // Retail Item globals read RaceManager +0x20, not the active-item clock.
+    reclaimPhase_=K::System::RaceManager::Instance()->timer()&7;nativeReclaimPhase_=true;
     std::array<ItemRacer,MaxRacers> states;snapshotNative(count,states);afterStep(states.data(),count,nativeSurface);
 }
 #else
@@ -297,5 +387,6 @@ void RaceItems::stepMovers(){}
 void RaceItems::unhookNative(){}
 void RaceItems::nativeKartPass(void*,size_t){}
 void RaceItems::nativeKartBump(void*,size_t,size_t){}
+void RaceItems::nativeCoursePickup(void*,Vec3,Vec3,uint8_t){}
 #endif
 }

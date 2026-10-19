@@ -6,7 +6,7 @@ namespace mkw {
 // Files of the scene and, per file with waves, the resident mask (empty:
 // every wave). Main thread; the archive is read only after start().
 struct ScenePlan { std::vector<u32> files; std::vector<std::vector<u8>> masks; };
-inline ScenePlan planSoundScene(const Archive& a, const SoundSystem::Scene& sc) {
+inline ScenePlan planSoundScene(const Archive& a, const SoundSystem::Scene& sc,u32 carriedSound=InvalidId) {
  ScenePlan plan;
  auto contains=[](const u32* ids,int count,u32 id){return count>0&&std::find(ids,ids+count,id)!=ids+count;};
  std::vector<u32> items;
@@ -20,6 +20,15 @@ inline ScenePlan planSoundScene(const Archive& a, const SoundSystem::Scene& sc) 
    resident[f] |= res;
   }
  }
+ // Keep just the departing BGM's sequence/stream and reached wave bank,
+ // never the preceding race's actors, course groups or engine families.
+ if(const auto* sound=a.sound(carriedSound)){
+  const auto reach=a.reach(carriedSound);
+  for(u32 f:{sound->fileId,reach.file})if(f<a.fileCount()){
+   if(!inScene[f]){inScene[f]=1;plan.files.push_back(f);}
+   resident[f]=1;
+  }
+ }
  plan.masks.resize(plan.files.size());
  if (sc.residentCount < 0 && !sc.onDemandCount && !sc.residentSoundCount) return plan;   // every wave resident
  std::vector<std::vector<u8>> byFile(a.fileCount());
@@ -28,6 +37,7 @@ inline ScenePlan planSoundScene(const Archive& a, const SoundSystem::Scene& sc) 
  std::vector<u8> pick(a.soundCount());
  for (int i = 0; i < sc.onDemandCount; ++i) if (sc.onDemandSounds[i] < pick.size()) pick[sc.onDemandSounds[i]] = 1;
  for (int i = 0; i < sc.residentSoundCount; ++i) if (sc.residentSounds[i] < pick.size()) pick[sc.residentSounds[i]] = 2;
+ if(carriedSound<pick.size())pick[carriedSound]=2;
  for (u32 id = 0; id < a.soundCount(); ++id) {
   const SoundEntry* e = a.sound(id);
   if (pick[id] == 1 || !e || e->fileId >= inScene.size() || !inScene[e->fileId]) continue;

@@ -41,6 +41,8 @@ public:
  // Drops queued jobs (they complete as cancelled) and joins the worker.
  void stop();
  bool running()const{return thread_!=nullptr;}
+ // A visible page waiting for assets takes precedence over preview work.
+ void setForeground(bool foreground);
  // Queues a job, or raises an already queued job to a higher priority.
  void submit(const std::shared_ptr<AssetJob>& job,AssetPriority priority);
  // Discards queued prefetch work and asks a running prefetch to stop at its
@@ -55,6 +57,7 @@ private:
  void loop();
  std::shared_ptr<AssetJob> next();
  Thread thread_=nullptr;
+ int backgroundPriority_=0x32,foregroundPriority_=0x2f;bool foreground_=false;
  mutable LightLock lock_;
  LightEvent wake_;
  std::array<std::deque<std::shared_ptr<AssetJob>>,4> queues_;

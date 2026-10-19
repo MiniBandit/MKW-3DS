@@ -40,6 +40,17 @@ ROOTS = ['rk_miniTurbo', 'rk_miniTurbo1T', 'rk_wheelie', 'rk_itemBox', 'rk_itemB
          # HandleFibCollision (RMCU 8056e40c): fragments on a vulnerable
          # racer, smoke on Star/Mega/Bullet. Full and remote variants.
          'rk_niseBox', 'rk_niseBoxS', 'rk_niseBoxVan', 'rk_niseBoxBiri']
+# Local bike chassis sparks: USA8068efe0..8068f388, independent of wheel chips.
+ROOTS += ['rk_driftSpark1'+side+tail for side in ('LB','RB','CB')
+          for tail in ('_Spark00','_Spark01')]
+ROOTS += ['rk_driftSpark1'+side+'1T'+tail for side in ('LB','RB','CB')
+          for tail in ('_Chip00','_Spark00','_Spark01')]
+ROOTS += ['rk_hangOnL','rk_hangOnR','rk_hangOnLTail','rk_hangOnRTail']
+# USA8057c140 invokes KartEffect::SSMTCharged (806ae924): local kart
+# sustained blue sparks and the one-shot charge trio, not drift input.
+ROOTS += ['rk_driftSpark1'+side+tail for side in ('L','R')
+          for tail in ('_Spark00','_Spark01','1T_Chip00','1T_Spark00','1T_Spark01')]
+INK_ROOTS = ['rk_gessoA_1P', 'rk_gessoB_1P', 'rk_gessoA0_1P', 'rk_gessoB0_1P', 'rk_gessoC0_1P']
 SPIN_ROOTS = ['rk_spinHalfL', 'rk_spinHalfLS', 'rk_spinL', 'rk_spinLS',
               'rk_spinHalfR', 'rk_spinHalfRS', 'rk_spinR', 'rk_spinRS']
 WATER_ROOTS = ['rk_wave', 'rk_awa', 'rk_spinWaterHalf', 'rk_spinWaterHalfS',
@@ -53,20 +64,42 @@ POWERUP_ROOTS = ['rk_star', 'rk_starS', 'rk_killerS', 'rk_killer1TS', 'rk_thunde
 # KartEffect slipstream (RMCU 0x8068abbc, 0x806972c0): drafting and the boost, S variants
 # for other racers (docs/VFX_RESEARCH.md "Slipstream").
 SLIPSTREAM_ROOTS = ['rk_slipStreamPre', 'rk_slipStreamPreS', 'rk_slipStream', 'rk_slipStreamS']
+# Ordinary remote racers use the original reduced driving roots, not eleven
+# copies of the local kart's full effects (USA constructor 8068d288/dbf4/f110).
+OPPONENT_DRIVING_ROOTS = ['rk_miniTurboS', 'rk_driftSpark1L_Spark01S', 'rk_driftSpark1R_Spark01S',
+                         'rk_driftSpark2L_Spark01S', 'rk_driftSpark2R_Spark01S',
+                         'rk_driftSpark1LB_Spark01S', 'rk_driftSpark1RB_Spark01S', 'rk_driftSpark1CB_Spark01S']
 # KartEffect smoke and dust (names from StaticR's KartEffect tables, RMCU 0x8038e24a..):
 # start-dash rear-wheel layers (rk_start0/1/2; S for other racers), the start burnout,
 # drift tyre smoke, off-road dust and landing puffs.
-SMOKE_ROOTS = ['rk_start0', 'rk_start1', 'rk_start2', 'rk_startS', 'rk_startMiss', 'rk_startMissS',
-               'rk_driftSmoke', 'rk_dirtSmokeA', 'rk_jumpSmoke', 'rk_jumpSmokeS', 'rk_jumpSmokeMini', 'rk_jumpSmokeMiniS',
+SMOKE_ROOTS = ['rk_wheelSpin0', 'rk_wheelSpin1', 'rk_wheelSpin2', 'rk_wheelSpinS', 'rk_start0', 'rk_start1', 'rk_start2', 'rk_startS', 'rk_startMiss', 'rk_startMissS',
+               'rk_driftSmoke', 'rk_brakeSmk', 'rk_dirtSmokeA', 'rk_jumpSmoke', 'rk_jumpSmokeS', 'rk_jumpSmokeMini', 'rk_jumpSmokeMiniS',
                'rk_jumpSmokeBikeL', 'rk_jumpSmokeBikeLMini', 'rk_jumpSmokeBikeS', 'rk_jumpSmokeBikeL_S', 'rk_jumpSmokeBikeS_S']
+# Per-course road materials select these instead of making them globally resident.
+SURFACE_ROOTS = ['rk_weed', 'rk_mud', 'rk_snowHDirt', 'rk_snowRoad0', 'rk_snowRoad1', 'rk_flower', 'rk_stone', 'rk_stoneTile', 'rk_stoneVolc']
+
+def surface_roots(root, course):
+    data=(root/'assets/courses'/course['key']/'course.kcl').read_bytes()
+    prism,octree=U32(data,8),U32(data,12)
+    if prism+16>octree or octree>len(data):raise ValueError('Invalid course KCL prism range')
+    variants={(U16(data,p+14)&31,(U16(data,p+14)>>5)&7) for p in range(prism+16,octree,16)}
+    roots=[]
+    if variants & {(2,3),(3,4),(4,4)} or (course['id']==19 and (23,2) in variants):roots.append('rk_weed')
+    if variants & {(3,2),(4,2),(22,7)}:roots.append('rk_mud')
+    if (4,5) in variants:roots.append('rk_snowHDirt')
+    if (0,5) in variants:roots.extend(['rk_snowRoad0','rk_snowRoad1'])
+    if (4,3) in variants:roots.append('rk_flower')
+    if variants & {(2,6),(2,7),(3,6)}:roots.append('rk_stoneTile' if course['id']==9 else 'rk_stoneVolc' if course['id']==3 else 'rk_stone')
+    return roots
+
 VERSION = 3
 NO_INDEX = 0xffffffff
 # Runtime limits (src/nw4r_ef.cpp, src/race_effects.cpp).
-MAX_EMITTERS, MAX_TEXTURES = 255, 96
-FORMS = {0: 'disc', 1: 'line', 7: 'cylinder', 8: 'sphere', 9: 'point'}
+MAX_EMITTERS, MAX_TEXTURES = 512, 160
+FORMS = {0: 'disc', 1: 'line', 5: 'cube', 7: 'cylinder', 8: 'sphere', 9: 'point'}
 PTCL_TYPES = {3: 'billboard', 4: 'directional', 5: 'stripe', 6: 'smooth stripe'}
-FIELDS = {0: 'gravity', 1: 'speed', 6: 'spin', 7: 'random'}
-TEX_FORMATS = {0: ('la4', 'I4'), 1: ('la8', 'I8'), 3: ('la8', 'IA8'), 4: ('rgb565', 'RGB565'),
+FIELDS = {0: 'gravity', 1: 'speed', 3: 'newton', 6: 'spin', 7: 'random'}
+TEX_FORMATS = {14: ('rgba8', 'CMPR'), 0: ('la4', 'I4'), 1: ('la8', 'I8'), 3: ('la8', 'IA8'), 4: ('rgb565', 'RGB565'),
                5: ('rgba8', 'RGB5A3'), 6: ('rgba8', 'RGBA8')}
 
 
@@ -214,6 +247,8 @@ def check(e, notes):
     form = emit & 0xff
     if form not in FORMS:
         raise ValueError(f'{name}: emitter form {form} is not ported')
+    if form == 5 and emit & 0x20000:
+        raise ValueError(f'{name}: uniform cube lattice is not ported')
     if d[0x84] or d[0x85] or d[0x86]:
         raise ValueError(f'{name}: LOD emission is not ported')
     ds = d[0x94:]
@@ -277,12 +312,14 @@ def check(e, notes):
                 if flag and not flag & 2:
                     raise ValueError(f'{name}: random child key without a random table')
         if kind == 7:
-            if c[1] not in FIELDS:
+            if c[1] not in FIELDS and not c[4] & 8:
                 raise ValueError(f'{name}: field {c[1]} is not ported')
             info = h['tables'][4]
             # Infos run 8 (speed) to 0x14 bytes; the runtime copies 0x1c.
             if len(info) < 8 or info[0] > 3 or info[1] > 1:
                 raise ValueError(f'{name}: field {tag} info')
+            if c[1] == 3 and len(info) < 0x18:
+                raise ValueError(f'{name}: short Newton field info')
         if kind == 2:
             info = h['tables'][4]
             if len(info) < 0x4c:
@@ -316,35 +353,43 @@ def morton(x, y):
     return m
 
 
-def write_t3x(path, im, form):
-    """A one-level Tex3DS texture (libctru Tex3DS_TextureImport layout): 8x8 tiles in
+def write_t3x(path, im, form, mipmaps=()):
+    """A Tex3DS texture retaining supplied source mip levels: 8x8 tiles in
     Morton order, image top row first, texels encoded without rounding."""
     w, h = im.size
     if w < 8 or h < 8 or w & (w - 1) or h & (h - 1) or w > 1024 or h > 1024:
         raise ValueError(f'{path.name}: {w}x{h} is not a PICA texture size')
     code, bpp = {'rgba8': (0, 4), 'rgb565': (3, 2), 'la8': (5, 2), 'la4': (9, 1)}[form]
-    px = im.tobytes()
-    data = bytearray(w * h * bpp)
-    for y in range(h):
-        for x in range(w):
-            r, g, b, a = px[(y * w + x) * 4:(y * w + x) * 4 + 4]
-            o = (((y // 8) * (w // 8) + x // 8) * 64 + morton(x % 8, y % 8)) * bpp
-            if form == 'rgba8':
-                data[o:o + 4] = bytes((a, b, g, r))
-            elif form == 'rgb565':
-                if (r & 7) != r >> 5 or (g & 3) != g >> 6 or (b & 7) != b >> 5:
-                    raise ValueError(f'{path.name}: texel is not a 565 expansion')
-                struct.pack_into('<H', data, o, (r >> 3) << 11 | (g >> 2) << 5 | b >> 3)
-            elif form == 'la8':
-                if not r == g == b:
-                    raise ValueError(f'{path.name}: grey texture with colour')
-                data[o:o + 2] = bytes((a, r))
-            else:
-                if not r == g == b or r % 17 or a % 17:
-                    raise ValueError(f'{path.name}: texel is not a 4-bit expansion')
-                data[o] = (r // 17) << 4 | a // 17
+    def encode_level(im):
+        w, h = im.size
+        px = im.tobytes()
+        data = bytearray(w * h * bpp)
+        for y in range(h):
+            for x in range(w):
+                r, g, b, a = px[(y * w + x) * 4:(y * w + x) * 4 + 4]
+                o = (((y // 8) * (w // 8) + x // 8) * 64 + morton(x % 8, y % 8)) * bpp
+                if form == 'rgba8':
+                    data[o:o + 4] = bytes((a, b, g, r))
+                elif form == 'rgb565':
+                    if (r & 7) != r >> 5 or (g & 3) != g >> 6 or (b & 7) != b >> 5:
+                        raise ValueError(f'{path.name}: texel is not a 565 expansion')
+                    struct.pack_into('<H', data, o, (r >> 3) << 11 | (g >> 2) << 5 | b >> 3)
+                elif form == 'la8':
+                    if not r == g == b:
+                        raise ValueError(f'{path.name}: grey texture with colour')
+                    data[o:o + 2] = bytes((a, r))
+                else:
+                    if not r == g == b or r % 17 or a % 17:
+                        raise ValueError(f'{path.name}: texel is not a 4-bit expansion')
+                    data[o] = (r // 17) << 4 | a // 17
+        return data
+    data = encode_level(im)
+    for level, mip in enumerate(mipmaps, 1):
+        if mip.size != (w >> level, h >> level) or min(mip.size) < 8:
+            raise ValueError('Invalid PICA mip dimensions: '+str(mip.size))
+        data.extend(encode_level(mip))
     log2 = lambda n: n.bit_length() - 1
-    head = struct.pack('<HBBB', 1, (log2(w) - 3) | (log2(h) - 3) << 3, code, 0)
+    head = struct.pack('<HBBB', 1, (log2(w) - 3) | (log2(h) - 3) << 3, code, len(mipmaps))
     head += struct.pack('<HHHHHH', w, h, 0, 0x400, 0x400, 0)
     head += struct.pack('<I', len(data) << 8)
     path.write_bytes(head + bytes(data))
@@ -357,12 +402,14 @@ def texture(reft, tindex, name, output, namespace=''):
     fmt, palfmt, colors, palsize = struct.unpack_from('>BBHI', reft, pos + 12)
     if fmt not in TEX_FORMATS:
         raise ValueError(f'texture {name}: GX format {fmt} is not mapped')
-    if reft[pos + 0x14] > 1:
-        raise ValueError(f'texture {name}: mipmaps are not cooked')
     im = decode_image(io.BytesIO(reft[pos + 32:pos + 32 + length]),
                       io.BytesIO(reft[pos + 32 + length:pos + 32 + length + palsize]),
                       ImageFormat(fmt), PaletteFormat(palfmt), colors, width, height).convert('RGBA')
     safe = 'fx_' + namespace + ''.join(ch if ch.isalnum() or ch == '_' else '_' for ch in name)
+    # REFX stores a NUL-terminated name in 32 bytes. Use the same short name
+    # for the file and table instead of letting struct.pack truncate only one.
+    if len(safe.encode('utf-8')) > 31:
+        safe = safe[:20] + '_' + hashlib.sha256(safe.encode('utf-8')).hexdigest()[:10]
     im.save(output / (safe + '.png'))
     # GX takes any size; PICA needs powers of two. The image keeps its top-left corner and
     # its last row and column repeat outward, so clamped sampling matches GX exactly once
@@ -376,7 +423,28 @@ def texture(reft, tindex, name, output, namespace=''):
         for y in range(height, ph):
             padded.paste(padded.crop((0, height - 1, pw, height)), (0, y))
         im = padded
-    write_t3x(output / (safe + '.t3x'), im, TEX_FORMATS[fmt][0])
+    mipmaps = []
+    from gclib.texture_utils import BLOCK_WIDTHS, BLOCK_HEIGHTS, BLOCK_DATA_SIZES
+    image_format = ImageFormat(fmt)
+    bw, bh, bs = BLOCK_WIDTHS[image_format], BLOCK_HEIGHTS[image_format], BLOCK_DATA_SIZES[image_format]
+    offset = 0
+    for level in range(max(1, reft[pos + 0x14])):
+        lw, lh = max(1, width >> level), max(1, height >> level)
+        size = ((lw+bw-1)//bw)*((lh+bh-1)//bh)*bs
+        if offset+size > length: raise ValueError('Truncated GX mip chain: '+name)
+        if level and min(pw >> level, ph >> level) >= 8:
+            mip = decode_image(io.BytesIO(reft[pos+32+offset:pos+32+offset+size]),
+                               io.BytesIO(reft[pos+32+length:pos+32+length+palsize]),
+                               image_format, PaletteFormat(palfmt), colors, lw, lh).convert('RGBA')
+            mw, mh = pw >> level, ph >> level
+            if (mw, mh) != mip.size:
+                padded = Image.new('RGBA', (mw, mh));padded.paste(mip, (0, 0))
+                for x in range(lw, mw): padded.paste(mip.crop((lw-1, 0, lw, lh)), (x, 0))
+                for y in range(lh, mh): padded.paste(padded.crop((0, lh-1, mw, lh)), (0, y))
+                mip = padded
+            mipmaps.append(mip)
+        offset += size
+    write_t3x(output / (safe + '.t3x'), im, TEX_FORMATS[fmt][0], mipmaps)
     return safe, width, height, TEX_FORMATS[fmt][1], pw, ph
 
 
@@ -414,40 +482,7 @@ def exhausts(root):
     (root / 'include/mkw/vehicle_exhaust.hpp').write_text('\n'.join(lines))
 
 
-def cook(root, output):
-    breff = root / 'assets/common/Effect/RKRace.breff'
-    br, reft = breff.read_bytes(), breff.with_suffix('.breft').read_bytes()
-    idx, tindex = entries(br), entries(reft)
-    order, notes, records = [], [], {}
-    namespaces = {}
-    for roots in (ROOTS, POWERUP_ROOTS, SLIPSTREAM_ROOTS, SMOKE_ROOTS, SPIN_ROOTS, WATER_ROOTS):
-        queue = list(roots)
-        while queue:
-            name = queue.pop(0)
-            if name in records or name not in idx:
-                continue
-            records[name] = Emitter(br, idx, name)
-            namespaces[name] = ''
-            order.append(name)
-            queue.extend(records[name].references())
-    # The original large drowning splash lives in the course's pocha
-    # archive, not RKRace. Keep its texture names in a separate namespace.
-    pocha = root / 'assets/courses/old_peach_gc/effect/pocha/rk_pocha.breff'
-    pb, pt = pocha.read_bytes(), pocha.with_suffix('.breft').read_bytes()
-    pi, pti = entries(pb), entries(pt)
-    queue = ['rk_pochaWater', 'rk_pochaWaterS']
-    while queue:
-        name = queue.pop(0)
-        if name in records:
-            continue
-        if name not in pi:
-            raise ValueError('Missing original pocha water emitter: '+name)
-        records[name] = Emitter(pb, pi, name)
-        namespaces[name] = 'pocha_'
-        order.append(name)
-        queue.extend(records[name].references())
-    texture_archives = {'': (reft, tindex), 'pocha_': (pt, pti)}
-    creature_sources = []  # Creature-only candidates stay in the test branch.
+def write_bank(order, records, namespaces, texture_archives, output, notes, bank_name='race-effects.bin', texture_cache=None):
     if len(order) > MAX_EMITTERS:
         raise ValueError('Too many emitters')
     for name in order:
@@ -460,18 +495,22 @@ def cook(root, output):
             return NO_INDEX
         source, index = texture_archives[namespace]
         if t not in index:
-            notes.append(f'texture {t} missing from RKRace.breft')
+            notes.append(f'texture {t} missing from effect texture archive')
             return NO_INDEX
         key = (namespace, t)
         if key not in textures:
             textures[key] = len(files)
-            files.append(texture(source, index, t, output, namespace))
+            if texture_cache is not None and key in texture_cache:
+                files.append(texture_cache[key])
+            else:
+                files.append(texture(source, index, t, output, namespace))
+                if texture_cache is not None: texture_cache[key] = files[-1]
         return textures[key]
     emitter_index = {n: i for i, n in enumerate(order)}
 
     def emitter_lookup(n):
         if n not in emitter_index:
-            notes.append(f'emitter {n} missing from RKRace.breff')
+            notes.append(f'emitter {n} missing from effect emitter bank')
         return emitter_index.get(n, NO_INDEX)
     blob = bytearray()
 
@@ -515,14 +554,159 @@ def cook(root, output):
         raise ValueError('Too many effect textures')
     head = struct.pack('<4sIIII', b'REFX', VERSION, len(order), len(files), len(blob))
     tex_table = b''.join(struct.pack('<32sHHHH', f[0].encode(), f[1], f[2], f[4], f[5]) for f in files)
-    (output / 'race-effects.bin').write_bytes(head + tex_table + b''.join(table) + bytes(blob))
+    (output / bank_name).write_bytes(head + tex_table + b''.join(table) + bytes(blob))
+    return files, len(blob)
+
+
+def cannon_attachment(root):
+    # USA806bb778: snow is attached to the Wii cannon's taru joint at firing.
+    path = root / 'build/cannon-taru.djnt'
+    subprocess.run(['node', str(root / 'build/export_joints.mjs'),
+                    str(root / 'assets/courses/boardcross_course/DonkyCannon_wii.brres'),
+                    str(path), 'DonkyCannon_wii', 'taru'], check=True, capture_output=True)
+    data = path.read_bytes()
+    if struct.unpack_from('<4s3I', data)[:3] != (b'DJNT', 1, 1):
+        raise ValueError('Unexpected cannon attachment format')
+    offset, matrix = 48, None
+    for _ in range(struct.unpack_from('<I', data, 12)[0]):
+        name = data[offset:offset+32].split(b'\0')[0].decode()
+        frames, loop = struct.unpack_from('<2I', data, offset+32)
+        offset += 40
+        if name == 'DonkyCannon_wii': matrix = struct.unpack_from('<12f', data, offset)
+        offset += frames * 48
+    if matrix is None or offset != len(data):
+        raise ValueError('Missing original cannon firing attachment')
+    (root / 'include/mkw/cannon_effect_assets.hpp').write_text(
+        '#pragma once\nnamespace mkw {\ninline constexpr float CannonSnowJoint[12]={' +
+        ','.join(format(x, '.9f')+'f' for x in matrix) + '};\n}\n')
+
+
+def cook(root, output, course_only=False):
+    breff = root / 'assets/common/Effect/RKRace.breff'
+    br, reft = breff.read_bytes(), breff.with_suffix('.breft').read_bytes()
+    idx, tindex = entries(br), entries(reft)
+    order, notes, records = [], [], {}
+    namespaces = {}
+    for roots in (ROOTS, POWERUP_ROOTS, SLIPSTREAM_ROOTS, SMOKE_ROOTS, SPIN_ROOTS, WATER_ROOTS, INK_ROOTS, OPPONENT_DRIVING_ROOTS, SURFACE_ROOTS):
+        if roots is SURFACE_ROOTS: always_common=set(order)
+        queue = list(roots)
+        while queue:
+            name = queue.pop(0)
+            if name in records or name not in idx:
+                continue
+            records[name] = Emitter(br, idx, name)
+            namespaces[name] = ''
+            order.append(name)
+            queue.extend(records[name].references())
+    # The original large drowning splash lives in the course's pocha
+    # archive, not RKRace. Keep its texture names in a separate namespace.
+    pocha = root / 'assets/courses/old_peach_gc/effect/pocha/rk_pocha.breff'
+    pb, pt = pocha.read_bytes(), pocha.with_suffix('.breft').read_bytes()
+    pi, pti = entries(pb), entries(pt)
+    queue = ['rk_pochaWater', 'rk_pochaWaterS']
+    while queue:
+        name = queue.pop(0)
+        if name in records:
+            continue
+        if name not in pi:
+            raise ValueError('Missing original pocha water emitter: '+name)
+        records[name] = Emitter(pb, pi, name)
+        namespaces[name] = 'pocha_'
+        order.append(name)
+        queue.extend(records[name].references())
+    # Penguin effects are separate course resources. Keep each texture archive
+    # explicit rather than treating every non-empty namespace as pocha.
+    texture_archives = {'': (reft, tindex), 'pocha_': (pt, pti)}
+    creature_sources = []
+    course_roots = {'pocha': ['rk_pochaWater', 'rk_pochaWaterS']}
+    for course, archive, roots in [('old_sherbet_64', 'penguin_s', ['rk_pgnSpin_s', 'rk_pgnSlider_s']),
+                           ('old_sherbet_64', 'penguin_m', ['rk_pgnSpin_m_l']),
+                           ('old_heyho_gba', 'crab', ['rk_crabHide', 'rk_crabPocha', 'rk_crab']),
+                           ('boardcross_course', 'DonkyCannon_wii', ['rk_dkCannon', 'rk_dkCannonSnw']),
+                           ('koopa_course', 'koopaBall', ['rk_koopaBallS']),
+                           ('desert_course', 'sanbo', ['rk_sanbo']),
+                           ('rainbow_course', 'StarRing', ['rk_StarRing']),
+                           ('rainbow_course', 'entry', ['rk_entry']),
+                           ('treehouse_course', 'hanachan', ['rk_hanaSmk']),
+                           ('treehouse_course', 'leaf_effect', ['rk_leaf_effect', 'rk_leaf_effectDash']),
+                           ('treehouse_course', 'karehayama', ['rk_karehayamaS', 'rk_karehayama0S']),
+                           ('treehouse_course', 'truckChimSmk', ['rk_truckChimSmkWCalc','rk_truckChimSmkW_A','rk_truckChimSmkW_B','rk_truckChimSmkW1T','rk_truckChimSmkW1TS']),
+                           ('venice_battle', 'truckChimSmkW', ['rk_truckChimSmkW_A','rk_truckChimSmkW_B','rk_truckChimSmkW1T','rk_truckChimSmkW1TS']),
+                           ('old_donkey_gc', 'DKrockGC', ['rk_DKrockGC']),
+                           ('water_course', 'Epropeller', ['rk_epropeller', 'rk_epropellerS']),
+                           ('old_koopa_gba', 'pochaYogan', ['rk_pochaYogan', 'rk_pochaYoganS']),
+                           ('volcano_course', 'VolcanoBall1', ['rk_volcTail', 'rk_volcFire_L', 'rk_volcErupt', 'rk_volcBrk']),
+                           ('factory_course', 'woodbox', ['rk_woodbox']),
+                           ('factory_course', 'Block', ['rk_block']),
+                           ('factory_course', 'Steam', ['rk_steam']),
+                           ('factory_course', 'Alarm', ['rk_alarm']),
+                           ('farm_course', 'choropu', ['rk_choropuMoko1', 'rk_choropuMoko0'])]:
+        # These four W roots share names with the race archive, but their
+        # original descriptors/curves differ. Keep the battle archive distinct.
+        alias = (lambda name: 'W_' + name) if archive == 'truckChimSmkW' else (lambda name: name)
+        course_roots[archive] = [alias(name) for name in roots]
+        effect_name = {'DonkyCannon_wii':'dkCannon', 'hanachan':'hana', 'Steam':'steam', 'Alarm':'alarm', 'choropu':'choropuMoko', 'Epropeller':'epropeller', 'VolcanoBall1':'volc', 'Block':'block'}.get(archive, archive)
+        path = root / f'assets/courses/{course}/effect/{archive}/rk_{effect_name}.breff'
+        source, pixels = path.read_bytes(), path.with_suffix('.breft').read_bytes()
+        index, pixel_index = entries(source), entries(pixels)
+        namespace = archive + '_'
+        texture_archives[namespace] = (pixels, pixel_index)
+        creature_sources.append({'path': str(path.relative_to(root)),
+                                 'sha256': hashlib.sha256(source).hexdigest(),
+                                 'breft_sha256': hashlib.sha256(pixels).hexdigest()})
+        queue = list(roots)
+        while queue:
+            name = queue.pop(0)
+            key = alias(name)
+            if key in records: continue
+            if name not in index: raise ValueError('Missing original creature emitter: ' + name)
+            emitter = Emitter(source, index, name)
+            # W's original four records have no child/postfield references. Refuse
+            # future dependencies here rather than silently resolving race names.
+            if key != name and emitter.references():
+                raise ValueError('Namespaced chimney has unexpected dependencies: ' + name)
+            records[key] = emitter
+            namespaces[key] = namespace
+            order.append(key)
+            queue.extend(emitter.references())
+    texture_cache = {}
+    # Course-only reentry must not expand the legacy aggregate resident bank.
+    # The race actually loads its course bank; package_sd reads every bank's
+    # texture dependencies, including these entry textures.
+    aggregate = [name for name in order if namespaces[name] != 'entry_']
+    files, blob_size = ([],0) if course_only else write_bank(aggregate, records, namespaces, texture_archives, output, notes, texture_cache=texture_cache)
+    from course_catalog import courses
+    profiles = []
+    header = ['#pragma once', 'namespace mkw {', 'template<class Effects> bool courseEffectRootsPresent(const Effects& effects,unsigned course){', 'switch(course){']
+    common = [name for name in order if name in always_common]
+    for course in courses():
+        folder = root / 'assets/courses' / course['key'] / 'effect'
+        roots = [name for archive, names_ in course_roots.items() if (folder/archive).is_dir() for name in names_]
+        roots += surface_roots(root,course)
+        selected = set(common); queue = list(roots)
+        while queue:
+            name = queue.pop()
+            if name in selected: continue
+            if name not in records: raise ValueError('Missing course effect dependency: '+name)
+            selected.add(name); queue.extend(records[name].references())
+        names_ = [name for name in order if name in selected]
+        bank = f"race-effects-{course['id']:02d}.bin"
+        textures_, size_ = write_bank(names_, records, namespaces, texture_archives, output, [], bank, texture_cache)
+        if len(textures_) > 128: raise ValueError('Course effects exceed texture budget: '+course['key'])
+        profiles.append({'id':course['id'],'course':course['key'],'bank':bank,'roots':roots,'emitters':len(names_),'textures':len(textures_),'payload_bytes':size_})
+        checks = '&&'.join('effects.find("'+name+'")>=0' for name in roots) or 'true'
+        header.append(f"case {course['id']}: return {checks};")
+    header += ['default:return false;', '}', '}', '}']
+    (root/'include/mkw/course_effect_roots.hpp').write_text('\n'.join(header)+'\n')
+    (output/'course-effects.json').write_text(json.dumps(profiles,indent=2)+'\n')
     (output / 'race-effects.json').write_text(json.dumps({
-        'source_sha256': hashlib.sha256(br).hexdigest(), 'emitters': order,
+        'source_sha256': hashlib.sha256(br).hexdigest(), 'emitters': aggregate, 'all_course_emitters': order,
         'pocha_source_sha256': hashlib.sha256(pb).hexdigest(),
         'creature_sources': creature_sources,
         'textures': [[f[0], f[1], f[2], f[3], f[4], f[5]] for f in files], 'notes': notes}, indent=1) + '\n')
     exhausts(root)
-    print(f'Cooked {len(order)} emitters, {len(files)} textures, {len(blob)} bytes of descriptors and curves')
+    cannon_attachment(root)
+    print(f'Cooked {len(order)} emitters, {len(files)} textures, {blob_size} bytes of descriptors and curves')
     for n in notes:
         print('  note:', n)
     return len(order)
@@ -532,6 +716,7 @@ if __name__ == '__main__':
     p = argparse.ArgumentParser()
     p.add_argument('--root', type=Path, default=Path(__file__).resolve().parents[1])
     p.add_argument('--output', type=Path)
+    p.add_argument('--course-only', action='store_true', help='Build only the bounded banks loaded by races, without a globally resident aggregate')
     a = p.parse_args()
     # Build-local output; tools/package_sd.py overlays it onto the SD assets.
-    cook(a.root, a.output or a.root / 'build/vfx/textures')
+    cook(a.root, a.output or a.root / 'build/vfx/textures', a.course_only)

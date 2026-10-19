@@ -16,6 +16,7 @@ using namespace snd;
 constexpr std::uint32_t None = 0xFFFFFFFFu;
 constexpr std::uint16_t FanfareSlot = 5;      // RaceMgr+0x2c
 constexpr std::uint16_t AlterationSlot = 6;   // ItemAlterationMgr+0x18
+constexpr std::uint16_t ResultPointSlot = 8; // independent of the goal voice/fanfare
 constexpr std::uint16_t GoalSlot = 7;         // the local KartActor's SE_RC_GOAL
 
 // ItemAlterationMgr::GetCourseSoundId (80708750): table 8089d378, course -> N
@@ -165,7 +166,7 @@ void RaceSound::begin(const Setup& s) {
  alteration_ = 3; wasMega_ = wasStar_ = false; wobble_ = 0;
  alterVolume_ = fanfareVolume_ = bgmVolume_ = bgmPitch_ = 1; postedBgmVolume_ = postedBgmPitch_ = -1; postedSlot_ = -1;
  bgm_ = Bgm{};
- triggers_.reset(s.course, false);   // no mirror mode in this port
+ triggers_.reset(s.course, s.mirror);
  introLoaded_ = false; introShot_ = -1;
  for (auto& t : stems_) t = AudioTrack{};
  stemCount_ = 0; stemSound_ = 0xFFFFFFFFu;
@@ -245,6 +246,8 @@ void RaceSound::planScene() {
  for (std::uint32_t id = id::SE_UI_TITLE_OUT; id <= id::SE_UI_CTRL_REJECT; ++id) must.push_back(id);   // race UI bank
  appendRaceDamageEffects(must);
  must.push_back(id::SE_RC_GOAL);
+ must.push_back(id::SE_VCL_FALL_WATER);
+ if(battleCourse(course))must.push_back(id::SE_RC_BTL_FINISH);
  for(auto goal:goalVoice_)if(goal)must.push_back(goal);
  // Rainbow's collision bank belongs to its course group, not GRP_RACE.
  if(course==0x0d)must.push_back(id::SE_VCL_COL_RAINBOW);
@@ -471,6 +474,8 @@ void RaceSound::postVolumes(bool force) {
 void RaceSound::step(const Frame& f, RaceAudioFrame* actors) {
  if (!active_ || paused_) return;
  auto& sys = SoundSystem::instance();
+ if(f.resultPointsChanged)sys.hold(id::SE_RSLT_POINT_UP,ResultPointSlot);
+ if(f.resultSlideSound>=0)sys.play(unsigned(f.resultSlideSound));
  ++tick_;
  // Bounded release diagnostics for silent race actors; no per-frame file I/O.
  if (tick_ == 300 || tick_ == 900 || tick_ == 1800) {
@@ -509,7 +514,8 @@ void RaceSound::step(const Frame& f, RaceAudioFrame* actors) {
  if (f.finished && !finished_) {
   finished_ = true; rank_ = f.rank;
   sys.stopSlot(AlterationSlot, 0);
-  sys.play(battleCourse(setup_.course) ? id::SE_RC_BTL_FINISH : id::SE_RC_GOAL, GoalSlot);
+  // Normal races deliver the cue with the persistent actor frame.
+  if(!actors)sys.play(battleCourse(setup_.course) ? id::SE_RC_BTL_FINISH : id::SE_RC_GOAL, GoalSlot);
   triggers_.ambience.clear(); triggers_.music.clear();
   bgmValue_ = AudioTrack{}; bgmValue_.value = bgmValue_.target = 1;
   setRaceState(7);
@@ -591,6 +597,21 @@ void RaceSound::pause(bool paused) {
  if (bgm_.delay < 1 && bgm_.active >= 0) post(SoundCommand::Pause, bgm_.slot[bgm_.active], 0, paused ? 1.0f : 0.0f, 0);
  // PlayersVolumeMgr::PauseAllButTrackUI: every player but BGM and menu UI.
  for (std::uint32_t p = 2; p < 11; ++p) post(SoundCommand::PausePlayer, 0, p, paused ? 1.0f : 0.0f, 10);
+}
+
+void RaceSound::carryResultMusic(){
+ if(!active_||!finished_||bgm_.active<0)return;
+ auto& sys=SoundSystem::instance();
+ const int i=bgm_.active;
+ if(bgm_.delay>=0)post(SoundCommand::StartPrepared,bgm_.slot[i],0,0);
+ sys.carryMusic(bgm_.sound[i],bgm_.slot[i]);
+ bgm_.active=-1;bgm_.delay=-1;
+ // Removing the layer resets every actor-owned loop on the audio thread.
+ // quit leaves the transferred music handle alone and stops race players.
+ quit();
+ // The load starts now: no released engine/item/voice tail accompanies it.
+ sys.stopSlot(FanfareSlot,0);sys.stopSlot(AlterationSlot,0);
+ for(std::uint32_t player=2;player<11;++player)post(SoundCommand::StopPlayer,0,player,0,0);
 }
 
 void RaceSound::quit() {

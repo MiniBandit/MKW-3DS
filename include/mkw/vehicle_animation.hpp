@@ -1,6 +1,7 @@
 #pragma once
 #include "mkw/math.hpp"
 #include "mkw/wheel_motion.hpp"
+#include "mkw/luma_motion.hpp"
 #include <citro3d.h>
 #include <algorithm>
 #include <array>
@@ -16,15 +17,37 @@ public:
     VehicleAnimation(){reset();}
     void reset();
     void step(Kinoko::Kart::KartObject& kart);
+    // Complete visual input, without retaining a KartObject or race heap.
+    // Positions and wheel frames are world-space; display is the original
+    // kartPartsDispParam/bikePartsDispParam row, decoded to host floats.
+    struct Snapshot {
+        C3D_Mtx body{},handle{};
+        std::array<C3D_Mtx,4> wheelFrames{};
+        std::array<Vec3,4> tirePositions{};
+        std::array<float,4> radius{},sourceRadius{},travel{},roll{};
+        std::array<float,84> display{};
+        Vec3 scale{1,1,1};float steering=0;
+        unsigned vehicle=0,count=0;bool bike=false;
+    };
+    Snapshot snapshot() const;
+    // Source initial suspension state. Chassis already includes original
+    // floor snap and BSP initialHeight; this does not guess collision height.
+    static bool initialSnapshot(unsigned vehicle,const C3D_Mtx& chassis,Snapshot& result);
+    static float initialHeight(unsigned vehicle);
+    // Call after the preceding GPU frame has retired, before posing/drawing.
+    bool setSnapshot(const Snapshot& pose);
     const C3D_Mtx& body() const {evaluate();return body_;}
     // The kart's position and largest scale this tick, without building any matrix.
     Vec3 position() const {return {base_.r[0].w,base_.r[1].w,base_.r[2].w};}
     float maxScale() const {return std::max({kartScale_.x,kartScale_.y,kartScale_.z});}
+    const LumaMotion& lumaMotion() const {return luma_;}
+    Vec3 visualScale() const {return kartScale_;}
+    unsigned lumaFrame() const {return lumaFrame_;}
     const C3D_Mtx& handle() const {evaluate();return handle_;}
     const C3D_Mtx& handleBase() const {evaluate();return handleBase_;}
     const C3D_Mtx& wheel(unsigned i) const {evaluate();return wheels_[i<4?i:0];}
     unsigned wheelCount() const {return count_;}
-    unsigned modelIndex(unsigned i) const {return bike_?i%2:i;}
+    unsigned modelIndex(unsigned i) const {return bike_?i%2:count_==3?i+1:i;}
     float roll(unsigned i) const {return roll_[i<4?i:0];}
     float suspensionTravel(unsigned i) const {return travel_[i<4?i:0];}
     float effectiveRadius(unsigned i) const {return radii_[i<4?i:0];}
@@ -48,6 +71,8 @@ private:
     Vec3 kartScale_{1,1,1};
     float steering_=0;
     WheelMotion wheelMotion_{};
+    LumaMotion luma_{};
+    unsigned lumaFrame_=0;
     mutable bool dirty_=false;
     mutable C3D_Mtx body_{},handle_{},handleBase_{};
     mutable std::array<C3D_Mtx,4> wheels_{},wheelFrames_{};

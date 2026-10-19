@@ -658,7 +658,7 @@ struct Engine::Impl {
  std::unique_ptr<Sounds> sounds;
  EngineObserver* observer = nullptr; u32 soundFrames = 0;
  void setupSounds();
- void gameFrame();
+ void gameFrame(bool advanceHold);
  void soundFrame();
 };
 
@@ -1319,9 +1319,9 @@ struct Engine::Impl::Sounds {
   if (n && ++s.waitFrames > WaveWaitFrames) { ++e.stats.startsFailed; shutdown(s); return false; }
   return true;
  }
- void basicUpdate(SoundBase& s) {
+ void basicUpdate(SoundBase& s, bool advanceHold) {
   if (!refreshWaves(s)) return;
-  if (s.autoStop && s.playerActive()) { if (s.autoStopCounter == 0) { stop(s, 0); return; } --s.autoStopCounter; }
+  if (advanceHold && s.autoStop && s.playerActive()) { if (s.autoStopCounter == 0) { stop(s, 0); return; } --s.autoStopCounter; }
   bool startPlayer = false;
   if (!s.startedFlag) {
    if (!s.startFlag) return;
@@ -1333,6 +1333,12 @@ struct Engine::Impl::Sounds {
   if (s.playerPaused()) return;
   if (s.pauseFade) s.pauseFadeVolume.update(); else { s.fadeVolume.update(); s.extMoveVolume.update(); if (s.type == TypeStrm) strmGameFrame(s); }
   f32 volume = s.initVolume * players[s.playerId].volume * s.extMoveVolume.value() * s.fadeVolume.value() * s.pauseFadeVolume.value() * s.ambient.volume;
+  // 3DS output calibration: preserve authored automation/attenuation, but
+  // reserve summing headroom for simultaneous karts, UI and music on NDSP.
+  // BRSAR player 0 is PL_BGM; SE_RC_LAP (218) is a full-volume two-track
+  // sequence on player 7 and needs extra peak allowance over race ambience.
+  constexpr f32 bgmOutput=.75f, effectOutput=.45f, lapOutput=.32f;
+  volume *= s.playerId==0?bgmOutput:s.id==218?lapOutput:effectOutput;
   const f32 pan = s.extPan + s.ambient.pan;
   const f32 pitch = s.extPitch * s.ambient.pitch;
   const f32 surround = s.extSurroundPan + s.ambient.surroundPan;
@@ -1454,10 +1460,10 @@ void Engine::Impl::setupSounds() {
  for (u32 i = 0; i < archive->playerCount(); ++i) sounds->players[i].playable = archive->player(i)->playableSoundCount;
 }
 
-void Engine::Impl::gameFrame() {
+void Engine::Impl::gameFrame(bool advanceHold) {
  if (!sounds) return;
  // SoundArchivePlayer::Update -> SoundPlayer::Update for every player.
- for (auto& s : sounds->sound) if (s.used) sounds->basicUpdate(s);
+ for (auto& s : sounds->sound) if (s.used) sounds->basicUpdate(s, advanceHold);
 }
 
 void Engine::Impl::soundFrame() {
@@ -1553,6 +1559,7 @@ bool Engine::prepareSound(Handle& h, u32 id, const StartInfo* si, const Ambient*
 }
 void Engine::startPrepared(Handle h) { if (auto* s = impl_->sounds->get(h)) if (!s->startedFlag) s->startFlag = true; }
 bool Engine::attached(Handle h) const { return impl_->sounds && impl_->sounds->get(h); }
+bool Engine::started(Handle h) const { const auto* s=impl_->sounds?impl_->sounds->get(h):nullptr;return s&&s->startedFlag; }
 u32 Engine::soundId(Handle h) const { auto* s = impl_->sounds ? impl_->sounds->get(h) : nullptr; return s ? s->id : InvalidId; }
 void Engine::detach(Handle& h) { h = {}; }
 void Engine::stop(Handle h, int frames) { if (auto* s = impl_->sounds->get(h)) impl_->sounds->stop(*s, frames); }
@@ -1602,7 +1609,7 @@ void Engine::stopPlayer(u32 player, int frames) { if (impl_->sounds) for (auto& 
 void Engine::pausePlayer(u32 player, bool p, int frames) { if (impl_->sounds) for (auto& s : impl_->sounds->sound) if (s.used && s.playerId == player) impl_->sounds->pause(s, p, frames); }
 int Engine::playingCount(u32 player) const { return impl_->sounds ? impl_->sounds->countPlayer(player) : 0; }
 void Engine::setMasterVolume(f32 v) { impl_->masterVolume = clamp(v, 0.0f, 1.0f); }
-void Engine::updateGameFrame() { impl_->gameFrame(); }
+void Engine::updateGameFrame(bool advanceHold) { impl_->gameFrame(advanceHold); }
 void Engine::updateSoundFrame() { impl_->soundFrame(); }
 void setObserver(Engine& engine, EngineObserver* observer) { engine.impl_->observer = observer; }
 u32 soundFrameCount(const Engine& engine) { return engine.impl_->soundFrames; }

@@ -1,9 +1,8 @@
-# Which converted game files a build has (see tools/release/build_cia.py).
-# stamp: kept by hand. Change it only when the converted files change.
-# windows_legacy: what Windows builders of 0.5.0 and 0.5.1 wrote (npm.cmd was in
-#   the recipe); games accept it too. Never changes.
-# recipe: the cook recipe last reviewed against the stamp
-#   (python tools/release/check_content_stamp.py).
-stamp 77c4de46847a1b1d1e262a1fc77574a6
-windows_legacy 4db5b9c1c6c54b90bbbfea5a98782663
-recipe cf69fd08237c86f0faa555dbecece969
+# Converted assets for the necessary-fixes integration.
+# Keep the migrated asset stamp: these upstream changes do not alter cooked files.
+# Do not reuse upstream asset stamps; the migrated assets have a different layout.
+# windows_legacy preserves this integration's prior Windows recipe compatibility.
+# recipe records the merged cook/package tools reviewed for these assets.
+stamp 0d747f1ce768bdaf0e62c7736609be6d
+windows_legacy 509d020b2c42e3c7fb4487b79e1509e3
+recipe 0d747f1ce768bdaf0e62c7736609be6d

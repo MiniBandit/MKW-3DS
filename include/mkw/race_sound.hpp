@@ -23,6 +23,7 @@ public:
   unsigned mode = 1;          // RaceConfig game mode: 0 GP, 1 VS, 2 TT, 3 battle
   unsigned lapCount = 3;
   unsigned engineClass = 2;   // 0 50cc, 1 100cc, 2 150cc
+  bool mirror = false;
   bool preview = false;       // the course preview plays first (retail intro section)
   unsigned racers = 0;
   std::uint32_t graphicsReserve = 2048u * 1024;
@@ -32,6 +33,8 @@ public:
   unsigned stage = 0;         // Kinoko RaceManager stage (0 intro .. 4 all finished)
   unsigned timer = 0;         // RaceManager timer: countdown frames, then race frames
   int currentLap = 0;         // local player's RaceManager currentLap
+  bool resultPointsChanged = false; // CtrlRaceResult / Team displayed integer changed
+  int resultSlideSound = -1; // original result control entry/exit cue
   bool finished = false;      // local player finished the race
   unsigned rank = 1;          // local player's finishing position once finished
   bool star = false, mega = false, shocked = false;   // local kart status bits 63, 79, 71
@@ -48,6 +51,7 @@ public:
  void step(const Frame& frame, RaceAudioFrame* actors = nullptr);
  void previewEnded();          // the course preview finished or was skipped
  void pause(bool paused);      // RaceRSARPlayer::Pause / Resume
+ void carryResultMusic(); // Next/Next Race: retire racing actors, keep result stream
  void quit();                  // RaceRSARPlayer::Stop: the race is left
  bool active() const { return active_; }
  // QA: called with a line on every race state change and countdown/lap sound.
@@ -56,6 +60,7 @@ public:
  // Residency chosen at begin() (runtime.log / QA).
  struct Budget { std::uint32_t linearFree = 0, budget = 0, resident = 0, cache = 0; unsigned demoted = 0; };
  const Budget& budget() const { return budget_; }
+ RaceAudioLayer& layer() { return layer_; }
  const RaceAudioLayer& layer() const { return layer_; }
 
  // EGG::AudioTrack: moves linearly to a target over frames.

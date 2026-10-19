@@ -21,7 +21,7 @@ struct EffectTexture { char name[32]; uint16_t width,height,paddedWidth,paddedHe
 // Steps at the 60 Hz simulation rate; presentation only.
 class RaceEffects {
 public:
-    static constexpr unsigned SlotCount=592;
+    static constexpr unsigned SlotCount=1914;
     RaceEffects();
     ~RaceEffects();
     bool load(const char* path);
@@ -32,6 +32,7 @@ public:
     int find(const char* name) const;
     // One-shot effect with its authored emission life, not tied to a slot.
     void burst(int spec,const EffectFrame& frame);
+    void burst(int spec,const EffectFrame& frame,float specificVelocity);
     // Persistent attachment: created when it becomes active, moved every step, and faded
     // (emitters stop, particles live on and keep following) when inactive. spec < 0 kills.
     void attach(unsigned slot,int spec,const EffectFrame& frame,bool active);
@@ -50,6 +51,10 @@ public:
     // particles retain their final transform and can coexist with a new instance.
     void fade(unsigned slot);
     void kill(unsigned slot);
+    void stopParticleTrack(unsigned slot,unsigned track,bool stop);
+    // EGG SetDisableCalc / SetDisableDraw (flags at Effect+0x50 bits0/1).
+    // Invalid handles are ignored; this does not kill, fade or reset an instance.
+    void setDisabled(unsigned slot,bool calc,bool draw);
     // setColor (+0x50, 0x80223794): the instance's active particle managers scale their
     // colours by this RGBA (light type 1) from the next draw on.
     void setColor(unsigned slot,const uint8_t rgba[4]);
@@ -59,6 +64,7 @@ public:
     void setParticleScale(unsigned slot,float x,float y);
     void setEmissionRatio(unsigned slot,float ratio);
     void setSpecificVelocity(unsigned slot,float speed);
+    void setVelocity(unsigned slot,Vec3 velocity);
     // EffectSystem::SetProcessCamera (0x800276b0): the view matrix (world to camera, 3x4)
     // that billboard emitters (EMIT_FLAG_15/16) calculate against. MKW's EffectManager
     // calc (RMCU 0x80678818) sets it after the kart effect groups, so each step uses the

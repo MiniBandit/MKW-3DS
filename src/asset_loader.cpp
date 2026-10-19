@@ -8,11 +8,17 @@ AssetLoader::AssetLoader(){LightLock_Init(&lock_);LightEvent_Init(&wake_,RESET_O
 bool AssetLoader::start(int priorityOffset){
  if(thread_)return true;
  s32 priority=0x30;svcGetThreadPriority(&priority,CUR_THREAD_HANDLE);
- stopping_.store(false);
+ stopping_.store(false);foreground_=false;
+ backgroundPriority_=std::clamp<int>(priority+priorityOffset,0x18,0x3f);
+ foregroundPriority_=std::clamp<int>(priority-1,0x18,0x3f);
  // Lower priority (higher number) than the caller, same core: never preempts
  // frame work, and consumes the main thread's VBlank/GPU idle time instead.
- thread_=threadCreate(entry,this,96*1024,std::clamp<int>(priority+priorityOffset,0x18,0x3f),-2,false);
+ thread_=threadCreate(entry,this,96*1024,backgroundPriority_,-2,false);
  return thread_!=nullptr;
+}
+void AssetLoader::setForeground(bool foreground){
+ if(!thread_||foreground_==foreground)return;
+ if(R_SUCCEEDED(svcSetThreadPriority(threadGetHandle(thread_),foreground?foregroundPriority_:backgroundPriority_)))foreground_=foreground;
 }
 void AssetLoader::stop(){
  if(!thread_)return;
@@ -27,6 +33,9 @@ void AssetLoader::submit(const std::shared_ptr<AssetJob>& job,AssetPriority prio
  if(!job||job->done())return;
  const int level=int(priority);
  LightLock_Lock(&lock_);
+ // Promotion also applies after a job starts: a now-visible model must
+ // not remain speculative and get cancelled by cancelPrefetch().
+ if(job->state_.load()==AssetJob::Running && level<job->priority_)job->priority_=level;
  if(job->state_.load()==AssetJob::Queued){
   if(job->priority_>=0&&job->priority_<=level){LightLock_Unlock(&lock_);return;}
   if(job->priority_>=0){auto& old=queues_[job->priority_];old.erase(std::remove(old.begin(),old.end(),job),old.end());}

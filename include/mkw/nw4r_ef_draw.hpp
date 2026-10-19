@@ -7,6 +7,7 @@
 // colour-lookup texel (texture unit 2); register values a program reads from stage
 // constants split batches, like EF's GXSetTevColor per particle.
 #include "mkw/nw4r_ef_internal.hpp"
+#include <mkw/visibility.hpp>
 
 namespace mkw::ef {
 // PICA combiner sources and operations used by the translated programs.
@@ -72,5 +73,5 @@ struct DrawList {
 // Stores only the complete-triangle prefix up to vertexLimit, but still advances
 // every particle's draw axis so later frames match an unlimited draw list.
 void buildDrawList(System& s,const std::vector<Material>& materials,const TextureSize* textures,u32 textureCount,
-                   const Mtx34& view,DrawList& out,u32 vertexLimit=~0u);
+                   const Mtx34& view,DrawList& out,u32 vertexLimit=~0u,const mkw::ClipFrustum* frustum=nullptr);
 }

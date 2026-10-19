@@ -1,5 +1,7 @@
+#include <mkw/driver_look_target.hpp>
 #include "mkw/animation.hpp"
 #include <mkw/render_metrics.hpp>
+#include <mkw/skin_draw_reuse.hpp>
 #include <mkw/asset_pack.hpp>
 #include "mkw/pose_blend.hpp"
 #include <3ds.h>
@@ -9,21 +11,9 @@
 #include <algorithm>
 #include <cmath>
 namespace mkw {
-// Banks are CPU-only, but a race keeps twelve racers' banks (about 11 MiB)
-// resident. On an Old 3DS the ordinary heap also holds Kinoko's 16 MiB arena
-// and is the scarce region, while LINEAR has room once menu textures are gone,
-// so bank storage comes from the (thread-safe, see linear_lock.cpp) LINEAR heap.
-// Banks are read only by the CPU. They stay in LINEAR while it has room, so
-// the ordinary heap keeps its Old 3DS headroom (main.cpp), and spill to the
-// heap once LINEAR would drop under the reserve later race loads need: eleven
-// bike riders' banks (100cc Grand Prix) are about 5.5 MiB more than karts'.
-static uint8_t* allocateBank(size_t size,bool& linear){
-    constexpr size_t LinearReserve=3u<<20;
-    linear=linearSpaceFree()>size+LinearReserve;
-    if(linear)if(void* p=linearAlloc(size))return static_cast<uint8_t*>(p);
-    linear=false;return static_cast<uint8_t*>(std::aligned_alloc(16,(size+15)&~size_t(15)));
-}
-void DriverAnimation::reset(){if(data_){if(dataLinear_)linearFree(data_);else std::free(data_);}data_=nullptr;ready=false;rigidParts_.clear();count_=faceCount_=hairNodeCount_=hairClipCount_=uvClipCount_=0;baseUV_.clear();lastClip_=-1;hasPreviousPose_=false;cachedVertices_=nullptr;cachedSettled_=false;poseBoundsValid_=false;usedMatrices_.fill(false);neutralUv_=nullptr;uvBuffer_=nullptr;uvNeutral_=true;shared_={};handleDrive_=dash_=shake_=-1;gpu_=false;shapeHidden_.fill(false);}
+// Animation banks are CPU-only. Prefer LINEAR while it has spare capacity,
+// but reserve room for GPU resources and allow banks to use the ordinary heap.
+void DriverAnimation::reset(){resetLook();bodyLook_={};lookCount_=0;lookYaw_=lookPitch_=0;beforeLookPalette_.clear();hasBraids_=braidsRacing_=false;braids_.reset();braidWorld_={1,0,0,0,0,1,0,0,0,0,1,0,1,0,0,0,1,0,0,0,1};effectRootSlot_=-2;effectRootReady_=false;effectRootTracks_={};effectRoot_=previousEffectRoot_={};if(data_){if(dataLinear_)linearFree(data_);else std::free(data_);}data_=nullptr;dataLinear_=true;ready=false;rigidParts_.clear();count_=faceCount_=hairNodeCount_=hairClipCount_=uvClipCount_=0;baseUV_.clear();lastClip_=-1;hasPreviousPose_=false;cachedVertices_=nullptr;cachedSettled_=false;poseBoundsValid_=false;usedMatrices_.fill(false);neutralUv_=nullptr;uvBuffer_=nullptr;uvNeutral_=true;shared_={};handleDrive_=dash_=shake_=-1;gpu_=false;shapeHidden_.fill(false);}
 bool DriverAnimation::gpuSkin(Model& model){
     if(!ready||gpu_||matrices_>Renderer::MaxSkinBones||vertices_!=model.vertexCount)return false;
     if(skinNormals_){
@@ -45,6 +35,14 @@ bool DriverAnimation::gpuSkin(Model& model){
     // A draw before the first apply() still has a pose (the first clip's first frame).
     evaluate(clips_[0],0,0,0.f,0,1.f);poseBoundsValid_=false;
     return gpu_=true;
+}
+unsigned DriverAnimation::shareDrawVertices(Model& model){
+    if(!ready||!gpu_||vertices_!=model.vertexCount)return 0;
+    std::vector<uint64_t> domains(vertices_,0);
+    for(unsigned i=0;i<shapes_;++i)for(unsigned j=ranges_[i].first;j<ranges_[i].first+ranges_[i].count;++j)domains[j]|=uint64_t(1)<<i;
+    const unsigned reused=shareSkinDrawIndices(model.vertices,model.skinBoneIndices,domains.data(),vertices_,model.indices,model.indexCount);
+    if(reused)flushGpuData(model.indices,model.indexCount*sizeof(uint16_t));
+    return reused;
 }
 void DriverAnimation::skinNormals(bool on){
     skinNormals_=on;
@@ -70,29 +68,37 @@ int DriverAnimation::find(const char* name)const{if(name)for(unsigned i=0;i<coun
 int DriverAnimation::face(const char* name)const{if(name)for(unsigned i=0;i<faceCount_;++i)if(!std::strcmp(name,faces_[i].name))return i;return -1;}
 bool DriverAnimation::load(const char* path,const Model& model){
     reset();
+    // These banks are read by the CPU, never directly by PICA or DSP. Leave
+    // LINEAR room for meshes/textures and the race sound cache.
+    // Prefer ordinary heap even when early loading has spare LINEAR.
+    auto allocateBank=[&](size_t bytes){
+        data_=static_cast<uint8_t*>(std::malloc(bytes));
+        if(data_){dataLinear_=false;return true;}
+        data_=static_cast<uint8_t*>(linearAlloc(bytes));dataLinear_=true;
+        return data_!=nullptr;
+    };
     // Menu banks come from the open menu.pak; other banks are loose files.
     bool ok=false;size_t size=0;
     if(const long packed=pack::size(path);packed>=0){
         size=size_t(packed);if(size<28||size>12*1024*1024)return false;
-        data_=allocateBank(size,dataLinear_);if(!data_)return false;
+        if(!allocateBank(size))return false;
         ok=pack::readInto(path,data_,size);
     }else{
         FILE* f=std::fopen(path,"rb");if(!f)return false;std::fseek(f,0,SEEK_END);long length=std::ftell(f);std::rewind(f);
         if(length<0){std::fclose(f);return false;}size=size_t(length);
         if(size<28||size>12*1024*1024){std::fclose(f);return false;}
-        data_=allocateBank(size,dataLinear_);if(!data_){std::fclose(f);return false;}
+        if(!allocateBank(size)){std::fclose(f);return false;}
         ok=std::fread(data_,1,size,f)==size;std::fclose(f);
     }
     auto u32=[](const uint8_t* p){uint32_t v;std::memcpy(&v,p,4);return v;};
-    if(!ok||std::memcmp(data_,"DSKM",4)||u32(data_+4)<2||u32(data_+4)>5){reset();return false;}
+    if(!ok||std::memcmp(data_,"DSKM",4)||u32(data_+4)<2||u32(data_+4)>8){reset();return false;}
     vertices_=u32(data_+8);matrices_=u32(data_+12);count_=u32(data_+16);shapes_=u32(data_+20);faceCount_=u32(data_+24);
     if(vertices_!=model.vertexCount||!matrices_||matrices_>128||!count_||count_>64||shapes_>64||faceCount_>64||model.submeshes.size()>64){reset();return false;}
     size_t cursor=28;
-    int32_t rootSlot=-2;
-    if(u32(data_+4)==5){
+    if(u32(data_+4)>=5){
         if(size<32){reset();return false;}
-        rootSlot=int32_t(u32(data_+28));cursor=32;
-        if(rootSlot < -1 || (rootSlot>=0&&unsigned(rootSlot)>=matrices_)){reset();return false;}
+        effectRootSlot_=int32_t(u32(data_+28));cursor=32;
+        if(effectRootSlot_<-1||(effectRootSlot_>=0&&unsigned(effectRootSlot_)>=matrices_)){reset();return false;}
     }
     source_=reinterpret_cast<const SourceVertex*>(data_+cursor);cursor+=vertices_*sizeof(SourceVertex);
     ranges_=reinterpret_cast<const Range*>(data_+cursor);cursor+=shapes_*sizeof(Range);
@@ -141,15 +147,56 @@ bool DriverAnimation::load(const char* path,const Model& model){
         baseUV_.resize(vertices_);
         for(unsigned i=0;i<vertices_;++i)baseUV_[i]={model.vertices[i].uv[0],model.vertices[i].uv[1]};
     }
-    // DSKM5 appends translation tracks only for a root outside the palette.
-    // Ordinary skin/face/hair/UV payloads retain their previous layout.
-    if(u32(data_+4)==5&&rootSlot==-1){
+    if(u32(data_+4)>=5&&effectRootSlot_==-1){
         if(cursor+8>size||std::memcmp(data_+cursor,"ROOT",4)||u32(data_+cursor+4)!=count_){reset();return false;}
         cursor+=8;
         for(unsigned i=0;i<count_;++i){
             const size_t bytes=size_t(clips_[i].count)*12;
-            if(bytes>size-cursor){reset();return false;}
+            if(cursor>size||bytes>size-cursor){reset();return false;}
+            effectRootTracks_[i]=reinterpret_cast<const float*>(data_+cursor);
+            for(unsigned j=0;j<clips_[i].count*3;++j)if(!std::isfinite(effectRootTracks_[i][j])){reset();return false;}
             cursor+=bytes;
+        }
+    }
+    if(u32(data_+4)==6||(u32(data_+4)>=7&&cursor+4<=size&&!std::memcmp(data_+cursor,"BRAD",4))){
+        if(cursor+32>size||std::memcmp(data_+cursor,"BRAD",4)){reset();return false;}
+        braidHead_=u32(data_+cursor+4);
+        if(braidHead_>=matrices_){reset();return false;}
+        for(unsigned i=0;i<6;++i){
+            braidSlots_[i]=u32(data_+cursor+8+i*4);
+            if(braidSlots_[i]>=matrices_||braidSlots_[i]==braidHead_){reset();return false;}
+            for(unsigned j=0;j<i;++j)if(braidSlots_[j]==braidSlots_[i]){reset();return false;}
+        }
+        cursor+=32;hasBraids_=true;
+    }
+    if(u32(data_+4)>=7){
+        if(cursor+12>size||std::memcmp(data_+cursor,"LOOK",4)){reset();return false;}
+        lookHead_=u32(data_+cursor+4);lookCount_=u32(data_+cursor+8);cursor+=12;
+        if(lookHead_>=matrices_||!lookCount_||lookCount_>matrices_||cursor+lookCount_*4>size){reset();return false;}
+        bool hasHead=false;
+        for(unsigned i=0;i<lookCount_;++i){
+            const unsigned slot=u32(data_+cursor);cursor+=4;
+            if(slot>=matrices_){reset();return false;}
+            for(unsigned j=0;j<i;++j)if(lookSlots_[j]==slot){reset();return false;}
+            lookSlots_[i]=slot;hasHead|=slot==lookHead_;
+        }
+        if(!hasHead){reset();return false;}
+        beforeLookPalette_.resize(matrices_*21);
+    }
+    if(u32(data_+4)>=8){
+        if(cursor+4>size||std::memcmp(data_+cursor,"BODY",4)){reset();return false;}cursor+=4;
+        for(auto& body:bodyLook_){
+            if(cursor+8>size){reset();return false;}
+            body.joint=u32(data_+cursor);body.count=u32(data_+cursor+4);cursor+=8;
+            if(body.joint>=matrices_||!body.count||body.count>matrices_||cursor+body.count*4>size){reset();return false;}
+            bool hasJoint=false;
+            for(unsigned i=0;i<body.count;++i){
+                const unsigned slot=u32(data_+cursor);cursor+=4;
+                if(slot>=matrices_){reset();return false;}
+                for(unsigned j=0;j<i;++j)if(body.slots[j]==slot){reset();return false;}
+                body.slots[i]=slot;hasJoint|=slot==body.joint;
+            }
+            if(!hasJoint){reset();return false;}
         }
     }
     if(cursor!=size){reset();return false;}
@@ -187,10 +234,10 @@ bool inversePair(float* out,const float* m){
     return true;
 }
 }
-void DriverAnimation::evaluate(const Clip& c,unsigned a,unsigned b,float t,unsigned tick,float blend){
+void DriverAnimation::evaluate(const Clip& c,unsigned a,unsigned b,float t,unsigned tick,float blend,bool simulateBraids){
     const unsigned stride=matrices_*84+shapes_*4;
     auto x=reinterpret_cast<const float*>(c.data+a*stride);auto y=reinterpret_cast<const float*>(c.data+b*stride);
-    if(gpu_&&!hairClipCount_&&!rigid()&&blend>=1.f){
+    if(gpu_&&!lookCount_&&!hairClipCount_&&!hasBraids_&&!rigid()&&blend>=1.f){
         // GPU skinning consumes only the affine rows. Hair composition needs
         // the normal pair, so keep its full path (and all transition math).
         for(unsigned bone=0;bone<matrices_;++bone)for(unsigned i=0;i<12;++i){
@@ -200,6 +247,55 @@ void DriverAnimation::evaluate(const Clip& c,unsigned a,unsigned b,float t,unsig
     }else for(unsigned i=0;i<matrices_*21;++i)palette_[i]=x[i]+(y[i]-x[i])*t;
     applyHair(c,tick);
     if(blend<1)for(unsigned i=0;i<matrices_;++i){float result[21];blendPosePair(result,previousPalette_.data()+i*21,palette_.data()+i*21,blend);std::memcpy(palette_.data()+i*21,result,sizeof result);}
+    if(lookCount_){
+        std::copy_n(palette_.data(),matrices_*21,beforeLookPalette_.data());
+        const auto angles=lookMotion_.angles();
+        const auto& response=vehicleResponse_.angles();
+        applyDriverBodyLookPalette(palette_.data(),bodyLook_[0].joint,bodyLook_[0].slots.data(),bodyLook_[0].count,angles.root,response.pitch[0],response.roll[0]);
+        applyDriverBodyLookPalette(palette_.data(),bodyLook_[1].joint,bodyLook_[1].slots.data(),bodyLook_[1].count,angles.spine,response.pitch[1],response.roll[1]);
+        applyDriverLookPalette(palette_.data(),lookHead_,lookSlots_.data(),lookCount_,lookYaw_,lookPitch_+response.pitch[2],response.roll[2]);
+    }
+    if(simulateBraids)applyBraids(tick);
+    if(effectRootSlot_>=0){
+        const float* m=palette_.data()+unsigned(effectRootSlot_)*21;
+        effectRoot_={m[3],m[7],m[11]};effectRootReady_=true;
+    }else if(effectRootSlot_==-1){
+        const float* p=effectRootTracks_[size_t(&c-clips_.data())];
+        if(p){
+            const auto mix=[&](unsigned axis){return p[a*3+axis]+(p[b*3+axis]-p[a*3+axis])*t;};
+            effectRoot_={mix(0),mix(1),mix(2)};
+            if(blend<1)effectRoot_=previousEffectRoot_+(effectRoot_-previousEffectRoot_)*blend;
+            effectRootReady_=true;
+        }
+    }
+}
+void DriverAnimation::setBraidWorld(const C3D_Mtx& world){
+    if(!hasBraids_)return;
+    if(!braidsRacing_)braids_.reset();
+    for(unsigned r=0;r<3;++r){
+        braidWorld_[r*4]=world.r[r].x;braidWorld_[r*4+1]=world.r[r].y;
+        braidWorld_[r*4+2]=world.r[r].z;braidWorld_[r*4+3]=world.r[r].w;
+    }
+    float inverse[9];
+    if(inverse3(inverse,braidWorld_.data(),4))for(unsigned r=0;r<3;++r)for(unsigned c=0;c<3;++c)braidWorld_[12+r*3+c]=inverse[c*3+r];
+    braidsRacing_=true;
+}
+void DriverAnimation::applyBraids(unsigned tick){
+    if(!hasBraids_)return;
+    float inverse[21];if(!inversePair(inverse,braidWorld_.data()))return;
+    ToadetteBraids::Frames rest;
+    for(unsigned i=0;i<6;++i){
+        float m[21];multiplyPair(m,braidWorld_.data(),palette_.data()+braidSlots_[i]*21);
+        rest[i]={{m[3],m[7],m[11]},{m[0],m[4],m[8]},{m[1],m[5],m[9]},{m[2],m[6],m[10]}};
+    }
+    float head[21];multiplyPair(head,braidWorld_.data(),palette_.data()+braidHead_*21);
+    const auto& posed=braids_.step(rest,{head[3],head[7],head[11]},tick,braidsRacing_);
+    for(unsigned i=0;i<6;++i){
+        const auto& b=posed[i];float m[21]={b.x.x,b.y.x,b.z.x,b.p.x,b.x.y,b.y.y,b.z.y,b.p.y,b.x.z,b.y.z,b.z.z,b.p.z};
+        float inv[9];if(!inverse3(inv,m,4))continue;
+        for(unsigned r=0;r<3;++r)for(unsigned c=0;c<3;++c)m[12+r*3+c]=inv[c*3+r];
+        multiplyPair(palette_.data()+braidSlots_[i]*21,inverse,m);
+    }
 }
 void DriverAnimation::applyHair(const Clip& primary,unsigned tick){
     if(!hairClipCount_)return;
@@ -236,8 +332,8 @@ bool DriverAnimation::apply(Model& model,int clip,float frame,unsigned tick,int 
     if(!ready||clip<0||unsigned(clip)>=count_)return true;
     auto sample=[](const Clip& c,float t){return c.loop?std::fmod(std::max(t,0.f),float(c.count)):std::clamp(t,0.f,float(c.count-1));};
     const auto& c=clips_[clip];frame=sample(c,frame);unsigned a=unsigned(frame),b=a+1<c.count?a+1:(c.loop?0:a);float t=frame-a;
-    if(lastClip_!=clip){hasPreviousPose_=lastClip_>=0;previousPalette_=palette_;transitionTick_=tick;lastClip_=clip;}
-    float blend=hasPreviousPose_?std::clamp(float(tick-transitionTick_+1)/6.f,0.f,1.f):1.f;
+    if(lastClip_!=clip){hasPreviousPose_=lastClip_>=0;previousPalette_=palette_;if(lookCount_)std::copy_n(beforeLookPalette_.data(),matrices_*21,previousPalette_.data());previousEffectRoot_=effectRoot_;transitionTick_=tick;lastClip_=clip;}
+    float blend=motionBlendValid_?motionBlendWeight_:(hasPreviousPose_?std::clamp(float(tick-transitionTick_+1)/6.f,0.f,1.f):1.f);
     const float faceFrame=expression>=0&&unsigned(expression)<faceCount_?sample(faces_[expression],expressionFrame):0.f;
     auto poseVisible=[&](){
         if(!frustum)return true;
@@ -255,7 +351,7 @@ bool DriverAnimation::apply(Model& model,int clip,float frame,unsigned tick,int 
     };
     if(cachedSettled_&&blend>=1&&cachedVertices_==model.vertices&&cachedClip_==clip&&
        cachedFrame_==frame&&cachedExpression_==expression&&cachedExpressionFrame_==faceFrame&&
-       (!hairClipCount_||cachedTick_==tick)){++renderMetrics.poseReuses;return poseVisible();}
+       ((!hairClipCount_&&!hasBraids_)||cachedTick_==tick)){++renderMetrics.poseReuses;return poseVisible();}
     unsigned stride=matrices_*84+shapes_*4;
     evaluate(c,a,b,t,tick,blend);
     poseBoundsValid_=false;
@@ -353,18 +449,39 @@ void DriverAnimation::write(Model& model,const uint32_t* shown,const int32_t* te
     for(unsigned i=0;i<model.submeshes.size();++i){auto& sub=model.submeshes[i];sub.texture=baseTextures_[i];if(textures)for(unsigned j=0;j<shapes_;++j)if(sub.first>=ranges_[j].first&&sub.first<ranges_[j].first+ranges_[j].count&&textures[j]>=0&&unsigned(textures[j])<model.textures.size()){sub.texture=textures[j];break;}}
     flushGpuData(model.vertices,vertices_*sizeof(Vertex));
 }
-const float* DriverAnimation::pose(int clip,float frame,unsigned tick){
+void DriverAnimation::stepLook(int clip,float frame,unsigned tick,bool active,Vec3 target,
+        const C3D_Mtx& seated,bool body,const DriverLookParameters& parameters,
+        const DriverPose& motion,bool handleRelativeBike,float xAxisY,float zAxisY){
+    if(lookTickValid_&&lookTick_==tick)return;
+    lookTick_=tick;lookTickValid_=true;
+    if(!lookCount_||!ready){resetLook();return;}
+    motionBlendValid_=true;motionBlendWeight_=motion.blendWeight;
+    vehicleResponse_.step(motion.state,motion.previousState,motion.transitioning,
+        motion.blendWeight,handleRelativeBike,xAxisY,zAxisY,parameters);
+    // Evaluate the same transition as the rendered pose, without skin uploads.
+    // beforeLookPalette_ excludes last tick's procedural rotations.
+    // This query computes head targeting before the render transform is set.
+    // Advance world-space braid physics only with the final rendered pose.
+    if(!pose(clip,frame,tick,false)){resetLook();return;}
+    float world[12];for(unsigned row=0;row<3;++row){world[row*4]=seated.r[row].x;world[row*4+1]=seated.r[row].y;world[row*4+2]=seated.r[row].z;world[row*4+3]=seated.r[row].w;}
+    auto a=driverLookTargetAngles(world,palette_.data()+lookHead_*21,target);
+    const auto angles=lookMotion_.step(active&&a.valid,body,a.yaw,a.pitch,a.kartYaw,
+        0,vehicleResponse_.angles().pitchSum(),parameters);
+    cachedSettled_=false;setLookAngles(angles.yaw,angles.pitch);
+}
+
+const float* DriverAnimation::pose(int clip,float frame,unsigned tick,bool simulateBraids){
     if(!ready||clip<0||unsigned(clip)>=count_)return nullptr;
     auto sample=[](const Clip& c,float t){return c.loop?std::fmod(std::max(t,0.f),float(c.count)):std::clamp(t,0.f,float(c.count-1));};
     const auto& c=clips_[clip];frame=sample(c,frame);unsigned a=unsigned(frame),b=a+1<c.count?a+1:(c.loop?0:a);float t=frame-a;
-    if(lastClip_!=clip){hasPreviousPose_=lastClip_>=0;previousPalette_=palette_;transitionTick_=tick;lastClip_=clip;}
-    const float blend=hasPreviousPose_?std::clamp(float(tick-transitionTick_+1)/6.f,0.f,1.f):1.f;
-    evaluate(c,a,b,t,tick,blend);
+    if(lastClip_!=clip){hasPreviousPose_=lastClip_>=0;previousPalette_=palette_;if(lookCount_)std::copy_n(beforeLookPalette_.data(),matrices_*21,previousPalette_.data());previousEffectRoot_=effectRoot_;transitionTick_=tick;lastClip_=clip;}
+    const float blend=motionBlendValid_?motionBlendWeight_:(hasPreviousPose_?std::clamp(float(tick-transitionTick_+1)/6.f,0.f,1.f):1.f);
+    evaluate(c,a,b,t,tick,blend,simulateBraids);
     ++renderMetrics.poseEvaluations;
     return palette_.data();
 }
 bool DriverAnimation::makeRigid(Model& model){
-    if(!ready||rigid()||hairClipCount_||vertices_!=model.vertexCount)return false;
+    if(!ready||rigid()||hairClipCount_||hasBraids_||vertices_!=model.vertexCount)return false;
     const unsigned stride=matrices_*84+shapes_*4;
     // Shape visibility must be constant: a hidden shape is simply not drawn.
     std::vector<uint32_t> visible(shapes_,1);

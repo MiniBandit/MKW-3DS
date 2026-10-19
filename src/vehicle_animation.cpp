@@ -1,4 +1,5 @@
 #include "mkw/vehicle_animation.hpp"
+#include <mkw/vehicle_rest_data.hpp>
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -52,6 +53,7 @@ Vec3 vec(const Kinoko::EGG::Vector3f& v){return {v.x,v.y,v.z};}
 }
 
 void VehicleAnimation::reset(){
+    luma_.reset();lumaFrame_=0;
     body_=handle_=handleBase_=identity();for(auto& m:wheels_)m=identity();for(auto& m:wheelFrames_)m=identity();
     for(auto& m:accessories_)m=identity();accessorySet_=0;roll_={};travel_={};radii_={};display_={};wheelLocal_={};count_=0;vehicle_=~0u;bike_=false;driveFrame_=15;
     base_=handleSource_=identity();for(auto& m:wheelSources_)m=identity();tirePositions_={};bspRadii_={};kartScale_={1,1,1};steering_=0;wheelMotion_={};dirty_=false;
@@ -80,6 +82,23 @@ void VehicleAnimation::step(Kinoko::Kart::KartObject& kart){
     const auto& bsp=kart.param()->bsp();
     using S=Kinoko::Kart::eStatus;
     const auto& status=kart.status();
+    if(unsigned(Kinoko::System::RaceConfig::Instance()->raceScenario().players[kart.param()->playerIdx()].character)==23){
+        LumaMotion::Input input;
+        input.position=vec(kart.pos());input.previousPosition=vec(kart.prevPos());input.velocity=vec(kart.velocity());
+        input.right={base_.r[0].x,base_.r[1].x,base_.r[2].x};
+        input.poseUp={base_.r[0].y,base_.r[1].y,base_.r[2].y};
+        input.poseForward={base_.r[0].z,base_.r[1].z,base_.r[2].z};
+        input.bodyUp=vec(kart.bodyUp());input.bodyForward=vec(kart.bodyFront());
+        input.movementUp=vec(kart.move()->smoothedUp());
+        // Retail KartMove +0x74 is velocity direction, not smoothedForward (+0x80).
+        input.internalVelocityDirection=vec(kart.move()->vel1Dir());
+        input.scaleY=kartScale_.y;input.hopHeight=kart.move()->hopPosY();
+        input.resetPosition=unsigned(Kinoko::System::RaceManager::Instance()->stage())<2||status.onBit(S::InRespawn,S::AfterRespawn);
+        input.overZipper=status.onBit(S::OverZipper);input.inCannon=status.onBit(S::InCannon);
+        luma_.step(input);
+        // USA807c54c4: only the frozen rescue on N64 Sherbet Land stops wait.
+        if(!(unsigned(Kinoko::System::RaceConfig::Instance()->raceScenario().course)==27&&status.onBit(S::InRespawn,S::AfterRespawn)))++lumaFrame_;
+    }
     const float speed=wheelMotion_.step({
         unsigned(Kinoko::System::RaceManager::Instance()->stage()),
         kart.move()->speed(),kart.state()->startBoostCharge(),display_[2],display_[1],
@@ -100,6 +119,56 @@ void VehicleAnimation::step(Kinoko::Kart::KartObject& kart){
     }
     if(bike_)handleSource_=count_?wheelSources_[0]:fromSource(kart.body()->wheelMatrix(0));
     dirty_=true;
+}
+float VehicleAnimation::initialHeight(unsigned vehicle){
+    return vehicle<std::size(VehicleRestData)?VehicleRestData[vehicle].initialHeight:0.f;
+}
+bool VehicleAnimation::initialSnapshot(unsigned vehicle,const C3D_Mtx& chassis,Snapshot& result){
+    if(vehicle>=std::size(VehicleRestData)||!finiteMatrix(chassis))return false;
+    const auto& data=VehicleRestData[vehicle];Snapshot p;
+    p.vehicle=vehicle;p.bike=vehicle>=18;p.body=chassis;p.handle=chassis;
+    std::copy(std::begin(data.display),std::end(data.display),p.display.begin());
+    auto dv=[&](unsigned offset){return Vec3{p.display[offset/4],p.display[offset/4+1],p.display[offset/4+2]};};
+    if(data.body==1)p.handle=multiply(chassis,local(dv(0x0c),dv(0x18)*Degrees));
+    // KartObject::createTires skips slot 0 for the three-wheel chassis.
+    const unsigned slots=p.bike?2u:4u;
+    for(unsigned slot=0;slot<slots;++slot){
+        if(data.body==3&&slot==0)continue;
+        const unsigned source=p.bike?slot:slot/2;
+        const auto& wheel=data.wheels[source];if(!wheel.enabled)continue;
+        const unsigned i=p.count++;
+        Vec3 position=wheel.position;
+        if(!p.bike&&(slot&1))position.x=-position.x;
+        position.y-=wheel.travel;
+        p.tirePositions[i]=transform(chassis,position);
+        p.wheelFrames[i]=p.bike&&slot==0?p.handle:chassis;
+        p.radius[i]=p.sourceRadius[i]=wheel.radius;p.travel[i]=wheel.travel;
+    }
+    if(p.count!=(p.bike?2u:data.body==3?3u:4u))return false;
+    result=p;return true;
+}
+VehicleAnimation::Snapshot VehicleAnimation::snapshot() const{
+    Snapshot p;p.body=base_;p.handle=handleSource_;p.wheelFrames=wheelSources_;
+    p.tirePositions=tirePositions_;p.radius=radii_;p.sourceRadius=bspRadii_;
+    p.travel=travel_;p.roll=roll_;p.display=display_;p.scale=kartScale_;
+    p.steering=steering_;p.vehicle=vehicle_;p.count=count_;p.bike=bike_;return p;
+}
+bool VehicleAnimation::setSnapshot(const Snapshot& p){
+    if(p.vehicle>=36||p.count<2||p.count>4||p.bike!=(p.vehicle>=18)||
+       (p.bike&&p.count!=2)||!finiteMatrix(p.body)||!finiteMatrix(p.handle))return false;
+    if(!std::isfinite(p.steering)||!std::isfinite(p.scale.x)||!std::isfinite(p.scale.y)||
+       !std::isfinite(p.scale.z)||p.scale.x<=0||p.scale.y<=0||p.scale.z<=0)return false;
+    for(float value:p.display)if(!std::isfinite(value))return false;
+    for(unsigned i=0;i<p.count;++i){
+        const auto t=p.tirePositions[i];
+        if(!finiteMatrix(p.wheelFrames[i])||!std::isfinite(t.x)||!std::isfinite(t.y)||!std::isfinite(t.z)||
+           !std::isfinite(p.radius[i])||p.radius[i]<=0||!std::isfinite(p.sourceRadius[i])||p.sourceRadius[i]<=0||
+           !std::isfinite(p.travel[i])||!std::isfinite(p.roll[i]))return false;
+    }
+    base_=p.body;handleSource_=p.handle;wheelSources_=p.wheelFrames;tirePositions_=p.tirePositions;
+    radii_=p.radius;bspRadii_=p.sourceRadius;travel_=p.travel;roll_=p.roll;display_=p.display;
+    kartScale_=p.scale;steering_=std::clamp(p.steering,-1.f,1.f);vehicle_=p.vehicle;count_=p.count;bike_=p.bike;
+    dirty_=true;return true;
 }
 void VehicleAnimation::evaluate() const{
     if(!dirty_)return;
@@ -156,7 +225,8 @@ void VehicleAnimation::updateAccessories() const{
     }
     if(bike_)return;
     for(unsigned i=0;i<count_;++i){
-        const bool front=i<2,reflected=(i&1)!=0;
+        const unsigned sourceSlot=modelIndex(i);
+        const bool front=sourceSlot<2,reflected=(sourceSlot&1)!=0;
         Vec3 pivot=displayVec(front?0x48:0x60);
         Vec3 rotation=front?displayVec(0x54):Vec3{display_[0x6c/4],0,0};
         if(reflected){pivot.x=-pivot.x;rotation.z=-rotation.z;}
@@ -164,7 +234,7 @@ void VehicleAnimation::updateAccessories() const{
         const float travelAngle=std::atan2(delta.y,std::abs(delta.x));
         rotation=rotation*Degrees;rotation.z+=(reflected?-travelAngle:travelAngle);
         const auto arm=multiply(body_,local(pivot,rotation));
-        set((4+i)*4,arm);
+        set((4+sourceSlot)*4,arm);
         // A sole right-arm mesh is mirrored for the opposite side; all four
         // pivots remain the authored front/rear values, never bounding-box guesses.
         auto sharedArm=arm;if(!reflected)scale(sharedArm,{-1,1,1});
