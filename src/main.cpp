@@ -4892,6 +4892,16 @@ int main()
                     fclose(f);
                 }
             saveRightEye(renderer, path);
+            std::vector<uint8_t> lower(320 * 240 * 3);
+            snprintf(path, sizeof path, "sdmc:/3ds/mkw-3ds/intro-%02u-%04u-bottom.ppm", unsigned(Courses[courseChoice].id),
+                     introTick);
+            if (renderer.captureBottom(lower.data()))
+                if (FILE *f = fopen(path, "wb"))
+                {
+                    fprintf(f, "P6\n320 240\n255\n");
+                    fwrite(lower.data(), 1, lower.size(), f);
+                    fclose(f);
+                }
         }
         // QA (autoplay + race-capture.txt): sample race frames for review.
         if (raceCapture && menu.simulates() && !intro.active() &&

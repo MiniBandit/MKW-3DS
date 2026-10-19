@@ -184,6 +184,8 @@ void RaceBottomScreen::draw(Renderer& renderer,const BottomView& view){
     // Animations advance by simulation ticks (presentation runs at 30 or 60 Hz).
     const unsigned elapsed=m.started?std::min<unsigned>(view.tick-m.lastTick,30u):0u;
     m.lastTick=view.tick;m.started=true;
+    // The fly-over runs before the race's clock: its tour shows the whole course at once.
+    if(view.tour)m.blend=1;
     for(unsigned i=0;i<elapsed;++i){
         m.blend=std::clamp(m.blend+((m.overviewWanted||view.tour)?1.f:-1.f)/12.f,0.f,1.f); // the tour shows the whole course
         m.standings=std::clamp(m.standings+(view.standingsVisible?1.f:-1.f)/16.f,0.f,1.f);
