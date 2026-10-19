@@ -134,6 +134,24 @@ intro_audio=movie_manifest['introAudio'];audio_relative=Path(intro_audio['path']
 if audio_relative!=Path('movies/title.wav') or digest_file(assets/audio_relative)!=intro_audio['sha256']:raise ValueError('Opening movie audio changed')
 if digest_file(ROOT/intro_audio['source'])!=intro_audio['sourceSha256']:raise ValueError('Opening movie audio source changed')
 files[assets/audio_relative]=audio_relative
+# Credits movies and their audio (tools/cook_credits.py), checked like the menu movies.
+credits=json.loads((assets/'models/credits.json').read_text())
+if credits.get('version')!=1 or not credits.get('everySourceFrame') or len(credits.get('streams',[]))!=2:raise ValueError('Cook the credits movies (tools/cook_credits.py) before packaging')
+files[assets/'models/credits.json']=Path('models/credits.json')
+for movie in credits['streams']:
+ relative=Path(movie['path']);source_relative=Path(movie['source'])
+ if relative.parent!=Path('movies') or relative.suffix!='.gmv' or not source_relative.as_posix().startswith('data/extracted/thp/ending/') or '..' in source_relative.parts:raise ValueError('Invalid credits movie path')
+ if digest_file(ROOT/source_relative)!=movie['sourceSha256']:raise ValueError('Credits movie source changed: '+str(source_relative))
+ path=assets/relative
+ with path.open('rb') as stream:header=stream.read(64)
+ magic,version,width,height,count,numerator,denominator,frame_bytes,offset=struct.unpack('<4sIHHIIIII32x',header)
+ if magic!=b'GMV1' or [width,height]!=movie['textureSize'] or count!=movie['frames'] or frame_bytes!=width*height//2 or path.stat().st_size!=64+count*frame_bytes:raise ValueError('Invalid credits GMV stream: '+str(relative))
+ if digest_file(path)!=movie['sha256']:raise ValueError('Credits movie payload changed: '+str(relative))
+ files[path]=relative
+for sound in credits['audio']:
+ relative=Path(sound['path'])
+ if relative.parent!=Path('movies') or relative.suffix!='.wav' or digest_file(assets/relative)!=sound['sha256']:raise ValueError('Credits audio changed: '+str(relative))
+ files[assets/relative]=relative
 menu_audio=json.loads((assets/'models/menu-audio.json').read_text())
 if menu_audio.get('version')!=1 or digest_file(ROOT/menu_audio['source'])!=menu_audio['sourceSha256']:raise ValueError('Title music source changed')
 files[assets/'models/menu-audio.json']=Path('models/menu-audio.json')

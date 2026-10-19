@@ -76,6 +76,7 @@ COOK_STEPS=[
  ('Firebar phase stream',['{py}','tools/cook_firebar_phases.py'],['build/firebar/textures/firebar-indirect.ftan']),
  ('Lakitu',['{py}','tools/cook_lakitu.py'],['build/vfx/models/lakitu_body.dskm']),
  ('award ceremony',['{py}','tools/cook_ceremony.py','{disc}'],[SD+'/models/ceremony.json']),
+ ('credits movies',['{py}','tools/cook_credits.py','--jobs','{jobs}'],[SD+'/models/credits.json']),
  ('battle and award screens',['{py}','tools/cook_battle.py'],[SD+'/models/battle.json']),
  ('effect archives',['{py}','tools/cook_effect_archives.py'],[SD+'/models/effect-archives.json']),
  ('name balloons',['{py}','tools/cook_race_balloon.py'],['build/vfx/textures/hud_balloon_line.t3x']),
