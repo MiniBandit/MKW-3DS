@@ -50,6 +50,7 @@
 #include <mkw/asset_pack.hpp>
 #include <mkw/overlay.hpp>
 #include <mkw/menu_bottom_screen.hpp>
+#include <mkw/menu_bottom_ui.hpp>
 #include <mkw/mii_store.hpp>
 #include <mkw/balloon_battle.hpp>
 #include <mkw/bullet_bill.hpp>
@@ -889,6 +890,7 @@ int main()
         // paused race already owns the lower-screen target: borrow it, else make one.
         mkw::MenuBottomScreen menuBottom;
         mkw::MenuBottomLayout bottomLayout;
+        mkw::MenuBottomMap bottomMap;
         if (!autoplay && !menuBottom.borrow(renderer))
             menuBottom.enable(renderer);
         auto last = svcGetSystemTick();
@@ -1152,6 +1154,9 @@ int main()
             if (drawFrame)
             {
                 mkw::composeMenu(visual, uiRace, quads, motion);
+                // The page's controls are drawn on the lower screen, where they take touch.
+                if (menuBottom.active())
+                    mkw::relocateControls(visual, quads, bottomMap);
                 menuProfile->mark(MenuStage::Compose);
             }
             menuRenderer.streamMovies(revealed ? quads : visualResident,
@@ -1199,8 +1204,9 @@ int main()
             if (menuBottom.active())
             {
                 mkw::composeMenuBottom(visual, bottomLayout, &mkw::miiStore(),
-                                       [](unsigned course) -> const char * { return Courses[course].name; });
+                                       [](unsigned course) -> const char * { return Courses[course].name; }, &bottomMap);
                 menuBottom.draw(renderer, bottomLayout);
+                menuRenderer.draw(renderer, quads, true, 0, ~0u, &menuIcons);
             }
             menuProfile->mark(MenuStage::Foreground);
             renderer.end();
@@ -1251,7 +1257,15 @@ int main()
                                   {"character", mkw::UiPage::Character, 8}, {"vehicle", mkw::UiPage::Vehicle, 0},
                                   {"drift", mkw::UiPage::Drift, 1},         {"cup", mkw::UiPage::Cup, 0},
                                   {"course", mkw::UiPage::Course, 0},       {"confirm", mkw::UiPage::Confirm, 0},
-                                  {"pause", mkw::UiPage::Pause, 0}};
+                                  {"pause", mkw::UiPage::Pause, 0},         {"intro", mkw::UiPage::Intro, 0},
+                                  {"vs-mode", mkw::UiPage::VSMode, 0},      {"battle-mode", mkw::UiPage::BattleMode, 0},
+                                  {"battle-cup", mkw::UiPage::BattleCup, 0}, {"battle-stage", mkw::UiPage::BattleStage, 0},
+                                  {"ghost", mkw::UiPage::Ghost, 2},         {"quit-confirm", mkw::UiPage::QuitConfirm, 1},
+                                  {"results", mkw::UiPage::Results, 0},     {"error", mkw::UiPage::Error, 0}};
+        // The lower screen beside each page (name-bottom.ppm, 320x240).
+        mkw::MenuBottomScreen qaBottom;
+        mkw::MenuBottomLayout qaBottomLayout;
+        qaBottom.enable(renderer);
         bool ok = true;
         unsigned captured = 0, expected = std::size(pages), motionFrames = 0;
         std::vector<uint8_t> pixels(400 * 240 * 3);
@@ -1260,6 +1274,9 @@ int main()
                            bool save = true, bool models = true) {
             std::vector<mkw::UiQuad> quads, resident;
             mkw::composeMenu(visual, fixture, quads, motion);
+            mkw::MenuBottomMap qaMap;
+            if (qaBottom.active())
+                mkw::relocateControls(visual, quads, qaMap);
             auto preload = motion;
             preload.active = false;
             preload.entering = false;
@@ -1268,8 +1285,6 @@ int main()
             preload.holdFrame = 0;
             preload.selectedControl = mkw::uiSelectedMenuControl(visual);
             mkw::composeMenu(visual, fixture, resident, preload);
-            for (const auto &quad : quads)
-                ok &= !quad.bottom;
             renderer.waitForGpu();
             ok &= menuRenderer.prepare(resident);
             ok &= menuRenderer.updateMovies(motion.underlay ? motion.underlay->age : visual.age);
@@ -1283,9 +1298,29 @@ int main()
             menuRenderer.draw(renderer, quads, false, 1, ~0u, &menuIcons);
             if (motion.blackAlpha > 0)
                 renderer.drawScreenFade(motion.blackAlpha, false);
+            if (qaBottom.active())
+            {
+                mkw::composeMenuBottom(visual, qaBottomLayout, &mkw::miiStore(),
+                                       [](unsigned course) -> const char * { return Courses[course].name; }, &qaMap);
+                qaBottom.draw(renderer, qaBottomLayout);
+                menuRenderer.draw(renderer, quads, true, 0, ~0u, &menuIcons);
+            }
             renderer.end();
             if (!save)
                 return;
+            if (qaBottom.active())
+            {
+                std::vector<uint8_t> lower(320 * 240 * 3);
+                char lowerPath[96];
+                snprintf(lowerPath, sizeof lowerPath, "sdmc:/3ds/mkw-3ds/menu-%s-bottom.ppm", name);
+                if (renderer.captureBottom(lower.data()))
+                    if (FILE *f = fopen(lowerPath, "wb"))
+                    {
+                        fprintf(f, "P6\n320 240\n255\n");
+                        fwrite(lower.data(), 1, lower.size(), f);
+                        fclose(f);
+                    }
+            }
             char path[96];
             snprintf(path, sizeof path, "sdmc:/3ds/mkw-3ds/menu-%s.ppm", name);
             if (renderer.captureTop(pixels.data()))
@@ -1309,7 +1344,9 @@ int main()
             menu.selection = {};
             menu.selection.mode = mkw::UiMode::GrandPrix;
             if (page.page == mkw::UiPage::Vehicle || page.page == mkw::UiPage::Drift || page.page == mkw::UiPage::Cup ||
-                page.page == mkw::UiPage::Confirm)
+                page.page == mkw::UiPage::Confirm || page.page == mkw::UiPage::Course ||
+                page.page == mkw::UiPage::Ghost || page.page == mkw::UiPage::BattleCup ||
+                page.page == mkw::UiPage::BattleStage)
             {
                 menu.selection.driver = 10;
                 menu.selection.vehicle = page.page == mkw::UiPage::Vehicle ? 0 : 4;

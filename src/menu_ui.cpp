@@ -119,6 +119,7 @@ public:
   float l=std::max(x,0.f),t=std::max(y,7.5f),r=std::min(x+w,400.f),b=std::min(y+h,232.5f);
   if(r<=l||b<=t)return;
   out.push_back({i,l,t,r-l,b-t,alpha,tint,false,(l-x)/w,(t-y)/h,(r-x)/w,(b-y)/h});
+  out.back().slot=p.focusSlot; // the control this quad belongs to (menu_bottom_ui.hpp moves controls to the lower screen)
  }
  void sprite(const char* key,float x,float y,float w,float h,float a=1,uint32_t tint=0xffffffff,Pose p={}){quad(uiFindSpriteKey(key),x,y,w,h,a,tint,p);}
  void region(const char* key,float x,float y,float w,float h,float u0,float v0,float u1,float v1,Pose p,float alpha,const char* focusKey=nullptr){
@@ -307,6 +308,8 @@ static void composeMenuImpl(const MenuState& s,const UiRaceView& race,std::vecto
    underlayView.selectedControl=transition->underlaySelectedControl;
   }
   composeMenuImpl(base,race,q,underlayView.confirming||underlayView.preload?&underlayView:nullptr);
+  // The page under the confirmation stays where it is: only the OK button below is a control.
+  for(auto& quad:q)quad.slot=~0u;
  }
  Composer c(s,q,transition);const unsigned driver=std::min(s.selection.driver,unsigned(UiCharacters.size()-1));
  const bool preload=transition&&transition->preload;

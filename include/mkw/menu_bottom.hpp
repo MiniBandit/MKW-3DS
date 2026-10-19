@@ -4,6 +4,7 @@
 #include <cstdint>
 namespace mkw {
 class MiiStore;
+struct MenuBottomMap;
 // The menus' lower screen (320 x 240): the current page's choices as large
 // touch targets, mirrored from the same MenuState the top screen shows. A tap
 // selects a control and accepts it, exactly as the d-pad and A would; the Back
@@ -21,6 +22,7 @@ struct BottomWidget {
     bool back=false;      // a tap is Back
     bool enabled=true;    // false: drawn dimmed (a tap still reports "not available")
     bool selected=false;  // the page's current cursor
+    bool hidden=false;    // tappable but not drawn (the control's art is drawn by the menu quads)
     std::uint32_t color=0;// RRGGBBAA fill (Tile and Button)
 };
 struct MenuBottomLayout {
@@ -36,7 +38,7 @@ struct MenuBottomLayout {
 // kept out of this layer so it builds on the host).
 using CourseNameFn=const char* (*)(unsigned course);
 // Fills the layout for the state. miis (may be null) names the two Mii outfit slots.
-void composeMenuBottom(const MenuState& state,MenuBottomLayout& layout,const MiiStore* miis=nullptr,CourseNameFn courseName=nullptr);
+void composeMenuBottom(const MenuState& state,MenuBottomLayout& layout,const MiiStore* miis=nullptr,CourseNameFn courseName=nullptr,const MenuBottomMap* moved=nullptr);
 // The widget under a touch (pixels), or -1; only tappable widgets count.
 int hitMenuBottom(const MenuBottomLayout& layout,float x,float y);
 }

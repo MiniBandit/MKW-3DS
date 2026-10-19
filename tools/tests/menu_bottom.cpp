@@ -2,6 +2,7 @@
 #include <mkw/mii_store.hpp>
 #include <mkw/menu_index.hpp>
 #include <mkw/menu_transition.hpp>
+#include <mkw/menu_bottom_ui.hpp>
 #include <cassert>
 #include <cstdio>
 #include <cstring>
@@ -9,6 +10,8 @@
 namespace mkw {
 const UiAnimationClip* uiFindAnimationClip(const char*,const char*,const char*){return nullptr;}
 const char* uiPauseMenuControl(const MenuState&){return nullptr;}
+// The host test checks the standalone layout: no controls are moved.
+bool movesControls(UiPage){return false;}
 }
 int main(){
  using namespace mkw;

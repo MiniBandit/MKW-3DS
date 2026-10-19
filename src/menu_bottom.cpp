@@ -1,4 +1,5 @@
 #include <mkw/menu_bottom.hpp>
+#include <mkw/menu_bottom_ui.hpp>
 #include <mkw/mii_store.hpp>
 #include <algorithm>
 #include <cstdio>
@@ -11,17 +12,25 @@ constexpr const char* CupNames[8]={"MUSHROOM","FLOWER","STAR","SPECIAL","SHELL",
 constexpr const char* MainMenuNames[7]={"SINGLE PLAYER","2 PLAYERS","3 PLAYERS","4 PLAYERS","WFC 1 PLAYER","WFC 2 PLAYERS","CHANNEL"};
 
 void copy(char (&destination)[32],const char* source){std::snprintf(destination,sizeof destination,"%s",source?source:"");}
+// The lower screen's letters are drawn at whole-pixel sizes only (a 5 x 7 font
+// scaled by a fraction smears): the largest size up to 'preferred' that fits.
+float fit(const char* text,float width,float preferred){
+    float size=preferred<1?1:float(int(preferred));
+    const float length=float(std::strlen(text));
+    while(size>1&&length*6*size-size>width)size-=1;
+    return size;
+}
 
 struct Builder {
     MenuBottomLayout& layout;
     const MenuState& state;
     BottomWidget* label(float x,float y,const char* text,float size=1,std::uint32_t color=0xffffffffu){
         auto* w=layout.add();if(!w)return nullptr;
-        w->kind=BottomWidget::Label;w->x=x;w->y=y;copy(w->text,text);w->textSize=size;w->color=color;return w;
+        w->kind=BottomWidget::Label;w->x=x;w->y=y;copy(w->text,text);w->textSize=fit(w->text,312-x,size);w->color=color;return w;
     }
     BottomWidget* tile(float x,float y,float w,float h,const char* text,int slot,bool enabled=true,float size=1,const char* sub=""){
         auto* t=layout.add();if(!t)return nullptr;
-        t->kind=BottomWidget::Tile;t->x=x;t->y=y;t->w=w;t->h=h;copy(t->text,text);copy(t->sub,sub);t->textSize=size;
+        t->kind=BottomWidget::Tile;t->x=x;t->y=y;t->w=w;t->h=h;copy(t->text,text);copy(t->sub,sub);t->textSize=fit(t->text,w-6,size);
         t->slot=slot;t->enabled=enabled;t->selected=slot>=0&&unsigned(slot)==state.cursor;
         t->color=!enabled?TileDisabled:t->selected?TileSelected:TileColor;
         return t;
@@ -53,7 +62,7 @@ BottomWidget* MenuBottomLayout::add(){
     return &widgets[count++];
 }
 
-void composeMenuBottom(const MenuState& state,MenuBottomLayout& layout,const MiiStore* miis,CourseNameFn courseName){
+void composeMenuBottom(const MenuState& state,MenuBottomLayout& layout,const MiiStore* miis,CourseNameFn courseName,const MenuBottomMap* moved){
     layout.count=0;layout.page=state.page;layout.cursor=state.cursor;layout.message=state.unavailable;
     Builder b{layout,state};
     const auto& s=state.selection;
@@ -63,6 +72,40 @@ void composeMenuBottom(const MenuState& state,MenuBottomLayout& layout,const Mii
         if(const char* name=courseName?courseName(index):nullptr)return name;
         std::snprintf(fallback,sizeof fallback,"COURSE %u",index+1);return fallback;
     };
+    if(moved&&moved->valid&&moved->page==state.page&&movesControls(state.page)){
+        // The page's authored controls were moved here as menu quads: draw only the
+        // title and Back, and make each control's rectangle tappable.
+        const char* title="";
+        switch(state.page){
+        case UiPage::License:title="SELECT A LICENSE";break;
+        case UiPage::MainMenu:title="MAIN MENU";break;
+        case UiPage::Mode:title="SELECT A MODE";break;
+        case UiPage::EngineClass:title="ENGINE CLASS";break;
+        case UiPage::VSMode:title="VS RACE";break;
+        case UiPage::BattleMode:title="BATTLE";break;
+        case UiPage::Character:title="SELECT A CHARACTER";break;
+        case UiPage::Drift:title="DRIFT TYPE";break;
+        case UiPage::Cup:title="SELECT A CUP";break;
+        case UiPage::Course:title="SELECT A COURSE";break;
+        case UiPage::BattleCup:title="BATTLE STAGES";break;
+        case UiPage::BattleStage:title="SELECT A STAGE";break;
+        case UiPage::Ghost:title="TIME TRIAL";break;
+        case UiPage::Confirm:title="READY?";break;
+        case UiPage::Pause:title="PAUSED";break;
+        case UiPage::QuitConfirm:title="QUIT THE RACE?";break;
+        default:break;
+        }
+        b.title(title);
+        for(unsigned slot=0;slot<state.count()&&slot<moved->rects.size();++slot){
+            const auto& r=moved->rects[slot];
+            if(!r.present)continue;
+            auto* t=b.tile(r.x0,r.y0,r.x1-r.x0,r.y1-r.y0,"",int(slot),true);
+            if(t)t->hidden=true;
+        }
+        b.back();
+        if(state.unavailable)b.label(86,192,"NOT AVAILABLE YET",1.5f,0xff6060ffu);
+        return;
+    }
     switch(state.page){
     case UiPage::Strap:case UiPage::Intro:case UiPage::Title:
         b.tile(40,90,240,60,"TOUCH TO START",0,true,2);
