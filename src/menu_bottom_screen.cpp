@@ -118,7 +118,7 @@ void MenuBottomScreen::disable(Renderer& renderer){
     on_=false;owned_=false;
 }
 
-void MenuBottomScreen::draw(Renderer& renderer,const MenuBottomLayout& layout,bool beginFrame){
+void MenuBottomScreen::draw(Renderer& renderer,const MenuBottomLayout& layout,bool beginFrame,const std::function<void()>& between){
     if(!on_)return;
     if(beginFrame)renderer.beginBottom();
     // The lower screen's quads (fills, then letters) share one capacity.
@@ -134,6 +134,7 @@ void MenuBottomScreen::draw(Renderer& renderer,const MenuBottomLayout& layout,bo
         rect(quads[count++],w.x,w.y,w.w,w.h,w.color);
     }
     renderer.drawScreenMaterialQuads(nullptr,quads.data(),count,0,0xffffffffu);
+    if(between)between();
     // Icons (Mii portraits) at the left of their tiles.
     for(unsigned i=0;i<layout.count;++i){
         const auto& w=layout.widgets[i];

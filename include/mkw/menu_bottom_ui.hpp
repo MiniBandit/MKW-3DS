@@ -14,6 +14,7 @@ struct MenuBottomMap {
     bool valid=false;
     UiPage page=UiPage::Strap;
     std::array<SlotRect,32> rects{}; // lower-screen rectangle of each control, by slot
+    SlotRect back;                   // the Back button (a copy of the page's own art)
 };
 // True for pages whose controls move.
 bool movesControls(UiPage page);

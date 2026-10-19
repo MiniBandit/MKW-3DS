@@ -695,8 +695,10 @@ void Renderer::drawAtScreenNow(const Model& model,const Vertex* vertices,const C
 }
 
 void Renderer::drawMenuIconNow(const Model& model,const Vertex* vertices,const C3D_Mtx& transform,const UiQuad& q){
-    if(q.bottom||q.alpha<=0||q.w<=0||q.h<=0||q.u1<=q.u0||q.v1<=q.v0)return;
+    // Icons of the lower screen's menu (bottom quads) draw in its own pass, 320 wide.
+    if(q.bottom!=bottomPass_||q.alpha<=0||q.w<=0||q.h<=0||q.u1<=q.u0||q.v1<=q.v0)return;
     flushSprites();
+    const float screenW=bottomPass_?320.f:400.f;
     const float width=q.w/(q.u1-q.u0),height=q.h/(q.v1-q.v0);
     const float centerX=q.x+(.5f-q.u0)*width,centerY=q.y+(.5f-q.v0)*height;
     const C3D_Mtx oldProjection=projection_,oldView=view_;
@@ -709,7 +711,7 @@ void Renderer::drawMenuIconNow(const Model& model,const Vertex* vertices,const C
     const float layer=.9f+.0005f*float(std::min(menuIconDrawCount_++,128u));
     for(unsigned col=0;col<4;++col){
         projection_.r[0].c[col]*=(480.f/44.f)*(height/240.f);
-        projection_.r[1].c[col]*=(608.f/192.f)*(width/400.f);
+        projection_.r[1].c[col]*=(608.f/192.f)*(width/screenW);
         // Captured-image panes composite in draw order, including the offset
         // shadow and OK glow of the same vehicle. Give each its own near-depth
         // interval while preserving all relative depth inside this machine.
@@ -726,8 +728,8 @@ void Renderer::drawMenuIconNow(const Model& model,const Vertex* vertices,const C
     const float x=q.x+(execStereo_.active()?(eye_?.5f:-.5f)*screenParallax_:0.f);
     const unsigned l=unsigned(std::clamp(std::floor(240.f-q.y-q.h),0.f,240.f));
     const unsigned r=unsigned(std::clamp(std::ceil(240.f-q.y),0.f,240.f));
-    const unsigned t=unsigned(std::clamp(std::floor(400.f-x-q.w),0.f,400.f));
-    const unsigned b=unsigned(std::clamp(std::ceil(400.f-x),0.f,400.f));
+    const unsigned t=unsigned(std::clamp(std::floor(screenW-x-q.w),0.f,screenW));
+    const unsigned b=unsigned(std::clamp(std::ceil(screenW-x),0.f,screenW));
     if(l<r&&t<b){
         C3D_SetScissor(GPU_SCISSOR_NORMAL,l,t,r,b);
         courseLighting_=false;menuIconLayer_=true;menuIconAlpha_=q.alpha;

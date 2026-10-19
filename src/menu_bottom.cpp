@@ -95,15 +95,17 @@ void composeMenuBottom(const MenuState& state,MenuBottomLayout& layout,const Mii
         case UiPage::QuitConfirm:title="QUIT THE RACE?";break;
         default:break;
         }
-        b.title(title);
+        (void)title; // the page's own title bar is drawn by the menu quads
         for(unsigned slot=0;slot<state.count()&&slot<moved->rects.size();++slot){
             const auto& r=moved->rects[slot];
             if(!r.present)continue;
             auto* t=b.tile(r.x0,r.y0,r.x1-r.x0,r.y1-r.y0,"",int(slot),true);
             if(t)t->hidden=true;
         }
-        b.back();
-        if(state.unavailable)b.label(86,192,"NOT AVAILABLE YET",1.5f,0xff6060ffu);
+        if(moved->back.present){
+            if(auto* t=b.tile(moved->back.x0,moved->back.y0,moved->back.x1-moved->back.x0,moved->back.y1-moved->back.y0,"",-1,true)){t->hidden=true;t->back=true;}
+        }else b.back();
+        if(state.unavailable)b.label(86,170,"NOT AVAILABLE YET",1.5f,0xff6060ffu);
         return;
     }
     switch(state.page){

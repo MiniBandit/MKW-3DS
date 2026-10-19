@@ -1,5 +1,6 @@
 #pragma once
 #include <mkw/menu_bottom.hpp>
+#include <functional>
 #include <memory>
 namespace mkw {
 class Renderer;
@@ -20,7 +21,8 @@ public:
     // Records the lower screen for this frame (inside the frame, after the top
     // screen). beginFrame: call Renderer::beginBottom() first; false when the
     // race's lower screen was already begun this frame and this draws over it.
-    void draw(Renderer& renderer,const MenuBottomLayout& layout,bool beginFrame=true);
+    // between: drawn after the flat fills and before the labels (the menu quads of moved controls).
+    void draw(Renderer& renderer,const MenuBottomLayout& layout,bool beginFrame=true,const std::function<void()>& between={});
     MenuBottomScreen();
     ~MenuBottomScreen();
 private:

@@ -1206,8 +1206,8 @@ int main()
             {
                 mkw::composeMenuBottom(visual, bottomLayout, &mkw::miiStore(),
                                        [](unsigned course) -> const char * { return Courses[course].name; }, &bottomMap);
-                menuBottom.draw(renderer, bottomLayout);
-                menuRenderer.draw(renderer, quads, true, 0, ~0u, &menuIcons);
+                menuBottom.draw(renderer, bottomLayout, true,
+                                [&] { menuRenderer.draw(renderer, quads, true, 0, ~0u, &menuIcons); });
             }
             menuProfile->mark(MenuStage::Foreground);
             renderer.end();
@@ -1304,8 +1304,8 @@ int main()
             {
                 mkw::composeMenuBottom(visual, qaBottomLayout, &mkw::miiStore(),
                                        [](unsigned course) -> const char * { return Courses[course].name; }, &qaMap);
-                qaBottom.draw(renderer, qaBottomLayout);
-                menuRenderer.draw(renderer, quads, true, 0, ~0u, &menuIcons);
+                qaBottom.draw(renderer, qaBottomLayout, true,
+                              [&] { menuRenderer.draw(renderer, quads, true, 0, ~0u, &menuIcons); });
             }
             renderer.end();
             if (!save)
