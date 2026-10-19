@@ -1,21 +1,23 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+LOG_FILE="build-cia-log.txt"
+
 shopt -s nullglob nocaseglob
-discs=(mkw-rom/*.iso mkw-rom/*.wbfs)
+roms=(mkw-rom/*.iso mkw-rom/*.wbfs)
 shopt -u nullglob nocaseglob
 
-if (( ${#discs[@]} == 0 )); then
+if (( ${#roms[@]} == 0 )); then
     echo "Error: Put a Mario Kart Wii (USA) ISO or WBFS file inside the mkw-rom folder." >&2
     exit 1
 fi
 
-if (( ${#discs[@]} > 1 )); then
+if (( ${#roms[@]} > 1 )); then
     echo "Error: mkw-rom contains multiple ISO/WBFS files." >&2
     exit 1
 fi
 
-disc="${discs[0]}"
+rom="${roms[0]}"
 
 if [[ ! -d vendor/gclib ]]; then
     python tools/bootstrap.py
@@ -33,14 +35,13 @@ fi
 export PYTHONUTF8=1 PYTHONUNBUFFERED=1
 
 set +e
-.venv/bin/python tools/release/build_cia.py "$disc" 2>&1 | tee build-cia-log.txt
+.venv/bin/python tools/release/build_cia.py "$rom" 2>&1 | tee "$LOG_FILE"
 status=${PIPESTATUS[0]}
 set -e
 
 if (( status != 0 )); then
-    echo "Build failed. See build-cia-log.txt for details." >&2
+    echo "Build failed. See $LOG_FILE for details." >&2
     exit "$status"
 fi
 
-echo "Build completed successfully."
-echo "Log: $PWD/build-cia-log.txt"
+echo "Log: $LOG_FILE"
