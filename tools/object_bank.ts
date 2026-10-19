@@ -82,11 +82,14 @@ export function writeObjectBank(path:string,archive:any,poseMetadata:PoseMetadat
  const names=new Set(model.nodes.map((n:any)=>n.name));
  // Some archives drive several models with the same joint names; the cooker
  // excludes clips that belong to a sibling model.
+ // noclip's linear track sampler reads one value past its table at exactly
+ // the last frame (NaN), so a non-looping end key is taken a hair earlier.
+ const endKey=(clip:any,f:number)=>clip.loopMode!==1&&f>=clip.duration&&clip.duration>0?clip.duration-1e-3:f;
  const exclude=process.env.MKW_OBJECT_CLIP_EXCLUDE?new RegExp(process.env.MKW_OBJECT_CLIP_EXCLUDE):null;
  const chr=archive.chr0.filter((c:any)=>!exclude?.test(c.name)&&c.nodeAnimations.some((n:any)=>names.has(n.nodeName))).map((clip:any)=>{
   const sample=evaluate(clip);const count=Math.max(1,clip.duration+(clip.loopMode===1?0:1));
   const frames:number[][][]=[];
-  for(let f=0;f<count;f++){controller.setTimeInFrames(f);frames.push(sample());}
+  for(let f=0;f<count;f++){controller.setTimeInFrames(endKey(clip,f));frames.push(sample());}
   const animated=palette.map((_,i)=>i).filter(i=>frames.some(fr=>fr[i].some((v,j)=>Math.abs(v-frames[0][i][j])>1e-6)));
   // Translations are world units; rotation/scale/normal terms are unitless.
   const step=chooseStep(frames.map(fr=>animated.flatMap(i=>fr[i])),j=>[3,7,11].includes(j%12)?0.5:2e-3);
@@ -121,7 +124,7 @@ export function writeObjectBank(path:string,archive:any,poseMetadata:PoseMetadat
   if(!animated.length)return null;
   // Non-looping SRT0 includes its authored end key, just like CLR0.
   const count=clip.loopMode===1?Math.max(1,clip.duration):clip.duration+1;const series:number[][]=[];
-  for(let f=0;f<count;f++){controller.setTimeInFrames(f);const data:number[]=[];series.push(data);
+  for(let f=0;f<count;f++){controller.setTimeInFrames(endKey(clip,f));const data:number[]=[];series.push(data);
    for(const t of tracks)for(let k=0;k<2;k++){
     const current=mat4.clone(t.material.texSrts[t.coords[k]]?.srtMtx??mat4.create());t.animators[k]?.calcTexMtx(current);
     const inverse=mat4.invert(mat4.create(),t.baseline[k]);
