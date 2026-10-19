@@ -53,13 +53,14 @@ steps are skipped. If it fails, share `build-cia-log.txt` when asking for help.
 
 ### Docker (suitable for any OS)
 
-You can also generate your `.cia` file using [Docker Engine](https://docs.docker.com/engine/install/) or [Docker Desktop](https://docs.docker.com/desktop/):
+You can also generate your `.cia` file using [Docker Engine](https://docs.docker.com/engine/install/) (Linux only) or [Docker Desktop](https://docs.docker.com/desktop/) (Windows, macOS, Linux):
 - Put your `.iso` or `.wbfs` file inside the `mkw-rom` folder
 - Open a terminal inside the project's root and run the following command:
-   ```
-   docker compose up --build
-   ```
+  ```
+  docker compose run --build --rm builder bash /workspace/build-mkw-cia-docker.sh
+  ```
 - Every dependency will be downloaded and installed and the build script will start automatically
+- If the build stops partway, run the above command again
 - After the script is done running and you have copied over important files (i.e. the `build/release/sd-card/3ds` folder and the `.cia` file), you can:
   - Remove containers/images/networks/volumes associated with this project:
     ```

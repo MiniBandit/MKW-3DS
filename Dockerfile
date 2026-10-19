@@ -28,5 +28,3 @@ RUN wget -U "dkp-apt" https://apt.devkitpro.org/install-devkitpro-pacman \
     && dkp-pacman -Sy --noconfirm \
     && dkp-pacman -S --needed --noconfirm 3ds-dev \
     && rm -rf /var/cache/pacman/pkg/*
-
-CMD ["bash", "./build-mkw-cia-docker.sh"]
