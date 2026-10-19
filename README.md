@@ -71,6 +71,7 @@ You can also generate your `.cia` file using [Docker Engine](https://docs.docker
   ```
   docker builder prune
   ```
+- If you no longer need Docker, you can uninstall it as well
 
 ## Installing
 
