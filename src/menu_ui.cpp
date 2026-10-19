@@ -415,7 +415,7 @@ static void composeMenuImpl(const MenuState& s,const UiRaceView& race,std::vecto
   // The chosen cup draws last (retail lifts it to z+200) over its neighbours.
   for(unsigned n=0;n<8;++n){const unsigned i=n<selectedCup?n:n==7?selectedCup:n+1;
    Pose p=child(cups,numbered(pickCup?"CupSelectCup":"CourseSelectCup",i));const char* base=i==selectedCup?"cup_select":"cup_free";
-   if(!pickCup)p.focusSlot=~0u; // on the course page the cup is a heading, not a control
+   if(!pickCup)p.focusSlot=UiHeadingSlot; // on the course page the cup is a heading, not a control
    if(!pickCup){
     // CtrlMenuCourseSelectCupSub::calcSelf (USA 807de7d4): t advances 20 per
     // frame to 300. The chosen cup slides to the CupSelectCupNULL origin and
@@ -450,7 +450,7 @@ static void composeMenuImpl(const MenuState& s,const UiRaceView& race,std::vecto
   const Pose cups=control("BattleCupSelectNULL","CupSelectCupNULL"),stages=control("BattleCupSelectNULL","CupSelectCourseNULL");
   for(unsigned i=0;i<2;++i){
    Pose p=child(cups,numbered(pick?"BattleCupSelectCup":"BattleStageSelectCup",i));
-   if(!pick)p.focusSlot=~0u; // on the stage page the cup is a heading, not a control
+   if(!pick)p.focusSlot=UiHeadingSlot; // on the stage page the cup is a heading, not a control
    const char* base=i==cup?"cup_select":"cup_free";
    c.panel(base,p);c.icon("battle_cup_",i,base,"icon",p);
    if(i==cup||(pick&&uiFocusAnimation(s,i).changing())){

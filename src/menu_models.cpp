@@ -433,8 +433,7 @@ namespace mkw
         const bool previewOnly = centered_ && (state.page == UiPage::Character || state.page == UiPage::Vehicle ||
                                                state.page == UiPage::Drift || state.page == UiPage::Cup ||
                                                state.page == UiPage::Course || state.page == UiPage::BattleCup ||
-                                               state.page == UiPage::BattleStage || state.page == UiPage::Ghost ||
-                                               state.page == UiPage::Mode || state.page == UiPage::EngineClass);
+                                               state.page == UiPage::BattleStage || state.page == UiPage::Ghost);
         if (centered_ && state.page == UiPage::Confirm)
             return; // the confirmation shows only its own button
         if (auto *background = shownBackground_ >= 0 && !previewOnly ? find(Background, shownBackground_) : nullptr; background && background->resident())

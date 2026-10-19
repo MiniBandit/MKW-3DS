@@ -37,6 +37,23 @@ struct MenuBottomLayout {
 // Names the 32 race courses in menu order (src/main.cpp passes the course catalog;
 // kept out of this layer so it builds on the host).
 using CourseNameFn=const char* (*)(unsigned course);
+// Text drawn on the top screen over a page's own art (the ghost page's record panel).
+struct MenuTopText {
+    char text[40]{};
+    float x=0,y=0,size=1;
+    std::uint32_t rgba=0xffffffffu;
+};
+struct MenuTopInfo {
+    const char* courseName=nullptr;
+    unsigned bestMs=0;       // saved best time of the selected course (0: none)
+    bool ghostSaved=false;   // a ghost is saved for it
+};
+struct MenuTopTexts {
+    std::array<MenuTopText,8> lines{};
+    unsigned count=0;
+};
+// What the top screen shows beyond the authored art for this page (empty for most pages).
+void composeMenuTopText(const MenuState& state,const MenuTopInfo& info,MenuTopTexts& out);
 // Fills the layout for the state. miis (may be null) names the two Mii outfit slots.
 void composeMenuBottom(const MenuState& state,MenuBottomLayout& layout,const MiiStore* miis=nullptr,CourseNameFn courseName=nullptr,const MenuBottomMap* moved=nullptr);
 // The widget under a touch (pixels), or -1; only tappable widgets count.

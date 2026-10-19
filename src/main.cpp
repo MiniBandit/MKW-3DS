@@ -809,6 +809,9 @@ int main()
         view.holdFrame = 0;
         view.selectedControl = mkw::uiSelectedMenuControl(state);
         mkw::composeMenu(state, uiRace, out, view);
+        // The lower screen's copies of the chrome use textures of their own on some pages.
+        mkw::MenuBottomMap unused;
+        mkw::relocateControls(state, out, unused);
     };
     // Set once a race's assets are resident; releaseRace (assigned with them
     // below) frees them. The menus never draw race assets.
@@ -889,7 +892,9 @@ int main()
         // The lower screen shows the page's choices to touch (menu_bottom.hpp). A
         // paused race already owns the lower-screen target: borrow it, else make one.
         mkw::MenuBottomScreen menuBottom;
-        mkw::MenuBottomLayout bottomLayout;
+        // Heap: the layout is several KB and the main thread's stack is small.
+        const auto bottomLayoutStorage = std::make_unique<mkw::MenuBottomLayout>();
+        mkw::MenuBottomLayout &bottomLayout = *bottomLayoutStorage;
         mkw::MenuBottomMap bottomMap;
         if (!autoplay && !menuBottom.borrow(renderer))
             menuBottom.enable(renderer);
@@ -1216,6 +1221,16 @@ int main()
             menuRenderer.draw(renderer, quads, false, 1, ~0u, &menuIcons);
             if (motion.blackAlpha > 0)
                 renderer.drawScreenFade(motion.blackAlpha, false);
+            if (menuBottom.active() && visual.page == mkw::UiPage::Ghost)
+            {
+                // Saved records of the selected course (the license's best times).
+                mkw::MenuTopInfo info;
+                info.courseName = Courses[std::min(visual.selection.course, 31u)].name;
+                info.bestMs = bestTimes[std::min(visual.selection.course, 31u)];
+                mkw::MenuTopTexts topTexts;
+                mkw::composeMenuTopText(visual, info, topTexts);
+                menuBottom.drawTopText(renderer, topTexts);
+            }
             if (menuBottom.active())
             {
                 mkw::composeMenuBottom(visual, bottomLayout, &mkw::miiStore(),
@@ -1279,7 +1294,8 @@ int main()
                                   {"results", mkw::UiPage::Results, 0},     {"error", mkw::UiPage::Error, 0}};
         // The lower screen beside each page (name-bottom.ppm, 320x240).
         mkw::MenuBottomScreen qaBottom;
-        mkw::MenuBottomLayout qaBottomLayout;
+        const auto qaBottomLayoutStorage = std::make_unique<mkw::MenuBottomLayout>();
+        mkw::MenuBottomLayout &qaBottomLayout = *qaBottomLayoutStorage;
         qaBottom.enable(renderer);
         menuModels.setCenteredPreview(qaBottom.active());
         bool ok = true;
@@ -1301,6 +1317,8 @@ int main()
             preload.holdFrame = 0;
             preload.selectedControl = mkw::uiSelectedMenuControl(visual);
             mkw::composeMenu(visual, fixture, resident, preload);
+            mkw::MenuBottomMap qaResidentMap;
+            mkw::relocateControls(visual, resident, qaResidentMap);
             renderer.waitForGpu();
             ok &= menuRenderer.prepare(resident);
             ok &= menuRenderer.updateMovies(motion.underlay ? motion.underlay->age : visual.age);
@@ -1320,6 +1338,16 @@ int main()
                                        [](unsigned course) -> const char * { return Courses[course].name; }, &qaMap);
                 qaBottom.draw(renderer, qaBottomLayout, true,
                               [&] { menuRenderer.draw(renderer, quads, true, 0, ~0u, &menuIcons); });
+                if (visual.page == mkw::UiPage::Ghost)
+                {
+                    // A sample record so the capture shows the filled panel.
+                    mkw::MenuTopInfo info;
+                    info.courseName = Courses[std::min(visual.selection.course, 31u)].name;
+                    info.bestMs = bestTimes[std::min(visual.selection.course, 31u)] ? bestTimes[std::min(visual.selection.course, 31u)] : 83456;
+                    mkw::MenuTopTexts topTexts;
+                    mkw::composeMenuTopText(visual, info, topTexts);
+                    qaBottom.drawTopText(renderer, topTexts);
+                }
             }
             renderer.end();
             if (!save)
@@ -1369,7 +1397,7 @@ int main()
             }
             menu.enter(page.page);
             menu.cursor = page.cursor;
-            menu.advance(54);
+            menu.advance(300); // long enough for every entrance and focus animation to finish
             for (unsigned tick = 0; tick < 6; ++tick)
             {
                 menu.advance(1);
@@ -1611,7 +1639,8 @@ int main()
     mkw::RaceFlowInput resultsInput;
     // The end-of-race menu's touch buttons, drawn over the race's lower screen.
     mkw::MenuBottomScreen resultsBottom;
-    mkw::MenuBottomLayout resultsBottomLayout;
+    const auto resultsBottomLayoutStorage = std::make_unique<mkw::MenuBottomLayout>();
+    mkw::MenuBottomLayout &resultsBottomLayout = *resultsBottomLayoutStorage;
     bool resultsReported = false;
     bool raceSavePending=false;
     auto flushRaceSave=[&](){

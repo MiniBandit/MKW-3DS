@@ -119,7 +119,7 @@ void composeMenuBottom(const MenuState& state,MenuBottomLayout& layout,const Mii
         }
         if(moved->back.present){
             if(auto* t=b.tile(moved->back.x0,moved->back.y0,moved->back.x1-moved->back.x0,moved->back.y1-moved->back.y0,"",-1,true)){t->hidden=true;t->back=true;}
-        }else b.back();
+        }else if(state.page!=UiPage::Title&&state.page!=UiPage::Strap&&state.page!=UiPage::Intro)b.back();
         if(state.unavailable)b.label(86,170,"NOT AVAILABLE YET",1.5f,0xff6060ffu);
         return;
     }
@@ -272,5 +272,27 @@ int hitMenuBottom(const MenuBottomLayout& layout,float x,float y){
         if(x>=w.x&&x<w.x+w.w&&y>=w.y&&y<w.y+w.h)return int(i);
     }
     return -1;
+}
+}
+
+namespace mkw {
+void composeMenuTopText(const MenuState& state,const MenuTopInfo& info,MenuTopTexts& out){
+    out.count=0;
+    if(state.page!=UiPage::Ghost)return;
+    auto add=[&](float x,float y,float size,std::uint32_t color,const char* text){
+        if(out.count>=out.lines.size())return;
+        auto& t=out.lines[out.count++];t.x=x;t.y=y;t.size=size;t.rgba=color;std::snprintf(t.text,sizeof t.text,"%s",text);
+    };
+    char line[40];
+    // The panel of the ghost page (the authored frame is empty): course, best time and ghost.
+    add(124,100,1,0x9fd0ffffu,"COURSE");
+    add(124,112,2,0xffffffffu,info.courseName&&*info.courseName?info.courseName:"-");
+    add(124,138,1,0x9fd0ffffu,"BEST TIME");
+    if(info.bestMs){
+        const unsigned total=info.bestMs,minutes=total/60000,seconds=total/1000%60,millis=total%1000;
+        std::snprintf(line,sizeof line,"%u:%02u.%03u",minutes,seconds,millis);
+        add(124,150,2,0xffd040ffu,line);
+    }else add(124,150,2,0x8a8f9cffu,"--:--.---");
+    add(124,172,1,0x9fd0ffffu,info.ghostSaved?"GHOST SAVED":"NO GHOST YET");
 }
 }

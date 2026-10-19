@@ -3,6 +3,7 @@
 #include <array>
 #include <cstdio>
 #include <cstring>
+#include <vector>
 
 namespace mkw {
 namespace {
@@ -60,10 +61,12 @@ struct MenuBottomScreen::Icons {
     std::array<Slot,Capacity> slots;
     unsigned used=0;
     Texture font;
+    // Per-frame quad buffers live here (heap): 80 bytes a quad is too much for the main thread's stack.
+    std::array<Renderer::MaterialQuad,Renderer::BottomQuadCapacity> quads;
     bool makeFont(){
         if(font.ready)return true;
         if(!C3D_TexInit(&font.gpu,AtlasSize,AtlasSize,GPU_RGBA8))return false;
-        std::array<std::uint32_t,AtlasSize*AtlasSize> pixels{};
+        std::vector<std::uint32_t> pixels(AtlasSize*AtlasSize,0u); // heap: the menu loop runs on a small stack
         for(unsigned g=0;g<GlyphCount;++g){
             const unsigned ox=(g%CellsPerRow)*Cell,oy=(g/CellsPerRow)*Cell;
             for(unsigned col=0;col<5;++col)for(unsigned row=0;row<7;++row)
@@ -118,12 +121,39 @@ void MenuBottomScreen::disable(Renderer& renderer){
     on_=false;owned_=false;
 }
 
+void MenuBottomScreen::drawTopText(Renderer& renderer,const MenuTopTexts& texts){
+    if(!on_||!texts.count||!icons_->font.ready)return;
+    auto& quads=icons_->quads;
+    unsigned count=0;
+    auto glyphs=[&](const char* s,float x,float y,float size,std::uint32_t color){
+        x=float(int(x+.5f));y=float(int(y+.5f));
+        for(;*s;++s,x+=6*size){
+            const int g=glyphIndex(static_cast<unsigned char>(*s));
+            if(g<0||count>=quads.size())continue;
+            auto& q=quads[count++];
+            const float u0=(float((unsigned(g)%CellsPerRow)*Cell)+.03f)/AtlasSize,v0=(float((unsigned(g)/CellsPerRow)*Cell)+.03f)/AtlasSize;
+            const float u1=u0+4.94f/AtlasSize,v1=v0+6.94f/AtlasSize;
+            q.x[0]=x;q.x[1]=x+5*size;q.x[2]=x;q.x[3]=x+5*size;
+            q.y[0]=y;q.y[1]=y;q.y[2]=y+7*size;q.y[3]=y+7*size;
+            q.u[0]=u0;q.u[1]=u1;q.u[2]=u0;q.u[3]=u1;
+            q.v[0]=v0;q.v[1]=v0;q.v[2]=v1;q.v[3]=v1;
+            for(unsigned k=0;k<4;++k)q.color[k]=color;
+        }
+    };
+    for(unsigned i=0;i<texts.count;++i){
+        const auto& t=texts.lines[i];
+        glyphs(t.text,t.x+1,t.y+1,t.size,0x000000c0u); // shadow
+        glyphs(t.text,t.x,t.y,t.size,t.rgba);
+    }
+    renderer.drawScreenMaterialQuads(&icons_->font,quads.data(),count,0x00000000u,0xffffffffu);
+}
+
 void MenuBottomScreen::draw(Renderer& renderer,const MenuBottomLayout& layout,bool beginFrame,const std::function<void()>& between){
     if(!on_)return;
     if(beginFrame)renderer.beginBottom();
     // The lower screen's quads (fills, then letters) share one capacity.
     constexpr unsigned Capacity=Renderer::BottomQuadCapacity-Icons::Capacity-2;
-    std::array<Renderer::MaterialQuad,Capacity> quads;
+    auto& quads=icons_->quads;
     unsigned count=0;
     // Flat fills: the screen, then each tile's selection frame and body.
     rect(quads[count++],0,0,ScreenW,ScreenH,Background);

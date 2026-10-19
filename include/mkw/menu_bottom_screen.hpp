@@ -23,6 +23,8 @@ public:
     // race's lower screen was already begun this frame and this draws over it.
     // between: drawn after the flat fills and before the labels (the menu quads of moved controls).
     void draw(Renderer& renderer,const MenuBottomLayout& layout,bool beginFrame=true,const std::function<void()>& between={});
+    // Top screen: the page's extra text (menu_bottom.hpp), in the same letters. Inside the top frame.
+    void drawTopText(Renderer& renderer,const MenuTopTexts& texts);
     MenuBottomScreen();
     ~MenuBottomScreen();
 private:
