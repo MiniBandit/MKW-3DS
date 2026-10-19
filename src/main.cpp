@@ -886,10 +886,10 @@ int main()
             report("FAIL menu asset thread; loading on demand");
         mkw::pack::open();
         // The lower screen shows the page's choices to touch (menu_bottom.hpp). A
-        // paused race keeps its own lower-screen target, so only a menu with none.
+        // paused race already owns the lower-screen target: borrow it, else make one.
         mkw::MenuBottomScreen menuBottom;
         mkw::MenuBottomLayout bottomLayout;
-        if (!autoplay && !renderer.bottomEnabled())
+        if (!autoplay && !menuBottom.borrow(renderer))
             menuBottom.enable(renderer);
         auto last = svcGetSystemTick();
         double pending = 0;
@@ -1556,6 +1556,9 @@ int main()
     auto resultsStorage = std::make_unique<mkw::RaceResultsFlow>();
     auto &results = *resultsStorage;
     mkw::RaceFlowInput resultsInput;
+    // The end-of-race menu's touch buttons, drawn over the race's lower screen.
+    mkw::MenuBottomScreen resultsBottom;
+    mkw::MenuBottomLayout resultsBottomLayout;
     bool resultsReported = false;
     bool raceSavePending=false;
     auto flushRaceSave=[&](){
@@ -2835,6 +2838,19 @@ int main()
                     results.setCursor(menu.cursor);
                     if (down & KEY_A)
                         resultsInput.accept = true;
+                    // A tap on a button of the lower screen selects and accepts it.
+                    if ((down & KEY_TOUCH) && resultsBottomLayout.page == mkw::UiPage::Results)
+                    {
+                        touchPosition touch{};
+                        hidTouchRead(&touch);
+                        const int hit = mkw::hitMenuBottom(resultsBottomLayout, float(touch.px), float(touch.py));
+                        if (hit >= 0 && resultsBottomLayout.widgets[unsigned(hit)].slot >= 0 &&
+                            menu.selectSlot(unsigned(resultsBottomLayout.widgets[unsigned(hit)].slot)))
+                        {
+                            results.setCursor(menu.cursor);
+                            resultsInput.accept = true;
+                        }
+                    }
                 }
                 if (results.hudGone())
                     down &= ~u32(KEY_START);
@@ -4613,6 +4629,13 @@ int main()
                                     results.leaveFade());
                 renderer.beginBottom();
                 bottomScreen.draw(renderer, bottomView);
+                if (endMenu && !autoplay && resultsBottom.borrow(renderer))
+                {
+                    mkw::composeMenuBottom(menu, resultsBottomLayout);
+                    resultsBottom.draw(renderer, resultsBottomLayout, false);
+                }
+                else if (resultsBottomLayout.page == mkw::UiPage::Results)
+                    resultsBottomLayout.page = mkw::UiPage::Race;
             }
             profiler->mark(Profile::Bottom);
             if (qaMode && frames % 15 == 0)

@@ -38,7 +38,9 @@ logs); the update CIA is downloaded by everyone, so keep it small.
 - A tap selects the control and accepts it (as the d-pad and A do) via
   `MenuState::selectSlot`; the Back button is B. The d-pad cursor is mirrored.
 - `MenuBottomScreen` draws it with flat fills and the built-in text. A paused race
-  keeps the race's own lower screen.
+  and the end-of-race menu draw their buttons over the race's own lower screen
+  (which they borrow, not release): RESUME / RESTART / QUIT and NEXT / QUIT are
+  tappable too.
 - To change a page or add one, edit `menu_bottom.cpp` only: that is a code update.
 
 ## 3. The Mii foundation (`include/mkw/mii_store.hpp`, `src/mii_store.cpp`)

@@ -40,20 +40,28 @@ void rect(Renderer::MaterialQuad& q,float x,float y,float w,float h,std::uint32_
 bool MenuBottomScreen::enable(Renderer& renderer){
     if(on_)return true;
     on_=renderer.enableBottom();
+    owned_=on_;
     return on_;
+}
+
+bool MenuBottomScreen::borrow(Renderer& renderer){
+    if(on_)return true;
+    if(!renderer.bottomEnabled())return false;
+    on_=true;owned_=false;
+    return true;
 }
 
 void MenuBottomScreen::disable(Renderer& renderer){
     if(!on_)return;
     renderer.waitForGpu(); // nothing recorded may still sample the icon textures
     icons_->clear();
-    renderer.releaseBottom();
-    on_=false;
+    if(owned_)renderer.releaseBottom();
+    on_=false;owned_=false;
 }
 
-void MenuBottomScreen::draw(Renderer& renderer,const MenuBottomLayout& layout){
+void MenuBottomScreen::draw(Renderer& renderer,const MenuBottomLayout& layout,bool beginFrame){
     if(!on_)return;
-    renderer.beginBottom();
+    if(beginFrame)renderer.beginBottom();
     // Flat fills: the screen, then each tile's selection frame and body.
     std::array<Renderer::MaterialQuad,1+2*MenuBottomLayout::Capacity> quads;
     unsigned count=0;
