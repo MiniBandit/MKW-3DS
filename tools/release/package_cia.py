@@ -68,8 +68,8 @@ def package(cci=False,version='0.1.0',output=None,update=False):
             for f in sorted(p for p in overlay.rglob('*') if p.is_file()) if overlay.is_dir() else []:
                 relative=f.relative_to(overlay)
                 if relative.name=='README.md' or any(part.startswith('.') for part in relative.parts):continue
-                target=Path(stage)/'overlay'/relative;target.parent.mkdir(parents=True,exist_ok=True)
-                shutil.copyfile(f,target)
+                destination=Path(stage)/'overlay'/relative;destination.parent.mkdir(parents=True,exist_ok=True)
+                shutil.copyfile(f,destination)
         else:
             assets=stage_assets(Path(stage))
             # Which converted game files these are, as on the SD card: updated
