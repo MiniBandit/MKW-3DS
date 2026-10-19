@@ -1,11 +1,1 @@
-Two-screen menus: touch buttons and
-  the Wii art on the lower screen
-Course tour on the lower screen
-  during the fly-over
-Save data with four licenses (Epic)
-Race graphics, driver animation,
-  effects, CPU drivers, items and
-  sound fixes, Rosalina's Luma (Epic)
-Circle Pad up/down tilts in the air
-Old 3DS: lighter object detail
-  (Codiak540)
+Docker build option (sgrontflix)
