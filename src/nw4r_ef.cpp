@@ -393,6 +393,14 @@ void initParticle(Particle& pt,u16 life,Vec3 pos,Vec3 vel,ParticleManager& pm,co
     const u32 r=em.random.seed*0x343fdu+0x269ec3u;em.random.seed=r;
     pt.p.alphaFlickRnd=s8(u8(u8(r>>16)+u8(r/0xfe0000u)*2-0x7e));
     pt.p.position=pos;pt.p.prevPosition=pos;pt.p.velocity=vel;
+    // Retail Particle::Initialize USA80032898..32918 adds Effect+84 in
+    // emitter-local space before the optional particle-space transform.
+    const Vec3 inherited=em.effect->velocity;
+    if(inherited.x!=0||inherited.y!=0||inherited.z!=0){
+        Mtx34 inv;
+        if(inverse(inv,noTranslate(emitterGlobalMtx(em))))
+            pt.p.velocity=pt.p.velocity+transformNormal(inv,inherited);
+    }
     if(space){
         pt.p.position=transformCoord(*space,pt.p.position);
         pt.p.velocity=transformNormal(*space,pt.p.velocity);
@@ -679,11 +687,71 @@ void emitSphere(System& s,Emitter& em,ParticleManager& pm,int count,u32 flags,co
         perRing=nextPer;
     }
 }
+// NW4R EmitterFormCube random-volume/surface branch, USA
+// 8003b4d4..8003bde0; EmissionSub 8003a280. Uniform lattice emission
+// remains rejected by the cooker until its distinct ordering is ported.
+void emitCube(System& s,Emitter& em,ParticleManager& pm,int count,u32 flags,const float* params,u16 life,float lifeRandom,const Mtx34* space){
+    if(flags&0x20000)return;
+    const float xr=std::max(params[0],0.00001f),yr=std::max(params[1],0.00001f),zr=std::max(params[2],0.00001f);
+    const float inner=params[3]==0.f?0.00001f:0.01f*params[3],outer=1.f-inner;
+    float diffusion=em.prm.velDiffusionEmitterNormal;
+    if(std::fabs(diffusion-Pi)<3.74507038714e-7f)diffusion-=3.74507038714e-7f;
+    auto random=[&](){return float(em.random.rand())/65536.f;};
+    auto signedRandom=[&](){return 2.f*random()-1.f;};
+    auto shell=[](float v){return v>=0.f?1.f-v:-1.f-v;};
+    for(int i=0;i<count;++i){
+        Vec3 p;
+        if(inner==0.f){p={signedRandom(),signedRandom(),signedRandom()};}
+        else if(inner==1.f){
+            const unsigned face=em.random.rand()%6;
+            const float a=signedRandom(),b=signedRandom();
+            if(face<2)p={a,b,face==0?1.f:-1.f};
+            else if(face<4)p={a,face==2?1.f:-1.f,b};
+            else p={face==4?1.f:-1.f,a,b};
+        }else{
+            const float r=random();
+            const float yVolume=outer*(xr*yr)*zr;
+            const float zVolume=outer*(inner*(xr*yr)*zr);
+            const float xVolume=inner*((inner*(yr*(xr*outer)))*zr);
+            const float choice=(xVolume+(yVolume+zVolume))*r;
+            if(choice<yVolume){
+                p.x=signedRandom();p.y=shell(outer*signedRandom());p.z=signedRandom();
+            }else if(choice<yVolume+zVolume){
+                p.x=signedRandom();p.y=inner*signedRandom();p.z=shell(outer*signedRandom());
+            }else{
+                p.x=shell(outer*signedRandom());p.y=inner*signedRandom();p.z=inner*signedRandom();
+            }
+        }
+        Vec3 normal{};
+        if(p.y>=0.f&&p.y>=std::fabs(p.x)&&p.y>=std::fabs(p.z))normal.y=1;
+        else if(p.y<0.f&&-p.y>=std::fabs(p.x)&&-p.y>=std::fabs(p.z))normal.y=-1;
+        else if(p.x>=0.f&&p.x>=std::fabs(p.y)&&p.x>=std::fabs(p.z))normal.x=1;
+        else if(p.x<0.f&&-p.x>=std::fabs(p.y)&&-p.x>=std::fabs(p.z))normal.x=-1;
+        else normal.z=p.z>=0.f?1.f:-1.f;
+        p={p.x*xr,p.y*yr,p.z*zr};
+        if(diffusion!=0.f){
+            auto axial=[&](float a,float b){return std::sqrt(a*a+b*b)/std::tan(std::max(std::fabs(a),std::fabs(b))*diffusion);};
+            if(normal.x!=0.f)normal={normal.x*axial(p.y,p.z),p.y,p.z};
+            else if(normal.y!=0.f)normal={p.x,normal.y*axial(p.x,p.z),p.z};
+            else normal={p.x,p.y,normal.z*axial(p.x,p.y)};
+        }
+        normalize(normal);
+        Vec3 origin=p;
+        if(dot(origin,origin)<=FltMin)origin={signedRandom(),signedRandom(),signedRandom()};
+        normalize(origin);
+        Vec3 fromY{p.x,0,p.z};
+        if(dot(fromY,fromY)<=FltMin)fromY={signedRandom(),0,signedRandom()};
+        normalize(fromY);
+        const auto velocity=calcVelocity(em,normal,origin,fromY);
+        emitOne(s,em,pm,p,velocity,life,lifeRandom,space);
+    }
+}
 void formEmission(System& s,Emitter& em,ParticleManager& pm,int count,u32 flags,const float* params,u16 life,float lifeRandom,const Mtx34* space){
     switch(em.form){
     case 9:emitPoint(s,em,pm,count,life,lifeRandom,space);break;
     case 1:emitLine(s,em,pm,count,flags,params,life,lifeRandom,space);break;
     case 0:emitDisc(s,em,pm,count,flags,params,life,lifeRandom,space);break;
+    case 5:emitCube(s,em,pm,count,flags,params,life,lifeRandom,space);break;
     case 7:emitCylinder(s,em,pm,count,flags,params,life,lifeRandom,space);break;
     case 8:emitSphere(s,em,pm,count,flags,params,life,lifeRandom,space);break;
     default:break;
@@ -1107,7 +1175,7 @@ void calcManager(System& s,ParticleManager& pm){
         float postTransform[9]{};const u8* postInfo=nullptr;const EmitterResource* postChild=nullptr;
         for(size_t i=p->tick==0?0:pm.res->ptclInitTracks;i<tracks.size();++i){
             const u8* c=tracks[i];
-            if(c[4]&8)continue;
+            if((c[4]&8)||(i<32&&(em.effect->stoppedParticleTracks>>i&1u)))continue;
             u32 tick,life;u16 seed;
             if(!(c[4]&0x10)){tick=p->tick;life=p->lifeSpan;seed=p->seed;}
             else{tick=em.tick;life=(em.prm.comFlags&EmitterDesc::MaxLife)?0xffffffffu:em.prm.emitSpan;seed=em.seed;}
@@ -1134,6 +1202,17 @@ void calcManager(System& s,ParticleManager& pm){
                 Vec3 v{};
                 if(target==1)v=vel*(power-1.f);
                 else if(target==0)v=rotationToVecY({f8,fc,f10})*power;
+                else if(target==3){
+                    // PC retail ParticleManager::Calc 800345c8..8003464c:
+                    // Newton field points toward info[3..5]; negative power
+                    // repels. Outside the authored radius, strength falls as
+                    // radius squared / distance squared (ink clearing).
+                    v=Vec3{fc,f10,bef(info+0x14)}-fpos;
+                    const float distanceSquared=dot(v,v),radiusSquared=f8*f8;
+                    normalize(v);
+                    v=v*power;
+                    if(distanceSquared>radiusSquared)v=v*(radiusSquared/distanceSquared);
+                }
                 else if(target==6){
                     const Mtx34 r=rotAxis(rotationToVecY({f8,fc,f10}),power);
                     v=transformCoord(r,fpos)-fpos;
@@ -1330,14 +1409,14 @@ void childKey(const u8* curve,const u8* key,u16 seed,Particle& particle,u32 loop
 
 void System::reset(){
     particles.reset();managers.reset();emitters.reset();effects.reset();
-    active={};queueCount=0;liveParticles=0;random.srand(0);calcGroups=drawGroups=~0u;
+    active={};queueCount=0;liveParticles=0;random.srand(0);calcGroups=drawGroups=~0u;cameraSpaceGroups=0;
     deadParticles.clear();deadManagers.clear();deadEmitters.clear();deadEffects.clear();
 }
 Effect* System::createEffect(const EmitterResource& res,u16 calcRemain,u8 group){
     currentSystem=this;
     Effect* e=effects.alloc();
     if(!e)return nullptr;
-    e->refs=0;e->life=Active;e->root=Mtx34::identity();e->flags=0;e->group=group;
+    e->refs=0;e->life=Active;e->root=Mtx34::identity();e->flags=0;e->stoppedParticleTracks=0;e->group=group;
     if(!effectCreateEmitter(*this,*e,res,128,calcRemain)){effects.release(e);return nullptr;}
     active.append(e);
     e->life=Wait;
@@ -1345,7 +1424,7 @@ Effect* System::createEffect(const EmitterResource& res,u16 calcRemain,u8 group)
 }
 void System::calc(){
     currentSystem=this;
-    snapshot(active,[&](Effect* e){if(calcGroups>>e->group&1u)calcEffect(*this,*e);});
+    snapshot(active,[&](Effect* e){if((calcGroups>>e->group&1u)&&!(e->flags&1u))calcEffect(*this,*e);});
     garbageCollection();
 }
 void System::retireEffect(Effect& e){
@@ -1378,6 +1457,7 @@ void System::setEmissionRatio(Effect& e,float ratio){
 void System::setSpecificVelocity(Effect& e,float speed){
     for(Emitter* em=e.emitters.head;em;em=em->next)em->prm.velPowerSpecDir=speed;
 }
+void System::setVelocity(Effect& e,Vec3 velocity){e.velocity=velocity;}
 void System::setRootMtx(Effect& e,const Mtx34& m){
     e.root=m;
     for(Emitter* em=e.emitters.head;em;em=em->next)if(!em->parent)setMtxDirty(*em);

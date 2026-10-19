@@ -1,4 +1,5 @@
 #include <mkw/asset_pack.hpp>
+#include <mkw/overlay.hpp>
 #include <3ds.h>
 #include <algorithm>
 #include <array>
@@ -41,6 +42,9 @@ bool load(Archive& a){
 // With the lock held: the archive holding path, or null.
 Archive* lookup(Archives& all,const char* path,const Entry** entry){
  if(!all.tried){all.tried=true;for(auto& a:all.list)load(a);}
+ // A file in the update overlay wins over the packs: report it absent so the
+ // caller opens the loose path, which the fopen wrapper serves from the overlay.
+ if(overlay::has(path))return nullptr;
  for(auto& a:all.list)if(a.file)if(const Entry* e=a.find(path)){*entry=e;return &a;}
  return nullptr;
 }

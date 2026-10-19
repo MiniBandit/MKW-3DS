@@ -119,6 +119,7 @@ public:
   float l=std::max(x,0.f),t=std::max(y,7.5f),r=std::min(x+w,400.f),b=std::min(y+h,232.5f);
   if(r<=l||b<=t)return;
   out.push_back({i,l,t,r-l,b-t,alpha,tint,false,(l-x)/w,(t-y)/h,(r-x)/w,(b-y)/h});
+  out.back().slot=p.focusSlot; // the control this quad belongs to (menu_bottom_ui.hpp moves controls to the lower screen)
  }
  void sprite(const char* key,float x,float y,float w,float h,float a=1,uint32_t tint=0xffffffff,Pose p={}){quad(uiFindSpriteKey(key),x,y,w,h,a,tint,p);}
  void region(const char* key,float x,float y,float w,float h,float u0,float v0,float u1,float v1,Pose p,float alpha,const char* focusKey=nullptr){
@@ -291,7 +292,7 @@ std::vector<UiQuad> composeMenu(const MenuState& state,const UiRaceView& race){s
 static void composeMenuImpl(const MenuState& s,const UiRaceView& race,std::vector<UiQuad>& q,const UiTransitionView* transition){
  // The race and its end-of-race menu draw themselves (RaceFlowUi draws the
  // retail result boards and buttons over the running race).
- q.clear();q.reserve(256);if(s.page==UiPage::Race||s.page==UiPage::Results)return;
+ q.clear();q.reserve(256);if(s.page==UiPage::Race)return;
  if(s.page==UiPage::Confirm){
   MenuState base=s;
   if(transition&&transition->underlay)base=*transition->underlay;
@@ -414,6 +415,7 @@ static void composeMenuImpl(const MenuState& s,const UiRaceView& race,std::vecto
   // The chosen cup draws last (retail lifts it to z+200) over its neighbours.
   for(unsigned n=0;n<8;++n){const unsigned i=n<selectedCup?n:n==7?selectedCup:n+1;
    Pose p=child(cups,numbered(pickCup?"CupSelectCup":"CourseSelectCup",i));const char* base=i==selectedCup?"cup_select":"cup_free";
+   if(!pickCup)p.focusSlot=UiHeadingSlot; // on the course page the cup is a heading, not a control
    if(!pickCup){
     // CtrlMenuCourseSelectCupSub::calcSelf (USA 807de7d4): t advances 20 per
     // frame to 300. The chosen cup slides to the CupSelectCupNULL origin and
@@ -431,7 +433,7 @@ static void composeMenuImpl(const MenuState& s,const UiRaceView& race,std::vecto
    Pose movie=child(cups,control("CourseSelectMovie","RaceCupMovie"));
    c.panel("course_movie_frame",movie);c.movie("cup_movie_",selectedCup,"course_movie_frame","black_base",movie);
    const unsigned highlighted=(unsigned(double(s.age)*59.94/60.0)/120)%4;
-   for(unsigned i=0;i<4;++i){Pose p=child(courses,numbered("CupSelectCourse",i,"Course"));
+   for(unsigned i=0;i<4;++i){Pose p=child(courses,numbered("CupSelectCourse",i,"Course"));p.focusSlot=~0u; // the course list stays on the top screen beside its preview
     c.text(CourseNames[selectedCup*4+i],i==highlighted?"cup_course_select":"cup_course_free",p);
     if(preload)c.text(CourseNames[selectedCup*4+i],i==highlighted?"cup_course_free":"cup_course_select",p);
    }
@@ -447,7 +449,8 @@ static void composeMenuImpl(const MenuState& s,const UiRaceView& race,std::vecto
   const char* names[]={"Wii Stages","Retro Stages"};
   const Pose cups=control("BattleCupSelectNULL","CupSelectCupNULL"),stages=control("BattleCupSelectNULL","CupSelectCourseNULL");
   for(unsigned i=0;i<2;++i){
-   const Pose p=child(cups,numbered(pick?"BattleCupSelectCup":"BattleStageSelectCup",i));
+   Pose p=child(cups,numbered(pick?"BattleCupSelectCup":"BattleStageSelectCup",i));
+   if(!pick)p.focusSlot=UiHeadingSlot; // on the stage page the cup is a heading, not a control
    const char* base=i==cup?"cup_select":"cup_free";
    c.panel(base,p);c.icon("battle_cup_",i,base,"icon",p);
    if(i==cup||(pick&&uiFocusAnimation(s,i).changing())){
@@ -460,8 +463,7 @@ static void composeMenuImpl(const MenuState& s,const UiRaceView& race,std::vecto
    const unsigned highlighted=(unsigned(double(s.age)*59.94/60.0)/120)%5;
    for(unsigned i=0;i<5;++i){
     const Pose p=child(stages,numbered("BattleCupSelectStage",i,"Course"));
-    c.text(UiBattleStageNames[cup*5+i],i==highlighted?"battle_course_select":"battle_course_free",p);
-    if(preload)c.text(UiBattleStageNames[cup*5+i],i==highlighted?"battle_course_free":"battle_course_select",p);
+    (void)highlighted; // the stage names are drawn by the lower screen (menu_bottom.cpp): the converted text sprites for them are other strings
    }
   }else{
    // The selected stage's native atlas region is split across five controls,
@@ -470,8 +472,8 @@ static void composeMenuImpl(const MenuState& s,const UiRaceView& race,std::vecto
     const Pose p=child(stages,numbered("BattleStageSelectStage",i));
     const char* base=s.cursor==i?"course_select":"course_free";
     c.movieButton(base,p);c.movie("battle_preview_",cup*5+std::min(s.cursor,4u),base,"black_base",p,1,0,float(i)/5,1,float(i+1)/5);
-    c.movieOverlay(base,p);c.text(UiBattleStageNames[cup*5+i],base,p);
-    if(s.cursor==i)c.glow("course",p,UiBattleStageNames[cup*5+i]);
+    c.movieOverlay(base,p);
+    if(s.cursor==i)c.glow("course",p);
    }
   }
   c.chrome(pick?"Cups":"Stages");break;
@@ -490,7 +492,10 @@ static void composeMenuImpl(const MenuState& s,const UiRaceView& race,std::vecto
   c.panel("confirm_bottom",control("MenuObiBottomRaceConfirm","MenuEndConfirmObiBottom"));
   c.text("Start Race","header_text",control("MenuObiTitleText","MenuEndConfirmObiTitleText"));
   Pose back=control("Back","ButtonBackMenuEndConfirm");c.panel("back_free",back);c.inPane("button_back","back_free","text",back);
-  c.button("confirm",0,control("MenuEndConfirm","ButtonOK"),"OK");break;
+  const auto okFirst=q.size();
+  c.button("confirm",0,control("MenuEndConfirm","ButtonOK"),"OK");
+  for(auto i=okFirst;i<q.size();++i)q[i].slot=UiConfirmOkSlot; // the OK button stays on the top screen
+  break;
  }
  case UiPage::Pause:{
   c.chrome("Pause");const char* variants[]={"ButtonContinue","ButtonRestart","ButtonQuit"};
@@ -498,6 +503,14 @@ static void composeMenuImpl(const MenuState& s,const UiRaceView& race,std::vecto
   // original race controller's delays and shared common_w004 animations.
   for(unsigned i=0;i<3;++i){auto p=control(uiPauseMenuControl(s),variants[i]);p.y=90.f-float(i)*85;
    c.button("button",i,p,i==0?"Continue":i==1?"Restart":"Quit");}break;
+ }
+ case UiPage::Results:{
+  // The end-of-race menu for the lower screen (the race loop moves it there; the top
+  // keeps RaceFlowUi's own boards and buttons). The pause menu's authored buttons.
+  c.chrome("Results");const char* variants[]={"ButtonContinue","ButtonQuit"};
+  const unsigned n=s.count();
+  for(unsigned i=0;i<n;++i){auto p=control(uiPauseMenuControl(s),variants[i]);p.y=45.f-float(i)*85;
+   c.button("button",i,p,i==0?"Continue":"Quit");}break;
  }
  case UiPage::QuitConfirm:{
   c.chrome("Quit this race?");auto yes=control("YesNoButton","Option0"),no=control("YesNoButton","Option1");

@@ -47,6 +47,7 @@ struct System {
     // Groups that calc() calculates and draw lists include, one bit per group. A masked
     // group's effects keep their state: they are neither aged nor drawn until unmasked.
     u32 calcGroups=~0u,drawGroups=~0u;
+    u32 cameraSpaceGroups=0; // Screen effects draw after world effects, with identity view.
 
     void reset();
     Effect* createEffect(const EmitterResource& res,u16 calcRemain=0,u8 group=0);
@@ -62,6 +63,7 @@ struct System {
     // EGG vtable +0x3c (8022333c): Emitter+0x7c is the specific-direction
     // velocity power, not the particle emission ratio.
     void setSpecificVelocity(Effect& e,float speed);
+    void setVelocity(Effect& e,Vec3 velocity);
     void setRootMtx(Effect& e,const Mtx34& m);
     bool alive(const Effect* e,u16 serial) const {return e&&e->life!=Closed&&e->life!=Closing&&e->serial==serial;}
     void garbageCollection();

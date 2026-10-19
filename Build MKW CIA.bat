@@ -39,10 +39,12 @@ if not exist "%disc%" goto :nodisc
 if not exist "vendor\gclib" (%PY% tools\bootstrap.py || goto :end)
 if not exist ".venv\Scripts\python.exe" (%PY% -m venv .venv || goto :end)
 ".venv\Scripts\python.exe" -c "import sys; sys.exit(not ((3, 11) <= sys.version_info[:2] < (3, 15)))" || (echo The existing .venv uses an unsupported Python version. Delete .venv and rerun with Python 3.11 through 3.14. & goto :end)
-if not exist ".venv\mkw-dependencies-installed" (
+rem Install the packages whenever the build environment cannot import them
+rem (a marker file alone could say "installed" after a failed or partial install).
+".venv\Scripts\python.exe" -c "import numpy, PIL, Crypto" >nul 2>nul || (
     ".venv\Scripts\python.exe" -m pip install -r requirements.txt || goto :end
-    type nul > ".venv\mkw-dependencies-installed"
 )
+".venv\Scripts\python.exe" -c "import numpy, PIL, Crypto" >nul 2>nul || (echo The Python packages did not install into .venv. Delete the .venv folder and run this again. & goto :end)
 rem Show the build and keep a copy in build-cia-log.txt. UTF-8 text on Windows too.
 set "PYTHONUTF8=1"
 set "MKW_DISC=%disc%"

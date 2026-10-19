@@ -24,6 +24,9 @@ vehicles each):
 - **Tricks on R** off ramps (Mario Kart 7 style), plus X/Y for tricks and wheelies
 - **Smoke and dust**: start-boost smoke, burnout, drift smoke, off-road dust, landing puffs
 - **Balloon Battle** on all ten arenas, with CPU opponents, balloon scoring and a three-minute match
+- **Two-screen menus** (v0.6.0): the Wii menu buttons and art on the lower screen with touch, the highlighted choice shown large on top, and a course tour on the lower screen during the pre-race fly-over
+- **Save data** with four licenses, unlocks and best times (v0.6.0, Epic0522)
+- **Race overhaul** (v0.6.0, Epic0522): course materials, driver and vehicle animation, effects, course objects, CPU drivers, items, sound and Rosalina's Luma
 - Model and HUD fixes
 - HOME Menu name and icon, and the standard Nintendo 3DS start-up logo
 
@@ -46,6 +49,11 @@ window and press Return.
 
 **Windows:** double-click `Build MKW CIA.bat`, drag your disc image into the
 window and press Enter. *(New: please report how it goes.)*
+
+**v0.6.0 needs a new build.** Its converted game files changed, so a game built
+with v0.5.x can't be updated to v0.6.0 with an update CIA: run the v0.6.0
+builder **in a new, empty folder** (not your old builder folder), install the
+new CIA and copy the new `build/release/sd-card/3ds` folder to your SD card.
 
 The first build takes about 30–60 minutes. Your CIA is saved to
 `build/release/mkw-3ds.cia`. If a build stops partway, run it again: finished
@@ -90,12 +98,13 @@ New 3DS / New 2DS run at 60 FPS (30 FPS with the 3D slider up); Old 3DS / 2DS at
 
 | You are… | What to do |
 |---|---|
-| **Built your game with v0.5.0 or newer** and copied `build/release/sd-card/3ds` to your SD card | ✅ **Scan the QR code below.** That's all. |
-| **Built with v0.4.1 or older** (or any older version) | ❌ **The QR code will NOT work for you.** Download the latest builder, build the game again and install the full CIA. After that, later updates are quick updates. |
+| **Built your game with v0.6.0 or newer** and copied `build/release/sd-card/3ds` to your SD card | ✅ **Scan the QR code below** whenever there's a quick update. That's all. |
+| **Built with v0.5.x or older** | ❌ **The QR code will NOT work for you.** v0.6.0 needs a new build: download the latest builder, build the game again, install the full CIA and copy the SD folder. After that, later updates are quick updates. |
 | **Never built the game** (no CIA from your own disc) | ❌ **The QR code is not the game.** It is a small update of a game you build yourself from your own Mario Kart Wii disc. Without a built game and its SD files it only shows a "build the game first" message. Use the builder. |
-| **Built with v0.5.0 or newer but didn't copy the SD folder** | ❌ Copy `build/release/sd-card/3ds` to the **root of your SD card** first, then scan. |
+| **Built with v0.6.0 or newer but didn't copy the SD folder** | ❌ Copy `build/release/sd-card/3ds` to the **root of your SD card** first, then scan. |
 
-**Windows:** games built on Windows with v0.5.0 or v0.5.1 are refused by the v0.5.1 update (fixed in v0.5.2: use the latest update).
+v0.6.0 itself has no update CIA (it needs a new build), so the QR codes find
+nothing to install until the first update after v0.6.0.
 
 If you're unsure which version you built with, **build again with the latest
 builder**: it always works. The game also tells you on start-up when its files
@@ -122,11 +131,18 @@ The QR codes always fetch the newest update. If an update ever needs newer game
 files, the game tells you on start-up: download the latest builder, build again
 and copy `build/release/sd-card/3ds` to your SD card again.
 
+## Performance log (for testers)
+
+To record how the game runs on your 3DS (useful on Old 3DS), create an empty
+file named `performance.txt` in `sd:/3ds/mkw-3ds/`, play a race, then send the
+`performance.csv` the game writes in the same folder. Delete `performance.txt`
+to switch it off. Nothing is recorded without that file.
+
 ## Controls
 
 | Button | Action |
 |---|---|
-| Circle Pad | Steer; up/down when using an item throws forward/back |
+| Circle Pad | Steer; up/down when using an item throws forward/back; up/down in the air tilts the kart |
 | A | Accelerate |
 | B | Brake / reverse |
 | R | Hop and drift; trick off a ramp |
@@ -135,7 +151,7 @@ and copy `build/release/sd-card/3ds` to your SD card again.
 | L | Use item |
 | START | Pause |
 | SELECT | Speedometer on/off |
-| Touch screen | Switch the bottom-screen map view |
+| Touch screen | Menus: tap a button on the lower screen. Races: switch the lower-screen map view |
 
 ## Contributing
 
@@ -146,8 +162,10 @@ Please test changes on an emulator (Azahar) or real hardware before submitting.
 
 - **dudewhat**: the original Mario Kart Wii 3DS port and CIA builder this project continues
 - **MiniBandit**: this continuation
-- **Epic0522**: graphics upgrades: lighting, kart shadows, water, effects and menu highlights
-- **DarthMDev**: Old 3DS drawing performance fix
+- **Epic0522**: graphics upgrades: lighting, kart shadows, water, effects and menu highlights; v0.6.0's race overhaul (course materials, driver and vehicle animation, effects, course objects, CPU drivers, items, sound, Rosalina's Luma) and save data with four licenses
+- **DarthMDev**: Old 3DS drawing performance fix, race sound fixes and menu cadence
+- **Codiak540**: Old 3DS performance testing and optimisation research (course-object detail distance, particle limit, performance log idea)
+- **janedoemk3ds**: Old 3DS performance research with Codiak540 (lighter models, visibility culling, faster course drawing; [PR #40](../../pull/40))
 - [Kinoko](https://github.com/vabold/Kinoko) by vabold (MIT): Mario Kart Wii physics
 - [noclip.website](https://github.com/magcius/noclip.website) (MIT): BRRES model reading
 - [gclib](https://github.com/LagoLunatic/gclib) by LagoLunatic (MIT): disc and texture tools

@@ -1,8 +1,10 @@
 #include <mkw/lakitu.hpp>
 #include <mkw/lakitu_assets.hpp>
+#include <mkw/lakitu_goal.hpp>
 #include <mkw/renderer.hpp>
 #include <mkw/animation.hpp>
 #include <game/field/jugem/JugemMove.hh>
+#include <game/field/CollisionDirector.hh>
 #include <game/kart/KartObject.hh>
 #include <game/kart/KartMove.hh>
 #include <game/system/RaceManager.hh>
@@ -52,7 +54,7 @@ enum class Mode{Away,Start,Lap,Reverse,Rescue,Goal};
 enum class Phase{Drop,Arc,Stay,Ascend};
 enum Attachment{None,Signal,LapBoard,LapFinal,Reverse,Flag};
 // Copied with the draw: the lamp colours by value.
-struct Binding{const Model* model;std::array<uint32_t,6> lamps;bool signal;int digit;};
+struct Binding{const Model* model;std::array<uint32_t,6> lamps;bool signal;int digit;int reverseFrame;};
 // jugemu_signal: light_N out=(C2+TEXC*RAS-0.5)*2; lightbN lerp(C2,TEXC,C2), alpha A2*TEXA.
 // jugemu_lap 'number': PAT0 digit texture. Everything else: TEXC*RAS.
 void bindLakitu(void* context,std::size_t submesh){
@@ -70,6 +72,16 @@ void bindLakitu(void* context,std::size_t submesh){
             C3D_TexEnvSrc(e0,C3D_RGB,GPU_TEXTURE0,GPU_CONSTANT,GPU_CONSTANT);C3D_TexEnvFunc(e0,C3D_RGB,GPU_INTERPOLATE);
             C3D_TexEnvSrc(e0,C3D_Alpha,GPU_TEXTURE0,GPU_CONSTANT);C3D_TexEnvFunc(e0,C3D_Alpha,GPU_MODULATE);
         }
+    }
+    if(b.reverseFrame>=0&&submesh==LakituReverseArrowSubmesh){
+        // Original yajirushi TEV0: clamp(TEX0*C0+C2), alpha TEXA*A2.
+        const auto pica=[](uint32_t c){return (c>>24)|((c>>8)&0xff00u)|((c<<8)&0xff0000u)|((c&0xffu)<<24);};
+        C3D_TexEnvColor(e0,pica(LakituReverseColour[b.reverseFrame]));
+        C3D_TexEnvSrc(e0,C3D_Both,GPU_TEXTURE0,GPU_CONSTANT);
+        C3D_TexEnvFunc(e0,C3D_Both,GPU_MODULATE);
+        C3D_TexEnvColor(e1,pica(LakituReverseAdd[b.reverseFrame]));
+        C3D_TexEnvSrc(e1,C3D_RGB,GPU_PREVIOUS,GPU_CONSTANT);
+        C3D_TexEnvFunc(e1,C3D_RGB,GPU_ADD);
     }
     if(b.digit>=0&&submesh==LakituLapNumberSubmesh){
         const int texture=LakituLapDigit[std::clamp(b.digit,0,int(LakituLapDigit.size())-1)];
@@ -90,7 +102,7 @@ struct Lakitu::Impl {
     float reverseActivation=0;bool reverseOn=false;
     // Direct placement (pickup, goal): position, facing, oscillation phases.
     Vec3 pos{},goalFrom{},goalTo{},forward{0,0,1};float phaseX=0,phaseY=0;
-    C3D_Mtx world{};
+    C3D_Mtx world{};Vec3 lapPosition{};bool lapPositionReady=false;
     Attachment attachment=None;int digit=-1;std::array<uint32_t,6> lamps{};
     const char* bodyClip="wait";const char* rodClip="wait";unsigned clipStart=0;int clipFrame=-1;
     Vec3 cameraFrame(Vec3 forwardH,Vec3 local) const {
@@ -108,7 +120,7 @@ struct Lakitu::Impl {
     }
     void clips(const char* b,const char* r,int frame=-1){if(std::strcmp(b,bodyClip)||std::strcmp(r,rodClip)){bodyClip=b;rodClip=r;clipStart=tick;}clipFrame=frame;}
     void begin(Mode m,Phase p,float duration,Vec3 at){
-        mode=m;phase=p;interp.init(duration);phaseTimer=ascendTimer=0;
+        mode=m;phase=p;interp.init(duration);phaseTimer=ascendTimer=0;lapPositionReady=false;
         move->init();move->setPos(egg(at),true);move->setForwardFromKartObjMainRot(true);move->setDescending(false);
     }
     void ascend(float duration){phase=Phase::Ascend;interp.init(duration);move->setDescending(false);ascendTimer=0;}
@@ -141,6 +153,7 @@ bool Lakitu::load(){
         p.model=std::make_unique<Model>();if(!p.model->load(model)){p.model.reset();return false;}
         if(!bank)return true;
         p.bank=std::make_unique<DriverAnimation>();if(!p.bank->load(bank,*p.model)){p.bank.reset();p.model.reset();return false;}
+        p.bank->skinNormals(true);
         p.rigid=p.bank->makeRigid(*p.model);return true;
     };
     m.ready=part(m.body,LakituBody,LakituBodyBank)&&part(m.rod,LakituRod,LakituRodBank)&&part(m.flag,LakituFlag,LakituFlagBank)&&
@@ -173,10 +186,16 @@ void Lakitu::step(const LakituInput& in){
     }else{m.reverseActivation-=1.f/60.f;if(m.reverseActivation<0.f){m.reverseActivation=0.f;m.reverseOn=false;}}
     const bool respawning=status.onBit(KK::eStatus::InRespawn);
     // Triggers, highest priority first.
-    if(in.stage==0&&!in.introHeld&&!m.started&&++m.introFrames>=172-120){
+    if(!m.started&&!in.introHeld&&((in.stage==0&&++m.introFrames>=172-120)||in.stage==1)){
         // Fly in over the last 120 intro ticks; jg_cd starts with the countdown.
         m.started=true;m.begin(Mode::Start,Phase::Drop,120,m.cameraFrame(forwardH,{0,2000,10}));
         m.attachment=Signal;m.digit=-1;m.clips("jg_ww","jg_ww");
+        // A skipped preview can enter countdown without the fly-in ticks.
+        // Re-seat at the hold position rather than miss the whole start mode.
+        if(in.stage==1){
+            m.phase=Phase::Stay;m.move->setPos(egg(m.cameraFrame(forwardH,{0,250,320})),true);
+            m.move->setDescending(true);
+        }
     }else if(respawning&&!m.wasRespawning){
         m.mode=Mode::Rescue;m.phase=Phase::Stay;m.phaseTimer=0;m.attachment=None;m.forward=forwardH*-1.f;m.clips("wait","pickup");
     }else if(in.finished&&!m.wasFinished){
@@ -244,7 +263,7 @@ void Lakitu::step(const LakituInput& in){
         // Lakitu carries the kart down for the 110 InRespawn ticks, then rises.
         if(m.phase==Phase::Stay){
             m.pos=kartPos+forwardH*180.f+Vec3{0,100,0};
-            if(!respawning){m.phase=Phase::Ascend;m.phaseTimer=0;m.clips("wait","wait");}
+            if(!respawning){m.phase=Phase::Ascend;m.phaseTimer=0;}
         }else{
             m.pos=m.pos+Vec3{0,5,0}+Vec3{0,2,0}*float(m.phaseTimer);
             if(++m.phaseTimer>=60)m.mode=Mode::Away;
@@ -252,12 +271,14 @@ void Lakitu::step(const LakituInput& in){
         m.place(m.pos,kartPos-m.pos,false);break;
     }
     case Mode::Goal:{
+        m.goalFrom=lakituGoalAnchor(kartPos,forwardH,2000.f);
+        m.goalTo=lakituGoalAnchor(kartPos,forwardH,120.f);
         if(m.phase==Phase::Drop){
             const bool done=m.interp.calc();m.pos=lerp(m.goalFrom,m.goalTo,m.interp.rate);
             if(done)m.phase=Phase::Stay;
         }else if(m.phase==Phase::Stay){
             m.pos=m.goalTo;
-            if(length(kartPos-m.goalTo)>2000.f){m.phase=Phase::Ascend;m.phaseTimer=0;}
+            if(!in.finished){m.phase=Phase::Ascend;m.phaseTimer=0;}
         }else{
             m.pos=m.pos+(m.phaseTimer<10?Vec3{0,30,0}:Vec3{0,80,0});
             if(++m.phaseTimer>=70)m.mode=Mode::Away;
@@ -265,6 +286,29 @@ void Lakitu::step(const LakituInput& in){
         m.place(m.pos,kartPos-m.pos,true);break;
     }
     }
+    if(m.mode==Mode::Lap){
+        // Original JugemUnit::calcCollision uses radius150 after the movement
+        // transform. Its native query merely notifies objects; this port also
+        // uses the existing side-effect-preserving camera sphere solver to
+        // prevent the final inertial/oscillating position entering terrain.
+        if(auto* collision=Kinoko::Field::CollisionDirector::Instance()){
+            const auto wanted=move.transPos();
+            Vector3f placed=m.lapPositionReady?egg(m.lapPosition):wanted;
+            const auto delta=wanted-placed;
+            const unsigned steps=std::clamp(unsigned(std::ceil(delta.length()/75.f)),1u,32u);
+            for(unsigned n=1;n<=steps;++n){
+                auto candidate=placed+delta/float(steps);
+                for(unsigned pass=0;pass<2;++pass){
+                    Vector3f push;bool wall=false;
+                    if(!collision->checkCameraSphere(150.f,candidate,placed,push,wall)||push.squaredLength()<.0001f)break;
+                    candidate+=push;
+                }
+                placed=candidate;
+            }
+            move.correctPosition(placed-wanted);
+        }
+        m.lapPosition=vec(move.transPos());m.lapPositionReady=true;
+    }else m.lapPositionReady=false;
     if(m.mode==Mode::Start||m.mode==Mode::Lap||m.mode==Mode::Reverse){
         const auto& t=move.transform();float rows[12];
         for(unsigned r=0;r<3;++r)for(unsigned c=0;c<4;++c)rows[r*4+c]=t[r,c];
@@ -291,10 +335,7 @@ void Lakitu::draw(Renderer& renderer){
         const int clip=bank.find(name);if(clip<0)return std::pair<int,unsigned>{-1,0};
         const unsigned duration=std::max(1u,unsigned(bank.duration(clip)));
         const unsigned f=m.clipFrame>=0?unsigned(m.clipFrame):elapsed;
-        // The rescue grab is flagged looping but runs once: the carry (110
-        // ticks) outlasts its 98 frames, and a loop re-grabbed the kart.
-        const bool loop=bank.loop(clip)&&std::strcmp(name,"pickup");
-        return std::pair<int,unsigned>{clip,loop?f%duration:std::min(f,duration-1)};
+        return std::pair<int,unsigned>{clip,bank.loop(clip)?f%duration:std::min(f,duration-1)};
     };
     auto drawPart=[&](Impl::Part& p,const char* name,const C3D_Mtx& transform){
         auto [clip,frame]=frameOf(*p.bank,name);if(clip<0)return;
@@ -317,7 +358,7 @@ void Lakitu::draw(Renderer& renderer){
     (void)bodyClip;(void)rodClip;
     Model* board=m.attachment==Signal?m.signal.model.get():m.attachment==LapBoard?m.lap.model.get():
                  m.attachment==LapFinal?m.lapFinal.model.get():m.reverse.model.get();
-    const Binding binding{board,m.lamps,m.attachment==Signal,m.attachment==LapBoard?m.digit:-1};
+    const Binding binding{board,m.lamps,m.attachment==Signal,m.attachment==LapBoard?m.digit:-1,m.attachment==Reverse?int(elapsed%60):-1};
     renderer.draw(*board,hookWorld,false,bindLakitu,binding);
 }
 }

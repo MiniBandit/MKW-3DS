@@ -1,14 +1,17 @@
 #include <mkw/race_grid.hpp>
 #include <mkw/bullet_bill.hpp>
 #include <mkw/garage.hpp>
+#include <mkw/race_teams.hpp>
 #include <game/system/RaceConfig.hh>
 #include <game/system/RaceManager.hh>
 #include <game/system/KPadDirector.hh>
 #include <game/system/ResourceManager.hh>
+#include <game/system/CourseMap.hh>
 #include <game/kart/KartObjectManager.hh>
 #include <game/kart/KartMove.hh>
 #include <game/kart/KartCollide.hh>
 #include <game/kart/KartPhysics.hh>
+#include <game/field/CollisionDirector.hh>
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -21,6 +24,21 @@ uint32_t be32(const uint8_t* b){return uint32_t(b[0])<<24|uint32_t(b[1])<<16|uin
 float beFloat(const uint8_t* b){uint32_t v=be32(b);float f;std::memcpy(&f,&v,4);return f;}
 bool finite(Vec3 p){return std::isfinite(p.x)&&std::isfinite(p.y)&&std::isfinite(p.z);}
 Vec3 native(const Kinoko::EGG::Vector3f& p){return {p.x,p.y,p.z};}
+// Killer route-plane normal (USA805b2964). Non-pushing query keeps the
+// kart's collision-entry array; detach/restore its optional no-bounce output.
+Vec3 bulletRouteNormal(Vec3 start,Vec3 end){
+    using namespace Kinoko;
+    Field::CollisionInfo info{};
+    auto* course=Field::CourseColMgr::Instance();
+    auto* saved=course->noBounceWallInfo();course->clearNoBounceWallInfo();
+    const bool hit=Field::CollisionDirector::Instance()->checkSphereFull(100.f,
+        EGG::Vector3f(start.x,start.y,start.z),EGG::Vector3f::inf,
+        Field::KCLTypeMask(0x20e80fff),&info,nullptr,0);
+    course->setNoBounceWallInfo(saved);
+    if(hit&&info.floorDist>-std::numeric_limits<float>::min())return native(info.floorNrm);
+    const Vec3 route=start-end;
+    return normalized(cross(cross(route,{0,1,0}),route),{});
+}
 float horizontalProjection(Vec3 p,Vec3 a,Vec3 b){p.y=a.y=b.y=0;const Vec3 d=b-a;const float n=dot(d,d);return n>0.001f?dot(p-a,d)/n:1.f;}
 float projection(Vec3 p,Vec3 a,Vec3 b){const Vec3 d=b-a;const float n=dot(d,d);return n>0.001f?dot(p-a,d)/n:1.f;}
 }
@@ -98,7 +116,7 @@ Vec3 EnemyRoute::target(unsigned segment,unsigned racer,Vec3 pos,float lookahead
     return z;
 }
 
-void RaceGrid::configure(Kinoko::System::RaceConfig& config,unsigned localChoice,unsigned count){
+void RaceGrid::configure(Kinoko::System::RaceConfig& config,unsigned localChoice,unsigned count,const std::array<unsigned,Capacity>* roster){
     constexpr unsigned driverCount=GarageChoices.size()/VehiclesPerDriver;
     static_assert(GarageChoices.size()%VehiclesPerDriver==0&&driverCount>=Capacity);
     count_=std::clamp(count,1u,Capacity);localChoice%=GarageChoices.size();
@@ -106,12 +124,17 @@ void RaceGrid::configure(Kinoko::System::RaceConfig& config,unsigned localChoice
     const unsigned course=unsigned(scenario.course);
     battleArena_=course>=32&&course<42;
     const unsigned localDriver=localChoice/VehiclesPerDriver;
-    for(unsigned i=0;i<Capacity;++i){auto& p=scenario.players[i];
+    const auto teams=offlineVsTeams(scenario.teams,RaceTeam(scenario.humanTeam));
+    for(unsigned i=0;i<Capacity;++i){auto& p=scenario.players[i];p.team=uint8_t(teams[i]);
         if(i>=count_){p.type=Kinoko::System::RaceConfig::Player::Type::None;continue;}
-        // CPUs take each driver's standard kart, or standard bike (garage slot 3)
-        // in the bikes-only 100cc Grand Prix.
-        const unsigned cpuVehicle=config.raceScenario().engineClass==1?3:0;
-        choices_[i]=i?((localDriver+i)%driverCount)*VehiclesPerDriver+cpuVehicle:localChoice;
+        choices_[i]=i?offlineRaceDriver(localDriver,i,driverCount)*VehiclesPerDriver:localChoice;
+        if(i&&scenario.gameMode==Kinoko::System::RaceConfig::Scenario::GameMode::Versus){
+            constexpr unsigned karts[]={0,1,2,6,7,8},bikes[]={3,4,5,9,10,11};
+            const unsigned kind=scenario.cpuVehicles==2?(i&1):scenario.cpuVehicles;
+            // Keep each opponent's machine across the VS set and restarts.
+            choices_[i]+=(kind?bikes:karts)[i%6];
+        }
+        if(i&&roster)choices_[i]=(*roster)[i];
         const auto& choice=GarageChoices[choices_[i]];
         p.character=static_cast<Kinoko::Character>(choice.character);p.vehicle=static_cast<Kinoko::Vehicle>(choice.vehicle);
         p.type=i?Kinoko::System::RaceConfig::Player::Type::CPU:Kinoko::System::RaceConfig::Player::Type::Local;
@@ -127,42 +150,39 @@ bool RaceGrid::reset(){
     for(unsigned i=0;i<count_;++i){
         auto* kart=kartObjects->object(i);
         ranks_[i]=i+1;
-        // Stat speed times the engine-class rate (retail KartMove +0x14).
-        drivers_[i].nativeSpeed=kart->move()->statBaseSpeed();
+        drivers_[i].nativeSpeed=kart->param()->stats().speed;
         drivers_[i].last=native(kart->pos());
     }
     size_t size=0;const void* kmp=System::ResourceManager::Instance()->getFile("course.kmp",&size,System::ArchiveId::Course);
     bool ok=route_.load(kmp,size);bulletRoute_.load(kmp,size,true);
     size_t paramSize=0;const void* params=System::ResourceManager::Instance()->getFile("kartAISpdParam.bin",&paramSize,System::ArchiveId::Core);
-    // The chosen engine class, Normal CPUs. Difficulty selection is not exposed yet.
-    const unsigned engineClass=std::min<unsigned>(config->raceScenario().engineClass,2);
-    speedParamReady_=readCpuSpeedParam(params,paramSize,unsigned(config->raceScenario().course),engineClass,1,speedParam_);
-    if (battleArena_ && !ok) {
+    const auto& scenario=config->raceScenario();
+    const unsigned engine=std::min(unsigned(scenario.engineClass),2u);
+    engineClass_=engine;difficulty_=cpuModeForRace(scenario.gameMode==System::RaceConfig::Scenario::GameMode::Grand_Prix,engine,scenario.cpuDifficulty);
+    const bool grandPrix=scenario.gameMode==System::RaceConfig::Scenario::GameMode::Grand_Prix;
+    speedParamReady_=readCpuSpeedParam(params,paramSize,unsigned(scenario.course),engine,difficulty_,speedParam_,grandPrix,scenario.mirror);
+    if(battleArena_&&!ok){
         speedParamReady_=false;
-        for(unsigned i=0;i<count_;++i)ranks_[i]=i+1;
-        CpuAi::Setup setup;
-        setup.route=nullptr;
-        setup.count=count_;
-        ai_.reset(setup);
+        CpuAi::Setup setup;setup.route=nullptr;setup.count=count_;ai_.reset(setup);
         return true;
     }
-    // Distance adapter: a permitted native ENPT circuit scales checkpoint lap
-    // completion. Retail uses mean CKPT circuit length; branched-path parity remains pending.
+    // Keep the old fallback driver's ENPT scale separate from CpuAi below.
+    // CpuAi receives the original mean CKPT circuit distance.
     lapDistance_=0;std::vector<bool> visited(route_.size(),false);unsigned point=0;
     while(point<route_.size()&&!visited[point]){visited[point]=true;unsigned next=route_.successor(point,0);lapDistance_+=length(route_.point(next).position-route_.point(point).position);point=next;}
     // AISpeedRace compares against the retail mean-checkpoint distance scale.
     // ENPT paths include long authored branch chords, so using their raw loop
     // length suppresses the catch-up response on several courses.
-    const float routeLength=lapDistance_;
     lapDistance_=std::clamp(lapDistance_,4500.f,9000.f);
     afterStep();
-    // Retail Enemy::AI (cpu_ai.cpp): the chosen engine class, Normal CPUs (cpuMode 1).
-    CpuAi::Setup setup;setup.route=&route_;setup.count=count_;setup.engineClass=engineClass;setup.cpuMode=1;
+    // Retail Enemy::AI uses the selected class's opening/catch-up tables.
+    CpuAi::Setup setup;setup.route=&route_;setup.count=count_;setup.engineClass=engine;setup.cpuMode=difficulty_;setup.mirror=scenario.mirror;
     setup.speed=speedParam_;setup.speedReady=speedParamReady_;
     size_t actionSize=0;const void* actions=System::ResourceManager::Instance()->getFile("kartAIActionParam.bin",&actionSize,System::ArchiveId::Core);
     setup.actionsReady=readCpuActionParam(actions,actionSize,setup.cpuMode,setup.actions);
     if(!setup.actionsReady)for(auto& a:setup.actions)a={50,10,70,70,80,50,0,0};
-    setup.courseLength=std::max(routeLength,1000.f);setup.humanMask=1;
+    const auto* checkpoints=System::CourseMap::Instance()->checkPoint();
+    setup.courseLength=checkpoints?checkpoints->calcTotalDistance():0.f;setup.humanMask=1;
     setup.seed=0x9e3779b9u^(unsigned(config->raceScenario().course)*2654435761u);
     ai_.reset(setup);
     return ok;
@@ -178,6 +198,7 @@ void RaceGrid::beforeStep(uint16_t bulletPlayers){
     if(!manager||!objects)return;
     const bool racing=manager->isStageReached(System::RaceManager::Stage::Race);
     if (battleArena_ && !route_.size()) {
+        if(!racing)return;
         auto* local=objects->object(0);
         const Vec3 target=native(local->pos());
         for(unsigned i=1;i<count_;++i){
@@ -207,12 +228,20 @@ void RaceGrid::beforeStep(uint16_t bulletPlayers){
     for(unsigned i=0;i<count_;++i){
         const bool bullet=(bulletPlayers&(1u<<i))!=0;
         auto& d=drivers_[i];
-        if(i==0&&!bullet&&!driveLocal){if(d.bullet)objects->object(i)->move()->setKartSpeedLimit();d.bullet=false;continue;}
+        auto* kart=objects->object(i);
+        auto releaseBulletGravity=[&]{
+            // Respawn and cannon own this flag once their controllers take over.
+            if(d.bulletGravity.noGravity&&kart->status().offBit(Kart::eStatus::InRespawn,Kart::eStatus::InCannon))
+                kart->dynamics()->setNoGravity(false);
+            d.bulletGravity.reset();
+        };
+        if(d.bullet&&!bullet)releaseBulletGravity();
+        if(i==0&&!bullet&&!driveLocal){if(d.bullet)kart->move()->setKartSpeedLimit();d.bullet=false;continue;}
         auto* pad=System::KPadDirector::Instance()->hostController(i);
         const auto& route=bullet?bulletRoute_:route_;
-        if(!route.size()){pad->setInputsRawStick(0,7,7,System::Trick::None);continue;}
+        if(!route.size()){releaseBulletGravity();pad->setInputsRawStick(0,7,7,System::Trick::None);continue;}
         unsigned& segment=bullet?d.bulletSegment:d.segment;
-        auto* kart=objects->object(i);const Vec3 pos=native(kart->pos()),forward=native(kart->bodyFront());
+        const Vec3 pos=native(kart->pos()),forward=native(kart->bodyFront());
         bool respawning=kart->status().onBit(Kart::eStatus::BeforeRespawn,Kart::eStatus::InRespawn);
         // A human may drive far beyond the last segment between Bullet uses.
         // Bullet follows retail ITPT/ITPH; ordinary CPUs follow ENPT/ENPH.
@@ -220,7 +249,7 @@ void RaceGrid::beforeStep(uint16_t bulletPlayers){
         if(segment==EnemyRoute::Invalid||d.respawning!=respawning||length(pos-d.last)>2000.f||bullet!=d.bullet)segment=route.nearest(pos,forward,i);
         if(bullet!=d.bullet){
             d.stuck=d.reverse=d.recoveries=0;
-            if(bullet){d.bulletTurn=.03f;kart->move()->clearDrift();}
+            if(bullet){d.bulletTurn=.03f;d.bulletGravity.reset();kart->move()->clearDrift();}
             else kart->move()->setKartSpeedLimit();
         }
         if(bullet)kart->move()->setBulletSpeedLimit();
@@ -238,7 +267,7 @@ void RaceGrid::beforeStep(uint16_t bulletPlayers){
             const auto& command=ai_.command(i);
             uint16_t buttons=command.buttons;float aiStick=command.stick;
             float speed=std::fabs(kart->move()->speed());
-            if(racing&&!respawning&&i==0){
+            if(racing&&!respawning&&i==0&&!finished_[0]){
                 // QA autopilot only: adapted reverse-out recovery.
                 if(speed<3.f){if(++d.stuck>150){d.reverse=70;d.stuck=0;++d.recoveries;}}else d.stuck=0;
                 if(d.reverse){--d.reverse;buttons=2;aiStick=0;}
@@ -255,7 +284,7 @@ void RaceGrid::beforeStep(uint16_t bulletPlayers){
             const float gap=std::max(0.f,(leaderCompletion-manager->player(i).raceCompletion())*lapDistance_);
             // Stable target ranks adapt the source rank-manager interface. Its
             // randomized top/middle/bottom group state machine is not yet ported.
-            const float policySpeed=d.speedPolicy.step(speedParam_,ranks_[i],ranks_[i],gap,laps_[i]);
+            const float policySpeed=d.speedPolicy.step(speedParam_,ranks_[i],ranks_[i],gap,laps_[i],engineClass_,difficulty_);
             d.desiredSpeed=cpuBaseSpeed(d.nativeSpeed,policySpeed);
             kart->move()->setCpuBaseSpeed(d.desiredSpeed);
         }
@@ -264,6 +293,25 @@ void RaceGrid::beforeStep(uint16_t bulletPlayers){
         const bool descentBehind=routeB.y<routeA.y&&
             (horizontalProjection(pos,routeA,routeB)-projection(pos,routeA,routeB))*length(routeB-routeA)>lookahead;
         const bool horizontalRecovery=!bullet&&(d.routeTicks>360||descentBehind);
+        if(bullet){
+            // The current retail ITPT is the next target of our incoming segment.
+            // UpdateGravity consumes it before this tick advances the route.
+            const unsigned current=route.successor(segment,i),next=route.successor(current,i);
+            const auto& a=route.point(current);const auto& b=route.point(next);
+            bool inside=false;
+            if(a.setting1!=1&&a.setting1!=2&&!d.bulletGravity.latched){
+                const Vec3 normal=bulletRouteNormal(a.position,b.position);
+                inside=bulletInsideRoute(pos,a.position,b.position,a.width,b.width,normal,a.setting1!=3,0.f);
+            }
+            const bool noGravity=d.bulletGravity.step(a.setting1,inside,respawning);
+            // Retail Update skips physics writes during the cannon-owned phase.
+            if(kart->status().offBit(Kart::eStatus::InCannon,Kart::eStatus::InRespawn)){
+                kart->dynamics()->setNoGravity(noGravity);
+                if(noGravity)kart->dynamics()->setExtVel(EGG::Vector3f::zero);
+            }
+            d.bulletGravity.observeWall(kart->status().onBit(Kart::eStatus::WallCollision,Kart::eStatus::Wall3Collision),
+                kart->collisionData().wallNrm.y);
+        }
         for(unsigned guard=0;guard<8;++guard){unsigned next=route.successor(segment,i);const Vec3 a=route.point(segment).position,b=route.point(next).position;
             if(bullet){
                 // Retail a5b08 advances after crossing the horizontal plane
@@ -285,8 +333,8 @@ void RaceGrid::beforeStep(uint16_t bulletPlayers){
         }
         if(racing&&!respawning&&bullet){
             // Retail target selection and adaptive rotation rate (a5400).
-            // This ground-plane integration retains Kinoko floor/jump physics;
-            // the separate retail free-flight/recovery controller is pending.
+            // Existing steering is retained; the route-gated gravity/recovery
+            // controller above owns only gravity and external collision velocity.
             buttons=1;d.reverse=d.recoveries=0;
             if(kart->status().offBit(Kart::eStatus::InCannon,Kart::eStatus::InAction)){
                 const Vec3 up=normalized(native(kart->move()->smoothedUp()));

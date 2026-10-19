@@ -5,9 +5,21 @@ from gx_material import GMDL_SUBMESH_BYTES
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1];assets=ROOT/'sd-card/3ds/mkw-3ds';out=ROOT/'build/playable/3ds/mkw-3ds';out.mkdir(parents=True,exist_ok=True)
 roster_overlay=ROOT/'build/roster'
+driver_effects=ROOT/'build/driver-effects'
+driver_effect_receipt=driver_effects/'receipt.json'
+if not driver_effect_receipt.is_file():raise ValueError('Run tools/cook_driver_effects.py before packaging')
+driver_effect_info=json.loads(driver_effect_receipt.read_text())
+if driver_effect_info.get('exporterSha256')!=hashlib.sha256((ROOT/'tools/export_driver.ts').read_bytes()).hexdigest():raise ValueError('Re-cook driver effect roots after exporter changes')
+driver_effect_files={row['path']:row for row in driver_effect_info['files']}
 def roster_asset(relative):
  relative=Path(relative)
  if relative.is_absolute() or '..' in relative.parts:raise ValueError('Invalid roster asset path')
+ if relative.as_posix() in driver_effect_files:
+  candidate=driver_effects/relative
+  if hashlib.sha256(candidate.read_bytes()).hexdigest()!=driver_effect_files[relative.as_posix()]['sha256']:raise ValueError('Driver effect bank changed: '+str(relative))
+  return candidate
+ candidate=ROOT/'build/team-vehicles'/relative
+ if candidate.is_file():return candidate
  candidate=roster_overlay/relative
  return candidate if candidate.is_file() else assets/relative
 # Explicit allowlist excludes QA markers, ghosts, receipts and obsolete models.
@@ -60,6 +72,17 @@ for choice in garage['choices']:
   files[roster_asset(Path('models')/(name+'.dskm'))]=Path('models')/(name+'.dskm')
 shadow_root=ROOT/'build/vehicle-shadows'
 shadow_manifest=json.loads((shadow_root/'models/vehicle-shadows.json').read_text())
+team_root=ROOT/'build/team-vehicles'
+team_info=json.loads((team_root/'team-vehicles.json').read_text())
+expected_teams={row['prefix']+team+'_' for row in garage['choices'] if row['vehicle'] in (0,1,2,18,19,20) for team in ('red','blue')}
+if {row['prefix'] for row in team_info['choices']}!=expected_teams:raise ValueError('Cook every standard team vehicle before packaging')
+for row in team_info['choices']:
+ for name in row['models']:
+  if not name.startswith(row['prefix']) or any(c not in 'abcdefghijklmnopqrstuvwxyz_' for c in name):raise ValueError('Invalid team model name')
+  models.append(name)
+ for name in row['animationBanks']:
+  if not name.startswith(row['prefix']) or any(c not in 'abcdefghijklmnopqrstuvwxyz_' for c in name):raise ValueError('Invalid team animation name')
+  files[team_root/'models'/(name+'.dskm')]=Path('models')/(name+'.dskm')
 expected={choice['prefix'] for choice in garage['choices']}
 if {row['prefix'] for row in shadow_manifest['choices']}!=expected:raise ValueError('Cook every vehicle shadow before packaging')
 for row in shadow_manifest['choices']:
@@ -67,6 +90,17 @@ for row in shadow_manifest['choices']:
  if hashlib.sha256(source.read_bytes()).hexdigest()!=row['sha256']:raise ValueError('Vehicle shadow changed: '+str(relative))
  files[source]=relative
 files[shadow_root/'models/vehicle-shadows.json']=Path('models/vehicle-shadows.json')
+item_shadow_root=ROOT/'build/item-shadows'
+item_shadow_manifest=json.loads((item_shadow_root/'models/item-shadows.json').read_text())
+expected_item_shadows={'models/item_shadow_shell.gmdl','models/item_shadow_banana.gmdl'}
+if item_shadow_manifest.get('version')!=1 or {row['path'] for row in item_shadow_manifest['models']}!=expected_item_shadows:
+ raise ValueError('Cook both original item shadows before packaging')
+for row in item_shadow_manifest['models']:
+ relative=Path(row['path']);source=item_shadow_root/relative
+ if hashlib.sha256(source.read_bytes()).hexdigest()!=row['sha256'] or hashlib.sha256((ROOT/row['source']).read_bytes()).hexdigest()!=row['source_sha256']:
+  raise ValueError('Original item shadow changed: '+str(relative))
+ files[source]=relative
+files[item_shadow_root/'models/item-shadows.json']=Path('models/item-shadows.json')
 textures={'drift_sparkTex2','drift_flash2','drift_rk_smoke2'}
 files[assets/'textures/drift-effects.bin']=Path('textures/drift-effects.bin')
 files[assets/'textures/drift-effects-bike.bin']=Path('textures/drift-effects-bike.bin')
@@ -100,6 +134,24 @@ intro_audio=movie_manifest['introAudio'];audio_relative=Path(intro_audio['path']
 if audio_relative!=Path('movies/title.wav') or digest_file(assets/audio_relative)!=intro_audio['sha256']:raise ValueError('Opening movie audio changed')
 if digest_file(ROOT/intro_audio['source'])!=intro_audio['sourceSha256']:raise ValueError('Opening movie audio source changed')
 files[assets/audio_relative]=audio_relative
+# Credits movies and their audio (tools/cook_credits.py), checked like the menu movies.
+credits=json.loads((assets/'models/credits.json').read_text())
+if credits.get('version')!=1 or not credits.get('everySourceFrame') or len(credits.get('streams',[]))!=2:raise ValueError('Cook the credits movies (tools/cook_credits.py) before packaging')
+files[assets/'models/credits.json']=Path('models/credits.json')
+for movie in credits['streams']:
+ relative=Path(movie['path']);source_relative=Path(movie['source'])
+ if relative.parent!=Path('movies') or relative.suffix!='.gmv' or not source_relative.as_posix().startswith('data/extracted/thp/ending/') or '..' in source_relative.parts:raise ValueError('Invalid credits movie path')
+ if digest_file(ROOT/source_relative)!=movie['sourceSha256']:raise ValueError('Credits movie source changed: '+str(source_relative))
+ path=assets/relative
+ with path.open('rb') as stream:header=stream.read(64)
+ magic,version,width,height,count,numerator,denominator,frame_bytes,offset=struct.unpack('<4sIHHIIIII32x',header)
+ if magic!=b'GMV1' or [width,height]!=movie['textureSize'] or count!=movie['frames'] or frame_bytes!=width*height//2 or path.stat().st_size!=64+count*frame_bytes:raise ValueError('Invalid credits GMV stream: '+str(relative))
+ if digest_file(path)!=movie['sha256']:raise ValueError('Credits movie payload changed: '+str(relative))
+ files[path]=relative
+for sound in credits['audio']:
+ relative=Path(sound['path'])
+ if relative.parent!=Path('movies') or relative.suffix!='.wav' or digest_file(assets/relative)!=sound['sha256']:raise ValueError('Credits audio changed: '+str(relative))
+ files[assets/relative]=relative
 menu_audio=json.loads((assets/'models/menu-audio.json').read_text())
 if menu_audio.get('version')!=1 or digest_file(ROOT/menu_audio['source'])!=menu_audio['sourceSha256']:raise ValueError('Title music source changed')
 files[assets/'models/menu-audio.json']=Path('models/menu-audio.json')
@@ -219,16 +271,26 @@ for name in sorted(textures):files[roster_asset(Path('textures')/(name+'.t3x'))]
 # Race VFX cooked in this tree (tools/cook_race_effects.py, tools/cook_effects.py
 # --output build/vfx/textures) replace or extend the shared SD assets.
 vfx=ROOT/'build/vfx/textures'
-if not (vfx/'race-effects.bin').is_file():raise ValueError('Run tools/cook_race_effects.py before packaging')
-effect_table=(vfx/'race-effects.bin').read_bytes()
-overlay={'textures/race-effects.bin':vfx/'race-effects.bin'}
+if not (vfx/'course-effects.json').is_file():raise ValueError('Run tools/cook_race_effects.py --course-only before packaging')
+overlay={}
+effect_tables=[]
+effect_profiles=json.loads((vfx/'course-effects.json').read_text())
+if len(effect_profiles)!=42 or {p['id'] for p in effect_profiles}!=set(range(42)):raise ValueError('Cook all 42 course effect banks')
+for profile in effect_profiles:
+ bank=vfx/profile['bank']
+ if not bank.is_file():raise ValueError('Missing course effect bank: '+str(bank))
+ overlay['textures/'+bank.name]=bank
+ effect_tables.append(bank.read_bytes())
 # REFX v3 (NW4R EF resources): a 20-byte header, then 40-byte texture entries (name,
 # GX and padded sizes).
-if struct.unpack_from('<4sI',effect_table)!=(b'REFX',3):raise ValueError('race-effects.bin is not REFX v3')
-for i in range(struct.unpack_from('<I',effect_table,12)[0]):
- name=effect_table[20+i*40:52+i*40].split(b'\0')[0].decode()
- if not name.startswith('fx_') or any(c not in 'abcdefghijklmnopqrstuvwxyz_0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ' for c in name):raise ValueError('Invalid effect texture name')
- overlay['textures/'+name+'.t3x']=vfx/(name+'.t3x')
+for table in effect_tables:
+ if len(table)<20 or struct.unpack_from('<4sI',table)!=(b'REFX',3):raise ValueError('Effect bank is not REFX v3')
+ texture_count=struct.unpack_from('<I',table,12)[0]
+ if len(table)<20+texture_count*40:raise ValueError('Truncated effect texture table')
+ for i in range(texture_count):
+  name=table[20+i*40:52+i*40].split(b'\0')[0].decode()
+  if not name.startswith('fx_') or any(c not in 'abcdefghijklmnopqrstuvwxyz_0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ' for c in name):raise ValueError('Invalid effect texture name')
+  overlay['textures/'+name+'.t3x']=vfx/(name+'.t3x')
 for name in ('drift-effects.bin','drift-effects-bike.bin'):
  if (vfx/name).is_file():overlay['textures/'+name]=vfx/name
 # CtrlRaceNameBalloon names and line (tools/cook_race_balloon.py).
@@ -239,18 +301,34 @@ for name in ('body','rod','flag','signal','lap','lapf','reverse'):
  model=vfx_models/f'lakitu_{name}.gmdl'
  if not model.is_file():raise ValueError('Run tools/cook_lakitu.py before packaging')
  overlay['models/'+model.name]=model
- b=model.read_bytes();ns,nt=struct.unpack_from('<II',b,16)
+ b=model.read_bytes();version=struct.unpack_from('<I',b,4)[0];ns,nt=struct.unpack_from('<II',b,16)
+ table=24+ns*GMDL_SUBMESH_BYTES[version]
  for i in range(nt):
-  tex=b[24+ns*44+i*64:24+ns*44+(i+1)*64].split(b'\0')[0].decode();overlay['textures/'+tex+'.t3x']=vfx/(tex+'.t3x')
+  tex=b[table+i*64:table+(i+1)*64].split(b'\0')[0].decode();overlay['textures/'+tex+'.t3x']=vfx/(tex+'.t3x')
 for extra in ('lakitu_body.dskm','lakitu_rod.dskm','lakitu_flag.dskm','lakitu_body.djnt','lakitu_rod.djnt'):overlay['models/'+extra]=vfx_models/extra
+# Rosalina's separate common/tico.brres model and looping wait animation.
+for name in ('luma.gmdl','luma.dskm'):
+ src=vfx_models/name
+ if not src.is_file():raise ValueError('Run tools/cook_luma.py before packaging')
+ overlay['models/'+name]=src
+b=(vfx_models/'luma.gmdl').read_bytes();version=struct.unpack_from('<I',b,4)[0];ns,nt=struct.unpack_from('<II',b,16)
+table=24+ns*GMDL_SUBMESH_BYTES[version]
+for i in range(nt):
+ tex=b[table+i*64:table+(i+1)*64].split(b'\0')[0].decode()
+ overlay['textures/'+tex+'.t3x']=vfx/(tex+'.t3x')
 # Course/sky meshes and receipts re-cooked in this tree (tools/cook_course_overlay.py);
 # part lists and textures are unchanged, so only these files are replaced.
 course_overlay=ROOT/'build/course-materials';packaged={r.as_posix() for r in files.values()}
-for src in sorted(course_overlay.glob('models/*.gmdl'))+sorted(course_overlay.glob('models/courses/*.json')):
+for src in sorted(course_overlay.glob('models/*.gmdl'))+sorted(course_overlay.glob('models/*.dobj'))+sorted(course_overlay.glob('models/courses/*.json')):
  rel=src.relative_to(course_overlay).as_posix()
  if src.name.startswith('._'):continue
  if rel not in packaged:raise ValueError('Course overlay file is not packaged: '+rel)
  overlay[rel]=src
+# FireBPlane's seekable phases are shared by all firebar children in a course.
+fire_phases=ROOT/'build/firebar/textures/firebar-indirect.ftan'
+fire_receipt=json.loads(fire_phases.with_suffix('.json').read_text())
+if digest_file(fire_phases)!=fire_receipt['sha256']:raise ValueError('Fire phase stream hash mismatch')
+overlay['textures/firebar-indirect.ftan']=fire_phases
 # Psea distance filtering: source base levels plus verified small mip chains.
 water_mipmaps=ROOT/'build/water-mipmaps'
 if (water_mipmaps/'receipt.json').is_file():
@@ -264,6 +342,19 @@ if (water_mipmaps/'receipt.json').is_file():
   if digest_file((assets/rel).with_suffix('.png'))!=info['pngSha256']:
    raise ValueError('Water mipmap pixels changed: '+rel)
   overlay[rel]=src
+# Static world minification levels, retaining maximum-resolution pixels.
+world_mipmaps=ROOT/'build/world-mipmaps'
+if (world_mipmaps/'receipt.json').is_file():
+ world=json.loads((world_mipmaps/'receipt.json').read_text())
+ for rel,info in world['models'].items():
+  if digest_file(ROOT/info['source'])!=info['sha256']:raise ValueError('World mipmap model changed: '+rel)
+ for rel,info in world['textures'].items():
+  src=world_mipmaps/rel
+  if rel not in packaged or Path(rel).parent!=Path('textures') or Path(rel).suffix!='.t3x':
+   raise ValueError('Invalid world mipmap override: '+rel)
+  if digest_file(src)!=info['sha256'] or digest_file(assets/rel)!=info['originalSha256'] or digest_file((assets/rel).with_suffix('.png'))!=info['pngSha256']:
+   raise ValueError('World mipmap source changed: '+rel)
+  overlay[rel]=src
 # Original item channels and reflection maps, refreshed without disc extraction.
 item_lighting=ROOT/'build/item-lighting'
 if (item_lighting/'receipt.json').is_file():
@@ -274,6 +365,19 @@ if (item_lighting/'receipt.json').is_file():
   if digest_file(src)!=info['sha256'] or digest_file(assets/rel)!=info['originalSha256']:
    raise ValueError('Item lighting source changed: '+rel)
   overlay[rel]=src
+# Original Blooper screen model and all three source clips (cook_blooper.py).
+blooper=ROOT/'build/blooper'
+if (blooper/'receipt.json').is_file():
+ info=json.loads((blooper/'receipt.json').read_text())
+ if digest_file(ROOT/info['source'])!=info['source_sha256']:raise ValueError('Blooper source changed')
+ for rel in ('models/item_12.gmdl','models/item_12.dskm'):overlay[rel]=blooper/rel
+ b=(blooper/'models/item_12.gmdl').read_bytes();version,ns,nt=struct.unpack_from('<I',b,4)[0],*struct.unpack_from('<II',b,16)
+ stride={3:44,4:56,5:92}.get(version)
+ if stride is None:raise ValueError('Unsupported Blooper GMDL version')
+ for i in range(nt):
+  tex=b[24+ns*stride+i*64:24+ns*stride+(i+1)*64].split(b'\0')[0].decode()
+  overlay['textures/'+tex+'.t3x']=blooper/'textures'/(tex+'.t3x')
+else:raise ValueError('Run tools/cook_blooper.py before packaging')
 # Race-flow UI (tools/cook_race_flow.py): out-of-bounds wipe, result board and
 # end-of-race menu textures, cooked into this tree's own overlay directory.
 flow=ROOT/'build/race-flow/textures'

@@ -1,5 +1,6 @@
 #pragma once
 #include <mkw/math.hpp>
+#include <mkw/bullet_bill.hpp>
 #include <mkw/cpu_speed.hpp>
 #include <mkw/cpu_ai.hpp>
 #include <array>
@@ -31,7 +32,7 @@ class RaceGrid {
 public:
     static constexpr unsigned Capacity=12;
     // Call within the RaceConfig init callback. Count=1 keeps a solo race.
-    void configure(Kinoko::System::RaceConfig& config,unsigned localGarageChoice,unsigned count=Capacity);
+    void configure(Kinoko::System::RaceConfig& config,unsigned localGarageChoice,unsigned count=Capacity,const std::array<unsigned,Capacity>* roster=nullptr);
     // Call after every scene creation/restart. Owns copies, never scene pointers.
     bool reset();
     // Call immediately before scene.calc. Player zero remains human unless
@@ -53,13 +54,13 @@ public:
     CpuAi& ai(){return ai_;}
 private:
     void forwardBumps();
-    struct Driver {CpuSpeedState speedPolicy{};float nativeSpeed=70,desiredSpeed=70;unsigned segment=EnemyRoute::Invalid,bulletSegment=EnemyRoute::Invalid,stuck=0,reverse=0,recoveries=0,routeTicks=0;Vec3 last{};float bulletTurn=.03f;bool respawning=false,bullet=false;};
+    struct Driver {BulletGravity bulletGravity{};CpuSpeedState speedPolicy{};float nativeSpeed=70,desiredSpeed=70;unsigned segment=EnemyRoute::Invalid,bulletSegment=EnemyRoute::Invalid,stuck=0,reverse=0,recoveries=0,routeTicks=0;Vec3 last{};float bulletTurn=.03f;bool respawning=false,bullet=false;};
     EnemyRoute route_,bulletRoute_;
     CpuAi ai_;
     std::array<Driver,Capacity> drivers_{};
     std::array<unsigned,Capacity> choices_{},ranks_{},laps_{};
     std::array<bool,Capacity> finished_{};
     CpuSpeedParam speedParam_{};bool speedParamReady_=false;float lapDistance_=0;
-    unsigned count_=1;bool battleArena_=false;
+    unsigned count_=1,engineClass_=2,difficulty_=1;bool battleArena_=false;
 };
 }

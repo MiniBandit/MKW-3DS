@@ -21,7 +21,7 @@ public:
   if(frame>previous)for(unsigned i=0;i<clip->count;++i){
    const auto& event=ObjectSoundEvents[clip->first+i];
    const float point=period>0?event.frame+(std::floor((previous-event.frame)/period)+1)*period:event.frame;
-   if(point>previous&&point<=frame)object.cueSound(event.sound,Object::SoundCall::Animation,event.volume);
+   if(point>previous&&point<=frame)object.cueSound(event.sound,Object::SoundCall::Animation,event.volume,event.pitch);
   }
   clip_=clip;frame_=frame;
  }

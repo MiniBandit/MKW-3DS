@@ -1,0 +1,7 @@
+# Converted assets of the 0.6.0 rebuild (Epic's race overhaul, Mii portraits
+# optional, credits movies). Every 0.5.x build has to be rebuilt.
+# windows_legacy: no older Windows recipe is accepted for these files.
+# recipe records the cook/package tools reviewed for these assets.
+stamp c4943e904e92e4da0a33d20d0b252628
+windows_legacy c4943e904e92e4da0a33d20d0b252628
+recipe 119787badb623518185fc01ba3aca096

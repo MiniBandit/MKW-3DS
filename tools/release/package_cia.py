@@ -7,7 +7,7 @@ volume, no copy), the HOME Menu art is made from the player's own disc
 (home_menu_art.py), and makerom builds the CIA. --cci builds a cartridge
 image of the same content instead, which emulators boot without installing.
 """
-import argparse, hashlib, json, subprocess, sys, tempfile
+import argparse, hashlib, json, shutil, subprocess, sys, tempfile
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[2]
 sys.path[:0]=[str(ROOT/'tools'),str(Path(__file__).parent)]
@@ -62,6 +62,14 @@ def package(cci=False,version='0.1.0',output=None,update=False):
     with tempfile.TemporaryDirectory(prefix='mkw-cia-romfs-',dir=(ROOT/'build') if update else SOURCE.resolve().parents[2]) as stage:
         if update:
             (Path(stage)/'update.txt').write_text('Game files are read from sdmc:/3ds/mkw-3ds (made by the builder).\n');assets={}
+            # tools/release/overlay/: small files this update adds to (or replaces in)
+            # the game's own, read by the game from romfs:/overlay/ (src/overlay.cpp).
+            overlay=Path(__file__).parent/'overlay'
+            for f in sorted(p for p in overlay.rglob('*') if p.is_file()) if overlay.is_dir() else []:
+                relative=f.relative_to(overlay)
+                if relative.name=='README.md' or any(part.startswith('.') for part in relative.parts):continue
+                destination=Path(stage)/'overlay'/relative;destination.parent.mkdir(parents=True,exist_ok=True)
+                shutil.copyfile(f,destination)
         else:
             assets=stage_assets(Path(stage))
             # Which converted game files these are, as on the SD card: updated

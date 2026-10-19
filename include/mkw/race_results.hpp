@@ -1,5 +1,6 @@
 #pragma once
 #include <mkw/color_fader.hpp>
+#include <mkw/race_teams.hpp>
 #include <algorithm>
 #include <array>
 #include <cstdint>
@@ -23,7 +24,7 @@ enum class RaceFlowPhase:uint8_t {Racing,Finished,HudExit,UpdateIn,Update,Update
 // advance: A, B or START (Leaderboard handlers); accept: A on the end menu.
 struct RaceFlowInput {bool advance=false,accept=false;};
 // One result row: the racer, its retail character id and VS point totals.
-struct RaceResultEntry {uint8_t racer=0,character=0;bool human=false;uint16_t previous=0,gain=0;};
+struct RaceResultEntry {uint8_t racer=0,character=0;bool human=false;uint16_t previous=0,gain=0;RaceTeam team=RaceTeam::None;};
 // CtrlRaceResult score state (FillScore 0x807EB0AC, fn_1_2E53E8 0x807EB174,
 // OnUpdate 0x807EB428): ten times the shown score, counting by 2 per frame.
 struct RaceResultCount {
@@ -65,6 +66,15 @@ public:
  float hudSlide()const;
  bool hudGone()const{return phase_>RaceFlowPhase::HudExit;}
  // Board rows currently shown (update order or totals order).
+ bool teams()const{return teams_;}
+ RaceTeam humanTeam()const{return humanTeam_;}
+ const RaceTeamScore& teamScore(RaceTeam team)const{return teamScores_[unsigned(team)<2?unsigned(team):0];}
+ // Original CalcTeamScoreDiff returns Red minus Blue; zero is a draw.
+ int teamDifference()const{return int(teamScores_[0].total())-int(teamScores_[1].total());}
+ RaceTeam winningTeam()const{return teamDifference()>0?RaceTeam::Red:teamDifference()<0?RaceTeam::Blue:RaceTeam::None;}
+ unsigned teamShown(RaceTeam team)const{return unsigned(teamDisplayed_[unsigned(team)<2?unsigned(team):0]);}
+ unsigned teamRowShown(unsigned row)const{return unsigned(teamRowDisplayed_[row]);}
+ bool teamCounting()const;
  unsigned rowCount()const{return count_;}
  const RaceResultEntry& row(unsigned i)const{return rows_[i];}
  const RaceResultCount& count(unsigned i)const{return counts_[i];}
@@ -73,6 +83,10 @@ public:
  // Horizontal offset (layout units) of control `delay` for the current page.
  float slideOffset(float delay)const;
  bool counting()const;
+ // Original result controls: slide sounds follow each control delay; points
+ // sound only when the displayed integer changes.
+ int slideSound()const;
+ bool pointsChanged()const{return pointsChanged_;}
  // End menu: buttons, cursor and the chosen option (0 Next, 1 Quit). The
  // page stays on screen under the fade until the section changes.
  bool menuVisible()const{return phase_>=RaceFlowPhase::MenuIn&&phase_<=RaceFlowPhase::Done;}
@@ -98,6 +112,10 @@ private:
  void sortTotals();
  RaceFlowPhase phase_=RaceFlowPhase::Racing;
  int finishFrame_=-1;unsigned pageFrame_=0,timeout_=0,count_=0,cursor_=0;int chosen_=-1;bool final_=false,filled_=false;
+ bool pointsChanged_=false;
+ bool teams_=false;RaceTeam humanTeam_=RaceTeam::None;
+ std::array<RaceTeamScore,2> teamScores_{};
+ std::array<float,2> teamDisplayed_{};std::array<float,12> teamRowDisplayed_{};
  std::array<RaceResultEntry,12> rows_{};
  std::array<RaceResultCount,12> counts_{};
 };

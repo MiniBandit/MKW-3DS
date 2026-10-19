@@ -33,11 +33,17 @@ u32 __wrap_linearSpaceFree(void){Guard g;return __real_linearSpaceFree();}
 // QA: counts file opens and the time spent opening (fopen is wrapped at link).
 #include <cstdio>
 #include <atomic>
+#include <mkw/overlay.hpp>
 namespace mkw {std::atomic<unsigned> fileOpens{0};std::atomic<unsigned long long> fileOpenTicks{0};}
 extern "C" {
 FILE* __real_fopen(const char* path,const char* mode);
 FILE* __wrap_fopen(const char* path,const char* mode){
- const u64 start=svcGetSystemTick();FILE* file=__real_fopen(path,mode);
+ const u64 start=svcGetSystemTick();
+ // An update's overlay file (romfs:/overlay/...) replaces the same relative
+ // path when the game opens it for reading (include/mkw/overlay.hpp).
+ FILE* file=nullptr;char overlayPath[192];
+ if(mode&&mode[0]=='r'&&mode[1]!='+'&&mkw::overlay::resolve(path,overlayPath,sizeof overlayPath))file=__real_fopen(overlayPath,mode);
+ if(!file)file=__real_fopen(path,mode);
  mkw::fileOpens.fetch_add(1,std::memory_order_relaxed);mkw::fileOpenTicks.fetch_add(svcGetSystemTick()-start,std::memory_order_relaxed);
  return file;
 }

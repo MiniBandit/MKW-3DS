@@ -1,0 +1,65 @@
+Rendering and course materials
+- Preserve original texture filtering, LOD bias and complete mip chains in VRAM.
+- Correct alpha, depth and back-face culling behavior in world materials.
+- Keep selected driveable mesh surfaces at LOD0 to preserve fence and grating detail.
+- Apply the accepted LOD0 exception to Moonview Highway cutout materials.
+- Restore Mario Circuit's distant rainbow and correct sky texture bindings.
+- Preserve authored course UV animation and object material animation tracks.
+- Retain flat water geometry with scrolling textures.
+- Correct bloom edge handling and compositing while retaining the main project's existing intensity and tint.
+- Include offline default Mii textures for course billboards and vehicles, plus 30 statue portraits across five courses.
+
+Drivers, vehicles and effects
+- Correct in-race driver and vehicle animation, look targets, attachments and Toadette's braids.
+- Use the normal motorcycle falling animation for ordinary falls.
+- Apply Blooper darkening to both the driver and vehicle.
+- Adjust effect attachment points for giant and shrunken racers.
+- Include Rosalina's Luma companion behavior and required resources.
+- Restore inside-drifting motorcycle body scrape sparks, including Dolphin Dasher.
+- Restore stationary A+B wheel-spin smoke and charge sparks.
+- Restore cannon streaks and associated course effects.
+- Correct surface, landing, water, opponent and creature effect handling.
+- Resolve recursive effect and texture dependencies into course-specific banks.
+
+Course objects, items and cameras
+- Integrate targeted collision, damage and animation corrections for traffic, penguins, bats, Piranha Plants, falling rocks, iron balls and crates.
+- Keep Lakitu's lap-sign presentation above nearby ground during its motion.
+- Restore Chain Chomp mouth animation and wrong-way sign flashing.
+- Correct item collision, lifetime, guidance and discarded-item recovery behavior.
+- Preserve held items through cannon launches.
+- Make item boxes follow deforming driveable surfaces, including Bowser's Castle and Rainbow Road.
+- Correct Rainbow Road debris and stardust animation timing.
+- Correct race camera collision, sweep history and respawn camera reset.
+
+CPU drivers and race data
+- Integrate CPU steering, drift, obstacle avoidance and stuck-recovery corrections across difficulty levels and Grand Prix conditions.
+- Correct post-finish automatic driving behavior.
+- Use the original random algorithm and character/vehicle eligibility rules for CPU rosters.
+- Avoid duplicate CPU characters and respect weight-class and vehicle restrictions.
+- Keep the generated roster across restarts and subsequent races in a series.
+- Integrate race configuration, team scoring, race records, Grand Prix telemetry, rank calculation and cup-result data.
+- Persist earned unlock flags at the race-save boundary without adding notification pages.
+
+Save data
+- Add the RKSD0006/RKPD save backend with four license slots.
+- Validate checksums and support backup recovery and temporary-file publication.
+- Preserve unknown save fields, other license slots and existing ghost data.
+- Import legacy best-time data.
+- Skip unchanged writes, use 128 KiB I/O chunks and share the initial core save read across startup consumers.
+- Preserve an imported Wii Mii identity when no native Mii sidecar is available.
+- Keep save settings independent of menu presentation types.
+
+Audio and resource management
+- Integrate race, object, item, environment and character-voice corrections.
+- Load and release audio wave resources as needed and correct short-loop playback handling.
+- Carry results music through blocking Next and Next Race loads.
+- End carried results music when the existing menu music starts.
+- Integrate resource-load cleanup, retry and scene-release safety fixes.
+
+Rendering performance
+- Use fixed lighting for opponents while retaining their material shading.
+- Reuse skinning results and draw data where applicable.
+- Improve static-model culling, material submission and buffer reuse.
+- Cache course-screen capture and visibility work.
+
+epic

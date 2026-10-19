@@ -14,7 +14,7 @@ public:
     bool load();
     void reset();
     void resetAnimation();
-    void step(unsigned tick);
+    void step(unsigned tick,const RaceItems& items);
     // Poses and culls every opponent for this frame, on the job worker where
     // possible. Call after Renderer::begin; race state must not change until draw.
     void prepare(const Renderer& renderer,const RaceItems& items,Vec3 viewer,unsigned tick);

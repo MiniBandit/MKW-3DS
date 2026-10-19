@@ -6,12 +6,18 @@
 #include <cstring>
 
 namespace mkw {
+// AIManager::init (USA8072c374..450): GP takes difficulty from engine
+// class, including Mirror/150 as hard; VS takes the explicit CPU setting.
+inline unsigned cpuModeForRace(bool grandPrix,unsigned engineClass,unsigned selected){
+ return grandPrix?std::min(engineClass,2u):std::min(selected,2u);
+}
 // RMCU AISpeedRace: section1+227f80/22801c/2280b8; see CPU_SOURCE.md.
 struct CpuSpeedParam { float advantage=0, bias=1, minimum=50; };
-inline bool readCpuSpeedParam(const void* data,size_t size,unsigned course,unsigned engineClass,unsigned difficulty,CpuSpeedParam& out){
+inline bool readCpuSpeedParam(const void* data,size_t size,unsigned course,unsigned engineClass,unsigned difficulty,CpuSpeedParam& out,bool grandPrix=false,bool mirror=false){
     // Retail VS: 128 GP records, then 3 engine classes * 32 courses * 3 difficulties.
     if(!data||size!=4992||course>=32||engineClass>=3||difficulty>=3)return false;
-    const auto* p=static_cast<const uint8_t*>(data)+12*(128+(engineClass*32+course)*3+difficulty);
+    const unsigned record=grandPrix?course*4+(mirror?3:engineClass):128+(engineClass*32+course)*3+difficulty;
+    const auto* p=static_cast<const uint8_t*>(data)+12*record;
     float v[3];for(unsigned i=0;i<3;++i){uint32_t w=uint32_t(p[4*i])<<24|uint32_t(p[4*i+1])<<16|uint32_t(p[4*i+2])<<8|p[4*i+3];std::memcpy(v+i,&w,4);if(!std::isfinite(v[i]))return false;}
     if(v[1]<=0||v[2]<=0)return false;out={v[0],v[1],v[2]};return true;
 }

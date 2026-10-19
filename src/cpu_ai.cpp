@@ -1,3 +1,4 @@
+#include <mkw/gp_rank.hpp>
 #include <mkw/cpu_ai.hpp>
 #include <mkw/race_grid.hpp>
 #include <game/kart/KartObjectManager.hh>
@@ -6,6 +7,7 @@
 #include <game/kart/KartDynamics.hh>
 #include <game/system/RaceManager.hh>
 #include <game/field/ObjectDirector.hh>
+#include <game/field/BoxColManager.hh>
 #include <game/field/obj/ObjectBase.hh>
 #include <algorithm>
 #include <cmath>
@@ -186,7 +188,8 @@ bool CpuAi::endDriftHere(const Path& p) const{
 }
 
 void CpuAi::reset(const Setup& setup){
-    setup_=setup;route_=setup.route&&setup.route->size()>=2?setup.route:nullptr;
+    setup_=setup;setup_.count=std::min(setup.count,Capacity);route_=setup.route&&setup.route->size()>=2?setup.route:nullptr;
+    gpRankBonus_={};
     racers_={};groups_={};rng_=setup.seed?setup.seed:1;raceStarted_=false;
     rmState=0;rmFrame=0;rmDuration=0;rmPhase=0;rmInterval=-1;advantageEnabled=false;advantageState=0;advantageValue=0;
     topType=2;cpuCount=humanCount=0;
@@ -210,12 +213,13 @@ void CpuAi::reset(const Setup& setup){
         Path& p=r.path;
         p.start=uint16_t(route_->nearest(native(kart->pos()),native(kart->bodyFront()),i));
         if(p.start>=route_->size())p.start=0;
-        p.goNext=p.goNextDefault=GoNextDistance;p.inside=InsideFactor[mode];p.passMode=p.passModeReset=2;
+        p.goNext=p.goNextDefault=GoNextDistance;p.inside=setup.demo?0.f:InsideFactor[mode];p.passMode=p.passModeReset=2;
         int lane=int((startRank[i]+2)%3)-1; // ((position-1)%3)-1
         if(setup.mirror)lane=-lane;
-        setPoint(i,float(lane)*.5f*widthOffset(p.start));
+        setPoint(i,setup.demo?0.f:float(lane)*.5f*widthOffset(p.start));
         p.nextParam={int(route_->point(p.cur).setting1),int(route_->point(p.cur).driftSetting),route_->point(p.cur).flags,p.curvature};
     }
+    if(setup.demo)return; // Demo has no rank groups, catch-up or race items.
     // AIRankManager::init (fn_1_2311B4 / fn_1_23165C): groups filled by grid order.
     for(unsigned r=0;r<count;++r){const unsigned i=order[r];if(!racers_[i].human)sortedCpus[cpuCount++]=int(i);else sortedHumans[humanCount++]=int(i);}
     const auto& sizes=GroupSizes[std::min(cpuCount,12)];int filled=0;
@@ -346,7 +350,13 @@ void CpuAi::updateRanks(const std::array<unsigned,Capacity>& ranks,const std::ar
         }
         break;}
     case 3: // Speed advantage (fn_1_232E08)
-        if(rmPhase==0){if(rmDuration<rmFrame){if(advantageState==1)advantageState=2;rmPhase=1;}}
+        if(rmPhase==0){
+            if(rmDuration<rmFrame){if(advantageState==1)advantageState=2;rmPhase=1;}
+            // Retail still awards on this tick if it just switched to decay.
+            if(gpAiBonusTick(engine,unsigned(rmFrame)))for(int k=0;k<humanCount;++k){
+                auto& bonus=gpRankBonus_[unsigned(sortedHumans[k])];bonus=(bonus+1)&0xffffu;
+            }
+        }
         else{for(int k=0;k<cpuCount;++k){auto& s=racers_[sortedCpus[k]].speed;s.advantage=std::max(0.f,s.advantage-AdvantageDecay);}
             if(rmDuration+1200<rmFrame){rmState=2;for(int g=0;g<3;++g)for(int k=0;k<groups_[g].count;++k)racers_[groups_[g].members[k]].rank.offset=0;
                 redistribute();assignGroupTargets();rmDuration=rmFrame+(NormalMin+int(rand(uint32_t(std::max(0,NormalMax[mode]-NormalMin)))))*60;}}
@@ -376,7 +386,7 @@ void CpuAi::updateSpeed(unsigned racer,unsigned lap){
     s.frameBonus=0;
 }
 
-void CpuAi::drive(unsigned racer){
+void CpuAi::drive(unsigned racer,bool demo){
     auto& r=racers_[racer];Path& p=r.path;Drive& d=r.drive;
     auto* kart=Kart::KartObjectManager::Instance()->object(racer);
     const auto& status=kart->status();
@@ -385,10 +395,10 @@ void CpuAi::drive(unsigned racer){
     // state): a trick roll on take-off, then the bike wheelie points.
     uint8_t trick=0;
     const bool bike=kart->isBike();
-    if(status.onBit(Kart::eStatus::AirStart)&&status.offBit(Kart::eStatus::JumpPad,Kart::eStatus::InAction)&&
+    if(!demo&&status.onBit(Kart::eStatus::AirStart)&&status.offBit(Kart::eStatus::JumpPad,Kart::eStatus::InAction)&&
        int(rand(100))<int(action(r).trick))
         trick=uint8_t(1+rand(bike?4u:2u));
-    if(bike&&p.switching){
+    if(!demo&&bike&&p.switching){
         if(p.currParam.setting1==3&&int(rand(100))<int(action(r).wheelie)&&rmState!=3)r.wheelie=true;
         if(p.currParam.setting1==4){r.wheelie=false;trick=2;}
         if(r.wheelie)trick=1;
@@ -402,22 +412,24 @@ void CpuAi::drive(unsigned racer){
         const bool fastEnough=kart->move()->speed()>kart->move()->statBaseSpeed()*.55f;
         if(fastEnough&&p.distance<DriftStartDistance){
             // AIProbabilityRace::getDrift(true): one roll per opportunity.
-            if(!r.driftRolled){r.driftRolled=true;if(int(rand(100))<int(action(r).drift)){startDrift=true;driftDir=p.nextParam.curvature>0?-1.f:1.f;}}
+            if(demo||!r.driftRolled){r.driftRolled=true;if(demo||int(rand(100))<int(action(r).drift)){startDrift=true;driftDir=p.nextParam.curvature>0?-1.f:1.f;}}
         }
     }else r.driftRolled=false;
     const bool switched=p.switching;
     if(switched){
         d.feedForward=FeedForward*p.currParam.curvature;
         if(endDriftHere(p)){endDrift=true;
-            if(!p.currParam.forbidDrift()&&r.canMiniturbo&&int(rand(100))<int(action(r).miniturbo))releaseMiniturbo=true;}
+            if(!p.currParam.forbidDrift()&&r.canMiniturbo&&(demo||int(rand(100))<int(action(r).miniturbo)))releaseMiniturbo=true;}
     }
     d.feedForward+=FeedForwardDecay*(0.f-d.feedForward);
     // AIControlRace::doUpdate (fn_1_2204D4): block line, then doUpdate_: route,
     // obstacle avoider, stuck handler and the kart controller (fn_1_220824).
-    if(!bike&&!r.human)blockUpdate(racer);
+    if(!demo&&!bike&&!r.human)blockUpdate(racer);
     updatePath(racer,pos);
     avoid(racer);
-    if(!r.human)stuckUpdate(racer);
+    // AIControlBase::doUpdate_ calls its stuck sequencer for every driven
+    // actor, including the local player in PostRaceDriving (80728d00..10).
+    stuckUpdate(racer);
     const Avoid& av=r.avoid;
     uint16_t buttons=0;float stick=0;bool drifting=true;
     if(d.state==0){
@@ -432,6 +444,10 @@ void CpuAi::drive(unsigned racer){
         const bool hop=status.onBit(Kart::eStatus::Hop);
         stick=(!status.onBit(Kart::eStatus::TouchingGround)||hop)?-d.driftDir:d.driftDir*d.ramp;
         if(d.switched)d.timer=0;
+        // Kart controller 80741930..98: its 8/30/10-tick steering windows
+        // are separate from the continuously increasing ramp. The old port
+        // advanced timer but never used it, applying countersteer immediately.
+        if(d.timer<8.f||(d.timer>=38.f&&d.timer<48.f))stick=0;
         d.ramp=std::min(1.f,d.ramp+RampStep);d.timer=std::min(9999.9f,d.timer+1.f);
         buttons|=1|8;
         if(!status.onBit(Kart::eStatus::DriftManual)&&!hop){
@@ -476,9 +492,24 @@ void CpuAi::drive(unsigned racer){
     r.command={buttons,stick,trick};
 }
 
+CpuAi::DemoEvents CpuAi::stepDemoRun(unsigned racer,uint32_t frame){
+    if(!setup_.demo||!route_||racer>=setup_.count||!racers_[racer].active)return {};
+    // AIControlDemo::stateRun: shared base driving first, then authored ENPT
+    // speed, followed by current-point flags. No rank speed or item AI here.
+    frame_=frame;obstaclesValid_=false;
+    drive(racer,true);
+    auto& r=racers_[racer];const Path& p=r.path;
+    auto* kart=Kart::KartObjectManager::Instance()->object(racer);
+    kart->move()->setSpeed(float(p.nextParam.setting1));
+    r.speed.result=float(p.nextParam.setting1);
+    return {bool(p.currParam.flags&0x40),
+            p.switching&&bool(p.currParam.flags&0x20),
+            p.switching&&bool(p.currParam.flags&0x10)};
+}
+
 void CpuAi::step(uint32_t driveMask,const std::array<unsigned,Capacity>& ranks,const std::array<unsigned,Capacity>& laps,
                  const std::array<bool,Capacity>& finished,unsigned finalLap){
-    if(!route_)return;
+    if(!route_||setup_.demo)return;
     auto* manager=System::RaceManager::Instance();
     ++frame_;obstaclesValid_=false;
     updateRanks(ranks,laps,finished,finalLap);
@@ -515,7 +546,10 @@ void CpuAi::step(uint32_t driveMask,const std::array<unsigned,Capacity>& ranks,c
         // After its goal a CPU drives on AIEngine PostRaceDriving (USA
         // 0x80728C28): AISpeedRace vt_0x14 (0x80733F54) holds 0.8 x the
         // kart's base speed (0x808C600C) instead of the race speed manager.
-        if(racing&&!r.human){if(finished[i])kart->move()->setCpuBaseSpeed(PostRaceSpeed*kart->move()->statBaseSpeed());else updateSpeed(i,laps[i]);}
+        if(racing){
+            if(finished[i])kart->move()->setCpuBaseSpeed(PostRaceSpeed*kart->move()->statBaseSpeed());
+            else if(!r.human)updateSpeed(i,laps[i]);
+        }
         if(!racing||dropping){updatePath(i,native(kart->pos()));r.command={};r.itemCommand={};continue;}
         drive(i);
         if(!r.human){r.item.goal=r.item.goal||finished[i];stepItems(i);}
@@ -722,22 +756,20 @@ bool CpuAi::findObstacle(unsigned i){
     const auto& status=kart->status();
     const bool star=status.onBit(Kart::eStatus::Star),mega=status.onBit(Kart::eStatus::Mega);
     bool found=false;
-    if(auto* director=Field::ObjectDirector::Instance();director&&!star&&!mega&&!kart->move()->bulletActive()){
-        // Only the normal-kart column of GeoHitTableKart is loaded here.
-        const Field::ObjectBase* nearest=nullptr;float best=0;
-        if(!obstaclesValid_){
-            obstacles_.clear();
-            for(const auto* obj:director->objects())if(obj)obstacles_.push_back({obj,native(obj->pos()),400.f+obj->getCollisionRadius()});
-            obstaclesValid_=true;
-        }
-        for(const auto& o:obstacles_){
-            const Vec3 delta=o.position-a.end;const float dist=dot(delta,delta);
-            if(dist<o.reach*o.reach&&(!nearest||dist<best)){nearest=static_cast<const Field::ObjectBase*>(o.object);best=dist;}
-        }
-        if(nearest&&std::fabs(nearest->pos().y-a.end.y)<=600.f){
-            const auto& table=director->hitTableKart();const s16 slot=table.slot(nearest->id());
-            if(slot!=-1&&table.reaction(slot)!=Kart::Reaction::None){
-                found=true;a.chanceWeight=1.5f;a.steerWeight=1.5f;a.obstacle=native(nearest->pos());
+    if(auto* director=Field::ObjectDirector::Instance();director){
+        // USA8072cb04..f0 searches the live collision registry at probe.end,
+        // then checks the first returned object and the actual kart column.
+        // Scanning every decorative ObjectBase and choosing the nearest one
+        // let noncolliding props mask the traffic and ignored inactive units.
+        if(auto* boxes=Field::BoxColManager::Instance()){
+            Field::BoxColFlag flags;flags.setBit(Field::eBoxColFlag::Object);
+            boxes->search(400.f,egg(a.end),flags);
+            const auto* object=boxes->getNextObject();
+            if(object&&std::fabs(object->pos().y-a.end.y)<=600.f){
+                const auto& table=director->hitTableKart();const s16 slot=table.slot(object->id());
+                if(slot>=0&&table.reaction(slot,Field::ObjectHitTable::KartColumn(kart))!=Kart::Reaction::None){
+                    found=true;a.chanceWeight=1.5f;a.steerWeight=1.5f;a.obstacle=native(object->pos());
+                }
             }
         }
     }

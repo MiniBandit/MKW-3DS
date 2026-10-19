@@ -15,6 +15,11 @@ inline bool countedWallContact(bool contact,std::uint8_t type,std::uint8_t varia
     const bool skip=(type==0x14&&variant==7)||(type==0x1e&&(variant==3||variant==0));
     return wall&&!skip;
 }
+// Shared Effects::Player wall trigger (USA 8069262c..80692738).
+// Call after advancing the cooldown for this physics tick.
+inline bool wallImpactReady(bool beforeRespawn,bool contact,float speed,int frames){
+    return !beforeRespawn&&contact&&speed>30.f&&frames>30;
+}
 // Effects::Player::OnBushCollision (0x806a221c): the bush wall, 0xc variant 5.
 inline bool bushContact(bool contact,std::uint8_t type,std::uint8_t variant){
     return contact&&type==0xc&&variant==5;

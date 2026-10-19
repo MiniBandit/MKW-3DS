@@ -56,7 +56,7 @@ enum : uint16_t {
     CmdBegin=1,CmdEnd,CmdProjection,CmdCourseLighting,CmdRetailFog,CmdRequestBloom,CmdApplyBloom,CmdBottom,
     CmdDraw,CmdDrawAtScreen,CmdMenuIcon,CmdEnvironmentUv,CmdUv1,CmdUvOffset,CmdClearEnvironment,
     CmdRigid,CmdSkin,CmdOverrides,CmdShadows,CmdSparks,CmdEffects,CmdCinema,CmdFade,CmdSprite,CmdFontSprite,
-    CmdMaterialQuads,CmdText,CmdScreenDepth,
+    CmdMaterialQuads,CmdText,CmdScreenDepth,CmdRequestStadium,
 };
 // begun: C3D_FrameBegin already ran on the recording thread (stereo immediate frames).
 struct BeginCommand {static constexpr uint16_t Type=CmdBegin;C3D_Mtx view,projection;bool sync,begun;};
@@ -65,6 +65,7 @@ struct ProjectionCommand {static constexpr uint16_t Type=CmdProjection;C3D_Mtx p
 struct CourseLightingCommand {static constexpr uint16_t Type=CmdCourseLighting;bool enabled;};
 struct RetailFogCommand {static constexpr uint16_t Type=CmdRetailFog;RetailFog fog;};
 struct RequestBloomCommand {static constexpr uint16_t Type=CmdRequestBloom;const CourseBloom* settings;};
+struct RequestStadiumCommand {static constexpr uint16_t Type=CmdRequestStadium;const Bounds* screens;unsigned count;};
 struct ApplyBloomCommand {static constexpr uint16_t Type=CmdApplyBloom;};
 struct BottomCommand {static constexpr uint16_t Type=CmdBottom;};
 struct DrawCommand {
@@ -78,7 +79,7 @@ struct DrawAtScreenCommand {
     const Model* model;const Vertex* vertices;C3D_Mtx transform;float x,y,brightness,scaleX,scaleY;uint32_t frame,additive;
 };
 struct MenuIconCommand {static constexpr uint16_t Type=CmdMenuIcon;const Model* model;const Vertex* vertices;C3D_Mtx transform;const UiQuad* quad;uint32_t frame,additive;};
-struct EnvironmentUvCommand {static constexpr uint16_t Type=CmdEnvironmentUv;C3D_Mtx transform;float uv[6];};
+struct EnvironmentUvCommand {static constexpr uint16_t Type=CmdEnvironmentUv;C3D_Mtx transform;float uv[6];bool texture2;};
 struct Uv1Command {static constexpr uint16_t Type=CmdUv1;float uv[6];};
 struct UvOffsetCommand {static constexpr uint16_t Type=CmdUvOffset;float u,v;};
 struct ClearEnvironmentCommand {static constexpr uint16_t Type=CmdClearEnvironment;};
@@ -281,6 +282,7 @@ void Renderer::execute(FrameList& list){
         case CmdProjection:projection_=eyeProjection(static_cast<const ProjectionCommand*>(body)->projection);break;
         case CmdCourseLighting:courseLighting_=static_cast<const CourseLightingCommand*>(body)->enabled;break;
         case CmdRetailFog:retailFogNow(static_cast<const RetailFogCommand*>(body)->fog);break;
+        case CmdRequestStadium:{const auto& c=*static_cast<const RequestStadiumCommand*>(body);requestStadiumScreen(c.screens,c.count);break;}
         case CmdRequestBloom:{const auto& c=*static_cast<const RequestBloomCommand*>(body);requestBloomNow(*c.settings);break;}
         case CmdApplyBloom:applyBloom();break;
         case CmdBottom:bottom=true;if(eye+1==eyes)beginBottom();break;
@@ -299,7 +301,7 @@ void Renderer::execute(FrameList& list){
             execFrame_=c.frame;execAdditive_=c.additive;
             drawMenuIconNow(*c.model,c.vertices,c.transform,*c.quad);break;
         }
-        case CmdEnvironmentUv:{const auto& c=*static_cast<const EnvironmentUvCommand*>(body);setEnvironmentUv(c.transform,c.uv);break;}
+        case CmdEnvironmentUv:{const auto& c=*static_cast<const EnvironmentUvCommand*>(body);setEnvironmentUv(c.transform,c.uv,c.texture2);break;}
         case CmdUv1:setUv1Transform(static_cast<const Uv1Command*>(body)->uv);break;
         case CmdUvOffset:{const auto& c=*static_cast<const UvOffsetCommand*>(body);setUvOffset(c.u,c.v);break;}
         case CmdClearEnvironment:clearEnvironmentUv();break;
@@ -350,8 +352,8 @@ void Renderer::releaseRetired(){
 }
 
 // Recording side of the public calls (renderer.cpp holds the drawing side).
-void Renderer::setFov(float degrees){
-    fov_=std::clamp(degrees,1.f,170.f);Mtx_PerspTilt(&mainProjection_,C3D_AngleFromDegrees(fov_),C3D_AspectRatioTop,10.f,400000.f,false);
+void Renderer::setFov(float degrees,float nearPlane,float farPlane){
+    fov_=std::clamp(degrees,1.f,170.f);Mtx_PerspTilt(&mainProjection_,C3D_AngleFromDegrees(fov_),C3D_AspectRatioTop,std::clamp(nearPlane,1.f,100.f),std::max(farPlane,101.f),false);
     cullProjection_=mainProjection_;
     if(recording())command<ProjectionCommand>().projection=mainProjection_;
     else projection_=mainProjection_;
@@ -388,6 +390,16 @@ void Renderer::setRetailFog(const RetailFog& fog){
     if(recording())command<RetailFogCommand>().fog=fog;
     else retailFogNow(fog);
 }
+void Renderer::requestStadiumScreen(const Bounds* screens,unsigned count){
+    if(recording()){
+        Bounds* copy=nullptr;
+        if(screens&&count){copy=static_cast<Bounds*>(data(size_t(count)*sizeof(Bounds)));std::copy_n(screens,count,copy);}
+        auto& c=command<RequestStadiumCommand>();c.screens=copy;c.count=copy?count:0;
+    }else{
+        stadiumRequested_=true;stadiumScreens_.clear();
+        if(screens&&count)stadiumScreens_.assign(screens,screens+count);
+    }
+}
 void Renderer::requestBloom(const CourseBloom& settings){
     if(!recording()){requestBloomNow(settings);return;}
     // Bloom's VRAM targets (unless reserved at load) and LINEAR vertices:
@@ -395,9 +407,10 @@ void Renderer::requestBloom(const CourseBloom& settings){
     if(settings.enabled()&&!bloomVertices_&&!bloomFailed_){drain();initBloom();}
     command<RequestBloomCommand>().settings=&settings;
 }
-void Renderer::begin(Vec3 eye,Vec3 target,Vec3 up){
+void Renderer::begin(Vec3 eye,Vec3 target,Vec3 up,bool mirror){
     auto e=FVec3_New(eye.x,eye.y,eye.z),t=FVec3_New(target.x,target.y,target.z),u=FVec3_New(up.x,up.y,up.z);
     Mtx_LookAt(&mainView_,e,t,u,false);
+    if(mirror)for(unsigned c=0;c<4;++c)mainView_.r[0].c[c]=-mainView_.r[0].c[c];
     mainScreenWidth_=400.f;
     beginStereo(length(target-eye));
     beginRecorded();
@@ -479,6 +492,7 @@ void Renderer::beginBottom(){
 }
 void Renderer::applyBloom(){
     if(recording()){command<ApplyBloomCommand>();return;}
+    if(stadiumFrame_)captureStadiumScreenNow();
     if(!bloomFrame_)return;
     applyBloomNow();
 }
@@ -554,9 +568,9 @@ void Renderer::setOverrides(const SubmeshOverride* overrides,unsigned count){
     const SubmeshOverride* copied=copy(overrides,count);
     auto& c=command<OverridesCommand>();c.overrides=copied;c.count=copied?count:0;
 }
-void Renderer::setEnvironmentUv(const C3D_Mtx& transform,const float (&uv)[6]){
-    if(!recording()){environmentUvNow(transform,uv);return;}
-    auto& c=command<EnvironmentUvCommand>();c.transform=transform;std::memcpy(c.uv,uv,sizeof c.uv);
+void Renderer::setEnvironmentUv(const C3D_Mtx& transform,const float (&uv)[6],bool texture2){
+    if(!recording()){environmentUvNow(transform,uv,texture2);return;}
+    auto& c=command<EnvironmentUvCommand>();c.transform=transform;std::memcpy(c.uv,uv,sizeof c.uv);c.texture2=texture2;
 }
 void Renderer::setUv1Transform(const float (&uv)[6]){
     if(!recording()){uv1TransformNow(uv);return;}

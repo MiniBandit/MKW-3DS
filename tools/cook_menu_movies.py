@@ -173,7 +173,7 @@ def encode(spec, quality, force):
     return record
 
 
-def cook_audio(path):
+def cook_audio(path, name='title'):
     """Decode the THP's original Nintendo DSP ADPCM channels to PCM16 WAV."""
     movie = ThpMovie(path)
     data = movie.data
@@ -182,7 +182,7 @@ def cook_audio(path):
     if types != [0, 1]: raise ValueError('Expected THP video plus one audio component')
     channels, rate, samples, tracks = struct.unpack_from('>4I', data, component+32)
     if channels not in (1, 2) or tracks != 1: raise ValueError('Unsupported THP audio layout')
-    destination = OUT/'movies/title.wav'
+    destination = OUT/f'movies/{name}.wav'
     destination.parent.mkdir(parents=True, exist_ok=True)
     partial = destination.with_suffix('.wav.partial')
     written = 0
@@ -219,9 +219,9 @@ def cook_audio(path):
             output.writeframesraw(interleaved.tobytes());written += count
     if written != samples: raise ValueError(f'THP sample count mismatch {written} != {samples}')
     partial.replace(destination)
-    receipt = dict(source=path.relative_to(ROOT).as_posix(), sourceSha256=hashlib.sha256(data).hexdigest(), path='movies/title.wav', channels=channels, sampleRate=rate, samples=samples, seconds=samples/rate, codec='retail Nintendo DSP ADPCM decoded to PCM16', sha256=digest_file(destination))
+    receipt = dict(source=path.relative_to(ROOT).as_posix(), sourceSha256=hashlib.sha256(data).hexdigest(), path=f'movies/{name}.wav', channels=channels, sampleRate=rate, samples=samples, seconds=samples/rate, codec='retail Nintendo DSP ADPCM decoded to PCM16', sha256=digest_file(destination))
     destination.with_suffix('.audio.json').write_text(json.dumps(receipt, indent=2)+'\n')
-    print(f'Original intro audio ready: {channels}ch {rate}Hz, {written} samples, {samples/rate:.3f}s', flush=True)
+    print(f'Original {name} audio ready: {channels}ch {rate}Hz, {written} samples, {samples/rate:.3f}s', flush=True)
     return receipt
 
 

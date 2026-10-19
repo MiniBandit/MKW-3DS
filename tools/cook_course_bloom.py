@@ -57,7 +57,7 @@ def main():
         ' for(const auto& b:CourseBlooms)if(!std::strcmp(b.archive,archive))return &b;return nullptr;','}','}']
     (ROOT/'include/mkw/course_bloom.hpp').write_text('\n'.join(lines)+'\n')
     (ROOT/'build/course-bloom.json').write_text(json.dumps({'courses':len(rows),'sourceFiles':evidence,
-        'adaptation':'Quarter-resolution near band and eighth-resolution far band; ring taps halve on reduced quality; gain stays unchanged.',
+        'adaptation':'Full 128x64 near and 64x32 far surfaces with authored screen-space radii; ring taps halve on reduced quality; gain stays unchanged.',
         'runtime_validation':'Dad manual, pending'},indent=2)+'\n')
     print(json.dumps({'courses':len(rows),'source_files':len(evidence)}))
 if __name__=='__main__':main()

@@ -7,6 +7,7 @@
 #include <mkw/sound_scene.hpp>
 #include <mkw/menu_movie_audio.hpp>
 #include <mkw/snd_layout.hpp>
+#include <mkw/snd_short_loop.hpp>
 #include <3ds.h>
 #include <algorithm>
 #include <array>
@@ -339,11 +340,45 @@ public:
  std::array<Chan, VoiceMax> ch{};
  u8* bridgePool = nullptr; u32 bridgeUsed = 0;
  static constexpr u32 BridgePoolBytes = 4096;
+ struct PcmLoop {
+  std::vector<u8> encoded;
+  AdpcmParam adpcm; AdpcmLoop loop;
+  u32 first = 0, end = 0;
+  const s16* pcm = nullptr;
+ };
+ std::vector<PcmLoop> pcmLoops;
+ s16* pcmLoopPool = nullptr; u32 pcmLoopUsed = 0;
+ // All seven matching waves in the retail archive occupy 10,112 bytes.
+ static constexpr u32 PcmLoopPoolBytes = 16384;
  u32 underruns = 0;
 
  NdspHardware() { bridgePool = static_cast<u8*>(linearAlloc(BridgePoolBytes)); }
- ~NdspHardware() override { for (int v = 0; v < VoiceMax; ++v) hardStop(v); if (bridgePool) linearFree(bridgePool); }
+ ~NdspHardware() override { for (int v = 0; v < VoiceMax; ++v) hardStop(v); if (bridgePool) linearFree(bridgePool); if (pcmLoopPool) linearFree(pcmLoopPool); }
  int voiceCount() const override { return VoiceMax; }
+
+ const s16* shortLoopPcm(const WaveData& w, int channel) {
+  if (!shortAdpcmLoop(w)) return nullptr;
+  const auto& c = w.channel[channel];
+  // Compare the content, not a bank address: banks can be unloaded and
+  // allocated again between races. Cached PCM remains immutable while
+  // any DSP channel may still reference it.
+  for (const auto& old : pcmLoops)
+   if (old.first == w.loopStart && old.end == w.loopEnd && old.encoded.size() == c.bytes &&
+       old.adpcm.ps == c.adpcm.ps && old.adpcm.yn1 == c.adpcm.yn1 && old.adpcm.yn2 == c.adpcm.yn2 &&
+       old.loop.ps == c.loopParam.ps && old.loop.yn1 == c.loopParam.yn1 && old.loop.yn2 == c.loopParam.yn2 &&
+       !std::memcmp(old.adpcm.coef, c.adpcm.coef, sizeof c.adpcm.coef) &&
+       !std::memcmp(old.encoded.data(), c.data, c.bytes)) return old.pcm;
+  const u32 samples = shortLoopSamples(w);
+  if ((pcmLoopUsed + samples) * sizeof(s16) > PcmLoopPoolBytes) return nullptr;
+  if (!pcmLoopPool) pcmLoopPool = static_cast<s16*>(linearMemAlign(PcmLoopPoolBytes, 32));
+  if (!pcmLoopPool) return nullptr;
+  s16* pcm = pcmLoopPool + pcmLoopUsed;
+  if (!decodeShortLoop(w, channel, pcm)) return nullptr;
+  DSP_FlushDataCache(pcm, samples * sizeof(s16));
+  pcmLoops.push_back({std::vector<u8>(c.data, c.data + c.bytes), c.adpcm, c.loopParam, w.loopStart, w.loopEnd, pcm});
+  pcmLoopUsed += samples;
+  return pcm;
+ }
 
  const u8* bridgeData(const LoopBridge* b) {
   // Copy each distinct bridge frame once into DSP-visible memory.
@@ -396,6 +431,18 @@ public:
    setupChannel(v, 2, wc.adpcm.coef, w.rate);
    c.mode = Chan::Stream; c.feed = feed; c.ownFeed = feed; c.feedChannel = 0; c.pendingStart = true;
    refillStream(v);
+   return;
+  }
+  if (const s16* pcm = shortLoopPcm(w, channel)) {
+   // SE_RC_GOAL's original oscillator is a 43-sample loop. Its old
+   // bridge/body queue emptied several times within one DSP frame.
+   // Keep its exact decoded samples, loop length, rate and sequence pitch.
+   setupChannel(v, 1, nullptr, w.rate);
+   c.mode = Chan::Wave; c.pendingStart = true;
+   if (offset >= w.loopEnd) offset = 0;
+   offset = offset / 14 * 14;
+   queue(v, reinterpret_cast<const u8*>(pcm + offset), w.loopEnd - offset, false, nullptr);
+   queue(v, reinterpret_cast<const u8*>(pcm + shortLoopOffset(w)), w.loopEnd - w.loopStart, true, nullptr);
    return;
   }
   setupChannel(v, w.format, wc.adpcm.coef, w.rate);
@@ -839,11 +886,14 @@ struct SoundSystem::Impl {
   case SoundCommand::Layer: gameFrame(true); break;
   case SoundCommand::Prepare: { StartInfo si; si.startOffsetSamples = u32(c.frames); engine.prepareSound(h ? *h : temp, c.id, &si); break; }
   case SoundCommand::StartPrepared: if (h) engine.startPrepared(*h); break;
+  case SoundCommand::MoveSlot:
+   if(h&&c.id<slots.size()&&c.id!=c.slot){engine.stop(slots[c.id],0);slots[c.id]=*h;*h=Handle{};}
+   break;
   }
  }
  void gameFrame(bool fromGame) {
   if (layer && fromGame) layer->gameFrame(engine);
-  engine.updateGameFrame();
+  engine.updateGameFrame(fromGame);
   lastGameFrameMs = audioClock;
  }
  void audioLoop() {
@@ -1034,6 +1084,7 @@ bool SoundSystem::start() {
 }
 
 void SoundSystem::stop() {
+ carriedMusic_=InvalidId;
  if (!impl_) return;
  running_.store(false);
  auto* s = impl_;
@@ -1057,6 +1108,15 @@ void SoundSystem::stop() {
 }
 
 
+void SoundSystem::carryMusic(u32 soundId,std::uint16_t fromSlot){
+ if(!impl_||soundId==InvalidId||!fromSlot)return;
+ carriedMusic_=soundId;
+ SoundCommand c;c.type=SoundCommand::MoveSlot;c.slot=fromSlot;c.id=30;post(c);
+}
+void SoundSystem::finishCarriedMusic(int frames){
+ if(carriedMusic_==InvalidId)return;
+ stopSlot(30,frames);carriedMusic_=InvalidId;
+}
 void SoundSystem::loadScene(const u32* groups, int count, int keepMs, const u32* skip, int skipCount) {
  Scene sc; sc.groups = groups; sc.groupCount = count; sc.keepMs = keepMs; sc.skipFiles = skip; sc.skipCount = skipCount;
  loadScene(sc);
@@ -1064,7 +1124,7 @@ void SoundSystem::loadScene(const u32* groups, int count, int keepMs, const u32*
 void SoundSystem::loadScene(const Scene& sc) {
  if (!impl_) return;
  auto& s = *impl_;
- ScenePlan plan = planSoundScene(s.archive, sc);
+ ScenePlan plan = planSoundScene(s.archive, sc,carriedMusic_);
  LightLock_Lock(&s.fileLock);
  for (u32 f : s.sceneFiles) if (std::find(plan.files.begin(), plan.files.end(), f) == plan.files.end()) { s.files[f].wanted = false; s.dropFiles.push({f, f32(sc.keepMs)}); }
  for (size_t i = 0; i < plan.files.size(); ++i) {
@@ -1088,7 +1148,7 @@ u32 SoundSystem::streamBytes(u32 soundId) const {
 u32 SoundSystem::residentBytes(const Scene& sc) const {
  if (!impl_) return 0;
  const Archive& a = impl_->archive;
- const ScenePlan plan = planSoundScene(a, sc);
+ const ScenePlan plan = planSoundScene(a, sc,carriedMusic_);
  u32 total = 0;
  for (size_t i = 0; i < plan.files.size(); ++i) {
   const FileEntry* f = a.file(plan.files[i]);

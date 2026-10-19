@@ -30,6 +30,8 @@ public:
         const EnemyRoute* route=nullptr;
         unsigned count=1,engineClass=2,cpuMode=1;
         bool mirror=false;
+        // AIControlDemo: authored speed and guaranteed drift, no race rank AI.
+        bool demo=false;
         CpuSpeedParam speed{};bool speedReady=false;
         std::array<CpuActionParam,12> actions{};bool actionsReady=false;
         float courseLength=6000;
@@ -42,6 +44,10 @@ public:
     // (CPUs, plus player zero for QA route driving). ranks: 1-based positions.
     void step(uint32_t driveMask,const std::array<unsigned,Capacity>& ranks,const std::array<unsigned,Capacity>& laps,
               const std::array<bool,Capacity>& finished,unsigned finalLap);
+    // Only the Demo Run state. The owning scene handles Start delay / visibility
+    // and End transitions; it must not call the ordinary race step for this mode.
+    struct DemoEvents { bool celebrate=false,throwForwards=false,end=false; };
+    DemoEvents stepDemoRun(unsigned racer,uint32_t frame);
     const CpuCommand& command(unsigned i) const { return racers_[i<Capacity?i:0].command; }
     // AI::handleBump (retail 80721f9c): kart contact shifts the lateral offset.
     void bump(unsigned racer,Vec3 direction);
@@ -65,6 +71,7 @@ public:
     int avoidState(unsigned racer) const { return racer<Capacity?racers_[racer].avoid.state:0; }
     int itemState(unsigned racer) const { return racer<Capacity?int(racers_[racer].item.state):0; }
     int targetRank(unsigned racer) const { return racer<Capacity?racers_[racer].rank.target:0; }
+    unsigned gpRankBonus(unsigned racer) const { return racer<Capacity?gpRankBonus_[racer]:0; }
     bool ready() const { return route_!=nullptr; }
     // Retail AIProbabilityRace::getStartBoost (fn_1_22EAD8): 0 none, -1 burnout, 1..5 levels.
     int startBoostLevel(unsigned racer) const { return racer<Capacity?racers_[racer].startBoost:0; }
@@ -158,7 +165,7 @@ private:
     bool driftHere(const Path& p) const;
     bool endDriftHere(const Path& p) const;
     // AIControlRace / kart controller.
-    void drive(unsigned racer);
+    void drive(unsigned racer,bool demo=false);
     // AISpeedRace / AIRankManager.
     void updateRanks(const std::array<unsigned,Capacity>& ranks,const std::array<unsigned,Capacity>& laps,
                      const std::array<bool,Capacity>& finished,unsigned finalLap);
@@ -192,6 +199,7 @@ private:
     std::array<Racer,Capacity> racers_{};
     std::array<Group,3> groups_{}; // top, middle, bottom
     int topType=2;
+    std::array<unsigned,Capacity> gpRankBonus_{};
     int rmState=0,rmFrame=0,rmDuration=0,rmPhase=0,rmInterval=-1;
     bool advantageEnabled=false;
     int advantageState=0;float advantageValue=0;

@@ -1,5 +1,10 @@
+#include <game/field/obj/ObjectKarehayama.hh>
+#include <game/system/RaceConfig.hh>
+#include <game/field/obj/ObjectChimney.hh>
 #include "mkw/course_object_kinds.hpp"
 #include "mkw/factory_belts.hpp"
+#include "mkw/joint_billboard.hpp"
+#include "mkw/course_mii_statue.hpp"
 #include "mkw/render_quality.hpp"
 #include <game/field/ObjectDirector.hh>
 #include <game/field/obj/ObjectBase.hh>
@@ -9,23 +14,38 @@
 #include <game/field/obj/ObjectChoropu.hh>
 #include <game/field/obj/ObjectCow.hh>
 #include <game/field/obj/ObjectCrab.hh>
+#include <game/field/obj/ObjectParasolR.hh>
 #include <game/field/obj/ObjectDossun.hh>
 #include <game/field/obj/ObjectFireRing.hh>
 #include <game/field/obj/ObjectFirebar.hh>
 #include <game/field/obj/ObjectFlamePole.hh>
 #include <game/field/obj/ObjectFlamePoleFoot.hh>
 #include <game/field/obj/ObjectHanachan.hh>
+#include <game/field/obj/ObjectDokan.hh>
+#include <game/field/obj/ObjectItemboxLine.hh>
+#include <game/field/obj/ObjectWoodbox.hh>
+#include <game/field/obj/ObjectWoodboxWSub.hh>
 #include <game/field/obj/ObjectFireSnake.hh>
 #include <game/field/obj/ObjectHeyho.hh>
+#include <game/field/obj/ObjectHwanwan.hh>
+#include <game/field/obj/ObjectRock.hh>
 #include <game/field/obj/ObjectHeyhoBall.hh>
 #include <game/field/obj/ObjectItemboxPress.hh>
 #include <game/field/RailManager.hh>
 #include <game/field/obj/ObjectKoopaBall.hh>
+#include <game/field/obj/ObjectKoopaFigure.hh>
+#include <game/field/obj/ObjectSanbo.hh>
+#include <game/field/obj/ObjectCannon.hh>
+#include <game/field/obj/ObjectCarB.hh>
+#include <game/field/obj/ObjectBGTeresa.hh>
+#include <game/field/obj/ObjectTeresa.hh>
 #include <game/field/obj/ObjectTruckWagon.hh>
 #include <game/field/obj/ObjectTwistedWay.hh>
+#include <game/field/obj/ObjectTownBridge.hh>
 #include <game/field/obj/ObjectKuribo.hh>
 #include <game/field/obj/ObjectPakkunF.hh>
 #include <game/field/obj/ObjectPenguin.hh>
+#include <game/field/obj/ObjectPoihana.hh>
 #include <game/field/obj/ObjectPress.hh>
 #include <game/field/obj/ObjectVolcanoBall.hh>
 #include <game/field/obj/ObjectVolcanoBallLauncher.hh>
@@ -70,15 +90,84 @@ C3D_Mtx facingMatrix(Vec3 position,Vec3 forward,Vec3 scale){
     return basisMatrix(side,cross(forward,side),forward,position,scale);
 }
 
+// The original star/meteor object rotates its entire model independently
+// of CHR0; both distance variants receive the same current transform.
+void drawInseki(ObjectDraw& d,Visual& v){
+    const float angle=v.inseki.update(d.tick,int16_t(v.geo->setting(1)),
+        int16_t(v.geo->setting(2)),int16_t(v.geo->setting(3)));
+    K::EGG::Matrix34f placement,spin;
+    placement.makeRT(v.geo->rot()*0.01745329238474369f,v.geo->pos());
+    spin.setAxisRotation(angle,K::EGG::Vector3f::ez);
+    const auto rotated=placement.multiplyTo(spin);
+    C3D_Mtx matrix=objectMatrix(rotated,v.geo->scale());
+    // The single-screen full bank animates six fragments; its low bank has
+    // no animated joints. The port's distance-only switch snaps their poses.
+    // Keep this small decorative model on its authored full animation.
+    d.submit(v.main.model,matrix,loopAt(v.main,float(d.tick)*v.rate+v.phase));
+    v.drawn=matrix;v.drawnValid=true;
+}
 void drawGeneric(ObjectDraw& d,Visual& v){
+    if(v.object&&unsigned(v.object->id())==0x176&&!static_cast<const K::Field::ObjectKarehayama*>(v.object)->shown())return;
+    if(v.object&&(unsigned(v.object->id())==0x14c||unsigned(v.object->id())==0x2c0)&&
+        !static_cast<const K::Field::ObjectChimney*>(v.object)->modelVisible())return;
+    if(v.object&&v.object->id()==ObjectId::Woodbox&&
+        !static_cast<const K::Field::ObjectWoodbox*>(v.object)->shown())return;
+    if(v.object&&v.object->id()==ObjectId::DKRockGC&&
+        !static_cast<const K::Field::ObjectRock*>(v.object)->visible())return;
     const C3D_Mtx m=v.kinetic&&v.object?liveMatrix(*v.object):v.placement;
     const float frame=float(d.tick)*v.rate+v.phase;
     const bool far=v.low.model&&length(position(m)-d.camera)>renderQuality().objectLowDistance;
     const Tracks& t=far?v.low:v.main;
     Anim a=loopAt(t,frame);
+    if(v.object&&v.object->id()==ObjectId::TownBridge)
+        a.frame=static_cast<const K::Field::ObjectTownBridge*>(v.object)->animationFrame();
     if(v.variant>=0)a.patFrame=a.clrFrame=float(v.variant);
     d.submit(t.model,m,a);
-    if(v.shadow.model)d.shadow(v.shadow.model,m);
+    if(v.shadow.model){
+        if(v.object&&v.object->id()==ObjectId::DKRockGC){
+            const auto& rock=*static_cast<const K::Field::ObjectRock*>(v.object);
+            d.shadow(v.shadow.model,objectMatrix(rock.shadowTransform(),rock.shadowScale()));
+        }else d.shadow(v.shadow.model,m);
+    }
+}
+// Retail statues attach an additional RFL model at face_1. The 3DS path
+// uses an offline portrait instead; no head assembly or capture during a race.
+void drawMiiStatue(ObjectDraw& d,Visual& v){
+    drawGeneric(d,v);
+    const auto* binding=miiStatueBinding(v.geo->id());
+    const auto* source=v.main.model;
+    const auto* head=v.extra[5].model;
+    if(!binding||!source||!source->bank||!head)return;
+    const auto& bank=*source->bank;
+    const int nodeIndex=bank.node("face_1");
+    if(nodeIndex<0)return;
+    const auto& node=bank.nodes()[nodeIndex];
+    const float* face=node.world;
+    if(node.slot>=0&&unsigned(node.slot)<bank.matrixCount()){
+        v.palette.resize(bank.matrixCount()*12);
+        bank.pose(v.main.clip,float(d.tick)*v.rate+v.phase,v.palette.data());
+        face=v.palette.data()+node.slot*12;
+    }
+    C3D_Mtx joint;Mtx_Identity(&joint);
+    for(unsigned r=0;r<3;++r)for(unsigned c=0;c<4;++c)joint.r[r].c[3-c]=face[r*4+c];
+    // Init retains (0,-pi/2,pi); SetParams changes translation and scale.
+    K::EGG::Matrix34f local;
+    local.makeRT({0,-1.5707963705062866f,3.1415927410125732f},{binding->x,binding->y,0});
+    const C3D_Mtx offset=objectMatrix(local,{binding->scale,binding->scale,binding->scale});
+    C3D_Mtx attached,world;
+    Mtx_Multiply(&attached,&joint,&offset);
+    const C3D_Mtx body=v.kinetic&&v.object?liveMatrix(*v.object):v.placement;
+    Mtx_Multiply(&world,&body,&attached);
+    // Baked portrait is centered at RFL Y=34.5; billboard around that point,
+    // preserving original column lengths and projected local-Y roll.
+    float rows[12],view[12];
+    for(unsigned r=0;r<3;++r){
+        world.r[r].w+=world.r[r].y*34.5f;
+        for(unsigned c=0;c<4;++c){rows[r*4+c]=world.r[r].c[3-c];view[r*4+c]=d.view.view.r[r].c[3-c];}
+    }
+    if(!billboardJoint(rows,view))return;
+    for(unsigned r=0;r<3;++r)for(unsigned c=0;c<4;++c)world.r[r].c[3-c]=rows[r*4+c];
+    if(d.view.visible(*head->model,world))d.plain(*head->model,world);
 }
 // Toad's Factory's belts scroll their SRT0 at the rate their constructor stores
 // (USA 0x807F0C4C: BeltEasy 0.9, BeltCrossing 1.25; classifyObject sets v.rate).
@@ -109,6 +198,7 @@ void drawSun(ObjectDraw& d,Visual& v){
 }
 void drawKuribo(ObjectDraw& d,Visual& v){
     const auto& k=*static_cast<const K::Field::ObjectKuribo*>(v.object);
+    if(!k.visible())return;
     const C3D_Mtx m=liveMatrix(k);
     // Kinoko's walk timer is the CHR0 frame that gates each step.
     Anim a;a.clip=v.clips[0];a.frame=k.animTimer();
@@ -185,32 +275,40 @@ void drawWanwan(ObjectDraw& d,Visual& v){
 }
 void drawHanachan(ObjectDraw& d,Visual& v){
     const auto& h=*static_cast<const K::Field::ObjectHanachan*>(v.object);
-    const bool walking=h.stateId()==0;
-    const float frame=float(d.tick);
     for(size_t i=0;i<h.partCount();++i){
         const auto* part=h.part(i);if(!part)continue;
-        const C3D_Mtx m=liveMatrix(*part);
+        C3D_Mtx m=liveMatrix(*part);
+        const auto& offset=static_cast<const K::Field::ObjectHanachanPart*>(part)->hitOffset();
+        m.r[0].w+=offset.x;m.r[1].w+=offset.y;m.r[2].w+=offset.z;
         if(i==0){
-            Anim a;a.clip=v.clips[walking?0:1];a.frame=frame;
+            Anim a;a.clip=v.clips[h.headAnimation()];a.frame=h.animationFrame(i);
             d.submit(v.main.model,m,a);
             if(v.shadow.model)d.shadow(v.shadow.model,m);
         }else{
             const Tracks& body=v.extra[(i-1)%4];
-            Anim a;a.clip=body.model&&body.model->bank?body.model->bank->clip(walking?"walk":"wait"):-1;a.frame=frame;
+            Anim a;a.clip=body.model&&body.model->bank?body.model->bank->clip(h.bodyWaiting(i-1)?"wait":"walk"):-1;a.frame=h.animationFrame(i);
             d.submit(body.model,m,a);
             if(v.extra[4].model)d.shadow(v.extra[4].model,m);
         }
     }
 }
+void drawPuchiPakkun(ObjectDraw& d,Visual& v){
+    const auto& p=*static_cast<const K::Field::ObjectDokan*>(v.object);
+    const auto m=liveMatrix(p);
+    const bool far=v.low.model&&length(position(m)-d.camera)>renderQuality().objectLowDistance;
+    const Tracks& tracks=far?v.low:v.main;
+    d.submit(tracks.model,m,loopAt(tracks,p.animationFrame()));
+    if(v.shadow.model)d.shadow(v.shadow.model,m);
+}
 void drawPenguinSlide(ObjectDraw& d,Visual& v){
     const auto& p=*static_cast<const K::Field::ObjectPenguinS*>(v.object);
     const C3D_Mtx m=liveMatrix(p);
-    Anim a;a.frame=float(d.tick);
-    switch(p.state()){
+    Anim a;a.frame=p.animationFrame();
+    switch(p.presentationState()){
     case 2: // Diving onto its belly: Kinoko counts the dive clip down.
-        a.clip=v.clips[1];a.frame=clipFrames(v.main,a.clip)-float(p.anmTimer());break;
+        a.clip=v.clips[1];if(!p.spinning())a.frame=clipFrames(v.main,a.clip)-float(p.anmTimer());break;
     case 3:a.clip=v.clips[2];break;
-    case 4:a.clip=v.clips[3];a.frame=clipFrames(v.main,a.clip)-float(p.anmTimer());break;
+    case 4:a.clip=v.clips[3];if(!p.spinning())a.frame=clipFrames(v.main,a.clip)-float(p.anmTimer());break;
     default:a.clip=v.clips[0];break;
     }
     d.submit(v.main.model,m,a);
@@ -218,7 +316,7 @@ void drawPenguinSlide(ObjectDraw& d,Visual& v){
 }
 void drawPenguinWalk(ObjectDraw& d,Visual& v){
     const C3D_Mtx m=liveMatrix(*v.object);
-    Anim a;a.clip=v.clips[0];a.frame=float(d.tick);
+    Anim a;a.clip=v.clips[0];a.frame=static_cast<const K::Field::ObjectPenguin*>(v.object)->animationFrame();
     d.submit(v.main.model,m,a);
     if(v.shadow.model)d.shadow(v.shadow.model,m);
 }
@@ -228,10 +326,27 @@ template<class T> void drawFireballs(ObjectDraw& d,Visual& v){
     const float frame=float(d.tick);
     for(const auto* ball:owner.fireballs()){
         if(!ball)continue;
-        // Fireballs are camera-facing: a flattened core and its flame card.
-        const C3D_Mtx m=d.view.cameraFacing(vec(ball->pos()),ball->scale().x);
-        if(v.extra[0].model)d.submit(v.extra[0].model,m,{});
-        if(v.extra[1].model)d.submit(v.extra[1].model,m,animAt(v.extra[1],frame));
+        // Retail child ObjectFireball loads only fireBPlane; the opaque
+        // WLfirebarGC sphere belongs to the parent pivot, not every child.
+        C3D_Mtx m=liveMatrix(*ball);
+        // The parent can update the child position after its model tick.
+        m.r[0].w=ball->pos().x;m.r[1].w=ball->pos().y;m.r[2].w=ball->pos().z;
+        auto a=animAt(v.extra[1],frame);
+        if(v.extra[1].model&&v.extra[1].model->bank){
+            const auto& bank=*v.extra[1].model->bank;
+            v.palette.resize(bank.matrixCount()*12);bank.pose(a.clip,a.frame,v.palette.data());
+            C3D_Mtx mv;Mtx_Multiply(&mv,&d.view.view,&m);
+            float rows[12];for(unsigned r=0;r<3;++r)for(unsigned c=0;c<4;++c)rows[r*4+c]=mv.r[r].c[3-c];
+            // Retail fireBPlane has a root BILLBOARD_ROT (mode 3) node.
+            // With no parent, its projected local Y supplies the roll.
+            const int index=bank.node("ef_fireBplane");
+            if(index>=0){
+                const auto& node=bank.nodes()[index];
+                if(node.slot>=0&&unsigned(node.slot)<bank.matrixCount())billboardJoint(v.palette.data()+node.slot*12,rows);
+            }
+            a.palette=v.palette.data();
+        }
+        if(v.extra[1].model)d.submit(v.extra[1].model,m,a);
     }
 }
 void drawMushroom(ObjectDraw& d,Visual& v){
@@ -266,8 +381,8 @@ void drawChoropu(ObjectDraw& d,Visual& v){
     const auto& c=*static_cast<const K::Field::ObjectChoropu*>(v.object);
     const int state=c.stateId();
     const bool stationary=named(v,"choropu2");
-    // The placement's hole object is the first part Kinoko registers.
-    const K::Field::ObjectBase* hole=v.parts.size()>1?v.parts[0]:nullptr;
+    // Moving moles register their ground cylinders before the actual hole.
+    const K::Field::ObjectBase* hole=c.hole();
     if(hole&&v.extra[0].model&&(stationary||state==1||state==3))d.submit(v.extra[0].model,liveMatrix(*hole),{});
     if(state!=1&&state!=3)return;
     Anim a;a.clip=v.clips[state==1?0:1];a.frame=float(c.stateFrame());
@@ -280,7 +395,7 @@ void drawCow(ObjectDraw& d,Visual& v){
     for(size_t i=0;i+1<v.parts.size();++i){
         const auto& cow=*static_cast<const K::Field::ObjectCow*>(v.parts[i]);
         const C3D_Mtx m=liveMatrix(cow);
-        Anim a;a.frame=float(d.tick+i*17);
+        Anim a;a.frame=float(cow.soundAnimationFrame());
         int state;unsigned frame;
         if(i==0){const auto& l=static_cast<const K::Field::ObjectCowLeader&>(cow);state=l.stateId();frame=l.stateFrame();
             if(state==1){
@@ -312,23 +427,50 @@ void drawHeyho(ObjectDraw& d,Visual& v){
 void drawPakkun(ObjectDraw& d,Visual& v){
     const auto& p=*static_cast<const K::Field::ObjectPakkunF*>(v.object);
     Anim a;
-    if(p.attacking()){a.clip=v.clips[0];a.frame=float(p.attackFrame());}
-    else{a.clip=v.clips[1];a.frame=float(d.tick);}
+    if(p.damaged()){a.clip=v.clips[2];a.frame=float(p.damageFrame());}
+    else if(p.attacking()){a.clip=v.clips[0];a.frame=float(p.attackFrame());}
+    else{a.clip=v.clips[1];a.frame=float(p.waitAnimationFrame());}
+    if(p.turnAngle()!=0.f&&v.main.model&&v.main.model->bank){
+        auto& model=*v.main.model;const auto& bank=*model.bank;
+        K::EGG::Matrix34f rotation;rotation.setAxisRotation(p.turnAngle(),K::EGG::Vector3f::ex);
+        float rows[12];for(unsigned r=0;r<3;++r)for(unsigned c=0;c<4;++c)rows[r*4+c]=rotation[r,c];
+        const ObjectBank::JointCallback callbacks[]={{"mouth_under_end",rows},{"skil_root",rows}};
+        v.palette.resize(size_t(bank.matrixCount())*12);
+        if(bank.poseCallbacks(a.clip,a.frame,callbacks,2,v.palette.data(),v.callbackScratch)){
+            a.palette=v.palette.data();
+            if(model.slots.empty())bank.slotBounds(model.slots,model.slotUsed);
+            bool first=true;
+            for(unsigned i=0;i<model.slots.size();++i)if(model.slotUsed[i]){
+                const auto b=transformBounds(model.slots[i],v.palette.data()+size_t(i)*12);
+                if(first){v.posed=b;first=false;}else{v.posed.include(b.minimum);v.posed.include(b.maximum);}
+            }
+            if(!first)a.bounds=&v.posed;
+        }
+    }
     d.submit(v.main.model,liveMatrix(p),a);
 }
 void drawCrab(ObjectDraw& d,Visual& v){
     const auto& c=*static_cast<const K::Field::ObjectCrab*>(v.object);
-    const int state=c.state();
-    if(state==2)return; // deactivated: under the sand
-    Anim a;a.frame=float(d.tick);
-    a.clip=state==1?v.clips[2]:v.clips[c.backwards()?1:0];
+    if(!c.visible())return;
+    Anim a;a.frame=c.animationFrame();
+    a.clip=v.clips[c.animationClip()];
     const C3D_Mtx m=liveMatrix(c);
     d.submit(v.main.model,m,a);
     if(v.shadow.model)d.shadow(v.shadow.model,m);
 }
-// Cataquacks: walk loop; setting 0 selects the body colour pattern frame.
+void drawParasol(ObjectDraw& d,Visual& v){
+    const auto& p=*static_cast<const K::Field::ObjectParasolR*>(v.object);
+    const char* name=p.opened()?"open":"close";
+    Anim a;a.clip=clip(v.main,name);a.frame=p.animationFrame();
+    const auto m=liveMatrix(p);d.submit(v.main.model,m,a);
+    if(v.shadow.model){a.clip=clip(v.shadow,name);d.shadow(v.shadow.model,m,a);}
+}
+// Cataquack state/clock are simulation-owned; setting 0 selects body colour.
 void drawPoihana(ObjectDraw& d,Visual& v){
-    Anim a;a.clip=v.clips[0];a.frame=float(d.tick);a.pat=v.clips[1];a.patFrame=float(v.geo->setting(0));
+    const auto& p=*static_cast<const K::Field::ObjectPoihana*>(v.object);
+    Anim a;a.clip=!std::strcmp(p.animationName(),"throw")?v.clips[2]:
+        !std::strcmp(p.animationName(),"overturn")?v.clips[3]:v.clips[0];
+    a.frame=p.animationFrame();a.pat=v.clips[1];a.patFrame=float(v.geo->setting(0));
     const C3D_Mtx m=liveMatrix(*v.object);
     d.submit(v.main.model,m,a);
     if(v.shadow.model)d.shadow(v.shadow.model,m);
@@ -341,20 +483,38 @@ void drawFlock(ObjectDraw& d,Visual& v){
     const float frames=v.main.model&&v.main.model->bank&&v.clips[0]>=0?float(v.main.model->bank->clipFrames(v.clips[0])):1.f;
     for(size_t i=0;i<count;++i){
         const auto* part=v.parts[i];
-        if(bats&&!static_cast<const K::Field::ObjectBasabasaDummy*>(part)->active())continue;
+        if(bats&&!static_cast<const K::Field::ObjectBasabasaDummy*>(part)->visible())continue;
         const Vec3 p=vec(part->pos());
         const Vec3 delta=p-v.points[i];
         if(dot(delta,delta)>.01f&&dot(delta,delta)<1e6f)v.velocities[i]=delta;
         v.points[i]=p;
         Anim a;a.clip=v.clips[0];a.frame=float(d.tick)+std::fmod(float(i*37+v.index*11),frames);
-        d.submit(v.main.model,facingMatrix(p,v.velocities[i],vec(part->scale())),a);
+        const bool hit=bats&&static_cast<const K::Field::ObjectBasabasaDummy*>(part)->stateId()==1;
+        if(hit)a.frame+=6.f*static_cast<const K::Field::ObjectBasabasaDummy*>(part)->stateFrame();
+        const auto transform=hit?liveMatrix(*part):facingMatrix(p,v.velocities[i],vec(part->scale()));
+        if(bats&&v.main.model&&v.main.model->bank){
+            const auto& bank=*v.main.model->bank;
+            v.palette.resize(bank.matrixCount()*12);bank.pose(a.clip,a.frame,v.palette.data());
+            C3D_Mtx mv;Mtx_Multiply(&mv,&d.view.view,&transform);
+            float rows[12];for(unsigned r=0;r<3;++r)for(unsigned c=0;c<4;++c)rows[r*4+c]=mv.r[r].c[3-c];
+            // Both retail basabasa archives mark exactly these nodes BILLBOARD=1.
+            for(const char* name:{"basabasa_body","basabasa_face","basabasa_nose"}){
+                const int index=bank.node(name);if(index<0)continue;
+                const auto& node=bank.nodes()[index];
+                if(node.slot>=0&&unsigned(node.slot)<bank.matrixCount())billboardJoint(v.palette.data()+node.slot*12,rows);
+            }
+            a.palette=v.palette.data();
+        }
+        d.submit(v.main.model,transform,a);
     }
 }
 // Grumble Volcano lava balls: hidden while dormant (Kinoko state 0).
 void drawVolcanoBalls(ObjectDraw& d,Visual& v){
     const auto& launcher=*static_cast<const K::Field::ObjectVolcanoBallLauncher*>(v.object);
     for(const auto* ball:launcher.balls()){
-        if(!ball||ball->stateId()==0)continue;
+        // Retail ToggleVisible(1) on launch, ToggleVisible(0) while burning.
+        // The landed fire is an effect, not the falling stone mesh/shadow.
+        if(!ball||ball->stateId()!=1)continue;
         const C3D_Mtx m=liveMatrix(*ball);
         d.submit(v.main.model,m,{});
         if(v.shadow.model)d.shadow(v.shadow.model,m);
@@ -379,15 +539,39 @@ void drawHighwayCar(ObjectDraw& d,Visual& v){
 }
 // Fire Snakes: head with eyes plus two trailing segments (Kinoko kids,
 // 0.75x and 0.5x) replaying the head's earlier transforms. Hidden while
-// despawned (state 0).
+// despawned or in the one-update hit state (retail states 0 and 5).
 void drawFireSnake(ObjectDraw& d,Visual& v){
     const auto& s=*static_cast<const K::Field::ObjectFireSnake*>(v.object);
-    if(s.stateId()==0)return;
+    if(s.stateId()==0||s.stateId()==5)return;
     const float frame=float(d.tick);
     const C3D_Mtx m=liveMatrix(s);
-    d.submit(v.main.model,m,animAt(v.main,frame));
+    const auto segment=[&](const C3D_Mtx& transform){
+        auto a=animAt(v.main,frame);
+        if(v.main.model&&v.main.model->bank){
+            const auto& bank=*v.main.model->bank;
+            v.palette.resize(bank.matrixCount()*12);bank.pose(a.clip,a.frame,v.palette.data());
+            const int index=bank.node("ef_fireSnakePl");
+            if(index>=0){
+                const auto& node=bank.nodes()[index];
+                if(node.slot>=0&&unsigned(node.slot)<bank.matrixCount()){
+                    C3D_Mtx mv;Mtx_Multiply(&mv,&d.view.view,&transform);
+                    float rows[12];for(unsigned r=0;r<3;++r)for(unsigned c=0;c<4;++c)rows[r*4+c]=mv.r[r].c[3-c];
+                    // USA80065e80 -> 800657e0: ROT takes the XY Y-axis of
+                    // childWorld*inverse(parentWorld), not model-view roll.
+                    // Both original FireSnake archives have an identity local
+                    // child, no CHR: the product is identity even though the
+                    // sphere parent is rotated Z90. Only the flame faces us.
+                    const float roll[2]={0,1};
+                    billboardJoint(v.palette.data()+node.slot*12,rows,roll);
+                }
+            }
+            a.palette=v.palette.data();
+        }
+        d.submit(v.main.model,transform,a);
+    };
+    segment(m);
     if(v.extra[0].model)d.submit(v.extra[0].model,m,{});
-    for(size_t i=0;i<2;++i)if(const auto* kid=s.kid(i))d.submit(v.main.model,liveMatrix(*kid),animAt(v.main,frame));
+    for(size_t i=0;i<2;++i)if(const auto* kid=s.kid(i))segment(liveMatrix(*kid));
     if(v.shadow.model)d.shadow(v.shadow.model,m);
 }
 // The common Bob-omb explosion (bomb_core) at transform, frame into its clip.
@@ -413,7 +597,7 @@ void drawBombCarLive(ObjectDraw& d,Visual& v){
     }
 }
 // Bowser's Castle fireball: a rolling ball in its fire shell; at the end of
-// its route the common Bob-omb explosion clip plays at the ball's scale.
+// its route the common Bob-omb explosion uses an independent world-space pose.
 void drawKoopaBall(ObjectDraw& d,Visual& v){
     const auto& b=*static_cast<const K::Field::ObjectKoopaBall*>(v.object);
     const int state=b.state();
@@ -423,10 +607,11 @@ void drawKoopaBall(ObjectDraw& d,Visual& v){
         if(v.extra[0].model)d.submit(v.extra[0].model,m,animAt(v.extra[0],float(d.tick)));
         if(v.shadow.model)d.shadow(v.shadow.model,m);
     }else if(state==2){
-        // The ball's collision is 870 units at scale 1; the bombCore mesh is 87.
-        C3D_Mtx e=m;const float factor=10.f;
-        for(unsigned r=0;r<3;++r)for(unsigned c=1;c<4;++c)e.r[r].c[c]*=factor;
-        drawExplosion(d,e,float(int(b.explodeFrames())-b.explodeTimer()));
+        // USA8075ecb0..8075ed34: identity axes at the ball position,
+        // ModelDirector::SetScale(2). CHR0 already expands the bomb core;
+        // neither the rolling ball pose nor its collision radius belongs here.
+        drawExplosion(d,basisMatrix({1,0,0},{0,1,0},{0,0,1},vec(b.pos()),{2,2,2}),
+                      float(int(b.explodeFrames())-b.explodeTimer()));
     }
 }
 // GBA Shy Guy Beach cannonballs (Kinoko ObjectHeyhoBall): nothing while in
@@ -438,7 +623,8 @@ void drawHeyhoBall(ObjectDraw& d,Visual& v){
     const int state=b.stateId();
     if(state==0)return;
     if(state==3){
-        const float scale=1500.f/87.f;
+        // USA806eb28c..806eb344: original blast radius / authored 900-unit core.
+        const float scale=1500.f/900.f;
         drawExplosion(d,basisMatrix({1,0,0},{0,1,0},{0,0,1},vec(b.pos()),{scale,scale,scale}),float(b.stateFrame()));
         return;
     }
@@ -448,22 +634,72 @@ void drawHeyhoBall(ObjectDraw& d,Visual& v){
     d.submit(v.main.model,m,a);
     if(v.shadow.model)d.shadow(v.shadow.model,m);
 }
-// The statue's vomit clip starts as its fireball leaves the mouth.
-void drawKoopaFigure(ObjectDraw& d,Visual& v){
-    Anim a;a.clip=v.clips[0];a.frame=float(d.tick);
-    if(v.partner){
-        const int state=static_cast<const K::Field::ObjectKoopaBall*>(v.partner)->state();
-        const unsigned age=stateAge(d,v,state);
-        if(state==0&&v.clips[1]>=0&&float(age)<clipFrames(v.main,v.clips[1])){a.clip=v.clips[1];a.frame=float(age);}
+void drawSanbo(ObjectDraw& d,Visual& v){
+    const auto& pokey=*static_cast<const K::Field::ObjectSanbo*>(v.object);
+    if(pokey.scattered()){
+        for(unsigned i=0;i<4;++i){
+            const auto& pose=pokey.partTransform(i);
+            d.submit(v.extra[i?1:0].model,objectMatrix(pose,pokey.scale()),{});
+            // USA80766fb0: flying-piece shadow uses translation only, not its tumble.
+            if(v.shadow.model)d.shadow(v.shadow.model,basisMatrix({1,0,0},{0,1,0},{0,0,1},
+                    vec(pose.base(3)),vec(pokey.scale())));
+        }
+        return;
     }
+    const auto m=liveMatrix(pokey);
+    Anim a=loopAt(v.main,pokey.animationFrame());
+    a.clip=v.clips[pokey.reviving()?2:pokey.flinching()?1:0];a.frame=pokey.animationFrame();
+    d.submit(v.main.model,m,a);
+    if(v.shadow.model)d.shadow(v.shadow.model,m);
+}
+void drawTeresa(ObjectDraw& d,Visual& v){
+    const auto& controller=*static_cast<const K::Field::ObjectTeresa*>(v.object);
+    for(const auto& ghost:controller.ghosts()){
+        if(!ghost.alpha)continue;
+        const auto& tracks=v.extra[ghost.variant];
+        Anim a=loopAt(tracks,float(d.tick));
+        a.opacity=float(ghost.alpha)/255.f;a.mirrorU=ghost.mirrorU;
+        auto p=d.camera+vec(ghost.offset)+vec(ghost.displacement);p.y=std::max(3000.f,p.y);
+        C3D_Mtx m=d.view.cameraFacing(p,1.f);
+        const auto scale=v.geo->scale();Mtx_Scale(&m,scale.x,scale.y,scale.z);
+        d.submit(tracks.model,m,a);
+    }
+}
+void drawBGTeresa(ObjectDraw& d,Visual& v){
+    const auto& boo=*static_cast<const K::Field::ObjectBGTeresa*>(v.object);
+    if(!boo.alpha())return;
+    Anim a=loopAt(v.main,float(d.tick));
+    // Retail changes K3.a, the multiplier of texture alpha in lambert2.
+    a.opacity=float(boo.alpha())/255.f;a.mirrorU=boo.mirrorU();
+    C3D_Mtx m=d.view.cameraFacing(vec(boo.pos()),1.f);
+    const auto scale=boo.scale();Mtx_Scale(&m,scale.x,scale.y,scale.z);
+    d.submit(v.main.model,m,a);
+}
+void drawCarB(ObjectDraw& d,Visual& v){
+    const auto& car=*static_cast<const K::Field::ObjectCarB*>(v.object);
+    const auto& tracks=v.extra[car.variant()];
+    d.submit(tracks.model,v.placement,loopAt(tracks,float(d.tick)));
+}
+void drawCannon(ObjectDraw& d,Visual& v){
+    if(!v.object)return;
+    const auto& cannon=*static_cast<const K::Field::ObjectCannon*>(v.object);
+    Anim a=loopAt(v.main,float(d.tick));
+    a.clip=v.clips[cannon.starRing()&&!cannon.firing()?1:0];a.frame=cannon.animationFrame();
+    d.submit(v.main.model,v.placement,a);
+}
+// The simulation starts mouth preparation 42 frames before ball release.
+void drawKoopaFigure(ObjectDraw& d,Visual& v){
+    if(!v.object)return;
+    const auto& statue=*static_cast<const K::Field::ObjectKoopaFigure*>(v.object);
+    Anim a;a.clip=v.clips[statue.vomiting()?1:0];a.frame=statue.animationFrame();
     d.submit(v.main.model,v.placement,a);
 }
 // DS Peach Gardens chomps roam as the manager's child object.
 void drawHwanwan(ObjectDraw& d,Visual& v){
     if(v.parts.size()<2)return;
-    const auto& w=*v.parts[0];
-    const C3D_Mtx m=liveMatrix(w);
-    d.submit(v.main.model,m,animAt(v.main,float(d.tick)));
+    const auto& w=*static_cast<const K::Field::ObjectHwanwan*>(v.parts[0]);
+    const C3D_Mtx m=objectMatrix(w.modelTransform(),w.scale());
+    d.submit(v.main.model,m,animAt(v.main,w.animationFrame()));
     if(v.shadow.model)d.shadow(v.shadow.model,m);
 }
 // Wario's Gold Mine carts: the manager spawns and recycles active carts.
@@ -646,7 +882,6 @@ void drawPress(ObjectDraw& d,Visual& v){
 // side stomper (the line's ObjectPressSenko) has come down; from there VS
 // races carry an item box instead, which the race items draw and collect.
 void drawItemboxLine(ObjectDraw& d,Visual& v){
-    const auto* rails=K::Field::RailManager::Instance();
     for(size_t i=0;i+1<v.parts.size();++i){
         const auto* part=v.parts[i];
         if(part->id()==ObjectId::Press){
@@ -659,17 +894,16 @@ void drawItemboxLine(ObjectDraw& d,Visual& v){
             const C3D_Mtx m=liveMatrix(press);
             d.submit(v.extra[1].model,m,animAt(v.extra[1],frame));
             if(v.extra[2].model)d.shadow(v.extra[2].model,m);
-        }else if(part->id()==ObjectId::Itembox){
-            const auto& box=*static_cast<const K::Field::ObjectItemboxPress*>(part);
-            const auto* rail=box.railInterpolator();
-            if(box.state()==0||!rail||!rails)continue;
-            const auto points=rails->rail(unsigned(rail->railIdx()))->points();
-            size_t reveal=points.size();
-            for(size_t k=0;k<points.size();++k)if(points[k].setting[1]==2){reveal=k;break;}
-            if(size_t(rail->curPointIdx())>=reveal)continue;
-            C3D_Mtx m=liveMatrix(box);m.r[1].w-=180.f; // the brick rests on the belt
-            d.submit(v.main.model,m,{});
+        }else if(part->id()==ObjectId::ItemboxLine){
+            const auto& block=*static_cast<const K::Field::ObjectItemboxBlock*>(part);
+            if(block.shown())d.submit(v.main.model,liveMatrix(block),{});
         }
+    }
+}
+void drawWoodboxLine(ObjectDraw& d,Visual& v){
+    for(size_t i=0;i+1<v.parts.size();++i){
+        const auto& box=*static_cast<const K::Field::ObjectWoodboxWSub*>(v.parts[i]);
+        if(box.shown())d.submit(v.main.model,liveMatrix(box),{});
     }
 }
 // Dry Dry Ruins pillars (Kinoko ObjectPillar): the column at its live
@@ -683,8 +917,6 @@ void drawPillar(ObjectDraw& d,Visual& v){
 bool hidden(const Visual& v,int course){
     // Effects, sound sources and triggered splashes have no idle model; item
     // boxes are race items. Coconut Mall keeps its validated palm/escalator path.
-    // The Factory line also owns its moving conveyor bricks, which are scenery.
-    if(static_cast<ObjectId>(v.geo->id())==ObjectId::ItemboxLine)return false;
     static const char* names[]={"itembox","pocha","pochaYogan","pochaMori","f_itembox","s_itembox","sin_itembox","w_itembox"};
     for(const char* n:names)if(named(v,n))return true;
     if(course==5&&(named(v,"PalmTree")||named(v,"escalator")||named(v,"escalator_group")))return true;
@@ -696,6 +928,11 @@ bool classifyObject(Visual& v,const ObjectAssets& assets,int course){
     auto* main=assets.main(v.resource);
     v.main=assets.tracks(main);
     v.low=assets.tracks(assets.low(main));
+    // DK's low asset replaces the live display with a split DK-logo atlas
+    // (18 vertices); the live wl_screen1 face uses only 6. Its frame has the
+    // same 570 vertices, so retaining the live mesh is also slightly cheaper.
+    // Do not switch back to the baked placeholder when the monitor is distant.
+    if(course==6&&named(v,"dkmonitor"))v.low={};
     v.shadow=assets.tracks(assets.shadow(main));
     v.kinetic=v.object!=nullptr;
     v.variant=-1;
@@ -703,6 +940,16 @@ bool classifyObject(Visual& v,const ObjectAssets& assets,int course){
     const auto id=static_cast<ObjectId>(v.geo->id());
     const bool live=v.object!=nullptr;
     if(classifyMover(v,assets))return true;
+    if(miiStatueBinding(v.geo->id())&&main&&main->bank&&main->bank->node("face_1")>=0){
+        const auto* race=K::System::RaceConfig::Instance();
+        if(!race||!miiStatuePlayersEligible(race->raceScenario().players,race->raceScenario().playerCount))return true;
+        // Eligible-race identity selection remains a prepared-pool candidate;
+        // it does not yet implement official-database filtering and weights.
+        char name[16];std::snprintf(name,sizeof name,"face_%u",v.index%6);
+        v.extra[5]=assets.tracks(assets.find("__MiiStatueHeads",name));
+        if(v.extra[5].model)v.present=drawMiiStatue;
+        return true;
+    }
     if(id==ObjectId::Kuribo&&live){
         v.present=drawKuribo;v.clips[0]=clip(v.main,"walk_l");
     }else if(id==ObjectId::Wanwan&&live){
@@ -718,17 +965,17 @@ bool classifyObject(Visual& v,const ObjectAssets& assets,int course){
         static const char* bodies[]={"hanachan_body1","hanachan_body2","hanachan_body3","hanachan_body4"};
         for(unsigned i=0;i<4;++i)v.extra[i]=find(assets,"hanachan",bodies[i]);
         v.extra[4]=find(assets,"hanachan","hanachan-body_shadow");
-        v.clips={clip(v.main,"head_walk"),clip(v.main,"head_wait"),-1,-1,-1,-1,-1,-1};
+        v.clips={clip(v.main,"head_walk"),clip(v.main,"head_wait"),clip(v.main,"head_wait2"),-1,-1,-1,-1,-1};
     }else if(id==ObjectId::PenguinS&&live){
         v.present=drawPenguinSlide;
         v.clips={clip(v.main,"walk"),clip(v.main,"dive"),clip(v.main,"slider"),clip(v.main,"stand_up"),-1,-1,-1,-1};
-    }else if(id==ObjectId::PenguinM&&live){
+    }else if((id==ObjectId::PenguinM||id==ObjectId::PenguinL)&&live){
         v.present=drawPenguinWalk;v.clips[0]=clip(v.main,"walk");
     }else if((id==ObjectId::WLFirebarGC||id==ObjectId::KoopaFirebar||id==ObjectId::WLFireRingGC)&&live){
-        // koopaFirebar's own model is the pivot block; all use the GCN fireball.
+        // Parent pivot models are separate from each child's fireBPlane.
         v.present=id==ObjectId::WLFireRingGC?drawFireballs<K::Field::ObjectFireRing>:drawFireballs<K::Field::ObjectFirebar>;
-        v.main=id==ObjectId::KoopaFirebar?find(assets,"koopaFirebar","koopaFirebar"):Tracks{};
-        v.extra[0]=find(assets,"WLfirebarGC","WLfirebarGC");
+        v.main=id==ObjectId::KoopaFirebar?find(assets,"koopaFirebar","koopaFirebar"):
+            id==ObjectId::WLFirebarGC?find(assets,"WLfirebarGC","WLfirebarGC"):Tracks{};
         v.extra[1]=find(assets,"WLfirebarGC","fireBPlane","fireBPlane");
     }else if((id==ObjectId::KinokoUd||id==ObjectId::KinokoBend||id==ObjectId::KinokoNm)&&live){
         // Setting 0 picks the light or dark Mushroom Gorge palette. Bouncing and
@@ -751,12 +998,18 @@ bool classifyObject(Visual& v,const ObjectAssets& assets,int course){
     }else if(id==ObjectId::Heyho&&live){
         v.present=drawHeyho;
         v.clips={clip(v.main,"move"),clip(v.main,"jump"),clip(v.main,"jump_ed"),pattern(v.main,"body_color"),-1,-1,-1,-1};
+    }else if(id==ObjectId::PuchiPakkun&&live){
+        v.present=drawPuchiPakkun;
     }else if(id==ObjectId::PakkunF&&live){
-        v.present=drawPakkun;v.clips[0]=clip(v.main,"attack");v.clips[1]=clip(v.main,"wait");
+        v.present=drawPakkun;v.clips[0]=clip(v.main,"attack");v.clips[1]=clip(v.main,"wait");v.clips[2]=clip(v.main,"damage");
+    }else if(id==ObjectId::ParasolR&&live){
+        v.present=drawParasol;
+        v.main=find(assets,"r_parasol","r_parasol");
+        v.shadow=find(assets,"r_parasol","r_parasol-shadow");
     }else if(id==ObjectId::Crab&&live){
         v.present=drawCrab;v.clips={clip(v.main,"walk_l"),clip(v.main,"walk_r"),clip(v.main,"wait"),-1,-1,-1,-1,-1};
     }else if(id==ObjectId::Poihana&&live){
-        v.present=drawPoihana;v.clips[0]=clip(v.main,"walk");v.clips[1]=pattern(v.main,"body_color");
+        v.present=drawPoihana;v.clips[0]=clip(v.main,"walk");v.clips[1]=pattern(v.main,"body_color");v.clips[2]=clip(v.main,"throw");v.clips[3]=clip(v.main,"overturn");
     }else if((id==ObjectId::Seagull||id==ObjectId::Basabasa)&&live){
         v.present=drawFlock;v.clips[0]=clip(v.main,id==ObjectId::Seagull?"flying":"fly");
     }else if(id==ObjectId::VolcanoBall&&live){
@@ -786,6 +1039,13 @@ bool classifyObject(Visual& v,const ObjectAssets& assets,int course){
         v.extra[0]=find(assets,"koopaBall","ef_koopaBall","ef_koopaBall");v.shadow=find(assets,"koopaBall","koopaBall-shadow");
     }else if(id==ObjectId::HeyhoBallGBA&&live){
         v.present=drawHeyhoBall;v.clips[0]=color(v.main,"HeyhoBallGBA_blink");
+    }else if(id==ObjectId::Sanbo&&live){
+        v.present=drawSanbo;v.clips[0]=clip(v.main,"move");v.clips[1]=clip(v.main,"damage");v.clips[2]=clip(v.main,"revive");
+        v.extra[0]=find(assets,"sanbo","sanbo_head");v.extra[1]=find(assets,"sanbo","sanbo_body");
+    }else if(K::Field::ObjectCannon::matches(v.name)&&live){
+        v.present=drawCannon;
+        v.clips[0]=clip(v.main,named(v,"StarRing")?"StarRing_shot":v.name);
+        v.clips[1]=clip(v.main,"StarRing_wait");
     }else if(named(v,"koopaFigure")){
         v.present=drawKoopaFigure;v.clips[0]=clip(v.main,"wait");v.clips[1]=clip(v.main,"vomit");
     }else if(id==ObjectId::Hwanwan&&live){
@@ -805,6 +1065,13 @@ bool classifyObject(Visual& v,const ObjectAssets& assets,int course){
         v.present=drawTuribashi;
     }else if(id==ObjectId::Ami&&live){
         v.present=drawAmi;
+    }else if(id==ObjectId::Woodbox&&live){
+        const auto& box=*static_cast<const K::Field::ObjectWoodbox*>(v.object);
+        v.main=find(assets,"woodbox",box.getKclName());v.low=v.shadow={};
+    }else if(id==ObjectId::W_Woodbox&&live){
+        v.present=drawWoodboxLine;
+        const auto* box=v.parts.size()>1?static_cast<const K::Field::ObjectWoodboxWSub*>(v.parts[0]):nullptr;
+        v.main=find(assets,"woodbox",box?box->getKclName():"woodbox");v.low=v.shadow={};
     }else if(id==ObjectId::ItemboxLine&&live){
         v.present=drawItemboxLine;v.main=find(assets,"Block","Block");
         v.extra[1]=find(assets,"Press","Press");v.extra[2]=find(assets,"Press","Press-shadow");v.clips[0]=clip(v.extra[1],"Press");
@@ -813,12 +1080,16 @@ bool classifyObject(Visual& v,const ObjectAssets& assets,int course){
         v.present=drawPress;v.clips[0]=clip(v.main,"Press");
     }else if(id==ObjectId::DCPillar&&live){
         v.present=drawPillar;v.extra[0]=find(assets,v.resource,"dc_pillar_base");
-    }else if(named(v,"CarB")||named(v,"b_teresa")||named(v,"BGteresaSFC")){
-        // Three authored variants and no setting choosing one: spread them
-        // over the placements.
-        static const char* car[]={"","1","2"};static const char* boo[]={"","2","3"};
-        char model[40];std::snprintf(model,sizeof model,"%s%s",v.resource,(named(v,"CarB")?car:boo)[v.index%3]);
-        if(auto* m=assets.find(v.resource,model)){v.main=assets.tracks(m);v.low=assets.tracks(assets.low(m));v.shadow=assets.tracks(assets.shadow(m));}
+    }else if(named(v,"CarB")&&live){
+        v.present=drawCarB;
+        static const char* names[]={"CarB1","CarB2","CarB"};
+        for(unsigned i=0;i<3;++i)v.extra[i]=find(assets,v.resource,names[i]);
+    }else if(named(v,"BGteresaSFC")&&live){
+        v.present=drawBGTeresa;
+    }else if(named(v,"b_teresa")&&live){
+        v.present=drawTeresa;
+        static const char* names[]={"b_teresa","b_teresa2","b_teresa3"};
+        for(unsigned i=0;i<3;++i)v.extra[i]=find(assets,v.resource,names[i]);
     }else if((id==ObjectId::KBombCar||id==ObjectId::KBombCar1)&&live){
         v.present=drawBombCarLive;v.main=find(assets,v.resource,"K_bomb_car");
         v.extra[0]=find(assets,v.resource,"Kbomneji","Kbomneji");v.extra[1]=find(assets,v.resource,"K_bomb_tire00","K_bomb_tire00");
@@ -832,6 +1103,15 @@ bool classifyObject(Visual& v,const ObjectAssets& assets,int course){
         v.rate=.9f;
     }else if(id==ObjectId::BeltCrossing){
         v.rate=1.25f;
+    }else if(named(v,"monte_a")||named(v,"mare_a")||named(v,"mare_b")){
+        // These archives name their idle CHR0 "wait", not the model name.
+        // Leaving clip=-1 displayed the bind pose even though the bank loaded.
+        v.main=assets.tracks(v.main.model,"wait");
+        if(v.low.model)v.low=assets.tracks(v.low.model,"wait");
+    }else if(named(v,"peachtreeGC")){
+        v.main=assets.tracks(v.main.model,"peachtreeGC");
+    }else if(named(v,"InsekiA")||named(v,"InsekiB")){
+        v.present=drawInseki;
     }else if(named(v,"StarRing")){
         v.main=assets.tracks(v.main.model,"StarRing_wait");
     }else if(named(v,"pylon01")){

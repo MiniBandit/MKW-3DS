@@ -120,7 +120,7 @@ void MenuVehicleIcons::reset(Renderer& renderer){
  impl_->sets.clear();impl_->shown=-1;
 }
 bool MenuVehicleIcons::draw(Renderer& renderer,const UiQuad& quad)const{
- if(quad.bottom||quad.alpha<=0||quad.vehicleIcon>=12)return false;
+ if(quad.alpha<=0||quad.vehicleIcon>=12)return false;
  const auto* set=impl_->find(impl_->shown);if(!set||!set->resident)return false;
  const auto& model=set->models[quad.vehicleIcon];if(!model)return false;
  renderer.drawMenuIcon(*model,set->transforms[quad.vehicleIcon],quad);

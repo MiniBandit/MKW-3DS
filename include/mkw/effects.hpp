@@ -51,26 +51,29 @@ public:
     }
     void reset(){
         for(auto& p:sparks)p.age=32;
-        cursor_=0;random_=0x584d4b57;haveOrigin_=false;state_=0;rates_={};
+        cursor_=0;random_=0x584d4b57;haveOrigin_=false;state_=0;rates_={};previousScale_=1;
     }
     // Origins are REAR wheel centres, once for a bike and twice for a kart.
     // The optional kart up vector keeps emission attached on banked surfaces.
-    void step(unsigned state,Vec3 left,Vec3 right,Vec3 forward,unsigned rearWheelCount=2,Vec3 up={0,1,0}){
+    void step(unsigned state,Vec3 left,Vec3 right,Vec3 forward,unsigned rearWheelCount=2,Vec3 up={0,1,0},float kartScale=1){
         if(!ready)return;
         rearWheelCount=std::min(rearWheelCount,2u);
         up=normalized(up);forward=normalized(tangent(forward,up),{0,0,1});
         const Vec3 side=normalized(cross(up,forward),{1,0,0});
         const Vec3 origins[]={left,right};
+        const float scaleRatio=previousScale_>0?kartScale/previousScale_:1.f;
         for(auto& p:sparks)if(p.age<p.life){
             const auto& s=specs[p.spec];++p.age;
             if(haveOrigin_){
                 const Vec3 delta=origins[p.wheel]-previous_[p.wheel];
                 p.position+=delta*s.inherit;p.origin+=delta;
+                p.position=p.origin+(p.position-p.origin)*scaleRatio;
+                p.velocity=p.velocity*scaleRatio;p.size[0]*=scaleRatio;p.size[1]*=scaleRatio;
             }
             p.velocity=p.velocity*s.drag;p.position+=p.velocity;
             if(s.shapeDirection==1)p.direction=normalized(p.position-p.origin,p.direction);
         }
-        previous_[0]=left;previous_[1]=right;haveOrigin_=true;
+        previous_[0]=left;previous_[1]=right;previousScale_=kartScale;haveOrigin_=true;
         // New effects have fresh accumulators and emit immediately, including
         // a fractional-rate parent. Residual charge must not survive releasing R.
         const bool first=state!=state_;
@@ -90,9 +93,9 @@ public:
                     Vec3 local,velocity;
                     emission(s.shapes[wheel],local,velocity);
                     const Vec3 offset{s.offset[wheel][0],s.offset[wheel][1],s.offset[wheel][2]};
-                    const Vec3 origin=origins[wheel]+world(offset);
-                    const Vec3 position=origin+world(local);
-                    const Vec3 motion=world(velocity);
+                    const Vec3 origin=origins[wheel]+world(offset)*kartScale;
+                    const Vec3 position=origin+world(local)*kartScale;
+                    const Vec3 motion=world(velocity)*kartScale;
                     // Both flash children occur on the SAME parent birth, with
                     // its shared velocity. Core and smoke each have one child.
                     const unsigned children=state>=2&&group==1?2:1;
@@ -103,8 +106,8 @@ public:
                         p.position=position;p.origin=origin;p.velocity=motion;p.up=up;
                         p.direction=normalized(def.shapeDirection==1?world(local):motion,forward*-1.f);
                         const float sizeRandom=random(); // source SyncRand links X/Y
-                        p.size[0]=def.sizeX+def.sizeDelta[0]*sizeRandom;
-                        p.size[1]=def.sizeY+def.sizeDelta[1]*sizeRandom;
+                        p.size[0]=(def.sizeX+def.sizeDelta[0]*sizeRandom)*kartScale;
+                        p.size[1]=(def.sizeY+def.sizeDelta[1]*sizeRandom)*kartScale;
                         p.rotation=def.rotate[0]+def.rotate[1]*random();
                         p.alphaVariation=1+def.alphaRandom*(random()*2-1);
                         for(unsigned channel=0;channel<3;++channel){
@@ -157,7 +160,7 @@ private:
         const Vec3 rotation{e.rotation[0],e.rotation[1],e.rotation[2]};
         local=rotate(local,rotation);velocity=rotate(velocity,rotation);
     }
-    unsigned cursor_=0,random_=0x584d4b57,state_=0;
+    unsigned cursor_=0,random_=0x584d4b57,state_=0;float previousScale_=1;
     Vec3 previous_[2]{};bool haveOrigin_=false;
     std::array<std::array<float,2>,2> rates_{};
     // NW4R's generator, private to visuals so race/replay RNG is untouched.

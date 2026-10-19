@@ -252,6 +252,7 @@ public:
  // StrmSoundHandle track volume (per BRSTM track).
  void setStreamTrackVolume(Handle h, u32 trackMask, f32 volume, int frames);
  bool prepared(Handle h) const;
+ bool started(Handle h) const; // preparation/queue acceptance alone is not playback
  u32 playingSamples(Handle h) const; // stream position, 0 otherwise
  u32 seqTick(Handle h) const;        // SeqSoundHandle::GetTick: ticks played, 0 for other sounds
 
@@ -263,7 +264,9 @@ public:
  void setMasterVolume(f32 volume);
 
  // Game frame (60 Hz): BasicSound fades/params, player priority sorting.
- void updateGameFrame();
+ // Maintenance frames during a stalled game advance fades but cannot
+ // expire HoldSound: the game has not had a chance to renew its handles.
+ void updateGameFrame(bool advanceHold = true);
  // Sound frame (3 ms): sequencer ticks, channel envelopes, voice params.
  void updateSoundFrame();
  const EngineStats& stats() const;

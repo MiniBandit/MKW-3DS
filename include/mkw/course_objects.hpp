@@ -15,11 +15,18 @@ public:
     bool loadCourse(int courseId);
     // The race scene was (re)created: re-link placements to new objects.
     void invalidate();
+    // Simulation event, before prepare: restart this racer's authored lava splash.
+    void triggerLavaSplash(unsigned racer,Vec3 position,float scale,unsigned tick);
+    // Future race overlays share LINEAR with optional per-instance skin copies.
+    void setAllocationReserve(std::size_t bytes);
     // Records this frame's sky and object draws (poses, skinning, materials) on
     // the job worker; call after Renderer::begin with the same tick and camera
     // as drawSky/draw, which then replay them in order. Without it they record
     // inline. The race must not step in between.
     void prepare(const Renderer& renderer,unsigned tick,Vec3 camera);
+    // Before Renderer::begin: supply the placed stadium display faces for
+    // conservative capture visibility, independently of their frame/stands.
+    void requestStadiumScreen(Renderer& renderer);
     // tick: simulation frames since the race scene began.
     void draw(Renderer& renderer,unsigned tick,Vec3 camera);
     // Transparent tide layers, after opaque scenery and racers, before effects.
@@ -27,10 +34,9 @@ public:
     // Sky-pass objects (suns, Rainbow Road's Earth glow): drawn after the sky,
     // before the course, so walls and scenery cover them.
     void drawSky(Renderer& renderer,unsigned tick,Vec3 camera);
-    // GPU-idle pause: keep controllers/physics links while releasing all meshes.
+    void reset();
     void suspendGraphics();
     bool resumeGraphics();
-    void reset();
     // Renderer::moveToVram for every object model's textures; returns the
     // number moved. GPU idle (Renderer::waitForGpu).
     unsigned moveTexturesToVram(Renderer& renderer,std::size_t reserve);

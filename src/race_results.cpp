@@ -1,4 +1,6 @@
 #include <mkw/race_results.hpp>
+#include <mkw/race_flow_layout.hpp>
+#include <mkw/sound_ids.hpp>
 #include <algorithm>
 
 namespace mkw {
@@ -43,6 +45,13 @@ float RaceResultsFlow::hudSlide()const{
  return std::min(1.f,float(pageFrame_)*.05f);
 }
 
+bool RaceResultsFlow::teamCounting()const{
+ if(!teams_)return false;
+ for(unsigned i=0;i<count_;++i)if(teamRowDisplayed_[i]<rows_[i].previous+rows_[i].gain)return true;
+ for(unsigned i=0;i<2;++i)if(teamDisplayed_[i]<teamScores_[i].total())return true;
+ return false;
+}
+
 bool RaceResultsFlow::counting()const{
  for(unsigned i=0;i<count_;++i)if(counts_[i].busy())return true;
  return false;
@@ -60,8 +69,30 @@ float RaceResultsFlow::slideOffset(float delay)const{
  }
 }
 
+int RaceResultsFlow::slideSound()const{
+ const bool entering=phase_==RaceFlowPhase::UpdateIn||phase_==RaceFlowPhase::TotalIn;
+ const bool leaving=phase_==RaceFlowPhase::UpdateOut||phase_==RaceFlowPhase::TotalOut;
+ if(!entering&&!leaving)return -1;
+ const bool teamBoard=teams_&&totals();
+ bool starts=false;
+ if(teamBoard){
+  // Retail team result controls begin at ticks 0 and 5; no UI layout dependency.
+  starts=pageFrame_==0||pageFrame_==5;
+ }else{
+  for(unsigned i=0;i<count_;++i)starts|=float(pageFrame_)==FlowResultRows[i].delay;
+ }
+ if(!starts)return -1;
+ return leaving?snd::id::SE_RSLT_OUT:teamBoard?snd::id::SE_RSLT_IN_TEAM:snd::id::SE_RSLT_IN;
+}
+
 void RaceResultsFlow::fill(const RaceResultEntry* byPosition,unsigned count,bool finalRace){
  count_=std::min(count,12u);final_=finalRace;filled_=true;
+ teamScores_={};teams_=false;humanTeam_=RaceTeam::None;
+ for(unsigned i=0;i<count_;++i){const auto& row=byPosition[i];
+  if(row.team==RaceTeam::None)continue;
+  teams_=true;auto& score=teamScores_[unsigned(row.team)];score.previous+=row.previous;score.gain+=row.gain;
+  if(row.human)humanTeam_=row.team;
+ }
  for(unsigned i=0;i<count_;++i){rows_[i]=byPosition[i];counts_[i].fill(rows_[i].previous,rows_[i].gain);}
 }
 
@@ -74,11 +105,13 @@ void RaceResultsFlow::sortTotals(){
   if(a.human!=b.human)return a.human;
   return a.gain>b.gain;
  });
- for(unsigned i=0;i<count_;++i)counts_[i].fill(rows_[i].previous+rows_[i].gain,0);
+ for(unsigned i=0;i<count_;++i){counts_[i].fill(rows_[i].previous+rows_[i].gain,0);teamRowDisplayed_[i]=float(rows_[i].previous);}
+ for(unsigned i=0;i<2;++i)teamDisplayed_[i]=float(teamScores_[i].previous);
 }
 
 uint32_t RaceResultsFlow::step(const RaceFlowInput& in){
  uint32_t events=EventNone;
+ pointsChanged_=false;
  if(phase_==RaceFlowPhase::Racing||phase_==RaceFlowPhase::Done)return events;
  if(finishFrame_>=0)++finishFrame_;
  ++pageFrame_;
@@ -96,7 +129,7 @@ uint32_t RaceResultsFlow::step(const RaceFlowInput& in){
  case RaceFlowPhase::Update:{
   // Leaderboard::AfterControlUpdate 0x8083A634: counting delays the timeout;
   // A/B/START (0x8083A5E0) leave only once every row has finished counting.
-  for(unsigned i=0;i<count_;++i)counts_[i].update();
+  for(unsigned i=0;i<count_;++i){const int before=counts_[i].shown;counts_[i].update();pointsChanged_|=before!=counts_[i].shown;}
   const bool busy=counting();
   if(busy)++timeout_;
   else if(in.advance||pageFrame_>=timeout_)enter(RaceFlowPhase::UpdateOut);
@@ -109,6 +142,13 @@ uint32_t RaceResultsFlow::step(const RaceFlowInput& in){
   if(pageFrame_>=slideDone)phase_=RaceFlowPhase::Total;
   break;
  case RaceFlowPhase::Total:
+  if(teams_){
+   // CtrlRaceResultTeam::OnUpdate 807ec990: individual scores advance .5
+   // per active tick, team total 1; block page dismissal until both finish.
+   for(unsigned i=0;i<count_;++i){const unsigned before=teamRowShown(i);teamRowDisplayed_[i]=std::min(float(rows_[i].previous+rows_[i].gain),teamRowDisplayed_[i]+.5f);pointsChanged_|=before!=teamRowShown(i);}
+   for(unsigned i=0;i<2;++i){const unsigned before=unsigned(teamDisplayed_[i]);teamDisplayed_[i]=std::min(float(teamScores_[i].total()),teamDisplayed_[i]+1.f);pointsChanged_|=before!=unsigned(teamDisplayed_[i]);}
+   if(teamCounting()){++timeout_;break;}
+  }
   if(in.advance||pageFrame_>=timeout_)enter(RaceFlowPhase::TotalOut);
   break;
  case RaceFlowPhase::TotalOut:

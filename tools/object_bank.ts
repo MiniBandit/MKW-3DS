@@ -7,7 +7,7 @@ import {mat4} from 'gl-matrix';
 import {ByteCodeOp,bindSRT0Animator,bindCLR0Animator} from '../vendor/noclip/src/rres/brres.js';
 import AnimationController from '../vendor/noclip/src/AnimationController.js';
 import * as GX from '../vendor/noclip/src/gx/gx_enum.js';
-import {PoseEvaluator,PoseMetadata} from './brres_pose.js';
+import {PoseEvaluator,PoseMetadata,PoseStep} from './brres_pose.js';
 
 // Per-shape material decisions made by export_brres.ts lighting().
 export type BankShape={matId:number,primaryMap:number,secondaryMap:number,primaryCoord:number,secondaryCoord:number,
@@ -82,11 +82,14 @@ export function writeObjectBank(path:string,archive:any,poseMetadata:PoseMetadat
  const names=new Set(model.nodes.map((n:any)=>n.name));
  // Some archives drive several models with the same joint names; the cooker
  // excludes clips that belong to a sibling model.
+ // noclip's linear track sampler reads one value past its table at exactly
+ // the last frame (NaN), so a non-looping end key is taken a hair earlier.
+ const endKey=(clip:any,f:number)=>clip.loopMode!==1&&f>=clip.duration&&clip.duration>0?clip.duration-1e-3:f;
  const exclude=process.env.MKW_OBJECT_CLIP_EXCLUDE?new RegExp(process.env.MKW_OBJECT_CLIP_EXCLUDE):null;
  const chr=archive.chr0.filter((c:any)=>!exclude?.test(c.name)&&c.nodeAnimations.some((n:any)=>names.has(n.nodeName))).map((clip:any)=>{
-  const sample=evaluate(clip);const count=Math.max(1,clip.duration);
+  const sample=evaluate(clip);const count=Math.max(1,clip.duration+(clip.loopMode===1?0:1));
   const frames:number[][][]=[];
-  for(let f=0;f<count;f++){controller.setTimeInFrames(f);frames.push(sample());}
+  for(let f=0;f<count;f++){controller.setTimeInFrames(endKey(clip,f));frames.push(sample());}
   const animated=palette.map((_,i)=>i).filter(i=>frames.some(fr=>fr[i].some((v,j)=>Math.abs(v-frames[0][i][j])>1e-6)));
   // Translations are world units; rotation/scale/normal terms are unitless.
   const step=chooseStep(frames.map(fr=>animated.flatMap(i=>fr[i])),j=>[3,7,11].includes(j%12)?0.5:2e-3);
@@ -119,8 +122,9 @@ export function writeObjectBank(path:string,archive:any,poseMetadata:PoseMetadat
    animated.push(i);tracks.push({material,coords:[s.primaryCoord,s.secondaryCoord],animators,baseline});
   });
   if(!animated.length)return null;
-  const count=Math.max(1,clip.duration);const series:number[][]=[];
-  for(let f=0;f<count;f++){controller.setTimeInFrames(f);const data:number[]=[];series.push(data);
+  // Non-looping SRT0 includes its authored end key, just like CLR0.
+  const count=clip.loopMode===1?Math.max(1,clip.duration):clip.duration+1;const series:number[][]=[];
+  for(let f=0;f<count;f++){controller.setTimeInFrames(endKey(clip,f));const data:number[]=[];series.push(data);
    for(const t of tracks)for(let k=0;k<2;k++){
     const current=mat4.clone(t.material.texSrts[t.coords[k]]?.srtMtx??mat4.create());t.animators[k]?.calcTexMtx(current);
     const inverse=mat4.invert(mat4.create(),t.baseline[k]);
@@ -176,8 +180,10 @@ export function writeObjectBank(path:string,archive:any,poseMetadata:PoseMetadat
  const s32=(...n:number[])=>{const b=Buffer.alloc(n.length*4);n.forEach((v,i)=>b.writeInt32LE(v,i*4));chunks.push(b);};
  const f32=(n:number[])=>{const b=Buffer.alloc(n.length*4);n.forEach((v,i)=>b.writeFloatLE(v,i*4));chunks.push(b);};
  const name=(s:string,size=32)=>{const b=Buffer.alloc(size);b.write(s.slice(0,size-1));chunks.push(b);};
- // Material-only banks leave the GMDL geometry untouched: no source vertices.
- const skinned=chr.length>0||palette.length>1;
+ // Billboard nodes change geometry at draw time even without CHR0. Keep
+ // their vertex bindings so a procedural palette reaches the rigid GPU path.
+ // Truly material-only banks may still leave GMDL geometry untouched.
+ const skinned=chr.length>0||palette.length>1||model.nodes.some((n:any)=>n.billboardMode>0)||process.env.MKW_CAPTURE_MORPH==='1';
  chunks.push(Buffer.from('DOBJ'));u32(1,skinned?vertices.length:0,palette.length,shapes.length,nodes.length,chr.length,pat.length,srt.length,clr.length);
  if(skinned)for(const v of vertices){f32(v.slice(0,6));u32(v[6]);}
  for(const r of ranges)u32(r[0],r[1]);
@@ -187,8 +193,53 @@ export function writeObjectBank(path:string,archive:any,poseMetadata:PoseMetadat
  for(const c of pat as any[]){name(c.name);u32(c.count,c.loop);s32(...c.data);}
  for(const c of srt as any[]){name(c.name);u32(c.count,c.loop,c.step,c.shapes.length);u32(...c.shapes);f32(c.data);}
  for(const c of clr as any[]){name(c.name);u32(c.count,c.loop,c.shapes.length);u32(...c.shapes);u32(...c.flags);u32(...c.data);}
+ // Pakkun's original ExecCallbackB changes two nodes before their children
+ // and the envelope mix. Final baked palettes cannot reproduce that order.
+ // Keep this optional program only for the model that currently needs it.
+ let callbackInfo:any=null;
+ if(model.name==='pakkun_f'){
+  const bindSteps:PoseStep[]=[];controller.setTimeInFrames(0);
+  new PoseEvaluator(poseMetadata,model,null,controller).calculate(undefined,bindSteps);
+  if(!bindSteps.length||bindSteps.length>256)throw new Error('Invalid callback step count');
+  const nodeStep=new Map(bindSteps.map((s,i)=>[s.nodeId,i]));
+  const recipes=new Map<number,any[]>(),envelopes=new Map<number,any[]>();
+  model.sceneGraph.nodeTreeOps.forEach((op:any,i:number)=>{
+   const matrix=op.op===ByteCodeOp.NODEDESC?model.nodes[op.nodeId].mtxId:op.toMtxId;
+   recipes.set(matrix,[{step:i,weight:1,inverse:mat4.create()}]);
+  });
+  for(const op of model.sceneGraph.nodeMixOps){
+   if(op.op===ByteCodeOp.EVPMTX){
+    const step=nodeStep.get(op.nodeId);if(step===undefined)throw new Error('Missing callback envelope node');
+    envelopes.set(op.mtxId,[{step,weight:1,inverse:model.nodes[op.nodeId].inverseBindPose}]);
+   }else{
+    const terms:any[]=[];
+    op.blendMtxIds.forEach((id:number,i:number)=>{
+     const parts=envelopes.get(id);if(!parts)throw new Error('Missing callback envelope');
+     for(const p of parts)terms.push({...p,weight:p.weight*op.weights[i]});
+    });
+    recipes.set(op.dstMtxId,terms);
+   }
+  }
+  chunks.push(Buffer.from('JCB1'));u32(bindSteps.length,palette.length,chr.length);
+  for(const s of bindSteps){name(s.name);s32(s.parent);}
+  f32(bindSteps.flatMap(s=>s.values));
+  for(const id of palette){
+   const terms=recipes.get(id);if(!terms?.length||terms.length>64)throw new Error('Missing callback matrix recipe '+id);
+   u32(terms.length);for(const t of terms){u32(t.step);f32([t.weight,...rows(t.inverse)]);}
+  }
+  for(const c of chr){
+   const clip=archive.chr0.find((a:any)=>a.name===c.name),e=new PoseEvaluator(poseMetadata,model,clip,controller);
+   u32(c.count,c.loop,1);
+   for(let frame=0;frame<c.count;++frame){
+    controller.setTimeInFrames(frame);const steps:PoseStep[]=[];e.calculate(undefined,steps);
+    if(steps.length!==bindSteps.length||steps.some((s,i)=>s.name!==bindSteps[i].name||s.parent!==bindSteps[i].parent))throw new Error('Callback topology changed');
+    f32(steps.flatMap(s=>s.values));
+   }
+  }
+  callbackInfo={steps:bindSteps.length,matrices:palette.length,clips:chr.length};
+ }
  fs.writeFileSync(path,Buffer.concat(chunks));
  return {vertices:vertices.length,palette:palette.length,nodes:nodes.length,weighted:model.sceneGraph.nodeMixOps.some((op:any)=>op.op!==ByteCodeOp.EVPMTX),
   chr:chr.map((c:any)=>({name:c.name,frames:c.count,loop:c.loop,step:c.step,animated:c.animated.length})),pat:(pat as any[]).map(c=>({name:c.name,frames:c.count,loop:c.loop})),
-  limitations:[...limitations],srt:(srt as any[]).map(c=>({name:c.name,frames:c.count,loop:c.loop,step:c.step,shapes:c.shapes.length})),clr:(clr as any[]).map(c=>({name:c.name,frames:c.count,loop:c.loop,shapes:c.shapes.length,flags:c.flags}))};
+  callbacks:callbackInfo,limitations:[...limitations],srt:(srt as any[]).map(c=>({name:c.name,frames:c.count,loop:c.loop,step:c.step,shapes:c.shapes.length})),clr:(clr as any[]).map(c=>({name:c.name,frames:c.count,loop:c.loop,shapes:c.shapes.length,flags:c.flags}))};
 }

@@ -12,7 +12,8 @@ overlays the result.
 
 --objects also re-cooks the selected courses' placed-object meshes as
 tools/cook_course_objects.py does, under the same mesh-only rule (animation
-banks and textures stay the shared tree's).
+banks are replaced only when their exported material tracks change; textures
+stay the shared tree's).
 """
 import argparse,contextlib,hashlib,io,json,os,shutil,subprocess
 from pathlib import Path
@@ -66,7 +67,7 @@ def overlay_course(c,output):
         (output/f"models/courses/{c['id']:02d}.json").write_text(json.dumps(receipt,indent=2)+'\n')
     return changed
 
-def overlay_objects(c,output):
+def overlay_objects(c,output,banks_only=False):
     from cook_course_objects import CLIP_EXCLUDE,EXCLUDED,mdl0_names,safe
     folder=ROOT/'assets/courses'/c['key'];changed=[]
     # Only the packaged meshes: the course's visuals list (resource model mesh bank).
@@ -76,6 +77,7 @@ def overlay_objects(c,output):
         for model in mdl0_names(archive):
             stem=f"obj{c['id']:02d}_{safe(resource)}__{safe(model)}"
             if (resource,model,stem+'_000') not in listed:continue
+            if banks_only and not (output/'models'/f'{stem}_000.gmdl').is_file():continue
             # Same export settings as tools/cook_course_objects.py; its animation bank is discarded.
             env={'MKW_FREEZE_NONLINEAR_UV':'1','MKW_OBJECT_MATERIALS':'1','MKW_RETAIL_LIGHTING':'1','MKW_OBJECT_BANK':str(output.parent/(output.name+'-bank.dobj')),
                  'MKW_TEXTURE_SOURCES':os.pathsep.join(str(folder/n) for n in ('course_model.brres','vrcorn_model.brres') if (folder/n).is_file())}
@@ -83,21 +85,33 @@ def overlay_objects(c,output):
                 if res==resource and pattern==model:env['MKW_OBJECT_CLIP_EXCLUDE']=regex
             names,_=recook(archive,[model],env,stem,output,texture_prefix=f"obj{c['id']:02d}_{safe(resource)}",preserve_vertices=True)
             changed+=names
+            bank=output.parent/(output.name+'-bank.dobj');original=SD/'models'/f'{stem}.dobj'
+            if original.is_file() and bank.read_bytes()!=original.read_bytes():
+                target=output/'models'/original.name;target.parent.mkdir(parents=True,exist_ok=True)
+                shutil.copyfile(bank,target);changed.append(target.name)
     (output.parent/(output.name+'-bank.dobj')).unlink(missing_ok=True)
     return changed
 
 def main():
     p=argparse.ArgumentParser(description=__doc__);p.add_argument('--ids',type=int,nargs='*');p.add_argument('--output',type=Path,default=ROOT/'build/course-materials')
-    p.add_argument('--objects',action='store_true',help="also re-cook the selected race courses' placed-object meshes");a=p.parse_args()
+    p.add_argument('--objects',action='store_true',help="also re-cook the selected race courses' placed-object meshes")
+    p.add_argument('--banks-only',action='store_true',help="update animation banks for object meshes already present in the overlay")
+    a=p.parse_args()
     subprocess.run(['node','tools/bundle_cooker.mjs'],cwd=ROOT,check=True)
     for c in courses():
         if a.ids is not None and c['id'] not in a.ids:continue
+        if a.banks_only:
+            if c['kind']=='race':
+                changed=overlay_objects(c,a.output,True)
+                print(c['id'],c['name'],' '.join(changed) or 'banks unchanged',flush=True)
+            continue
         # Rebuild this course's overlay entries from scratch.
         for old in [*a.output.glob(f"models/{c['prefix']}_*.gmdl"),*a.output.glob(f"models/{c['prefix']}_sky_*.gmdl"),a.output/f"models/courses/{c['id']:02d}.json"]:
             old.unlink(missing_ok=True)
         changed=overlay_course(c,a.output)
         if a.objects and c['kind']=='race':
-            for old in a.output.glob(f"models/obj{c['id']:02d}_*.gmdl"):old.unlink()
+            for pattern in (f"models/obj{c['id']:02d}_*.gmdl",f"models/obj{c['id']:02d}_*.dobj"):
+                for old in a.output.glob(pattern):old.unlink()
             changed+=overlay_objects(c,a.output)
         print(c['id'],c['name'],' '.join(changed) or 'unchanged',flush=True)
 

@@ -253,6 +253,7 @@ struct Writer {
     const std::vector<Material>& materials;
     const TextureSize* sizes;u32 sizeCount;
     u32 vertexLimit;
+    const mkw::ClipFrustum* frustum=nullptr;
     const EmitterResource* res=nullptr;
     const Material* mat=nullptr;
     u8 cull=0;
@@ -344,6 +345,16 @@ struct Writer {
         if(out.vertices.size()>=vertexLimit)return;
         out.vertices.push_back(v);++out.batches.back().count;
     }
+    bool visible(Vec3 a,Vec3 b,Vec3 c) const {
+        if(!frustum)return true;
+        mkw::Bounds bounds{{a.x,a.y,a.z},{a.x,a.y,a.z}};
+        bounds.include({b.x,b.y,b.z});bounds.include({c.x,c.y,c.z});
+        return frustum->intersects(bounds);
+    }
+    void triangle(const DrawVertex& a,const DrawVertex& b,const DrawVertex& c){
+        if(!visible({a.x,a.y,a.z},{b.x,b.y,b.z},{c.x,c.y,c.z}))return;
+        emit(a);emit(b);emit(c);
+    }
     // GX_TRIANGLESTRIP as a triangle list; odd triangles swap their first two vertices
     // so every triangle keeps the strip's winding.
     struct Strip {
@@ -352,17 +363,18 @@ struct Writer {
         u32 count=0;
         void push(const DrawVertex& v){
             if(count<2){prev[count++]=v;return;}
-            if(count&1){writer.emit(prev[1]);writer.emit(prev[0]);}
-            else{writer.emit(prev[0]);writer.emit(prev[1]);}
-            writer.emit(v);
+            if(count&1)writer.triangle(prev[1],prev[0],v);
+            else writer.triangle(prev[0],prev[1],v);
             prev[0]=prev[1];prev[1]=v;++count;
         }
     };
     // GX_QUADS: (v0,v1,v2) and (v0,v2,v3); corners carry texcoords (0,1),(0,0),(1,0),(1,1).
     void quad(Vec3 a,Vec3 b,Vec3 c,Vec3 d){
+        // Reject only fully clipped geometry; particle axes/lifetimes still advance.
+        if(!visible(a,b,c)&&!visible(a,c,d))return;
         // Shared triangle corners have identical position, UVs and colour.
         const DrawVertex va=make(a,0,1),vb=make(b,0,0),vc=make(c,1,0),vd=make(d,1,1);
-        emit(va);emit(vb);emit(vc);emit(va);emit(vc);emit(vd);
+        triangle(va,vb,vc);triangle(va,vc,vd);
     }
 };
 
@@ -727,6 +739,10 @@ bool translateMaterial(const DrawSetting& d,Material& m){
     if(sameStages(d,{lerp0})){
         m.vertex={RegC1,RegC0};m.lookup={RegC0,ValNone};
         m.stages=1;m.stage[0]=standard;
+    }else if(sameStages(d,{{0,{15,15,15,2},{0,0,0,1,0},{7,1,4,7},{0,0,0,1,0},0,0}})){
+        // Blooper's main blot: C = C0, A = A0 * TEX0A.
+        m.vertex={RegC0,RegC0};m.stages=1;
+        m.stage[0]=stage(Func::Replace,{{Src::Vertex,C}},Func::Modulate,{{Src::Tex0,A},{Src::Vertex,A}});
     }else if(sameStages(d,{{0,{15,15,15,8},{0,0,0,1,0},{7,1,4,7},{0,0,0,1,0},0,0}})){
         // C = TEX0C, A = A0 * TEX0A.
         m.vertex={ValNone,RegC0};
@@ -858,18 +874,19 @@ bool translateMaterial(const DrawSetting& d,Material& m){
 }
 
 void buildDrawList(System& s,const std::vector<Material>& materials,const TextureSize* textures,u32 textureCount,
-                   const Mtx34& view,DrawList& out,u32 vertexLimit){
+                   const Mtx34& view,DrawList& out,u32 vertexLimit,const mkw::ClipFrustum* frustum){
     out.clear();
-    Writer w{out,materials,textures,textureCount,u32(triangleVertexCount(vertexLimit,vertexLimit))};
+    Writer w{out,materials,textures,textureCount,u32(triangleVertexCount(vertexLimit,vertexLimit)),frustum};
+    for(unsigned cameraSpace=0;cameraSpace<2;++cameraSpace)
     for(Effect* e=s.active.head;e;e=e->next){
-        if(!(s.drawGroups>>e->group&1u))continue;
+        if((e->flags&2u)||!(s.drawGroups>>e->group&1u)||unsigned(s.cameraSpaceGroups>>e->group&1u)!=cameraSpace)continue;
         for(ParticleManager* pm=e->drawHead;pm;pm=pm->drawNext){
             const EmitterResource& res=*pm->res;
             const DrawSetting& d=res.desc.draw;
             if((d.flags&DrawSetting::Hidden)||(pm->emitter->prm.comFlags&EmitterDesc::DisableDraw))continue;
             if(!pm->particles.head||res.index>=materials.size()||!materials[res.index].valid)continue;
             w.res=&res;w.mat=&materials[res.index];w.cull=0;
-            const Mtx34 v=viewWithZOffset(view,*pm);
+            const Mtx34 v=viewWithZOffset(cameraSpace?Mtx34::identity():view,*pm);
             switch(d.ptclType){
             case 3:drawBillboard(w,*pm,v);break;
             case 4:drawDirectional(w,*pm,v);break;

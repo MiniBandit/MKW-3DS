@@ -16,7 +16,7 @@ namespace snd { class Engine; }
 struct SoundCommand {
  enum Type : std::uint8_t {
   Start, Hold, Stop, Pause, Volume, Pitch, Pan, SeqVariable, GlobalVariable, TrackVolume, StreamTrackVolume,
-  PlayerVolume, StopPlayer, PausePlayer, MasterVolume, Ambient, StopAll, Layer, Prepare, StartPrepared
+  PlayerVolume, StopPlayer, PausePlayer, MasterVolume, Ambient, StopAll, Layer, Prepare, StartPrepared, MoveSlot
  };
  Type type = Start;
  std::uint8_t pad = 0;
@@ -37,6 +37,10 @@ public:
  // root (romfs:/ or sdmc:/3ds/mkw-3ds). Requires MenuMovieAudio::initialize.
  bool start();
  void stop();
+ // Preserve only the already-playing results music across a loading handoff.
+ void carryMusic(std::uint32_t soundId,std::uint16_t fromSlot);
+ void finishCarriedMusic(int fadeFrames=0);
+ bool carryingMusic() const {return carriedMusic_!=0xffffffffu&&available();}
  bool available() const { return running_.load(std::memory_order_acquire); }
 
  // Scene residency (SoundArchivePlayer::LoadGroup): replaces the previous
@@ -96,6 +100,7 @@ public:
 private:
  SoundSystem() = default;
  Impl* impl_ = nullptr;
+ std::uint32_t carriedMusic_=0xffffffffu;
  std::atomic<bool> running_{false};
 };
 

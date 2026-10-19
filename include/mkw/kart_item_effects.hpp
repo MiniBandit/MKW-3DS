@@ -1,5 +1,6 @@
 #pragma once
 #include "mkw/race_effects.hpp"
+#include "mkw/kart_wall_contact.hpp"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -44,11 +45,12 @@ enum class KartFx : uint8_t {
     WaterWheelR,   // 0x334 rk_water
     WaterFall,     // course pocha archive: large drowning splash, fixed world origin
     Catapult,      // 0x1f8 rk_uchiage, Poihana's first throw contact
+    RainbowEntry,  // 0x228 rk_entry, original course-only reentry flame
     Count
 };
 inline constexpr unsigned KartFxCount=unsigned(KartFx::Count);
 // Each effect's index in KartEffect's handle table at +0x1f0: (offset above - 0x1f0) / 4.
-inline constexpr uint8_t KartFxTableIndex[KartFxCount]={5,6,7,8,9,10,11,15,16,17,18,3,4,43,28,29,30,31,1,39,33,34,22,21,35,20,0,32,23,80,81,255,2};
+inline constexpr uint8_t KartFxTableIndex[KartFxCount]={5,6,7,8,9,10,11,15,16,17,18,3,4,43,28,29,30,31,1,39,33,34,22,21,35,20,0,32,23,80,81,255,2,14};
 // 0x8069146c with argument 0, the kart effect LOD's kill, spares indices 5..12, 14..19, 27
 // and 35: every power-up here and the item box hit; it kills the slipstream (3, 4).
 constexpr bool keptByLodKill(unsigned tableIndex){
@@ -63,6 +65,7 @@ struct KartFxInput {
     float bulletOffset=0; // the Bullet model's centre along up (KartKiller matrix)
     // Status 63 Star, 79 Mega, 91 Bullet, 71 Shocked, 4 BeforeRespawn.
     bool star=false,mega=false,bullet=false,shocked=false,beforeRespawn=false;
+    bool hasRainbowEntry=false; // Original course entry dependency.
     // KartAction: the current action, its frame and the POW dodge (+0xcc bit 1);
     // powPending is KartMove::calcPow's POW-target-in-window test (0x8057a844).
     int action=-1;uint32_t actionFrame=0;bool powDodged=false,powPending=false;
@@ -100,6 +103,8 @@ struct KartFxInput {
     // UpdateWaterEffects (80698368), the original height probe 8058ab84
     // and rear wheel edges. Sea presence is separate from its height.
     bool diving=false,hasSea=false;
+    bool hasPocha=false;
+    float pochaHeight=-60000.f; // Effects::Mgr::Init height-table sentinel.
     float seaHeight=0,waterBodyHeight=0,waterRearHeight=0,waterBaseSpeed=50;
     // KartEffect +0xc halves emission for the reduced screen mode;
     // +0xb suppresses remote wakes in a split-screen mode, not LOD +7.
@@ -232,10 +237,22 @@ public:
         }
         const bool respawnStart=in.beforeRespawn&&!wasBeforeRespawn_;
         wasBeforeRespawn_=in.beforeRespawn;
-        if(respawnStart&&in.hasSea&&in.diving){
+        // Effects::Player USA8069a424: 35-frame delay, drop >700 units,
+        // and local downward velocity <-60. Original orientation is Rx(pi/2).
+        if(respawnStart){entryHeight_=in.position.y;entryFrames_=0;entryStarted_=false;}
+        if(in.hasRainbowEntry&&in.beforeRespawn){
+            if(entryFrames_<36)++entryFrames_;
+            auto f=world(in);f.x={1,0,0};f.y={0,0,1};f.z={0,-1,0};f.scale=1;
+            if(!entryStarted_&&entryFrames_>=35&&in.position.y<entryHeight_-700.f&&(!local_||in.velocity.y<-60.f)){
+                sink.create(KartFx::RainbowEntry,f);entryStarted_=true;
+            }
+            if(entryStarted_)sink.setFrame(KartFx::RainbowEntry,f);
+        }else if(entryStarted_){sink.kill(KartFx::RainbowEntry);entryStarted_=false;}
+
+        if(respawnStart&&(in.hasPocha||(in.hasSea&&in.diving))){
             // CreatePochaEffect 806a7708: predicted X/Z and authored
             // surface Y. The splash stays where the kart entered the sea.
-            auto f=world(in);f.origin=in.position+in.velocity;f.origin.y=in.seaHeight;f.scale=in.scale;
+            auto f=world(in);f.origin=in.position+in.velocity;f.origin.y=in.hasPocha?in.pochaHeight:in.seaHeight;f.scale=in.scale;
             sink.kill(KartFx::WaterFall);sink.create(KartFx::WaterFall,f);
         }
         // During the kart collision, before this update: Effects::Player counts the wall
@@ -403,7 +420,7 @@ private:
     // update): a counted contact since +0x7b0 was last cleared, speed above 30 and 30 frames
     // since the last.
     void wallHit(const KartFxInput& in,KartFxSink& sink){
-        if(!in.beforeRespawn&&wallContacts_>0&&length(in.velocity)>30.f&&hitFrames_[WallHit]>HitGap){
+        if(wallImpactReady(in.beforeRespawn,wallContacts_>0,length(in.velocity),hitFrames_[WallHit])){
             hitFrames_[WallHit]=0;
             if(local_){
                 auto f=pose(in);float scale=1;if(effectScale(in,scale))f.scale=scale;
@@ -567,6 +584,7 @@ private:
     int kartContactFrames_=0; // +0x7b8, separate from the effect-matrix timer
     int32_t slipFade_=-1;          // +0x8c, -1 idle
     bool slipVisible_=false;       // +0x89
+    float entryHeight_=0;unsigned entryFrames_=0;bool entryStarted_=false;
     bool wasBeforeRespawn_=false;  // +0x97
     bool wasLod_=false;            // +8, +7 at the last update outside a Bullet
     bool keepAlive_=false;         // +9
@@ -606,10 +624,13 @@ public:
             {"rk_itemBox","rk_itemBoxS"},{"rk_niseBoxBiri","rk_niseBoxBiri"},
             {"rk_crash","rk_crashS"},{"rk_crashWater","rk_crashWaterS"},
             {"rk_pochaWaterMini","rk_pochaWaterMini"},{"rk_water","rk_water"},{"rk_water","rk_water"},
-            {"rk_pochaWater","rk_pochaWaterS"},{"rk_uchiage","rk_uchiageS"}};
+            {"rk_pochaWater","rk_pochaWaterS"},{"rk_uchiage","rk_uchiageS"},{"rk_entry","rk_entry"}};
         effects_=&effects;
         for(unsigned i=0;i<KartFxCount;++i)for(unsigned j=0;j<2;++j)specs_[i][j]=effects.find(names[i][j]);
-        for(const auto& row:specs_)for(int spec:row)if(spec<0)return false;
+        for(unsigned i=0;i<KartFxCount;++i){
+            if(i==unsigned(KartFx::WaterFall)||i==unsigned(KartFx::RainbowEntry))continue; // Course pocha dependency, checked by loader.
+            for(int spec:specs_[i])if(spec<0)return false;
+        }
         return effects.ready;
     }
     void select(unsigned racer,bool local){racer_=racer<MaxRacers?racer:0;local_=local;}

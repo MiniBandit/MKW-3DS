@@ -13,6 +13,7 @@
 //    with the fog factor at the object's eye depth.
 // Everything is set once per frame or per submesh; no per-vertex CPU work.
 #include "mkw/renderer.hpp"
+#include <mkw/normal_matrix.hpp>
 #include <mkw/retail_lighting.hpp>
 #include <algorithm>
 #include <cmath>
@@ -45,15 +46,16 @@ bool Renderer::retailUniformLocations(){
     lightDiffLoc_=location("lightDiff");lightDirLoc_=location("lightDir");lightFnLoc_=location("lightFn");
     fogParamLoc_=location("fogParam");
     retailBoolLoc_=location("retailLightTexture");
-    environmentMappedLoc_=location("environmentMapped");diffuseLightingLoc_=location("diffuseLighting");
-    return lightDiffLoc_>=0&&lightDirLoc_>=0&&lightFnLoc_>=0&&fogParamLoc_>=0&&retailBoolLoc_>=0&&environmentMappedLoc_>=0&&diffuseLightingLoc_>=0;
+    environmentMappedLoc_=location("environmentMapped");environmentTexture2Loc_=location("environmentTexture2");environmentPrimaryLoc_=location("environmentPrimary");diffuseLightingLoc_=location("diffuseLighting");
+    for(unsigned i=0;i<3;++i){char name[16];std::snprintf(name,sizeof name,"normalRow%u",i);normalRowLoc_[i]=location(name);if(normalRowLoc_[i]<0)return false;}
+    return lightDiffLoc_>=0&&lightDirLoc_>=0&&lightFnLoc_>=0&&fogParamLoc_>=0&&retailBoolLoc_>=0&&environmentMappedLoc_>=0&&environmentTexture2Loc_>=0&&environmentPrimaryLoc_>=0&&diffuseLightingLoc_>=0;
 }
 
-void Renderer::setRetailLighting(const CourseLighting* course){
-    if(course==retail_)return;
+void Renderer::setRetailLighting(const CourseLighting* course,bool fixedLightTextures){
+    if(course==retail_&&fixedLightTextures==fixedLightTextures_)return;
     // Light textures and the fog ramp belong to the drawing side.
     drain();
-    retail_=course;retailTexturesValid_=false;
+    retail_=course;fixedLightTextures_=fixedLightTextures;retailTexturesValid_=false;
     retailFog_[7]=-1.f;
     if(!course)return;
     for(unsigned which=0;which<2;++which)retailTextureDynamic_[which]=retailLightTextureDynamic(*course,which);
@@ -86,6 +88,8 @@ void Renderer::retailShutdown(){
 void Renderer::retailBeginFrame(){
     // Defaults for every draw: no diffuse term, no saturation, fog off.
     C3D_BoolUnifSet(GPU_VERTEX_SHADER,environmentMappedLoc_,false);
+    C3D_BoolUnifSet(GPU_VERTEX_SHADER,environmentTexture2Loc_,false);
+    C3D_BoolUnifSet(GPU_VERTEX_SHADER,environmentPrimaryLoc_,false);
     C3D_BoolUnifSet(GPU_VERTEX_SHADER,diffuseLightingLoc_,false);
     C3D_FVUnifSet(GPU_VERTEX_SHADER,lightDiffLoc_,0,0,0,0);
     C3D_FVUnifSet(GPU_VERTEX_SHADER,lightDirLoc_,0,0,1,LegacyCeiling);
@@ -100,12 +104,22 @@ void Renderer::retailBeginFrame(){
     // Independently cache each light texture at GX's existing S1.10 direction
     // precision: camera motion below a quantization boundary changes no texel.
     // C3D_FrameBegin has retired every earlier use of these textures.
+    // Races use a fixed light-texture pair per course. Diffuse lighting
+    // above still follows the actual camera; the costly 32x32 CPU sphere
+    // maps no longer regenerate on turns or once for each stereo eye.
+    Vec3 textureDirections[16];
+    const Vec3* directions=retailLightView_;
+    if(fixedLightTextures_&&!retailTexturesValid_){
+        const float neutral[3][3]={{1,0,0},{0,1,0},{0,0,1}};
+        for(unsigned i=0;i<16;++i)textureDirections[i]=retailLightViewDirection(retail_->lights[i],neutral);
+        directions=textureDirections;
+    }
     for(unsigned which=0;which<2;++which){
-        if(retailTexturesValid_&&!retailTextureDynamic_[which])continue;
-        int key[12];retailLightTextureKey(*retail_,which,retailLightView_,key);
+        if(retailTexturesValid_&&(fixedLightTextures_||!retailTextureDynamic_[which]))continue;
+        int key[12];retailLightTextureKey(*retail_,which,directions,key);
         if(retailTexturesValid_&&!std::memcmp(key,retailTextureKeys_[which],sizeof key))continue;
         uint8_t rgba[LightTextureSize*LightTextureSize*4];
-        retailLightTexture(*retail_,which,retailLightView_,rgba);
+        retailLightTexture(*retail_,which,directions,rgba);
         auto* out=static_cast<uint8_t*>(retailTexture_[which].data);
         for(unsigned y=0;y<LightTextureSize;++y)for(unsigned x=0;x<LightTextureSize;++x){
             // GX row y (t down) is texcoord v = 1 - t (cooked UVs flip v).
@@ -170,17 +184,42 @@ bool Renderer::retailLight(const Submesh& s){
 
 void Renderer::retailEnvironment(const C3D_Mtx& modelView){
     // GX EnvCamera: view-space normal; the shader normalizes the rows' result.
-    for(unsigned r=0;r<3;++r)C3D_FVUnifSet(GPU_VERTEX_SHADER,envRowLoc_[r],modelView.r[r].c[3],modelView.r[r].c[2],modelView.r[r].c[1],0);
+    normalMatrixNow(modelView,true);
     C3D_FVUnifSet(GPU_VERTEX_SHADER,envParamLoc_,1,0,1,0);
     C3D_BoolUnifSet(GPU_VERTEX_SHADER,environmentMappedLoc_,true);
 }
 
-bool Renderer::retailCombiners(const Submesh& s,const C3D_Mtx& modelView,bool backdrop,bool additive,uint32_t additiveRgb){
+void Renderer::normalMatrixNow(const C3D_Mtx& modelView,bool environment){
+    Vec3 rows[3],normal[3];
+    for(unsigned r=0;r<3;++r)rows[r]={modelView.r[r].x,modelView.r[r].y,modelView.r[r].z};
+    normalMatrix(rows,normal);
+    for(unsigned r=0;r<3;++r){
+        C3D_FVUnifSet(GPU_VERTEX_SHADER,normalRowLoc_[r],normal[r].x,normal[r].y,normal[r].z,0);
+        if(environment)C3D_FVUnifSet(GPU_VERTEX_SHADER,envRowLoc_[r],normal[r].x,normal[r].y,normal[r].z,0);
+    }
+}
+
+bool Renderer::retailCombiners(const Submesh& s,const C3D_Mtx& modelView,bool backdrop,bool additive,uint32_t additiveRgb,uint32_t constant){
     // The sky pass (backdrop) is outside the course fog object in retail.
     const bool fog=!backdrop&&(s.lighting&retail::Fog)&&fogVisible(retailFog_);
     const unsigned channel=(s.lighting&retail::ChannelMask)>>retail::ChannelShift;
     const uint32_t fogColor=uint32_t(std::lround(retailFog_[4]*255.f))|uint32_t(std::lround(retailFog_[5]*255.f))<<8|
                             uint32_t(std::lround(retailFog_[6]*255.f))<<16|0xff000000u;
+    if(s.menuReflection==8||s.menuReflection==10){
+        // All three texture units hold the source statue layers. As with
+        // existing light-texture objects, apply fog at the object's eye depth.
+        if(fog){
+            const float depth=-modelView.r[2].w;
+            const float f=retailFogFactor(unsigned(retailFog_[0]),(depth-retailFog_[2])/std::max(retailFog_[3]-retailFog_[2],1e-3f));
+            auto* e=C3D_GetTexEnv(5);
+            C3D_TexEnvColor(e,(fogColor&0xffffffu)|uint32_t(std::lround((1.f-f)*255.f))<<24);
+            C3D_TexEnvSrc(e,C3D_RGB,GPU_PREVIOUS,GPU_CONSTANT,GPU_CONSTANT);
+            C3D_TexEnvOpRgb(e,GPU_TEVOP_RGB_SRC_COLOR,GPU_TEVOP_RGB_SRC_COLOR,GPU_TEVOP_RGB_SRC_ALPHA);
+            C3D_TexEnvFunc(e,C3D_RGB,GPU_INTERPOLATE);
+        }
+        retailFogBound_=retailTextureDirty_=true;
+        return true;
+    }
     if(channel==2){
         // Light-texture materials (tools/retail_lighting.ts patterns). The
         // vertex colour is the GX channel (rasC, rasA); lm_0/lm_1 are the EGG
@@ -227,6 +266,13 @@ bool Renderer::retailCombiners(const Submesh& s,const C3D_Mtx& modelView,bool ba
             }
             e=next();C3D_TexEnvColor(e,add|0xff000000u);
             C3D_TexEnvSrc(e,C3D_RGB,GPU_PREVIOUS,GPU_CONSTANT);C3D_TexEnvFunc(e,C3D_RGB,GPU_ADD);
+            C3D_TexEnvSrc(e,C3D_Alpha,GPU_PREVIOUS);C3D_TexEnvFunc(e,C3D_Alpha,GPU_REPLACE);
+        }
+        if(s.lighting&retail::AlbedoTint){
+            // GX C0 is the per-identity clothing/skin colour. Preserve
+            // APREV for the following lm_1 mask; do not tint specular light.
+            e=next();C3D_TexEnvColor(e,constant);
+            C3D_TexEnvSrc(e,C3D_RGB,GPU_PREVIOUS,GPU_CONSTANT);C3D_TexEnvFunc(e,C3D_RGB,GPU_MODULATE);
             C3D_TexEnvSrc(e,C3D_Alpha,GPU_PREVIOUS);C3D_TexEnvFunc(e,C3D_Alpha,GPU_REPLACE);
         }
         if(secondary==2){
@@ -293,6 +339,7 @@ void Renderer::retailEndSubmesh(){
         C3D_FVUnifSet(GPU_VERTEX_SHADER,envRowLoc_[0],1,0,0,0);C3D_FVUnifSet(GPU_VERTEX_SHADER,envRowLoc_[1],0,1,0,0);
         C3D_FVUnifSet(GPU_VERTEX_SHADER,envRowLoc_[2],0,0,1,0);C3D_FVUnifSet(GPU_VERTEX_SHADER,envParamLoc_,1,0,0,0);
         C3D_BoolUnifSet(GPU_VERTEX_SHADER,environmentMappedLoc_,false);
+        C3D_BoolUnifSet(GPU_VERTEX_SHADER,environmentTexture2Loc_,false);
         retailTextureDirty_=false;
     }
 }

@@ -12,6 +12,10 @@ type ModelMeta={rule:number,nodes:Map<string,NodeMeta>};
 // uses Maya (2); SSC keeps Peach's pelvis scale from shrinking her upper body.
 const SOFTIMAGE=1;
 export type PoseMetadata={models:Map<string,ModelMeta>,clips:Map<string,Map<string,number>>};
+// Optional local CalcWorld program for models with procedural node callbacks.
+// Parent indices refer to earlier steps, including MTXDUP aliases. Each step
+// stores local RT, parent scale used before RT, and final geometry scale.
+export type PoseStep={name:string,nodeId:number,parent:number,values:number[]};
 export function readPoseMetadata(data:Buffer):PoseMetadata{
  const u32=(p:number)=>data.readUInt32BE(p),str=(p:number)=>data.toString('utf8',p,data.indexOf(0,p));
  const dictionary=(p:number)=>{const count=u32(p+4);if(count>100000)throw new Error('Invalid BRRES dictionary');return Array.from({length:count},(_,i)=>{const e=p+24+i*16;return {name:str(p+u32(e+8)),offset:p+u32(e+12)};});};
@@ -51,8 +55,9 @@ export class PoseEvaluator{
   }
  }
  get scalingRule(){return this.meta.rule;}
- calculate():mat4[]{
+ calculate(callback?:(nodeId:number,world:mat4)=>void,steps?:PoseStep[]):mat4[]{
   const world:mat4[]=[],scale:number[][]=[];world[0]=mat4.create();scale[0]=[1,1,1];
+  const writers=new Map<number,number>();if(steps)steps.length=0;
   const written:number[]=[];
   for(const op of this.model.sceneGraph.nodeTreeOps){
    if(op.op===ByteCodeOp.NODEDESC){
@@ -62,6 +67,7 @@ export class PoseEvaluator{
     const s=this.scaleAnimator?.calcModelMtx(scaling,node.id)?[scaling[0],scaling[5],scaling[10]]:meta.scale;
     const parent=world[op.parentMtxId]??mat4.create(),ps=scale[op.parentMtxId]??[1,1,1];
     const f=this.flags.get(node.name),ssc=f===undefined?!!(meta.flags&(1<<5)):!!(f&(1<<10));
+    const parentScale=this.meta.rule===SOFTIMAGE||ssc?[1,1,1]:ps;
     if(this.meta.rule===SOFTIMAGE||ssc){
      local[12]*=ps[0];local[13]*=ps[1];local[14]*=ps[2];
      world[node.mtxId]=mat4.mul(mat4.create(),parent,local);
@@ -70,9 +76,12 @@ export class PoseEvaluator{
      const scaledParent=mat4.scale(mat4.create(),parent,ps as [number,number,number]);
      world[node.mtxId]=mat4.mul(mat4.create(),scaledParent,local);scale[node.mtxId]=s.slice();
     }
+    callback?.(op.nodeId,world[node.mtxId]);
+    if(steps){const parentStep=writers.get(op.parentMtxId)??-1;writers.set(node.mtxId,steps.length);steps.push({name:node.name,nodeId:op.nodeId,parent:parentStep,values:[...rowsForStep(local),...parentScale,...scale[node.mtxId]]});}
     written.push(node.mtxId);
    }else{
     world[op.toMtxId]=mat4.clone(world[op.fromMtxId]);scale[op.toMtxId]=scale[op.fromMtxId].slice();written.push(op.toMtxId);
+    if(steps){const parentStep=writers.get(op.fromMtxId)??-1;writers.set(op.toMtxId,steps.length);steps.push({name:'',nodeId:-1,parent:parentStep,values:[...rowsForStep(mat4.create()),1,1,1,...scale[op.toMtxId]]});}
    }
   }
   // Each node's geometry receives its scale only after descendants have been
@@ -81,3 +90,4 @@ export class PoseEvaluator{
   return world;
  }
 }
+function rowsForStep(m:mat4):number[]{return [m[0],m[4],m[8],m[12],m[1],m[5],m[9],m[13],m[2],m[6],m[10],m[14]];}

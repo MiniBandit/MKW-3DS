@@ -21,9 +21,11 @@ disc="${disc%\"}";disc="${disc#\"}";disc="${disc%\'}";disc="${disc#\'}"
 [ -d vendor/gclib ] || "$PYTHON" tools/bootstrap.py || exit 1
 [ -x .venv/bin/python ] || "$PYTHON" -m venv .venv || exit 1
 .venv/bin/python -c 'import sys; sys.exit(not ((3, 11) <= sys.version_info[:2] < (3, 15)))' || { echo "The existing .venv uses an unsupported Python version. Remove .venv and rerun with Python 3.11 through 3.14."; exit 1; }
-if [ ! -f .venv/mkw-dependencies-installed ]; then
+# Install the packages whenever the build environment cannot import them
+# (a marker file alone could say "installed" after a failed or partial install).
+if ! .venv/bin/python -c 'import numpy, PIL, Crypto' 2>/dev/null; then
     .venv/bin/python -m pip install -r requirements.txt || exit 1
-    touch .venv/mkw-dependencies-installed
+    .venv/bin/python -c 'import numpy, PIL, Crypto' 2>/dev/null || { echo "The Python packages did not install into .venv. Remove the .venv folder and run this again."; exit 1; }
 fi
 PYTHONUNBUFFERED=1 .venv/bin/python tools/release/build_cia.py "$disc" 2>&1 | tee build-cia-log.txt || { status=$?; echo "Build failed. See build-cia-log.txt for details."; exit "$status"; }
 echo "Log: $(pwd)/build-cia-log.txt"

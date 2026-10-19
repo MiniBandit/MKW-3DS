@@ -1,4 +1,5 @@
 #pragma once
+#include "mkw/item_ground_reclaim.hpp"
 #include "mkw/math.hpp"
 #include "mkw/item_karts.hpp"
 #include "mkw/item_odds.hpp"
@@ -11,7 +12,7 @@
 #include <memory>
 #include <vector>
 
-namespace Kinoko::Field {class RailInterpolator;class ObjectItemboxPress;}
+namespace Kinoko::Field {class RailInterpolator;class ObjectItemboxPress;class ObjectDrivable;}
 namespace mkw {
 enum class ItemKind : uint8_t {
     GreenShell=0, RedShell=1, Banana=2, FakeBox=3, Mushroom=4,
@@ -81,7 +82,9 @@ struct ItemActor {
     // The object's model up axis (retail matrix column 1): the thrower's up, then the floor's.
     Vec3 up{0,1,0};
     float yaw=0, scale=1, radius=45,terrainRadius=40,travelSpeed=0;
-    uint16_t age=0, lifetime=0;
+    uint32_t age=0;
+    uint16_t lifetime=0;
+    uint32_t floorTypes=0;
     int8_t owner=-1, target=-1;
     uint8_t bounces=0;
     uint8_t bounceLimit=10;
@@ -111,7 +114,7 @@ enum class ItemEffect : uint8_t { Mushroom, Spin, Launch, Explosion, Shrink, Cru
 // action 1 for a target, 0 for the user. Bolt (KartEffect +0x4c / +0x50 reset) has frames 0
 // for a Lightning bolt and 1 for the Thunder Cloud's strike.
 struct ItemEvent { ItemEffect effect; uint8_t player; uint16_t frames=0; Vec3 direction{}; int8_t action=-1; float scale=1; uint8_t source=0xff; };
-struct ItemSurface { Vec3 correction{}, floorNormal{}, wallNormal{}; bool kill=false; bool cannon=false; };
+struct ItemSurface { Vec3 correction{}, floorNormal{}, wallNormal{}; bool kill=false; bool cannon=false; uint32_t floorTypes=0; };
 // Sound cues: where retail item objects and holders call Audio::ItemActor, the
 // holder's KartActor or its CharacterActor (docs/AUDIO_SOURCE.md "Items").
 enum class ItemSoundCue : uint8_t {
@@ -138,6 +141,7 @@ enum class ItemSoundCue : uint8_t {
     // The Thunder Cloud object (ObjKumo) over its carrier:
     CloudOn, CloudAttach, CloudStrike, CloudOff,
     BoxBreak,   // a racer breaks an item box (ObjItemBox kart collision: SE_ITM_BOX_BRK on the box's actor)
+    HitSuccess, // CharacterActor USA 808610e8: the attacker's ITM_SCES voice
 };
 struct ItemSound { ItemSoundCue cue; uint8_t player=0xff, actor=0xff; ItemKind kind=ItemKind::None; Vec3 position{}; bool flag=false; uint8_t value=0; };
 using ItemWorldQuery=ItemSurface(*)(Vec3 previous,Vec3 position,float radius);
@@ -147,6 +151,7 @@ using ItemWorldQuery=ItemSurface(*)(Vec3 previous,Vec3 position,float radius);
 // (kartContacts, RMCU 0x805905e4); the holders (roulette, inventory, use) and the item objects
 // update after the karts. Every effect on a kart goes through ItemKarts, which applies the
 // retail action gates. See docs/POWERUPS_SOURCE.md.
+struct BlooperVisual;
 class RaceItems {
 public:
     static constexpr unsigned MaxRacers=12, MaxActors=96;
@@ -157,7 +162,12 @@ public:
     /// native Kinoko link.
     void setKarts(ItemKarts* karts);
     ItemKarts& karts() { return *karts_; }
-    bool loadOdds(const void* data,size_t size){return odds_.load(data,size,2,3);}
+    bool loadOdds(const void* data,size_t size,unsigned mode=0){
+        woodboxOdds_.load(data,size);return odds_.load(data,size,2,3,mode);
+    }
+    unsigned courseDropWeight(unsigned slot)const;
+    bool createCourseDrop(unsigned slot,Vec3 position,Vec3 velocity,uint8_t owner,
+            uint32_t randomWord,bool timeTrial=false);
     bool oddsReady()const{return odds_.ready();}
     bool loadShellRoute(const void* bytes,size_t size,unsigned course=0xffff){shellCourse_=course;return shellRoute_.load(bytes,size);}
     const ShellRoute& shellRoute()const{return shellRoute_;}
@@ -179,10 +189,13 @@ public:
     const std::vector<ItemEvent>& events() const { return events_; }
     // This step's sound cues (cleared with the events).
     const std::vector<ItemSound>& sounds() const { return sounds_; }
+    unsigned successfulHits(unsigned player)const{return player<MaxRacers?successfulHits_[player]:0;}
     // Every Mushroom / Golden Mushroom use, for per-press boost presentation.
     uint16_t mushroomUses(unsigned player) const { return mushroomUses_[player<MaxRacers?player:0]; }
     unsigned rank(unsigned player) const;
     uint32_t frame() const { return frame_; }
+    BlooperVisual blooperVisual(unsigned player,unsigned weight) const;
+    unsigned blooperEndAttackFrame(unsigned player) const {return blooperEndPose_[player<MaxRacers?player:0];}
     bool invincible(unsigned player) const;
     uint16_t bulletPlayers() const;
     Vec3 heldItemPosition(unsigned player,unsigned slot) const;
@@ -202,6 +215,7 @@ public:
     static bool segmentHits(Vec3 from,Vec3 to,Vec3 center,float radius);
 private:
     ItemOdds odds_;
+    WoodboxOdds woodboxOdds_;
     ShellRoute shellRoute_;
     unsigned shellCourse_=0xffff;
     std::unique_ptr<ItemKarts> ownKarts_;
@@ -210,8 +224,18 @@ private:
     std::vector<ItemBoxMover> movers_;
     std::vector<ItemBoxLine> lines_;
     std::vector<ItemBoxPress> presses_;
+    struct RoadBox {const Kinoko::Field::ObjectDrivable* road=nullptr;Vec3 local{};uint16_t box=0;float lift=180;};
+    std::vector<RoadBox> roadBoxes_;
     void stepMovers();
+    void resolveCourseObjects(ItemActor& actor);
+    void resolveHeldCourseObjects(unsigned player);
     std::array<ItemActor,MaxActors> actors_{};
+    std::array<GroundReclaimOrder<MaxActors>,15> reclaimOrder_{};
+    int reclaimPressure_=0;
+    unsigned reclaimPhase_=0;
+    bool nativeReclaimPhase_=false;
+    void forgetReclaimSlot(unsigned slot);
+    void syncReclaimOrder();
     std::array<bool,MaxActors> freeAtStepStart_{};
     std::array<ItemHud,MaxRacers> hud_{};
     std::array<ItemKind,MaxRacers> rouletteChoice_{};
@@ -234,6 +258,8 @@ private:
     struct InventoryDrop { ItemKind kind=ItemKind::None;uint8_t count=0,ticks=0;std::array<Vec3,3> velocity{}; };
     std::array<InventoryDrop,MaxRacers> inventoryDrops_{};
     std::array<uint32_t,MaxRacers> inkReadyFrame_{};
+    std::array<uint32_t,MaxRacers> blooperAttack_{},blooperEnd_{};
+    std::array<unsigned,MaxRacers> blooperEndPose_{};
     unsigned blooperCaster_=MaxRacers;
     uint32_t blooperSelectionFrame_=0,blooperStartFrame_=0,blooperBusyUntil_=0;
     // RMCU PowMgr (0x807d9808 deploy, 0x807d9d4c update): one POW at a time.
@@ -255,6 +281,7 @@ private:
     // the next step keeps: stepSounds_ counts the last finished step's.
     std::vector<ItemSound> sounds_;
     size_t stepSounds_=0;
+    std::array<unsigned,MaxRacers> successfulHits_{};
     void dropStepSounds(){sounds_.erase(sounds_.begin(),sounds_.begin()+std::min(stepSounds_,sounds_.size()));stepSounds_=0;}
     void sound(ItemSoundCue cue,const ItemActor& a,bool flag=false){
         sounds_.push_back({cue,uint8_t(a.owner<0?0xff:a.owner),uint8_t(&a-actors_.data()),a.kind,a.position,flag});
@@ -313,6 +340,7 @@ private:
     void snapshotNative(unsigned count,std::array<ItemRacer,MaxRacers>& out) const;
     void unhookNative();
     static void nativeKartPass(void* context,size_t player);
+    static void nativeCoursePickup(void* context,Vec3 position,Vec3 velocity,uint8_t owner);
     static void nativeKartBump(void* context,size_t attacker,size_t victim);
 };
 }

@@ -80,7 +80,7 @@ def write_native_garage(choices):
     (ROOT / "include/mkw/garage.hpp").write_text("\n".join(lines))
 
 
-def cook_choice(choice, output, *, source_root=None, export_root=None, models_only=False):
+def cook_choice(choice, output, *, source_root=None, export_root=None, models_only=False, include_driver=True):
     archive = (source_root or ROOT / "assets/vehicles") / choice["prefix"].rstrip("_")
     kart = json.loads((archive / "kart-inventory.json").read_text())
     result = subprocess.run(["node", str(ROOT / "build/export_driver.mjs"),
@@ -104,6 +104,7 @@ def cook_choice(choice, output, *, source_root=None, export_root=None, models_on
         mapping = {"body": "body", "driver": "model", "tire_fl": front_left, "tire_fr": front_right}
         mapping.update(tire_rl="tire_rl" if "tire_rl" in source_parts else front_left,
                        tire_rr="tire_rr" if "tire_rr" in source_parts else front_right)
+    if not include_driver:mapping.pop("driver")
     mapping.update((part, part) for part in EXTRA_NAMES if part in source_parts)
     choice["extrasMask"] = sum(1 << i for i, name in enumerate(EXTRA_NAMES) if name in source_parts)
     choice["bodyAnimation"] = bool(part_clips.get("body"))

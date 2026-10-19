@@ -2,8 +2,12 @@
 #include "mkw/bobomb.hpp"
 #include "mkw/item_box.hpp"
 #include "mkw/race_item_internal.hpp"
+#include "mkw/item_ground.hpp"
+#include "mkw/item_ground_reclaim.hpp"
+#include "mkw/item_rules.hpp"
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <limits>
 
 // Item objects: spawn, movement, blasts, object/object responses, and each kart's contact
@@ -31,6 +35,15 @@ constexpr uint8_t ItemPairResponses[15][15]={
     {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0},
 };
 bool blueFlight(const ItemActor& a){return a.kind==ItemKind::BlueShell&&!a.explosion&&!a.diving();}
+void traceLanding(const ItemActor& a,const ItemSurface& surface){
+    static unsigned count=0;
+    if(a.owner!=0||(!(a.kind==ItemKind::Banana)&&!a.scattered)||a.age%32||count>=16)return;
+    ++count;
+    if(FILE* log=std::fopen("sdmc:/3ds/mkw-3ds/item-ground-state.txt","a")){
+        std::fprintf(log,"kind=%u age=%u scattered=%u settled=%u pos=%.2f,%.2f,%.2f velocity=%.2f,%.2f,%.2f floor=%.3f,%.3f,%.3f correction=%.2f,%.2f,%.2f\n",unsigned(a.kind),a.age,a.scattered,a.settled,a.position.x,a.position.y,a.position.z,a.velocity.x,a.velocity.y,a.velocity.z,surface.floorNormal.x,surface.floorNormal.y,surface.floorNormal.z,surface.correction.x,surface.correction.y,surface.correction.z);
+        std::fclose(log);
+    }
+}
 uint8_t pairResponse(ItemKind source,ItemKind target){
     return ItemPairResponses[retailObjectId(source)][retailObjectId(target)];
 }
@@ -63,7 +76,9 @@ ItemActor& RaceItems::spawn(unsigned player,ItemKind kind,bool backwards,const V
     for(unsigned i=0;i<MaxActors&&it==actors_.end();++i)if(!actors_[i].active&&freeAtStepStart_[i])it=actors_.begin()+i;
     if(it==actors_.end())it=std::find_if(actors_.begin(),actors_.end(),[](const ItemActor& a){return !a.active;});
     if(it==actors_.end())it=std::max_element(actors_.begin(),actors_.end(),[](const ItemActor& a,const ItemActor& b){return a.age<b.age;});
-    auto& a=*it;a={};a.kind=kind;a.owner=int8_t(player);a.active=true;a.lifetime=1800;
+    forgetReclaimSlot(unsigned(it-actors_.begin()));
+    auto& a=*it;a={};a.kind=kind;a.owner=int8_t(player);a.active=true;a.lifetime=kind==ItemKind::Banana?0:1800;
+    reclaimOrder_[retailObjectId(kind)].add(unsigned(it-actors_.begin()));
     Vec3 direction=normalized(racers_[player].forward,{0,0,1});
     const bool trap=kind==ItemKind::Banana||kind==ItemKind::FakeBox;
     if(backwards||trap)direction=-direction;
@@ -145,30 +160,108 @@ void RaceItems::updateScattered(ItemActor& a,ItemWorldQuery query){
     // Shared source scatter state 292310: advance, XZ damping, gravity.
     // Complex moving-floor/sloped-wall callbacks remain in the source audit.
     a.position+=a.velocity;a.velocity.x*=.995f;a.velocity.z*=.995f;
-    const auto surface=query?query(a.previous,a.position,a.terrainRadius):ItemSurface{};
+    const auto surface=groundContact(query,a);
+    a.floorTypes=surface.floorTypes;
+    traceLanding(a,surface);
     if(surface.kill||surface.cannon){a.active=false;return;}
     a.position+=surface.correction;
     if(length(surface.floorNormal)>.1f){
-        const auto n=normalized(surface.floorNormal);a.velocity=tangent(a.velocity,n);a.settled=true;a.up=n;
-    }else a.velocity.y=std::max(-100.f,a.velocity.y-2.2f);
+        const auto n=normalized(surface.floorNormal);
+        if(!a.settled)sound(ItemSoundCue::Land,a);
+        a.velocity=scatteredGroundVelocity(a.velocity,n);a.settled=true;a.up=n;
+    }else {a.settled=false;a.velocity.y=std::max(-100.f,a.velocity.y-2.2f);}
     if(length(surface.wallNormal)>.1f){const auto n=normalized(surface.wallNormal);float into=dot(a.velocity,n);if(into<0)a.velocity=a.velocity-n*(2*into);}
 }
-void RaceItems::updateActors(ItemWorldQuery query){
-    // RMCU ItemHolderItem_update: one object type at a time (retail object IDs), each object
-    // moving and then resolving its own contacts with other objects (ItemObj_update ->
-    // CheckOtherObjsCollision 0x80798c88), including tethered ones.
-    std::array<uint8_t,MaxActors> order{};unsigned n=0;
-    for(unsigned type=0;type<15;++type)for(unsigned i=0;i<MaxActors;++i)
-        if(actors_[i].active&&retailObjectId(actors_[i].kind)==type)order[n++]=uint8_t(i);
-    for(unsigned k=0;k<n;++k){
-        auto& a=actors_[order[k]];if(!a.active)continue;
-        updateActor(a,query);if(!a.active)continue;
-        for(unsigned owner=0;owner<count_&&a.active;++owner)
-            for(unsigned slot=0;slot<3&&a.active;++slot)resolveActorHeld(a,owner,slot);
-        for(unsigned other=0;other<MaxActors&&a.active;++other)
-            if(other!=order[k]&&actors_[other].active)resolveActorPair(a,actors_[other]);
+void RaceItems::resolveCourseObjects(ItemActor& actor){
+    if(!actor.active||actor.radius<=0||blueFlight(actor))return;
+    struct Context {RaceItems* items;ItemActor* actor;} context{this,&actor};
+    karts_->courseContacts(retailObjectId(actor.kind),actor.owner<0?12u:unsigned(actor.owner),actor.position,actor.velocity,actor.radius,false,
+        [](void* data,uint8_t response,Vec3 penetration){
+            auto& c=*static_cast<Context*>(data);auto& a=*c.actor;
+            if(response==1&&!a.explosion)bumpItem(a,penetration,{});
+            else if(response==2&&!a.explosion){
+                if(blastItem(a.kind))c.items->explode(a);
+                else c.items->shatter(a);
+                return false;
+            }
+            return a.active;
+        },&context);
+}
+
+void RaceItems::resolveHeldCourseObjects(unsigned player){
+    const auto& h=hud_[player];if(!h.deployed||racers_[player].inCannon)return;
+    const auto kind=baseKind(h.heldKind);
+    for(unsigned slot=0;slot<3;++slot)if((h.heldMask&(1u<<slot))&&
+            deployments_[player].scales[slot]>=HeldContactMinimumScale){
+        struct Context {RaceItems* items;unsigned player,slot;} context{this,player,slot};
+        const auto& d=deployments_[player];
+        karts_->courseContacts(retailObjectId(kind),player,d.positions[slot],d.positions[slot]-d.previous[slot],
+            heldItemContactRadius(player,slot),true,
+            [](void* data,uint8_t response,Vec3){
+                auto& c=*static_cast<Context*>(data);
+                if(response==2){c.items->destroyHeld(c.player,c.slot);return false;}
+                return true;
+            },&context);
     }
 }
+
+void RaceItems::forgetReclaimSlot(unsigned slot){
+    for(auto& holder:reclaimOrder_)holder.remove(slot);
+}
+void RaceItems::syncReclaimOrder(){
+    for(unsigned type=0;type<15;++type){
+        auto& h=reclaimOrder_[type];
+        for(unsigned i=0;i<h.count;){
+            const auto slot=h.slots[i];const auto& a=actors_[slot];
+            if(!a.active||retailObjectId(a.kind)!=type)h.remove(slot);else ++i;
+        }
+    }
+    for(unsigned i=0;i<MaxActors;++i){
+        const auto& a=actors_[i];if(!a.active)continue;
+        auto& h=reclaimOrder_[retailObjectId(a.kind)];h.add(i);
+        if(a.settled&&(a.scattered||a.kind==ItemKind::Banana))h.land(i);
+    }
+}
+void RaceItems::updateActors(ItemWorldQuery query){
+    syncReclaimOrder();
+    const unsigned phase=nativeReclaimPhase_?reclaimPhase_:(frame_&7);
+    const auto eligible=[&](unsigned slot){const auto& a=actors_[slot];
+        return a.active&&groundReclaimEligible(a.age,a.scattered||a.kind==ItemKind::Banana,a.settled,a.explosion);};
+    // USA8078d464 uses the gameplay limit, not allocated capacity. USA80790844
+    // computes the global pressure AFTER all holders, so every holder reads the
+    // previous step's value. All fifteen retail +0x5c weights are one.
+    for(unsigned type=0;type<15;++type){
+        syncReclaimOrder();
+        auto& h=reclaimOrder_[type];
+        const int free=int(ItemObjectLimits[type])-int(objectCount(type));
+        if(ItemObjectLimits[type]>1&&(free<2||reclaimPressure_>-5)){
+            h.sort(phase,type==2,eligible,
+                [&](unsigned slot){return actors_[slot].floorTypes;},
+                [&](unsigned slot){return actors_[slot].explosion;});
+            if(phase==0&&(free<1||reclaimPressure_>0)&&h.count&&eligible(h.slots[0])){
+                const auto slot=h.slots[0];actors_[slot].active=false;h.remove(slot);
+            }
+        }
+        // Keep holder order for movement and contacts, too. Copy the slot list
+        // because a contact can remove another actor during this holder's step.
+        const auto order=h.slots;const unsigned n=h.count;
+        for(unsigned k=0;k<n;++k){
+            auto& a=actors_[order[k]];if(!a.active)continue;
+            updateActor(a,query);
+            if(!a.active){h.remove(order[k]);continue;}
+            if(a.settled&&(a.scattered||a.kind==ItemKind::Banana))h.land(order[k]);
+            resolveCourseObjects(a);if(!a.active)continue;
+            for(unsigned owner=0;owner<count_&&a.active;++owner)
+                for(unsigned slot=0;slot<3&&a.active;++slot)resolveActorHeld(a,owner,slot);
+            for(unsigned other=0;other<MaxActors&&a.active;++other)
+                if(other!=order[k]&&actors_[other].active)resolveActorPair(a,actors_[other]);
+        }
+    }
+    syncReclaimOrder();
+    reclaimPressure_=-30;
+    for(unsigned type=0;type<15;++type)reclaimPressure_+=int(objectCount(type));
+}
+
 void RaceItems::updateActor(ItemActor& a,ItemWorldQuery query){
     {
         a.previous=a.position;++a.age;
@@ -181,8 +274,14 @@ void RaceItems::updateActor(ItemActor& a,ItemWorldQuery query){
         const auto prop=itemProperties(unsigned(a.kind));
         a.scale=std::min(prop.releasedScale,a.scale+(a.backwards?prop.dropGrowth:prop.growth));
         a.radius=prop.releasedContact*a.scale;a.terrainRadius=prop.terrain*a.scale;
-        if(a.age>=a.lifetime){
-            // Green's update kills an old shell through KillFromOtherCollision (807a4014).
+        const bool groundLifetime=a.scattered||a.kind==ItemKind::Banana;
+        if(!groundLifetime&&a.lifetime&&a.age>=a.lifetime){
+            // Ordinary Green/Red expiry calls KillFromOtherCollision -> OnKill
+            // (807a4014 / 8079fc18), including the shell break effect and sound.
+            // Ground-dropped items are retired by holder pressure above.
+            if(!a.scattered&&(a.kind==ItemKind::GreenShell||a.kind==ItemKind::RedShell)){
+                shatter(a);return;
+            }
             if(a.kind==ItemKind::GreenShell)sound(ItemSoundCue::Break,a);
             a.active=false;return;
         }
@@ -211,7 +310,8 @@ void RaceItems::updateActor(ItemActor& a,ItemWorldQuery query){
             }
             a.position+=a.velocity;a.yaw=std::atan2(a.velocity.x,a.velocity.z);
             if(query){
-                const auto surface=query(a.previous,a.position,a.terrainRadius);a.position+=surface.correction;
+                const auto surface=groundContact(query,a);a.position+=surface.correction;a.floorTypes=surface.floorTypes;
+                traceLanding(a,surface);
                 if(surface.kill||surface.cannon){a.active=false;return;}
                 if(length(surface.floorNormal)>.1f){
                     const Vec3 normal=normalized(surface.floorNormal);const float into=dot(a.velocity,normal);

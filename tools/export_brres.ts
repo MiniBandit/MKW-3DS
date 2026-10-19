@@ -15,6 +15,9 @@ const data=fs.readFileSync(process.argv[2]);
 // recognise the TEV equations those materials animate.
 const objectBank=process.env.MKW_OBJECT_BANK;
 const objectMaterials=process.env.MKW_OBJECT_MATERIALS==='1';
+// Requested console policy: these actors keep albedo/GX diffuse lighting,
+// without normal-generated glossy maps or lm_0/lm_1 reflection layers.
+const actorDiffuseOnly=objectMaterials&&/^(wanwan|poihana)$/i.test(path.parse(process.argv[2]).name);
 const archive=parse(new ArrayBufferSlice(data.buffer,data.byteOffset,data.byteLength));
 const menuMaterials=process.env.MKW_MENU_MATERIALS==='1';
 const menuLighting=menuMaterials&&/(?:Driver|Kart)[/\\]/.test(process.argv[2]);
@@ -70,11 +73,14 @@ const surfaceAlbedo=raceMaterials||process.env.MKW_SURFACE_ALBEDO==='1';
 const courseMaterials=process.env.MKW_COURSE_MATERIALS==='1';
 // Level 0 of an archive texture as RGBA in [0,1] (intensity and CMPR formats
 // only; undefined otherwise), for averaging a layer the runtime cannot sample.
-function decodeLevel0(name:string){
+function decodeLevel0(name:string,level=0){
  const t:any=archive.tex0.find((x:any)=>x.name===name);if(!t)return undefined;
- const d=new Uint8Array(t.data.copyToBuffer()),w=t.width,h=t.height,out=new Float32Array(w*h*4);
  const block:{[f:number]:[number,number,number]}={0:[8,8,32],1:[8,4,32],2:[8,4,32],3:[4,4,32],14:[8,8,32]};
  const b=block[t.format];if(!b)return undefined;
+ let offset=0,w=t.width,h=t.height;
+ for(let i=0;i<level;++i){offset+=Math.ceil(w/b[0])*Math.ceil(h/b[1])*b[2];w=Math.max(1,w>>1);h=Math.max(1,h>>1);}
+ const d=new Uint8Array(t.data.copyToBuffer()).subarray(offset),out=new Float32Array(w*h*4);
+ if(d.length<Math.ceil(w/b[0])*Math.ceil(h/b[1])*b[2])throw new Error('Truncated mip texture '+name);
  const [bw,bh,bytes]=b,cols=Math.ceil(w/bw),rows=Math.ceil(h/bh);
  const put=(x:number,y:number,r:number,g:number,bl:number,a:number)=>{if(x<w&&y<h){const i=(y*w+x)*4;out[i]=r;out[i+1]=g;out[i+2]=bl;out[i+3]=a;}};
  const rgb565=(c:number)=>[((c>>11)&31)*255/31,((c>>5)&63)*255/63,(c&31)*255/31];
@@ -116,11 +122,12 @@ const constantTextures=new Map<string,{[map:number]:number}>();
 function lighting(material:any){
  const stages=material.gxMaterial.tevStages;
  const eq=(s:any,a:number[])=>s&&a.every((v,i)=>v===[s.colorInA,s.colorInB,s.colorInC,s.colorInD][i])&&s.colorOp===0&&s.colorBias===0&&s.colorClamp&&s.colorRegId===0&&s.colorScale<3;
+ const scaled=(s:any,a:number[],scale:number)=>s&&a.every((v,i)=>v===[s.colorInA,s.colorInB,s.colorInC,s.colorInD][i])&&s.colorOp===0&&s.colorBias===0&&s.colorClamp&&s.colorRegId===0&&s.colorScale===scale;
  const basic=eq(stages[0],[15,8,10,15]);
  let mode=0,secondaryMap=-1,secondaryCoord=0,primaryCoord=stages[0]?.texCoordId??0,primaryMap=stages[0]?.texMap??0;
  let vertexColor:number[]|undefined,vertexTint:number[]|undefined,colorLerp=false,environmentMetal=false,constantLerp=false,primaryTextureName:string|undefined;
  let constantRegister=-1,vertexColorRegister=-1,additiveRegister=-1,additiveFactor=[0,0,0],unlit=false;
- let reflection:any=null,textureAlphaAdd=false,skyScreenBlend=false;
+ let reflection:any=null,textureAlphaAdd=false,skyScreenBlend=false,skyRasterAdd=false;
  // Raster remap applied after the course light bake (colour*scale+offset), and
  // whether that bake applies: equations that never read the raster colour skip it.
  let raster:{scale:number[],offset:number[]}|undefined,bake=true;
@@ -172,6 +179,20 @@ function lighting(material:any){
     raster={scale:[0,1,2].map(i=>at(i,1)-at(i,0)),offset:[0,1,2].map(i=>at(i,0)-f1*ch(x,i))};
     approximate('subtractive cloud layers as one colour lerp');return true;
    }
+  }
+  // Mario Circuit's union_D00a atlas includes the actual distant rainbow.
+  // GX: clamp(2*K0*T0) + lerp(C0,K1,projected T1); C0 is black.
+  // Do not pick the projected p_nise_045 highlight as the primary albedo.
+  if(material.name==='union_D00a'&&material.samplers[0]?.name==='p_union_D18k'&&
+     material.samplers[1]?.name==='p_nise_045'&&cs.length===2&&
+     scaled(s0,[15,8,14,15],1)&&eq(s1,[2,14,8,0])&&s1.colorScale===0&&
+     s0.texMap===0&&s1.texMap===1&&material.texSrts[s1.texCoordId]?.mapMode===2&&
+     [material.colorRegisters[1].r,material.colorRegisters[1].g,material.colorRegisters[1].b].every(v=>v===0)){
+   const a=konst(s0.konstColorSel),b=konst(s1.konstColorSel),m=material.texSrts[s1.texCoordId].srtMtx;
+   const pack=(c:any)=>[c.r,c.g,c.b,1].reduce((v,x,i)=>v|(Math.round(Math.max(0,Math.min(1,x))*255)<<(8*i)),0)>>>0;
+   use(s0,true);use(s1,false);constant={...a,a:1};scale=1;mode=0;
+   reflection={mode:22,constant:0,add:pack(b),uv:[m[0],m[4],m[12],m[1],m[5],m[13]]};
+   vertexColor=[1,1,1];unlit=true;bake=false;return true;
   }
   if(cs.length===3&&cs.every(plain)){
    const [p,q,r]=cs,ap=args(p),aq=args(q),ar=args(r),f=[1,2,4,.5][r.colorScale];
@@ -310,12 +331,40 @@ function lighting(material:any){
  // so at scale 1 an unclamped stage cannot leave [0,1] either.
  const shadeLerp=(s:any)=>s&&[2,4,6,14,15].includes(s.colorInA)&&s.colorInB===10&&s.colorInC===8&&s.colorInD===15&&
   s.colorOp===0&&s.colorBias===0&&s.colorRegId===0&&s.colorScale<3&&(s.colorClamp||s.colorScale===0);
- // Daisy Circuit's authored sky has a sunset gradient (senior_VR) and a
- // separate dark cloud map (senior_VR2). The limited runtime can't reproduce
- // its TEV subtraction, so use the gradient directly instead of displaying
- // the cloud texture's nearly-black background as the whole sky.
- const authoredSunset=material.name==='senior_sky'&&textures.some((t:any)=>t.name==='senior_VR');
- if(authoredSunset){primaryTextureName='senior_VR';primaryCoord=0;vertexColor=[1,1,1];}
+ if(objectMaterials&&/^ef_sun(Core|Flare|Glow)$/.test(material.name)&&stages.length===1&&
+    [4,2,8,15].every((v,i)=>v===args(stages[0])[i])&&stages[0].colorOp===0&&
+    [0,2].includes(stages[0].colorBias)&&stages[0].colorScale<3){
+  // Original sun halo colours, including the subtract-half flare that the
+  // old generic albedo fallback discarded. Keep its alpha/ROP/SRT0.
+  const word=(c:any)=>[c.r,c.g,c.b,c.a].reduce((v,x,i)=>v|(Math.round(Math.max(0,Math.min(1,x))*255)<<(8*i)),0)>>>0;
+  reflection={mode:21,constant:word(material.colorRegisters[2]),add:word(material.colorRegisters[1]),
+   uv:[stages[0].colorBias===2?1:0,0,0,0,1,0]};
+  primaryMap=stages[0].texMap;primaryCoord=stages[0].texCoordId;secondaryMap=-1;
+  constant={r:1,g:1,b:1,a:1};vertexColor=[1,1,1];unlit=true;bake=false;scale=stages[0].colorScale;
+ }else if(objectMaterials&&stages.length===3&&scaled(stages[0],[15,8,10,15],3)&&scaled(stages[1],[0,8,2,15],3)&&scaled(stages[2],[15,4,8,0],1)&&
+    material.gxMaterial.texGens[stages[2].texCoordId]?.source===GX.TexGenSrc.NRM&&material.texSrts[stages[2].texCoordId]?.mapMode===1&&
+    material.colorRegisters.slice(1,3).every((c:any)=>[c.r,c.g,c.b].every((v:number)=>v>=0&&v<=1))){
+  // Daisy Circuit statues: halve albedo*raster, blend the marble with C0
+  // and halve again, then add C1*EnvCamera and double. Keep all three maps.
+  const m=material.texSrts[stages[2].texCoordId].srtMtx,c=material.colorRegisters[2];
+  reflection={mode:8,constant:0,add:([c.r,c.g,c.b,c.a].reduce((v,x,i)=>v|(Math.round(x*255)<<(8*i)),0))>>>0,
+   uv:[m[0],m[4],m[12],m[1],m[5],m[13]],thirdMap:stages[2].texMap};
+  primaryMap=stages[0].texMap;primaryCoord=stages[0].texCoordId;secondaryMap=stages[1].texMap;secondaryCoord=stages[1].texCoordId;
+  constantRegister=1;constant=material.colorRegisters[1];additiveRegister=2;additiveFactor=[1,1,1];
+ }else if(objectMaterials&&stages.length===2&&scaled(stages[0],[15,8,10,15],0)&&eq(stages[1],[15,2,8,0])&&
+    material.gxMaterial.texGens[stages[1].texCoordId]?.source===GX.TexGenSrc.NRM&&material.texSrts[stages[1].texCoordId]?.mapMode===1){
+  // Luigi Circuit/Yoshi Sphinx statue: albedo*raster + C0*environment,
+  // followed by the second stage's authored scale.
+  const m=material.texSrts[stages[1].texCoordId].srtMtx,c=material.colorRegisters[1];
+  reflection={mode:9,constant:([c.r,c.g,c.b,c.a].reduce((v,x,i)=>v|(Math.round(Math.max(0,Math.min(1,x))*255)<<(8*i)),0))>>>0,
+   add:0xff000000,uv:[m[0],m[4],m[12],m[1],m[5],m[13]]};
+  primaryMap=stages[0].texMap;primaryCoord=stages[0].texCoordId;secondaryMap=stages[1].texMap;secondaryCoord=stages[1].texCoordId;scale=stages[1].colorScale;
+ }else if(courseMaterials&&stages.length===1&&eq(stages[0],[15,8,12,10])){
+  // GX: scale * (raster + texture), ONE is colour input 12. Preserve
+  // the material's actual sampler and authored vertex sunset gradient.
+  primaryMap=stages[0].texMap;primaryCoord=stages[0].texCoordId;
+  scale=stages[0].colorScale;skyRasterAdd=true;
+ }
  else if(stages.length===2&&(eq(stages[0],[2,10,8,15])||(retailEnabled&&shadeLerp(stages[0])))&&eq(stages[1],[15,8,0,15])){
   // Baked shade map: albedo * lerp(dark, raster, shade). The dark colour is
   // C0 on most courses, a konst colour (or zero) on many retro ones; those
@@ -328,7 +377,44 @@ function lighting(material:any){
   mode=3;const k=(8-stages[0].konstColorSel)/8;constant={r:k,g:k,b:k,a:1};secondaryMap=stages[0].texMap;secondaryCoord=stages[0].texCoordId;primaryMap=stages[1].texMap;primaryCoord=stages[1].texCoordId;
  }else if(stages.length===1&&(eq(stages[0],[15,2,8,15])||eq(stages[0],[15,3,8,15]))){
   const c=material.colorRegisters[1];vertexColor=stages[0].colorInB===3?[c.a,c.a,c.a]:[c.r,c.g,c.b];scale=stages[0].colorScale;vertexColorRegister=stages[0].colorInB===3?-1:1;
- }else if((stages.length===1||(objectMaterials&&stages.length===2&&eq(stages[1],[15,0,10,15])))&&(eq(stages[0],[2,4,8,15])||eq(stages[0],[4,2,8,15]))){
+ }else if(objectMaterials&&stages.length===2&&scaled(stages[1],[15,6,8,0],0)&&
+          (scaled(stages[0],[2,10,8,15],0)||scaled(stages[0],[4,2,8,15],0))){
+  // Flame pillar / lava splash: interpolate the authored endpoints, then
+  // add C2*T1. C2 remains an absolute animated register, not an untextured lift.
+  const ramp=stages[0].colorInA===4;
+  constantRegister=ramp?2:1;constant=material.colorRegisters[constantRegister];
+  if(ramp){const c=material.colorRegisters[1];vertexColor=[c.r,c.g,c.b];vertexColorRegister=1;unlit=true;bake=false;}
+  additiveRegister=3;additiveFactor=[1,1,1];
+  const c=material.colorRegisters[3];
+  reflection={mode:14,constant:0,add:([c.r,c.g,c.b,c.a].reduce((v,x,i)=>v|(Math.round(Math.max(0,Math.min(1,x))*255)<<(8*i)),0))>>>0,uv:[1,0,0,0,1,0]};
+  primaryMap=stages[0].texMap;primaryCoord=stages[0].texCoordId;
+  secondaryMap=stages[1].texMap;secondaryCoord=stages[1].texCoordId;
+ }else if(objectMaterials&&stages.length===2&&scaled(stages[0],[4,2,8,15],0)&&scaled(stages[1],[15,6,11,0],0)&&
+          material.colorRegisters[1].a===1&&material.colorRegisters[2].a===0){
+  // Boble cap: ramp(C1,C0,T1)+C2*rasterAlpha; opacity keeps the separately scaled T1.a*T0.a.
+  constantRegister=2;constant=material.colorRegisters[2];
+  const hot=material.colorRegisters[1];vertexColor=[hot.r,hot.g,hot.b];vertexColorRegister=1;unlit=true;bake=false;
+  additiveRegister=3;additiveFactor=[1,1,1];const c=material.colorRegisters[3];
+  reflection={mode:14,constant:1,add:([c.r,c.g,c.b,c.a].reduce((v,x,i)=>v|(Math.round(Math.max(0,Math.min(1,x))*255)<<(8*i)),0))>>>0,uv:[1,0,0,0,1,0]};
+  primaryMap=stages[0].texMap;primaryCoord=stages[0].texCoordId;
+  secondaryMap=stages[1].texMap;secondaryCoord=stages[1].texCoordId;
+ }else if(objectMaterials&&stages.length===2&&scaled(stages[0],[15,8,10,15],1)&&scaled(stages[1],[8,12,0,15],0)){
+  // FlamePole base: P=clamp(2*T0*raster); lerp(T1,ONE,P).
+  primaryMap=stages[0].texMap;primaryCoord=stages[0].texCoordId;
+  secondaryMap=stages[1].texMap;secondaryCoord=stages[1].texCoordId;
+  reflection={mode:13,constant:0,add:0,uv:[1,0,0,0,1,0]};scale=0;
+ }else if(objectMaterials&&stages.length===2&&eq(stages[1],[15,0,10,15])&&(eq(stages[0],[2,4,8,15])||eq(stages[0],[4,2,8,15]))){
+  // Daisy Circuit pylons: lerp(C0,C1,texture), then multiply by the lit
+  // raster channel. Both CLR0 endpoints remain absolute colour registers;
+  // baking C1 into vertices loses the raster and cannot animate away from 0.
+  constantRegister=stages[0].colorInA===2?1:2;constant=material.colorRegisters[constantRegister];
+  additiveRegister=stages[0].colorInB===2?1:2;additiveFactor=[1,1,1];
+  const c=material.colorRegisters[additiveRegister];
+  const packed=([c.r,c.g,c.b,c.a].reduce((v,x,i)=>v|(Math.round(Math.max(0,Math.min(1,x))*255)<<(8*i)),0))>>>0;
+  reflection={mode:7,constant:0,add:packed,uv:[1,0,0,0,1,0]};
+  primaryMap=stages[0].texMap;primaryCoord=stages[0].texCoordId;secondaryMap=-1;
+  firstScale=stages[0].colorScale;scale=stages[1].colorScale;
+ }else if(stages.length===1&&(eq(stages[0],[2,4,8,15])||eq(stages[0],[4,2,8,15]))){
   constant=material.colorRegisters[stages[0].colorInA===2?1:2];const c=material.colorRegisters[stages[0].colorInB===2?1:2];
   constantRegister=stages[0].colorInA===2?1:2;vertexColorRegister=stages[0].colorInB===2?1:2;
   vertexColor=[c.r,c.g,c.b];colorLerp=true;scale=stages[0].colorScale;
@@ -339,13 +425,20 @@ function lighting(material:any){
  }else if(objectMaterials&&stages.length===2&&eq(stages[0],[2,8,10,15])&&eq(stages[1],[15,8,10,0])){
   // lerp(C0, texture, raster) + texture*raster (the factory press flash).
   constantRegister=1;constant=material.colorRegisters[1];mode=1;constantLerp=true;scale=stages[1].colorScale;
- }else if(objectMaterials&&stages.length===2&&stages.every((s:any)=>s.colorInA===4&&s.colorInB===2&&s.colorInC===8&&[15,10,0].includes(s.colorInD))){
-  // Effect cores (Fire Snake): each stage adds lerp(C1, C0, texture). Keep
-  // the colour ramp on the UV-mapped texture; the summed passes double it.
-  const surface=stages.find((s:any)=>material.gxMaterial.texGens?.[s.texCoordId]?.source===GX.TexGenSrc.TEX0)??stages[0];
-  primaryMap=surface.texMap;primaryCoord=surface.texCoordId;
-  constant=material.colorRegisters[2];constantRegister=2;const c=material.colorRegisters[1];vertexColor=[c.r,c.g,c.b];vertexColorRegister=1;
-  colorLerp=true;scale=1;
+ }else if(objectMaterials&&stages.length===2&&scaled(stages[0],[4,2,8,10],0)&&scaled(stages[1],[4,2,8,0],0)&&
+          material.gxMaterial.texGens[stages[0].texCoordId]?.source===GX.TexGenSrc.NRM&&material.texSrts[stages[0].texCoordId]?.mapMode===1&&
+          ['r','g','b'].every(k=>material.colorRegisters[1][k]>=material.colorRegisters[2][k]&&material.colorRegisters[2][k]>=0&&material.colorRegisters[1][k]<=1)){
+  // Fire Snake: P=clamp(ramp(C1,C0,environment)+raster), then
+  // clamp(ramp(C1,C0,surface)+P). All deltas are nonnegative, so moving
+  // C1 into the baked raster and splitting the final positive addition
+  // preserves both GX saturation points. Keep both original textures.
+  const hot=material.colorRegisters[1],cold=material.colorRegisters[2];
+  constant={r:hot.r-cold.r,g:hot.g-cold.g,b:hot.b-cold.b,a:1};
+  raster={scale:[1,1,1],offset:[cold.r,cold.g,cold.b]};unlit=true;bake=false;
+  reflection={mode:18,constant:0,add:([cold.r,cold.g,cold.b,cold.a].reduce((v,x,i)=>v|(Math.round(x*255)<<(8*i)),0))>>>0,uv:[1,0,0,0,1,0]};
+  primaryMap=stages[0].texMap;primaryCoord=stages[0].texCoordId;
+  secondaryMap=stages[1].texMap;secondaryCoord=stages[1].texCoordId;
+  if(stages.some((s:any)=>s.indTexMatrix!==0))approximated.add(material.name+' (indirect fire warp pending)');
  }else if(objectMaterials&&stages.length===1&&eq(stages[0],[4,8,2,15])){
   // texture*C0 + C1*(1-C0): C0 is a fixed factor, C1 an additive glow.
   const c=material.colorRegisters[1];vertexColor=[c.r,c.g,c.b];scale=stages[0].colorScale;
@@ -379,6 +472,49 @@ function lighting(material:any){
   // (1 + rainbow)/2. Without the glow that is lerp(C0/2, C0, rainbow).
   const c=material.colorRegisters[1];constant={r:c.r/2,g:c.g/2,b:c.b/2,a:1};vertexColor=[c.r,c.g,c.b];colorLerp=true;unlit=true;
   primaryMap=stages[1].texMap;primaryCoord=stages[1].texCoordId;approximated.add(material.name+' (environment glow omitted)');
+ }else if(courseMaterials&&stages.length===2&&(eq({...stages[0],colorScale:0},[2,12,8,15])||eq({...stages[0],colorScale:0},[2,13,8,15]))&&
+          (eq(stages[1],[2,0,8,0])||eq(stages[1],[2,6,8,0])||eq(stages[1],[2,12,8,0]))&&
+          (stages[0].colorScale===0||stages[0].colorScale===3)&&stages[1].colorScale===0&&
+          material.gxMaterial.texGens[stages[0].texCoordId]?.source===GX.TexGenSrc.POS&&
+          material.texSrts[stages[0].texCoordId]?.mapMode===2&&
+          material.texSrts[stages[0].texCoordId]?.refCamera===0&&
+          Array.from(material.texSrts[stages[0].texCoordId].effectMtx).every((v:any,i:number)=>v===(i%5===0?1:0))){
+  // Factory water: P=C0+(1-C0)*glow; out=C0+(P-C0)*wave+P.
+  // Retain the projected sampler instead of treating the wave mask as albedo.
+  // The original indirect setup remains in sourceMaterial for the coordinate
+  // translation; recognition of this colour equation does not remove that task.
+  const m=material.texSrts[stages[0].texCoordId].srtMtx;
+  constant=material.colorRegisters[1];constantRegister=1;
+  primaryMap=stages[1].texMap;primaryCoord=stages[1].texCoordId;
+  secondaryMap=stages[0].texMap;secondaryCoord=stages[0].texCoordId;
+  // Wave endpoint is P (factory), C2 (DS garden), or ONE (N64 jungle).
+  // All variants add the buffered projected glow P after interpolation.
+  const fixedWave=stages[1].colorInB!==0;
+  const endpoint=stages[1].colorInB===6?material.colorRegisters[3]:{r:1,g:1,b:1};
+  reflection={mode:11,constant:0,add:(fixedWave?1:0)|(stages[0].colorScale===3?2:0)|(stages[0].colorInB===13?4:0),uv:[m[0],m[4],m[12],m[1],m[5],m[13]]};
+  unlit=true;bake=false;vertexColor=fixedWave?[endpoint.r,endpoint.g,endpoint.b]:[1,1,1];
+  approximated.add(material.name+' (indirect water warp pending)');
+ }else if(courseMaterials&&stages.length===2&&eq({...stages[0],colorBias:0},[4,2,8,15])&&
+          ((stages[0].colorBias===0&&stages[0].colorScale===0)||(stages[0].colorBias===2&&stages[0].colorScale===1))&&
+          scaled(stages[1],[15,1,8,0],0)&&stages[0].alphaInA===7&&stages[0].alphaInB===7&&stages[0].alphaInC===7&&stages[0].alphaInD===4&&
+          stages[0].alphaOp===0&&stages[0].alphaBias===0&&stages[0].alphaScale===0&&stages[0].alphaRegId===0){
+  // Volcano/Bowser lava: ramp(C1,C0,T0), optionally (ramp-.5)*2,
+  // then + T0.alpha*T1. Keep the clamp between the two GX stages.
+  constant=material.colorRegisters[2];constantRegister=2;
+  const hot=material.colorRegisters[1];vertexColor=[hot.r,hot.g,hot.b];
+  vertexColorRegister=1;unlit=true;bake=false;
+  primaryMap=stages[0].texMap;primaryCoord=stages[0].texCoordId;
+  secondaryMap=stages[1].texMap;secondaryCoord=stages[1].texCoordId;
+  reflection={mode:12,constant:stages[0].colorBias===2?1:0,add:0,uv:[1,0,0,0,1,0]};
+  if(stages.some((s:any)=>s.indTexMatrix!==0))approximated.add(material.name+' (indirect lava warp pending)');
+ }else if(courseMaterials&&stages.length===2&&eq(stages[0],[8,15,15,15])&&
+          eq({...stages[1],colorClamp:true},[15,0,8,15])&&stages.every((s:any)=>s.colorScale===0)){
+  // DK Mountain smoke: texture0 * texture1; raster only supplies opacity.
+  // Its final product is unclamped, but remains in [0,1] exactly.
+  // Existing mode 1: lerp(0, white, secondary) * primary, preserving both SRTs.
+  primaryMap=stages[0].texMap;primaryCoord=stages[0].texCoordId;
+  secondaryMap=stages[1].texMap;secondaryCoord=stages[1].texCoordId;
+  mode=1;constant={r:0,g:0,b:0,a:1};vertexColor=[1,1,1];unlit=true;bake=false;
  }else if(courseMaterials&&stages.length===2&&eq(stages[0],[8,15,15,15])&&
           eq(stages[1],[15,0,9,8])&&stages.every((s:any)=>s.colorScale===0)){
   // Half-pipe border: arrows + rainbow * arrow alpha. Both colours are
@@ -388,6 +524,17 @@ function lighting(material:any){
   secondaryMap=stages[0].texMap;secondaryCoord=stages[0].texCoordId;
   textureAlphaAdd=true;vertexColor=[1,1,1];unlit=true;bake=false;
   if(stages.some((s:any)=>s.indTexMatrix!==0))approximated.add(material.name+' (indirect bump omitted)');
+ }else if(objectMaterials&&stages.length===2&&
+          stages.every((s:any)=>s.colorOp===0&&s.colorBias===0&&s.colorScale===0&&s.colorClamp&&s.colorRegId===0)&&
+          ((eq(stages[0],[15,2,10,15])&&eq(stages[1],[15,8,0,15]))||
+           (basic&&stages[1].colorInA===15&&stages[1].colorInC===0&&stages[1].colorInD===15&&constantArg(stages[1],stages[1].colorInB)))){
+  // Chain Chomp body: (C0 * raster) * environment texture.
+  // Its chain: (texture * raster) * C1.alpha. Keep the live lighting channel;
+  // constant texture selection must not turn the chain into a white surface.
+  const body=eq(stages[0],[15,2,10,15]);
+  const c=body?material.colorRegisters[1]:constantArg(stages[1],stages[1].colorInB);
+  primaryMap=stages[body?1:0].texMap;primaryCoord=stages[body?1:0].texCoordId;
+  vertexTint=[c.r,c.g,c.b];
  }else if(courseMaterials&&!(stages.length===1&&basic)&&courseRule()){
   // Assigned by the matching course rule.
  }else if(!(stages.length===1&&basic)){
@@ -458,8 +605,54 @@ function lighting(material:any){
    unsupported.delete(material.name);
   }
  }
+ // Rainbow Earth: lit surface, then twice lerp(surface, raster, cloud).
+ // Keep both original samplers; the fallback selected only the cloud map.
+ if(courseMaterials&&material.name==='a_earth'&&stages.length===2&&
+    scaled(stages[0],[15,8,10,15],0)&&scaled(stages[1],[0,10,8,15],1)&&
+    stages[0].texMap===0&&stages[1].texMap===1){
+  primaryMap=stages[0].texMap;primaryCoord=stages[0].texCoordId;
+  secondaryMap=stages[1].texMap;secondaryCoord=stages[1].texCoordId;
+  mode=0;scale=0;firstScale=0;vertexColor=undefined;vertexTint=undefined;
+  reflection={mode:19,constant:0,add:0,uv:[1,0,0,0,1,0]};
+  unsupported.delete(material.name);
+  approximated.add('a_earth (indirect cloud distortion omitted)');
+ }
+ // StarRing: weighted normal reflection plus lit surface, doubled.
+ if(objectMaterials&&stages.length===2&&scaled(stages[0],[15,8,14,15],0)&&
+    scaled(stages[1],[15,8,10,0],1)&&
+    material.gxMaterial.texGens[stages[0].texCoordId]?.source===GX.TexGenSrc.NRM&&
+    material.texSrts[stages[0].texCoordId]?.mapMode===1){
+  const k=konst(stages[0].konstColorSel),m=material.texSrts[stages[0].texCoordId].srtMtx;
+  primaryMap=stages[1].texMap;primaryCoord=stages[1].texCoordId;
+  secondaryMap=stages[0].texMap;secondaryCoord=stages[0].texCoordId;
+  mode=0;scale=0;firstScale=0;vertexColor=undefined;vertexTint=undefined;
+  reflection={mode:17,constant:([k.r,k.g,k.b,1].reduce((n,c,i)=>n|(Math.round(c*255)<<(8*i)),0))>>>0,add:0,
+   uv:[m[0],m[4],m[12],m[1],m[5],m[13]]};
+  unsupported.delete(material.name);
+ }
+ // Rainbow star pieces: primary normal reflection, then raster glow.
+ // Preserve the intermediate saturation before the final doubled sum.
+ if(objectMaterials&&stages.length===2&&scaled(stages[0],[15,8,10,15],2)&&
+    scaled(stages[1],[15,10,14,0],1)&&stages[1].texMap===255&&
+    material.gxMaterial.texGens[stages[0].texCoordId]?.source===GX.TexGenSrc.NRM&&
+    material.texSrts[stages[0].texCoordId]?.mapMode===1){
+  const k=konst(stages[1].konstColorSel);
+  primaryMap=stages[0].texMap;primaryCoord=stages[0].texCoordId;
+  secondaryMap=-1;mode=0;scale=0;firstScale=0;vertexColor=undefined;vertexTint=undefined;
+  reflection={mode:16,constant:([k.r,k.g,k.b,1].reduce((n,c,i)=>n|(Math.round(c*255)<<(8*i)),0))>>>0,add:0,uv:[1,0,0,0,1,0]};
+  unsupported.delete(material.name);
+ }
  // World items retain their own GX registers and reflection-alpha source.
  // Their C2 / raster-alpha equations differ from the garage's C1 / konst mask.
+ // Moonview toll display: CC.ONE=12, not the dormant konst selector.
+ if(courseMaterials&&stages.length===2&&eq(stages[0],[15,8,12,15])&&
+    scaled(stages[1],[15,0,12,9],1)&&stages[0].colorScale===0){
+  primaryMap=stages[0].texMap;primaryCoord=stages[0].texCoordId;
+  secondaryMap=stages[1].texMap;secondaryCoord=stages[1].texCoordId;
+  mode=0;scale=0;firstScale=0;vertexColor=[1,1,1];unlit=true;bake=false;
+  reflection={mode:15,constant:0,add:0,uv:[1,0,0,0,1,0]};
+  unsupported.delete(material.name);
+ }
  if(firstSampler&&racerLighting&&stages.length===2){
   const a=stages[0],b=stages[1],gen=material.gxMaterial.texGens[b.texCoordId];
   const srt=material.texSrts[b.texCoordId];
@@ -497,12 +690,55 @@ function lighting(material:any){
   secondaryMap=stages[1].texMap;secondaryCoord=stages[1].texCoordId;
   constant=material.colorRegisters[1];constantRegister=1;unsupported.delete(material.name);
  }
+ // Maple Treeway: clamp(2*albedo*raster) + K1*environment. Keep the
+ // coloured highlight and its authored normal/position texgen; the generic
+ // course rule treated the environment as repeated albedo UVs and grey light.
+ if(courseMaterials&&['base_m','ha_2_m','ha_m','house_m'].includes(material.name)&&stages.length===2){
+  const [a,b]=stages,gen=material.gxMaterial.texGens[b.texCoordId],srt=material.texSrts[b.texCoordId];
+  if(eq(a,[15,8,10,15])&&a.colorScale===1&&a.colorClamp&&
+     eq(b,[15,14,8,0])&&b.konstColorSel===13&&b.colorScale===0&&b.colorClamp&&
+     ((gen.source===GX.TexGenSrc.NRM&&srt.mapMode===1)||(gen.source===GX.TexGenSrc.POS&&srt.mapMode===0))){
+   const m=srt.srtMtx,k=material.colorConstants[1];
+   reflection={mode:20,constant:srt.mapMode===0?512:0,add:0,uv:[m[0],m[4],m[12],m[1],m[5],m[13]]};
+   primaryMap=a.texMap;primaryCoord=a.texCoordId;secondaryMap=b.texMap;secondaryCoord=b.texCoordId;
+   mode=0;scale=1;firstScale=0;constant=k;constantRegister=undefined;
+   raster=undefined;vertexColor=undefined;vertexTint=undefined;colorLerp=false;constantLerp=false;
+   unsupported.delete(material.name);
+   for(const entry of approximated)if(entry.startsWith(material.name+' ('))approximated.delete(entry);
+  }
+ }
+ // Ceremony trophies share a three-stage metal equation, with per-material
+ // reflection weight and optional C2 lift. Preserve the intermediate clamp:
+ // clamp(base*C0 + environment*w - bias), then raster and the final lift.
+ if(process.env.MKW_AWARD_MATERIALS==='1'&&stages.length===3){
+  const [a,b,c]=stages,k=material.colorConstants[3].a;
+  const weighted=b.colorInA===8&&b.colorInC===14&&b.konstColorSel===31&&
+   (b.colorInB===15||k===0);
+  const half=b.colorInA===15&&b.colorInB===13&&b.colorInC===8;
+  const lift=c.colorInD===6?material.colorRegisters[3]:{r:0,g:0,b:0};
+  const delta=[lift.r,lift.g,lift.b].map(v=>v-(c.colorBias===2?.5:0));
+  if(eq(a,[15,8,2,15])&&a.colorScale===0&&(weighted||half)&&
+     b.colorInD===0&&b.colorOp===0&&b.colorScale===0&&[0,2].includes(b.colorBias)&&b.colorClamp&&
+     c.colorInA===15&&c.colorInB===0&&c.colorInC===10&&[6,15].includes(c.colorInD)&&
+     c.colorOp===0&&[0,2].includes(c.colorBias)&&c.colorScale<3&&c.colorClamp&&
+     delta.every(v=>v>=0&&v<=1)&&[0,1].includes(material.texSrts[b.texCoordId]?.mapMode)){
+   const m=material.texSrts[b.texCoordId].srtMtx;
+   const weight=Math.round((half?.5:1-k)*255);
+   reflection={mode:10,constant:weight|(b.colorBias===2?256:0)|(material.texSrts[b.texCoordId].mapMode===0?512:0),
+    add:delta.reduce((n,v,i)=>n|(Math.round(v*255)<<(8*i)),0)>>>0,
+    uv:[m[0],m[4],m[12],m[1],m[5],m[13]]};
+   mode=0;environmentMetal=false;constantLerp=false;colorLerp=false;vertexTint=undefined;
+   scale=c.colorScale;firstScale=0;constant=material.colorRegisters[1];constantRegister=1;
+   primaryMap=a.texMap;primaryCoord=a.texCoordId;secondaryMap=b.texMap;secondaryCoord=b.texCoordId;
+   unsupported.delete(material.name);
+  }
+ }
  // Race items (tools/cook_race_items.py) keep the first exporter's base
  // texture: the material's first sampler on its first coordinate. The
  // equation matching above would pick e.g. a shell's specular map.
  if(firstSampler){primaryMap=0;primaryCoord=0;primaryTextureName=undefined;}
  const packed=([constant.r,constant.g,constant.b,constant.a].reduce((v,c,i)=>v|(Math.round(Math.max(0,Math.min(1,c))*255)<<(8*i)),0))>>>0;
- return {mode,secondaryMap,secondaryCoord,primaryMap,primaryCoord,primaryTextureName,constant:packed,scale,firstScale,vertexColor,vertexTint,colorLerp,environmentMetal,constantLerp,constantRegister,vertexColorRegister,additiveRegister,additiveFactor,unlit,raster,bake,reflection,textureAlphaAdd,skyScreenBlend};
+ return {mode,secondaryMap,secondaryCoord,primaryMap,primaryCoord,primaryTextureName,constant:packed,scale,firstScale,vertexColor,vertexTint,colorLerp,environmentMetal,constantLerp,constantRegister,vertexColorRegister,additiveRegister,additiveFactor,unlit,raster,bake,reflection,textureAlphaAdd,skyScreenBlend,skyRasterAdd};
 }
 const bankShapes:BankShape[]=[];
 for(const model of archive.mdl0){
@@ -516,6 +752,14 @@ for(const model of archive.mdl0){
  const sampleFrames=bank?Array.from({length:Math.ceil((clip!.duration-1)/interval)+1},(_,i)=>Math.min(i*interval,clip!.duration-1)):[Number(process.argv[6]??0)];
  for(const sampleFrame of sampleFrames){controller.setTimeInFrames(sampleFrame);
  const matrices=poseEvaluator.calculate();
+ // CarA's shadow uses the body's local matrix, written directly into the
+ // shadow ScnMdl root (RMCU 0x8080DE60..0x8080DF14). Its oversized authored
+ // shadow root SRT is consequently bypassed; baking it makes a giant block.
+ // These three single-node volumes are static, so the local geometry suffices.
+ if(objectMaterials&&/^CarA[123]-shadow$/.test(model.name)){
+  if(model.nodes.length!==1||clip)throw new Error('Unexpected CarA shadow hierarchy');
+  matrices[model.nodes[0].mtxId]=mat4.create();
+ }
  const envelopes:mat4[]=[];
  for(const op of model.sceneGraph.nodeMixOps){
   if(op.op===ByteCodeOp.EVPMTX){const node=model.nodes[op.nodeId];envelopes[op.mtxId]=mat4.mul(mat4.create(),matrices[op.mtxId],node.inverseBindPose);}
@@ -539,9 +783,44 @@ for(const model of archive.mdl0){
   }
   if(retail?.limitation)retailLimitations.add(retail.limitation);
   if(retail?.constant!==undefined)light.constant=retail.constant;
-  const sampler=light.primaryTextureName?undefined:material.samplers[light.primaryMap],secondarySampler=material.samplers[light.secondaryMap];
+  const primaryGen=material.gxMaterial.texGens[light.primaryCoord];
+  const primarySrt=material.texSrts[light.primaryCoord];
+  let flatPrimary=false;
+  if(actorDiffuseOnly&&retail){
+   if(((retail.word>>2)&3)===2){
+    // Keep the original light set, ambient and diffuse function, while
+    // dropping the light-texture TEV pattern and its additive reflection.
+    retail.word=(retail.word&0x7ff&~(3<<2))|(1<<2);retail.add=0;
+   }
+   if(primaryGen?.source===GX.TexGenSrc.NRM&&primarySrt?.mapMode===1&&light.primaryMap<material.samplers.length){
+    // Keep the average energy of the removed environment stage. C0 alone
+    // is the purple multiplier for the dark ref_b_i map, not body paint.
+    // A constant mean preserves that dark surface without moving reflection.
+    const mean=textureMean(material.samplers[light.primaryMap].name);
+    if(!mean)throw new Error('Cannot flatten actor environment texture: '+material.name);
+    light.vertexTint=[0,1,2].map(i=>(light.vertexTint?.[i]??1)*mean[i]);
+    flatPrimary=true;
+   }
+   light.reflection=null;light.secondaryMap=-1;
+  }
+  if(objectMaterials&&retail&&!flatPrimary&&(!light.reflection||light.reflection.mode===16||light.reflection.mode===18)&&light.primaryMap<material.samplers.length&&
+     primaryGen?.source===GX.TexGenSrc.NRM&&primarySrt?.mapMode===1){
+   // The primary EnvCamera map must follow the posed normal and camera, then
+   // its source SRT. A static normal->UV bake loses both of those transforms.
+   const m=primarySrt.srtMtx;
+   retail.word|=1<<22;
+   light.reflection={...(light.reflection??{mode:0,constant:0,add:0}),uv:[m[0],m[4],m[12],m[1],m[5],m[13]]};
+  }
+  const sampler=light.primaryTextureName||flatPrimary?undefined:material.samplers[light.primaryMap],secondarySampler=material.samplers[light.secondaryMap];
   const texture=light.primaryTextureName?textures.findIndex(t=>t.name===light.primaryTextureName):sampler?textures.findIndex(t=>t.name===sampler.name):-1;
   const secondary=secondarySampler?textures.findIndex(t=>t.name===secondarySampler.name):-1;
+  if(light.reflection?.mode===8){
+   const thirdSampler=material.samplers[light.reflection.thirdMap];
+   const third=textures.findIndex(t=>t.name===thirdSampler?.name);
+   if(third<0)throw new Error('Missing third statue texture: '+material.name);
+   // Mode 8 reuses the v5 reflection constant for an index+1 and wraps.
+   light.reflection.constant=(third+1)|((thirdSampler.wrapS&3)<<16)|((thirdSampler.wrapT&3)<<18);
+  }
   if((sampler&&texture<0)||(secondarySampler&&secondary<0))unsupported.add('External texture reference: '+material.name);
   const channel=material.gxMaterial.lightChannels[0];
   const unlit=menuMaterials||raceMaterials||light.unlit||(channel&&!channel.colorChannel.lightingEnabled);
@@ -553,6 +832,11 @@ for(const model of archive.mdl0){
   const coordIds=[light.primaryCoord,light.secondaryCoord];
   const animators=coordIds.map(id=>animClip?bindSRT0Animator(animController,animClip,material.name,id):null);
   const initialMatrices=coordIds.map((id,i)=>{const m=mat4.clone(material.texSrts[id]?.srtMtx??mat4.create());animController.setTimeInFrames(0);animators[i]?.calcTexMtx(m);return m;});
+  if(retail&&(retail.word&(1<<22))&&light.reflection){
+   // EnvCamera replaces the baked vertex UV. Its base must include frame
+   // zero of the same SRT used by ObjectBank's relative animation matrices.
+   const m=initialMatrices[0];light.reflection.uv=[m[0],m[4],m[12],m[1],m[5],m[13]];
+  }
   const uvVelocity=animators.flatMap((a,i)=>{
    if(!a)return [0,0];const m=mat4.create();animController.setTimeInFrames(1);a.calcTexMtx(m);
    // This compact path supports authored constant-rate translation; reject
@@ -564,6 +848,73 @@ for(const model of archive.mdl0){
    return [du,-dv];
   });
   const animationFrames=animators.some(a=>a)?Math.ceil(animClip!.duration):0;
+  // Static courses have no ObjectBank. Preserve nonlinear source SRT0 as
+  // per-frame UV matrices relative to the frame-zero UVs baked below.
+  let uvSamples:number[][]|undefined;
+  if(courseMaterials&&frozenUv.has(material.name)&&animClip){
+   const flip=mat4.fromValues(1,0,0,0,0,-1,0,0,0,0,1,0,0,1,0,1);
+   uvSamples=[];
+   for(let frame=0;frame<animationFrames;++frame){
+    animController.setTimeInFrames(frame);const rows:number[]=[];
+    for(let i=0;i<2;++i){
+     const current=mat4.clone(initialMatrices[i]);animators[i]?.calcTexMtx(current);
+     const inverse=mat4.invert(mat4.create(),initialMatrices[i]);
+     if(!inverse)throw new Error('Singular course SRT0 '+material.name);
+     const delta=mat4.mul(mat4.create(),current,inverse);
+     mat4.mul(delta,flip,delta);mat4.mul(delta,delta,flip);
+     rows.push(delta[0],delta[4],delta[12],delta[1],delta[5],delta[13]);
+    }
+    if(!rows.every(Number.isFinite))throw new Error('Invalid course SRT0 '+material.name);
+    uvSamples.push(rows);
+   }
+   frozenUv.delete(material.name);
+  }
+  let waterIndirect:any=undefined;
+  if(light.reflection?.mode===11){
+   const gx=material.gxMaterial,stage=gx.tevStages[0],ind=gx.indTexStages[stage.indTexStage];
+   if(!ind||!gx.tevStages.every((s:any)=>s.indTexStage===stage.indTexStage&&s.indTexMatrix===1&&s.indTexFormat===0&&s.indTexBiasSel===7&&!s.indTexAddPrev&&!s.indTexWrapS&&!s.indTexWrapT)||ind.scaleS||ind.scaleT)
+    throw new Error('Unsupported water indirect configuration: '+material.name);
+   const sampler=material.samplers[ind.texture],img=decodeLevel0(sampler.name);
+   if(!img||sampler.wrapS!==GX.WrapMode.REPEAT||sampler.wrapT!==GX.WrapMode.REPEAT)
+    throw new Error('Unsupported water indirect texture: '+material.name);
+   const coord=ind.texCoordId;
+   if(gx.texGens[coord].source!==gx.texGens[light.primaryCoord].source)
+    throw new Error('Water indirect and wave require a shared source UV: '+material.name);
+   const initial=mat4.clone(material.texSrts[coord].srtMtx);
+   const animator=animClip?bindSRT0Animator(animController,animClip,material.name,coord):null;
+   animController.setTimeInFrames(0);animator?.calcTexMtx(initial);
+   const next=mat4.clone(initial);animController.setTimeInFrames(1);animator?.calcTexMtx(next);
+   const mid=mat4.clone(initial);animController.setTimeInFrames((animClip?.duration??0)/2);animator?.calcTexMtx(mid);
+   for(const k of [0,1,4,5])if(Math.abs(next[k]-initial[k])>1e-5||Math.abs(mid[k]-initial[k])>1e-5)
+    throw new Error('Nonlinear water indirect SRT: '+material.name);
+   const velocity=[next[12]-initial[12],next[13]-initial[13]];
+   for(let i=0;i<2;++i)if(Math.abs(mid[12+i]-initial[12+i]-velocity[i]*(animClip?.duration??0)/2)>1e-3)
+    throw new Error('Nonlinear water indirect translation: '+material.name);
+   const inverse=mat4.invert(mat4.create(),initialMatrices[0]);
+   if(!inverse)throw new Error('Singular water wave SRT: '+material.name);
+   const map=mat4.mul(mat4.create(),initial,inverse);
+   const matrix=material.indTexMatrices[0],exponent=-Math.log2(matrix[3])-10;
+   if(!Number.isInteger(exponent))throw new Error('Invalid water indirect exponent');
+   const coefficients=[0,1,2,4,5,6].map(i=>Math.round(matrix[i]/matrix[3]));
+   const sourceTexture=archive.tex0.find(t=>t.name===sampler.name)!;
+   // The 3DS path keeps flat water and its authored scrolling textures.
+   // Preserve the indirect source data without requiring trilinear filtering:
+   // Dry Dry Ruins also uses a valid non-trilinear GX sampler here.
+   if(sampler.minFilter<0||sampler.minFilter>5||sampler.magFilter<0||sampler.magFilter>1)
+    throw new Error('Invalid water texture filter');
+   const file=`water_indirect_${op.matId}.bin`,levels=sourceTexture.mipCount,samples:Buffer[]=[];
+   for(let l=0;l<levels;++l){
+    const mip=decodeLevel0(sampler.name,l)!;const bytes=Buffer.alloc(mip.w*mip.h*3);
+    for(let i=0;i<mip.w*mip.h;++i)for(let c=0;c<3;++c)bytes[i*3+c]=Math.round(mip.rgba[i*4+[3,2,1][c]]*255);
+    samples.push(bytes);
+   }
+   fs.writeFileSync(path.join(out,file),Buffer.concat(samples));
+   waterIndirect={file,width:img.w,height:img.h,coefficients,shift:exponent,
+    // Input is the baked wave UV (V-up); output is GX indirect S/T (T-down).
+    uv:[map[0],-map[4],map[4]+map[12],map[1],-map[5],map[5]+map[13]],velocity,frames:animationFrames,
+    levels,lodBias:sampler.lodBias,minLOD:sourceTexture.minLOD,maxLOD:sourceTexture.maxLOD,
+    sourceTexture:sampler.name,channelOrder:'ABG'};
+  }
   const vertices:number[][]=[];
   for(const draw of loaded.draws)for(let i=draw.indexOffset;i<draw.indexOffset+draw.indexCount;i++){
    const index=indices[i],base=index*stride;
@@ -582,6 +933,10 @@ for(const model of archive.mdl0){
     // Object reflection maps (EnvCamera texgen from normals): a static
     // sphere-map lookup from the model-space normal, not a constant texel.
     if(objectMaterials&&gen&&gen.source===GX.TexGenSrc.NRM&&material.texSrts[coord]?.mapMode===1)return [0.5+0.5*n[0],0.5+0.5*n[1]];
+    if(light.reflection?.mode===20&&gen?.source===GX.TexGenSrc.POS){
+     const m=material.texSrts[coord].srtMtx;
+     return [m[0]*pos[0]+m[4]*pos[1]+m[8]*pos[2]+m[12],1-(m[1]*pos[0]+m[5]*pos[1]+m[9]*pos[2]+m[13])];
+    }
     const uvAttr=gen&&gen.source>=GX.TexGenSrc.TEX0&&gen.source<=GX.TexGenSrc.TEX7?GX.Attr.TEX0+gen.source-GX.TexGenSrc.TEX0:GX.Attr.TEX0;
     const uv=attr(uvAttr,2,[0,0]);const srt=rawUv?undefined:initialMatrices[unit];
     return srt?[srt[0]*uv[0]+srt[4]*uv[1]+srt[12],1-(srt[1]*uv[0]+srt[5]*uv[1]+srt[13])]:[uv[0],1-uv[1]];
@@ -596,7 +951,7 @@ for(const model of archive.mdl0){
    if(light.raster)for(let c=0;c<3;c++)color[c]=Math.round(Math.max(0,Math.min(255,color[c]*light.raster.scale[c]+light.raster.offset[c]*255)));
    vertices.push([...p,...n,...sampleUV(light.primaryCoord,0),...sampleUV(light.secondaryCoord,1),...color]);
   }
-  shapes.push({name:shape.name,material:material.name,sourceMaterial:material,constantTextures:constantTextures.get(material.name),primaryMap:light.primaryMap,secondaryMap:light.secondaryMap,texture,secondary,constant:light.constant,lightingMode:light.mode,uvVelocity,animationFrames,flags,vertices,tevStages:material.gxMaterial.tevStages.length,reflection:light.reflection,textureAlphaAdd:light.textureAlphaAdd,skyScreenBlend:light.skyScreenBlend,retail:retail?{word:retail.word,ambient:retail.ambient,add:retail.add}:null});
+  shapes.push({name:shape.name,material:material.name,sourceMaterial:material,constantTextures:constantTextures.get(material.name),primaryMap:light.primaryMap,secondaryMap:light.secondaryMap,texture,secondary,constant:light.constant,lightingMode:light.mode,uvVelocity,animationFrames,uvSamples,uvLoop:animClip?.loopMode===1,flags,vertices,tevStages:material.gxMaterial.tevStages.length,reflection:light.reflection,waterIndirect,textureAlphaAdd:light.textureAlphaAdd,skyScreenBlend:light.skyScreenBlend,skyRasterAdd:light.skyRasterAdd,retail:retail?{word:retail.word,ambient:retail.ambient,add:retail.add}:null});
   if(objectBank&&sampleFrame===sampleFrames[0]){
    const alphaStage=material.gxMaterial.tevStages.find((s:any)=>[s.alphaInA,s.alphaInB,s.alphaInC,s.alphaInD].some((v:number)=>v>=1&&v<=3));
    const alphaRegister=alphaStage?[alphaStage.alphaInA,alphaStage.alphaInB,alphaStage.alphaInC,alphaStage.alphaInD].find((v:number)=>v>=1&&v<=3):-1;

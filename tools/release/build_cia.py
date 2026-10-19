@@ -23,7 +23,7 @@ sys.path[:0]=[str(ROOT/'tools'),str(HERE)]
 SD='sd-card/3ds/mkw-3ds'
 DISC_MANIFEST=json.loads((HERE/'usa-disc.json').read_text())
 MENU_ARCHIVES=['MenuSingle','MenuSingle_U','MenuOther','MenuOther_U','Title','Title_U','Award','Award_U','Globe']
-COURSE_OVERLAY_IDS=['1','5','7','8','10','15','19','27','29','31']
+COURSE_OVERLAY_IDS=[str(i) for i in range(42)]
 COURSE_OBJECT_OUTPUTS=[SD+f'/models/course_{course_id:02d}_visuals.list' for course_id in range(32)]
 
 # (name, command, outputs that mean the step is done). {py} is this Python,
@@ -45,14 +45,22 @@ COOK_STEPS=[
  ('Coconut Mall sky',['{py}','tools/cook_model.py','assets/cooked-coconut-sky',SD,'--prefix','coconut_sky'],[SD+'/models/coconut_sky.list']),
  ('race courses and arenas',['{py}','tools/import_courses.py','--jobs','{jobs}'],[SD+'/models/course-catalog.json']),
  ('course objects',['{py}','tools/cook_course_objects.py','--jobs','{jobs}'],COURSE_OBJECT_OUTPUTS),
+ ('Wiggler effect joints',['{py}','tools/cook_hanachan_joints.py'],['include/mkw/hanachan_joint_assets.hpp']),
+ ('Pokey effect joints',['{py}','tools/cook_pokey_joints.py'],['include/mkw/pokey_joint_assets.hpp']),
  ('Coconut Mall escalators and palms',['{py}','tools/cook_coconut_objects.py'],[SD+'/models/coconut_escalator_000.gmdl',SD+'/models/coconut_palm_000.gmdl']),
  ('course lighting',['{py}','tools/lighting/recook_courses.py','--jobs','{jobs}','--no-pack'],[]),
  ('course material overlay',['{py}','tools/cook_course_overlay.py','--ids',*COURSE_OVERLAY_IDS,'--objects'],['build/course-materials/models']),
+ ('world mipmaps',['{py}','tools/cook_world_mipmaps.py','--jobs','{jobs}'],['build/world-mipmaps/receipt.json']),
  ('water mipmaps',['{py}','tools/cook_water_mipmaps.py'],['build/water-mipmaps/receipt.json']),
  ('drivers',['{py}','tools/cook_roster.py','{disc}',SD],[SD+'/models/roster.json']),
  ('karts and bikes',['{py}','tools/cook_garage.py','{disc}',SD],[SD+'/models/garage.json']),
  ('full roster',['{py}','tools/cook_full_roster.py','--jobs','{jobs}'],['build/roster']),
  ('race racer lighting',['{py}','tools/cook_racer_lighting.py'],['build/roster/models/garage.json']),
+ ('team vehicles',['{py}','tools/cook_team_vehicles.py','{disc}','--jobs','{jobs}'],['build/team-vehicles/team-vehicles.json']),
+ ('driver effect roots',['{py}','tools/cook_driver_effects.py','--jobs','{jobs}'],['build/driver-effects/receipt.json']),
+ ('driver look data',['{py}','tools/cook_driver_look.py'],['include/mkw/driver_look_data.hpp']),
+ ('vehicle rest poses',['{py}','tools/cook_vehicle_rest.py'],['include/mkw/vehicle_rest_data.hpp']),
+ ('GP grade reference times',['{py}','tools/cook_gp_rank.py'],['include/mkw/gp_rank_times.hpp']),
  ('vehicle shadows',['{py}','tools/cook_vehicle_shadows.py','--jobs','{jobs}'],['build/vehicle-shadows/models/vehicle-shadows.json']),
  ('kart effects',['{py}','tools/cook_effects.py','assets/common/Effect/RKRace.breft',SD+'/textures'],[SD+'/textures/drift-effects.bin']),
  ('bike effects',['{py}','tools/cook_effects.py','assets/common/Effect/RKRace.breft',SD+'/textures','--bike'],[SD+'/textures/drift-effects-bike.bin']),
@@ -60,10 +68,15 @@ COOK_STEPS=[
  ('Luigi Circuit archive',['{py}','tools/unpack_szs.py','data/extracted/Race/Course/beginner_course.szs','assets/luigi'],['assets/luigi/itembox.brres']),
  ('items and HUD',['{py}','tools/cook_race_items.py',SD,'--disc','{disc}'],[SD+'/models/race-items.json']),
  ('world item lighting',['{py}','tools/cook_item_lighting.py'],['build/item-lighting/receipt.json']),
- ('race effects',['{py}','tools/cook_race_effects.py','--output','build/vfx/textures'],['build/vfx/textures/race-effects.bin']),
+ ('race effects',['{py}','tools/cook_race_effects.py','--output','build/vfx/textures','--course-only'],['build/vfx/textures/course-effects.json','include/mkw/cannon_effect_assets.hpp']),
  ('blast effects',['{py}','tools/cook_blast.py'],['build/vfx/models/bomb_blast.gmdl']),
+ ('item shadows',['{py}','tools/cook_item_shadows.py'],['build/item-shadows/models/item-shadows.json']),
+ ('Blooper model',['{py}','tools/cook_blooper.py'],['build/blooper/receipt.json']),
+ ('Rosalina companion',['{py}','tools/cook_luma.py'],['build/vfx/models/luma.dskm']),
+ ('Firebar phase stream',['{py}','tools/cook_firebar_phases.py'],['build/firebar/textures/firebar-indirect.ftan']),
  ('Lakitu',['{py}','tools/cook_lakitu.py'],['build/vfx/models/lakitu_body.dskm']),
  ('award ceremony',['{py}','tools/cook_ceremony.py','{disc}'],[SD+'/models/ceremony.json']),
+ ('credits movies',['{py}','tools/cook_credits.py','--jobs','{jobs}'],[SD+'/models/credits.json']),
  ('battle and award screens',['{py}','tools/cook_battle.py'],[SD+'/models/battle.json']),
  ('effect archives',['{py}','tools/cook_effect_archives.py'],[SD+'/models/effect-archives.json']),
  ('name balloons',['{py}','tools/cook_race_balloon.py'],['build/vfx/textures/hud_balloon_line.t3x']),
@@ -91,7 +104,8 @@ def log(*a):print('[build_cia]',*a,flush=True)
 def run(cmd,**kw):
     log('$',' '.join(str(c) for c in cmd))
     # PYTHONUTF8: text files are UTF-8 on every OS (Windows would default to cp1252).
-    env=dict(os.environ,PYTHONUTF8='1',PYTHONPATH=os.pathsep.join(p for p in (str(ROOT/'vendor/gclib'),os.environ.get('PYTHONPATH')) if p))
+    # tools/release/hooks: on macOS, directory listings skip '._' files (exFAT/FAT drives).
+    env=dict(os.environ,PYTHONUTF8='1',PYTHONPATH=os.pathsep.join(p for p in (str(ROOT/'tools/release/hooks'),str(ROOT/'vendor/gclib'),os.environ.get('PYTHONPATH')) if p))
     subprocess.run([str(c) for c in cmd],cwd=ROOT,check=True,env=env,**kw)
 
 def shared_checkout():
@@ -126,7 +140,8 @@ def stage_tools():
     if not shutil.which('node'):raise SystemExit('Missing Node.js (https://nodejs.org), used by the model exporters')
 
 def stage_sources():
-    if all((ROOT/'vendor'/n).is_dir() for n in ('kinoko','noclip','gclib','citro3d')):log('sources present');return
+    # Always run: it fetches what is missing and brings a reused builder folder's
+    # Kinoko checkout to this version's patch (nothing is downloaded if current).
     run([sys.executable,'tools/bootstrap.py'])
 
 def stage_disc(disc):
@@ -234,21 +249,44 @@ def step_fingerprint(cmd,windows_npm=False):
         digest.update(f.relative_to(ROOT).as_posix().encode()+b'\0'+f.read_bytes().replace(b'\r\n',b'\n'))
     return digest.hexdigest()
 
-# The content stamp: every conversion step's fingerprint plus the packaging
-# scripts that lay out the SD folder. The update CIA is compiled with it
-# (tools/build.py -> MKW_CONTENT) and the builder writes it to the SD folder
-# (content.txt), so code and game files from different builders don't mix.
+# The content stamp says which converted game files a build has: the update CIA
+# is compiled with it (tools/build.py -> MKW_CONTENT), the builder writes it to
+# the SD folder (content.txt), and the game refuses files with another stamp.
+# It is a number kept by hand (tools/release/content_stamp.txt) and changes only
+# when the converted files themselves change, so edits to the cook tools that
+# leave their output as it was (a guard, a message, a refactor) never make
+# players rebuild. recipe_fingerprint() hashes every conversion step and the
+# packaging scripts; check_content_stamp() tells a maintainer when that recipe
+# differs from the one last reviewed, to decide: output unchanged (record the
+# new recipe) or changed (new stamp, and a rebuild release).
 PACKAGE_SCRIPTS=('tools/package_sd.py','tools/package_standalone.py')
-def content_fingerprint(windows_npm=False):
+STAMP_FILE=Path(__file__).with_name('content_stamp.txt')
+
+def recipe_fingerprint(windows_npm=False):
     digest=hashlib.sha256()
     for name,cmd,_ in COOK_STEPS:digest.update(f'{name}\0{step_fingerprint(cmd,windows_npm)}\n'.encode())
     for script in PACKAGE_SCRIPTS:digest.update((ROOT/script).read_bytes().replace(b'\r\n',b'\n'))
     return digest.hexdigest()[:32]
 
+def _stamp_values():
+    values=dict(line.split(None,1) for line in STAMP_FILE.read_text().splitlines() if line.strip() and not line.startswith('#'))
+    return {k:v.strip() for k,v in values.items()}
+
+def content_fingerprint():
+    return _stamp_values()['stamp']
+
 def legacy_windows_fingerprint():
-    """The stamp Windows builders of 0.5.0 and 0.5.1 wrote: the same recipe, but
-    with npm.cmd in the first step. Games accept it as well as the real one."""
-    return content_fingerprint(True)
+    """The stamp Windows builders of 0.5.0 and 0.5.1 wrote (npm.cmd was part of
+    the recipe then). Games accept it as well as the real one."""
+    return _stamp_values()['windows_legacy']
+
+def check_content_stamp():
+    """(True, '') when the cook recipe is the one last reviewed against the stamp."""
+    reviewed=_stamp_values()['recipe'];now=recipe_fingerprint()
+    if now==reviewed:return True,''
+    return False,(f'The cook recipe changed ({reviewed} -> {now}) since the content stamp '
+        f'{content_fingerprint()} was last reviewed. If the converted files are unchanged, set "recipe {now}" in '
+        f'tools/release/content_stamp.txt. If they changed, set a new "stamp": every player then has to rebuild.')
 
 def stamp_done(stamp,name,fingerprint):
     if not stamp.is_file():return False

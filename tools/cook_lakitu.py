@@ -49,8 +49,9 @@ def animated(source, model, name, clip):
     # cook_race_items.cook_world, but exporting into the build-local TMP.
     folder = TMP / name
     subprocess.run(['node', str(ROOT / 'build/export_brres.mjs'), str(source), str(folder), model, clip, '0'], check=True,
-                   stdout=subprocess.DEVNULL, env={**os.environ, 'MKW_FREEZE_NONLINEAR_UV': '1', 'MKW_SURFACE_ALBEDO': '1'})
-    data = unlit(folder)
+                   stdout=subprocess.DEVNULL, env={**os.environ, 'MKW_FREEZE_NONLINEAR_UV': '1', 'MKW_RACE_MATERIALS': '1', 'MKW_FIRST_SAMPLER': '1'})
+    # Preserve jugemu's original GX channels and light maps, as for racers.
+    data = json.loads((folder / 'model.json').read_text())
     parts = cook(folder, OUT, name, preserve_vertices=True)
     if len(parts) != 1:
         raise ValueError('Lakitu part needs partitioning: ' + name)
@@ -130,6 +131,13 @@ def main():
         h.append(f'inline constexpr std::array<std::array<uint32_t,6>,{len(frames)}> LakituSignal{i}{{{{ // {clip}')
         h += ['    {{' + ','.join(f'0x{v & 0xffffffff:08x}u' for v in row) + '}},' for row in frames]
         h.append('}};')
+    reverse_inventory = json.loads(subprocess.run(['node', str(ROOT / 'build/export_driver.mjs'), str(COMMON / 'jugem_reverse.brres'), '--inventory', 'board_reverse'], check=True, capture_output=True, text=True).stdout)
+    reverse_arrow = [m['material'] for m in reverse['materials']].index('yajirushi')
+    reverse_track = next(m for m in reverse_inventory['clr0'][0]['matAnimations'] if m['materialName'] == 'yajirushi')['clrAnimations']
+    h.append(f'inline constexpr unsigned LakituReverseArrowSubmesh={reverse_arrow};')
+    for target,index in [('Colour',4),('Add',6)]:
+        values = [reverse_track[index]['frames'][str(f)] for f in range(60)]
+        h.append(f'inline constexpr std::array<uint32_t,60> LakituReverse{target}{{{{'+','.join(f'0x{v:08x}u' for v in values)+'}};')
     h += [f'inline constexpr unsigned LakituLapNumberSubmesh={number};',
           f'inline constexpr std::array<int16_t,8> LakituLapDigit{{{{{",".join(map(str, digits))}}}}}; // PAT0 frame -> GMDL texture',
           '}', '']

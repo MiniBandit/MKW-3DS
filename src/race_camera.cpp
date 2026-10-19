@@ -255,7 +255,7 @@ RaceCameraDirector::Mode RaceCameraDirector::mode()const{
 }
 
 void RaceCameraDirector::reset(const StartPanParam& pan,Vec3 startPos,Vec3 startAngles,const RaceCameraInput& first){
- flags_=0;riseEye_=riseTarget_=0;wasBeforeRespawn_=wasInRespawn_=false;oobFrames_=wipe_=-1;
+ flags_=0;riseEye_=riseTarget_=0;wasBeforeRespawn_=wasInRespawn_=false;wipe_=-1;
  auto_={};
  // RaceCamera::Init: OpeningPan::Init sets the target height to 100, OnRespawn
  // evaluates the target once (easing it), then Init sets 100 again.
@@ -292,17 +292,17 @@ void RaceCameraDirector::step(const RaceCameraInput& in){
  // UpdateCameraOnRespawn (PAL 0x80590E28): RaceCamera::OnRespawn re-seats the
  // camera behind the kart and clears every request.
  if(in.inRespawn&&!wasInRespawn_){
-  flags_=0;riseEye_=riseTarget_=0;oobFrames_=-1;
+  flags_=0;riseEye_=riseTarget_=0;
   computeTarget(in,true);eye_=in.chaseEye;
  }
  // Out of bounds: the request issued with the activation (KartCollide hook).
- if(in.beforeRespawn&&!wasBeforeRespawn_){flags_|=in.oobRequest&(FlagHold|FlagRise|FlagOobHit);oobFrames_=0;}
- else if(in.beforeRespawn&&oobFrames_>=0)++oobFrames_;
+ if(in.beforeRespawn&&!wasBeforeRespawn_)flags_|=in.oobRequest&(FlagHold|FlagRise|FlagOobHit);
  wasBeforeRespawn_=in.beforeRespawn;wasInRespawn_=in.inRespawn;
  // Kart::Collision::UpdateRespawn (PAL 0x80573ED4): the wipe starts when the
- // 130-frame respawn timer reaches 90; Kart::Status advances it (+0x94).
+ // actual respawn timer reaches 90; do not infer it from the camera edge.
+ // Kart::Status advances the existing wipe before collision starts a new one.
  if(wipe_>=0&&++wipe_>int(WipeFrames))wipe_=-1;
- if(in.beforeRespawn&&oobFrames_==int(WipeStart)&&wipe_<0)wipe_=0;
+ if(in.beforeRespawn&&in.respawnTimer==90&&wipe_<0)wipe_=0;
  // RaceCamera::Update (PAL 0x805A21D0).
  computeTarget(in,false);
  if(!(flags_&FlagHold))eye_=in.chaseEye;
@@ -315,6 +315,10 @@ void RaceCameraDirector::step(const RaceCameraInput& in){
  if(in.finished&&course_&&!(flags_&FlagOobHit))flags_|=FlagAuto;else flags_&=uint16_t(~FlagAuto);
  stepPan(in);
  if(flags_&FlagAuto)stepAuto(in);
+ // Rear state has already been updated and collision-tested by KartCamera.
+ // Preview, start pan, rescue and goal cameras retain ownership of the view.
+ if(in.lookBack&&in.stage>=2&&!in.finished&&!(flags_&(FlagHold|FlagAuto))&&!(panFlags_&2))
+  view_={in.rearEye,in.rearPivot+Vec3{0,targetOffset_,0},in.cameraFov+in.boostFov};
 }
 
 // OpeningPan::Calc (PAL 0x805A7358).
@@ -440,6 +444,19 @@ void RaceCameraDirector::updateAction(const RaceCameraInput& in){
  }
 }
 
+bool RaceCameraDirector::selectDemoShot(unsigned shot,const RaceCameraInput& in){
+ if(!course_||shot>=course_->cameras.size())return false;
+ switchCamera(in,int(shot),false);auto_.suppress=false;updateAction(in);view_.fov=auto_.fov;return true;
+}
+void RaceCameraDirector::stepDemoShot(const RaceCameraInput& in){
+ if(!course_||auto_.camera<0)return;
+ updateAction(in);auto& a=auto_;const auto& c=course_->cameras[a.camera];
+ const float delta=c.fovEnd-c.fovStart;
+ if(c.fovSpeed)a.fov=std::clamp(a.fov+std::copysign(c.fovSpeed*.01f,delta),std::min(c.fovStart,c.fovEnd),std::max(c.fovStart,c.fovEnd));
+ else a.fov=c.fovStart;
+ view_.fov=a.fov;++a.elapsed;
+}
+
 // AutoCameraMoverRace::vf_0x10 (PAL 0x805AB57C) with fn_1_9C880 (0x805ACC34).
 void RaceCameraDirector::stepAuto(const RaceCameraInput& in){
  auto& a=auto_;
@@ -471,14 +488,19 @@ void RaceCameraDirector::stepAuto(const RaceCameraInput& in){
   a.fov=std::clamp(a.fov+.01f*sign*float(c.fovSpeed),low,high);
  }else a.fov=c.fovStart;
  view_.fov=a.fov;
- // fn_1_9A954 for held goal, KartFollow and kart-path cameras: the distance
- // relaxes to its target (0.05 within twice it, else snaps; at least 300)
- // and the pitch offset decays. The KCL push-back that raises them near
- // walls is presentation-forbidden here and not ported.
+ // fn_1_9A954 (USA 8059fcd8): correct the eye before distance/pitch
+ // recovery; carry the corrected eye into the next swept sphere query.
  if(a.suppress||a.type==3||a.type==6){
+  Vec3 push{};bool wall=false;
+  if(in.collideEye&&in.collideEye(in.collisionContext,65.f,view_.eye,a.prevEye,push,wall)){
+   view_.eye=view_.eye+push;
+   a.dist=length(view_.eye-view_.target);
+   if(wall&&a.dist<300.f)a.pitch=std::min(a.pitch+.5f,60.f);
+  }
   a.pitch+=.03f*(0.f-a.pitch);
   a.dist=a.dist<=2.f*a.distTarget?a.dist+.05f*(a.distTarget-a.dist):a.distTarget;
   if(a.dist<300.f)a.dist=300.f;
+  a.prevEye=view_.eye;
  }
 }
 }

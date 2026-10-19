@@ -46,7 +46,7 @@ function lightTexturePattern(material:any){
  const stages=material.gxMaterial.tevStages;
  const role=(s:any)=>samplers[s.texMap]==='lm_0'?0:samplers[s.texMap]==='lm_1'?1:2;
  if(!samplers.some((n:string)=>n==='lm_0'||n==='lm_1'))return null;
- let primary=0,primaryScale=0,secondary=0,albedoLerp=0,albedoScale=0,constant:any=null,add:any=null;
+ let primary=0,primaryScale=0,secondary=0,albedoLerp=0,albedoScale=0,albedoTint=0,constant:any=null,add:any=null;
  const c1=material.colorRegisters[2];
  for(const s of stages){
   const a=[s.colorInA,s.colorInB,s.colorInC,s.colorInD];
@@ -60,6 +60,15 @@ function lightTexturePattern(material:any){
    if(a.join()===[ZERO,TEXC,APREV,CPREV].join())secondary=1;
    else if(a.join()===[ZERO,RASC,TEXC,CPREV].join())secondary=2;
    else return {error:'lm_1 stage '+a};
+  }else if((material.name==='mii_color'||material.name==='mii_skin')&&
+           stages.length===4&&s===stages[2]&&s.texMap===255&&
+           a.join()===[ZERO,2,CPREV,C1].join()&&s.colorScale===0&&s.colorRegId===0&&
+           s.alphaInA===0&&s.alphaInB===7&&s.alphaInC===7&&s.alphaInD===7&&
+           !c1.r&&!c1.g&&!c1.b){
+   // Original MiiDriverModel writes GX_TEVREG0 (API enum 1), i.e. C0,
+   // not C1. Multiply the already clamped lit albedo before lm_1 is added.
+   // Keeping this stage separate avoids tinting the specular contribution.
+   albedoTint=1;constant=material.colorRegisters[1];
   }else{
    // The albedo stage reads the previous result (or the raster colour).
    const previous=primary?CPREV:RASC;
@@ -70,7 +79,7 @@ function lightTexturePattern(material:any){
    albedoScale=s.colorScale;
   }
  }
- return {primary,primaryScale,secondary,albedoLerp,albedoScale,constant,add};
+ return {primary,primaryScale,secondary,albedoLerp,albedoScale,albedoTint,constant,add};
 }
 
 // fogged: false for the sky (vrcorn), which retail draws without the course
@@ -104,6 +113,6 @@ export function retailLighting(material:any,vertexColorReplaced:boolean,fogged=t
  word|=set<<4;
  if(alpha?.lightingEnabled)word|=1<<7;
  word|=(color.diffuseFunction&3)<<8;
- if(pattern)word|=(pattern.primary<<11)|(pattern.primaryScale<<13)|(pattern.secondary<<15)|(pattern.albedoLerp<<17)|(pattern.albedoScale<<18)|(pattern.add?1<<20:0);
+ if(pattern)word|=(pattern.primary<<11)|(pattern.primaryScale<<13)|(pattern.secondary<<15)|(pattern.albedoLerp<<17)|(pattern.albedoScale<<18)|(pattern.add?1<<20:0)|(pattern.albedoTint?1<<24:0);
  return {word:word>>>0,ambient:rgba(ambientRegister),add:pattern?.add?rgba({...pattern.add,a:0}):0,bake:null,constant:pattern?.constant?tevConstant(pattern.constant):undefined};
 }

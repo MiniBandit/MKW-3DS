@@ -2,6 +2,7 @@
 ; Environment mapping for rigidly drawn menu models: rows of the bone's normal
 ; matrix, and (cos yaw, sin yaw, mix, 0). mix=0 keeps the vertex's own UV1.
 .fvec envRow0, envRow1, envRow2, envParam
+.fvec normalRow0, normalRow1, normalRow2
 ; Course-object material animation: affine rows u'=dot(row.xyz,(u,v,1)) for
 ; texcoord 0 (uvRow0/1) and 1 (uvRow2/3), and an RGBA multiplier on the
 ; vertex colour. Identity unless a draw animates its materials.
@@ -20,7 +21,8 @@
 ; Light-texture materials: texcoord2 repeats the EnvCamera UV1 (lm_1).
 .bool retailLightTexture
 ; Uniform branches skip work whose result cannot contribute to the draw.
-.bool environmentMapped, diffuseLighting
+.bool environmentMapped, environmentTexture2, environmentPrimary, diffuseLighting
+.bool projectedWater
 ; Unlit course objects keep their palette index in innormal.x. Lit racers
 ; use a separate attribute, retaining both UV pairs and bone-local normals.
 .fvec bones[57]
@@ -31,6 +33,7 @@
 .constf normalEpsilon(0.000000000001, 0.0, 0.0, 0.0)
 .out outpos position
 .out outtc texcoord0
+.out outtcw texcoord0w.x
 .out outtc1 texcoord1
 .out outtc2 texcoord2
 .out outcolor color
@@ -111,12 +114,17 @@
     dp3 r5.x, uvRow0, r11
     dp3 r5.y, uvRow1, r11
     add r5.xy, uvScroll.xy, r5.xy
-    mov outtc, r5
+    ; Keep primary UV in a temporary until EnvCamera has selected its result.
+    ; Write each output attribute once per vertex, including on real PICA.
+    mov r13, r5
     mov r11.xy, inuv.zw
     mov r5, constants.xxxy
     dp3 r5.x, uvRow2, r11
     dp3 r5.y, uvRow3, r11
     add r5.xy, uvScroll.zw, r5.xy
+    ; A primary EnvCamera map must not overwrite the independent UV1 map.
+    ; r14 is otherwise only used by the exclusive three-texture branch.
+    mov r14, r5
     ifu environmentMapped
         ; Same equation as the CPU path: m=normalize(R*n),
         ; uv1=(0.5+0.5*(cos*m.x+sin*m.z), 0.5+0.5*m.y).
@@ -126,7 +134,7 @@
         dp3 r7.y, envRow1, r0
         dp3 r7.z, envRow2, r0
         dp3 r8.x, r7, r7
-        max r8.x, colorScale.x, r8.x
+        max r8.x, normalEpsilon.x, r8.x
         rsq r8.x, r8.x
         mul r7.xyz, r7, r8.x
         mov r9, envParam
@@ -137,14 +145,51 @@
         mov r10, half
         mul r8.xy, r10.xy, r8.xy
         add r8.xy, r10.xy, r8.xy
-        add r8.xy, r8.xy, -r5.xy
-        mul r8.xy, r9.zz, r8.xy
-        add r5.xy, r5.xy, r8.xy
+        ifu environmentTexture2
+            ; Three-map statues retain their independent marble UV1.
+            ; The EnvCamera SRT instead feeds unit 2's third texture.
+            mov r8.zw, constants.xy
+            mov r14, constants.xxxy
+            dp4 r14.x, uv1Row0, r8
+            dp4 r14.y, uv1Row1, r8
+        .else
+            add r8.xy, r8.xy, -r5.xy
+            mul r8.xy, r9.zz, r8.xy
+            add r5.xy, r5.xy, r8.xy
+        .end
     .end
-    dp4 r11.x, uv1Row0, r5
-    dp4 r11.y, uv1Row1, r5
-    mov r5.xy, r11.xy
+    ifu environmentTexture2
+        ; UV1 already has its authored SRT from the cooker/material animation.
+    .else
+        dp4 r11.x, uv1Row0, r5
+        dp4 r11.y, uv1Row1, r5
+        mov r5.xy, r11.xy
+        ifu environmentPrimary
+            ; Course-object EnvCamera may be the sole colour map (Chain Chomp).
+            mov r13, r5
+            mov r5, r14
+        .end
+    .end
+    mov r10, constants.yyyy
+    ifu projectedWater
+        ; The affine wave remains on unit 1. Unit 0 receives homogeneous
+        ; camera-projected coordinates; hardware divides by Q per fragment.
+        mov r5, r13
+        dp4 r13.x, envRow0, r12
+        dp4 r13.y, envRow1, r12
+        dp4 r10.x, envRow2, r12
+        ; CPU sampled GX S17.7 offsets arrive as V-up texels. Each target
+        ; texture normalizes independently; projected offsets multiply by Q
+        ; so hardware's subsequent divide leaves a constant UV displacement.
+        mul r11.xy, envParam.xy, inuv.zw
+        add r5.xy, r5.xy, r11.xy
+        mul r11.xy, envParam.zw, inuv.zw
+        mul r11.xy, r11.xy, r10.xx
+        add r13.xy, r13.xy, r11.xy
+    .end
     mov outtc1, r5
+    mov outtc, r13
+    mov outtcw, r10.xxxx
     ; Fog coordinate: normalized GX eye depth (clamped by the ramp texture).
     mov r13, constants.xxxy
     mul r13.x, fogParam.x, r12.z
@@ -153,11 +198,11 @@
     ifu diffuseLighting
         mov r0.xyz, r15
         mov r0.w, constants.x
-        dp4 r1.x, modelView[0], r0
-        dp4 r1.y, modelView[1], r0
-        dp4 r1.z, modelView[2], r0
+        dp3 r1.x, normalRow0, r0
+        dp3 r1.y, normalRow1, r0
+        dp3 r1.z, normalRow2, r0
         dp3 r2.x, r1, r1
-        max r2.x, colorScale.x, r2.x
+        max r2.x, normalEpsilon.x, r2.x
         rsq r2.x, r2.x
         mul r1.xyz, r1, r2.x
         ; GX colour channel: light + lightDiff * df(n.L), saturated at lightDir.w.
@@ -175,11 +220,15 @@
     ; PICA requires all lanes of each output, including unused ones, written.
     mul r4, r4, r3
     mul r4, tint, r4
-    ifu retailLightTexture
-        ; lm_1 shares the EnvCamera coordinates of lm_0 (texture unit 1).
-        mov outtc2, r5
+    ifu environmentTexture2
+        mov outtc2, r14
     .else
-        mov outtc2, r13
+        ifu retailLightTexture
+            ; lm_1 shares the EnvCamera coordinates of lm_0 (texture unit 1).
+            mov outtc2, r5
+        .else
+            mov outtc2, r13
+        .end
     .end
     mov outcolor, r4
     end

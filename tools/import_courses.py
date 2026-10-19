@@ -28,6 +28,9 @@ def kmp_database(path):
         strides={'KTPT':28,'ENPT':20,'ENPH':16,'ITPT':20,'ITPH':16,'CKPT':20,'CKPH':16,'GOBJ':60,'AREA':48,'CAME':72,'JGPT':28,'CNPT':28,'MSPT':28,'STGI':12}
         if tag in strides:
             stride=strides[tag]
+            # Original draw_demo uses the older 8-byte STGI record; retain
+            # that record as-is instead of inventing the later four bytes.
+            if tag=='STGI' and count and len(body)==count*8:stride=8
             if len(body)<count*stride:raise ValueError('Truncated '+tag)
             for i in range(count):
                 raw=body[i*stride:(i+1)*stride];r={'index':i,'raw_hex':raw.hex()}

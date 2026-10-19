@@ -2,7 +2,9 @@
 // Internal to the course-object renderer: cooked assets, placement records and
 // the per-object presentation controllers (src/course_object_kinds.cpp).
 #include "mkw/animation.hpp"
+#include "mkw/fire_phase_stream.hpp"
 #include "mkw/object_bank.hpp"
+#include "mkw/inseki_motion.hpp"
 #include "mkw/renderer.hpp"
 #include <egg/math/Matrix.hh>
 #include <game/system/map/MapdataGeoObj.hh>
@@ -13,10 +15,14 @@
 namespace Kinoko::Field {class ObjectBase;class RailInterpolator;}
 namespace mkw {
 struct ObjModel {
+    std::unique_ptr<FirePhaseStream> firePhases;
+    int fireTexture=-1,firePhase=-1;
+
     std::string resource,name;
     std::unique_ptr<Model> model;
     std::unique_ptr<ObjectBank> bank;
     Bounds bounds{};
+    Bounds stadiumFace{};bool hasStadiumFace=false;
     bool rigid=false,cpuSkin=false,gpuSkin=false;
     // Retail's spectator crowds (group_* and monte_* banks): decorative,
     // CPU-skinned, and the costliest skins on Daisy Circuit and Coconut Mall.
@@ -37,6 +43,8 @@ struct ObjModel {
     // Vertex bounds per palette slot (slot space), for procedural poses.
     std::vector<Bounds> slots;
     std::vector<bool> slotUsed;
+    struct MiiBillboard {unsigned slot,mode;};
+    std::vector<MiiBillboard> miiBillboards;
 };
 struct Tracks {ObjModel* model=nullptr;int clip=-1,pat=-1,srt=-1,clr=-1;};
 struct ObjectAssets {
@@ -55,12 +63,17 @@ struct ObjectAssets {
     // The common Bob-omb explosion (Bowser's Castle fireball, Shy Guy Beach cannonballs, Moonview's Bob-omb cars).
     std::unique_ptr<Model> explosion;
     std::unique_ptr<DriverAnimation> explosionBank;
+    std::vector<std::unique_ptr<Model>> explosionPoses;
+    unsigned explosionUsed=0;
 };
 struct Anim {
     int clip=-1;float frame=0;
     int pat=-1;float patFrame=0;
     int srt=-1;float srtFrame=0;
     int clr=-1;float clrFrame=0;
+    // Per-instance modulation after CLR0; preserves the texture alpha mask.
+    float opacity=1;
+    bool mirrorU=false;
     const float* palette=nullptr;
     // Model-space bounds of a procedural palette (model bounds otherwise).
     const Bounds* bounds=nullptr;
@@ -85,6 +98,7 @@ struct Visual {
     Tracks main,low,shadow;
     std::array<Tracks,6> extra{};
     std::array<int,8> clips{-1,-1,-1,-1,-1,-1,-1,-1};
+    InsekiMotion inseki;
     float rate=1,phase=0;
     int variant=0;
     bool kinetic=false; // Kinoko moves it: use its live transform.
@@ -92,6 +106,7 @@ struct Visual {
     std::vector<Vec3> points,velocities;
     // Procedurally posed joints (deforming roads, nets and bridges).
     std::vector<float> palette;
+    std::vector<float> callbackScratch;
     Bounds posed{};
     // Presentation-only route followers (src/course_object_movers.cpp) for
     // placements Kinoko does not move, their heading and simulated frames.
@@ -142,9 +157,10 @@ struct ObjectDraw {
     ObjectDrawList& list;
     // Sky pass: no depth test, write or culling (Renderer::draw backdrop).
     bool backdrop=false;
+    std::size_t allocationReserve=2u*1024u*1024u;
     void submit(ObjModel* model,const C3D_Mtx& transform,const Anim& anim);
     // -shadow meshes are stencil shadow volumes, resolved after all objects.
-    void shadow(ObjModel* model,const C3D_Mtx& transform);
+    void shadow(ObjModel* model,const C3D_Mtx& transform,const Anim& anim={});
     // The common Bob-omb explosion, posed and drawn in order at replay.
     void explosion(const C3D_Mtx& transform,float frame);
     void plain(const Model& model,const C3D_Mtx& transform);

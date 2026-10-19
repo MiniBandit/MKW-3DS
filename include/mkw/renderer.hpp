@@ -15,7 +15,9 @@
 #include "mkw/job_worker.hpp"
 #include "mkw/render_metrics.hpp"
 #include "mkw/course_bloom.hpp"
+#include "mkw/display_layout.hpp"
 #include "mkw/stereo.hpp"
+#include "mkw/water_indirect.hpp"
 
 namespace mkw {
 struct UiQuad;
@@ -37,15 +39,25 @@ struct Submesh { uint32_t first,count; int32_t texture; uint32_t flags; int32_t 
     // the reflection with the albedo alpha; mode 2 uses a GX konst colour;
     // mode 3 adds C1 to the albedo without a reflection texture. World items
     // also use mode 4 (banana's raster lerp) and 6 (shell's raster-alpha mask).
+    // Mode 7 keeps a course object's two colour-ramp endpoints and raster light.
+    // Mode 8 is the three-map marble statue: reflectionConstant packs the
+    // third texture index+1 (low 16 bits), wrap S/T (bits 16/18, two each).
+    // Mode 9 is a two-map world statue with the source final-stage scale.
     uint32_t menuReflection=0,reflectionConstant=0,reflectionAdd=0;
     float reflectionUv[6]{}; };
 static_assert(offsetof(Submesh,menuReflection)==56&&sizeof(Submesh)==92,"GMDL v5 submesh stride");
 struct CourseLighting;
 struct RetailFog;
+struct MaterialSampler {float lodBias=0;uint8_t minFilter=0,magFilter=0,valid=0,reserved=0;};
+static_assert(sizeof(MaterialSampler)==8);
 class Texture {
 public:
     C3D_Tex gpu{};
     bool ready=false;
+    C3D_Tex noMipSampler{}; // diagnostic view; never owns/frees its data
+    std::array<C3D_Tex,3> materialSamplers{}; // one view per texture unit
+    C3D_Tex* sampledGpu();
+    C3D_Tex* sampledGpu(const MaterialSampler* sampler,unsigned unit=0);
     ~Texture();
     void reset();
     // Reads the whole .t3x in one FS request. Safe on the asset loader
@@ -63,6 +75,7 @@ public:
 };
 class Model {
 public:
+    int stadiumTexture=-1; // Original WLscreenGC wl_screen1 replacement only.
     Vertex* vertices=nullptr;
     // Lit GPU skinning keeps the original normal/UV attributes intact.
     // One immutable float (3 * palette index) per vertex, allocated on load.
@@ -70,11 +83,20 @@ public:
     uint16_t* indices=nullptr;
     uint32_t vertexCount=0,indexCount=0;
     std::vector<Submesh> submeshes;
+    std::vector<std::array<MaterialSampler,3>> samplers;
     std::vector<std::shared_ptr<Texture>> textures;
+    std::vector<WaterIndirectField> waterIndirect;
+    struct UvTrack {uint32_t frames=0,loop=0;std::vector<float> samples;};
+    std::vector<UvTrack> uvTracks;
     Vec3 minimum{},maximum{};
     // Opt-in for immutable geometry only; dynamic skinning must never use stale bounds.
     std::vector<SubmeshVisibility> visibility;
     void enableStaticCulling();
+    std::vector<std::vector<SkinVisibilityBlock>> skinVisibility;
+    void enableSkinCulling(unsigned bones);
+    bool fixedLighting=false;
+    // Load-only, opt-in for non-player actors. Never called on player assets.
+    void freezeLighting(const float* palette=nullptr,unsigned stride=21);
     ~Model();
     bool load(const char* path);
 };
@@ -149,7 +171,7 @@ public:
     // Waits until the render thread has drawn every recorded frame.
     void drain();
     // Race bottom screen (docs/BOTTOM_SCREEN.md): a 320x240 RGBA8 VRAM target
-    // without depth, transferred to the lower LCD only in frames that draw it.
+    // without depth; transferred only when drawn.
     // Create and release with the render thread idle, outside a frame:
     // releaseBottom() waits for the GPU, deletes the target and blanks both
     // lower LCD framebuffers, so menus keep their black lower screen.
@@ -166,6 +188,10 @@ public:
     // for the first requestBloom(). For races that request bloom. False if
     // the targets cannot exist.
     bool reserveBloom();
+    bool configureStadiumScreen(bool enabled);
+    // Optional conservative world bounds of the display faces. If all are
+    // outside both eyes, retain the last capture without any GPU copy.
+    void requestStadiumScreen(const Bounds* screens=nullptr,unsigned count=0);
     // A t3x (one uncompressed subtexture, no mipmaps, power-of-two sides of 8
     // to 1024) uploaded to VRAM in chunks through an idle LINEAR staging
     // region: no temporary LINEAR or heap allocation. On failure the texture
@@ -176,17 +202,19 @@ public:
     // bytes of VRAM free. False leaves it untouched in LINEAR. Main thread;
     // call waitForGpu() first: no recorded frame may still sample it.
     bool moveToVram(Texture& texture,std::size_t reserve);
+    void clearUnusedTextureCache();
     // Index of the frame being recorded: storage a deferred frame references
     // in place alternates on its parity (two frames are in flight).
     uint32_t recordingFrame() const {return submitted_.load(std::memory_order_relaxed);}
     // Outside a frame, drain submitted GPU work before retiring its resources.
     void waitForGpu();
-    void setFov(float degrees);
+    void setFov(float degrees,float nearPlane=10.f,float farPlane=400000.f);
     void setCourseLighting(bool enabled);
     // Retail course lighting (src/renderer_retail.cpp): EGG lights, light
     // textures and fog for course draws whose submeshes carry GMDL v4 state.
     // The course table outlives the renderer's use; nullptr turns it off.
-    void setRetailLighting(const CourseLighting* course);
+    void setRetailLighting(const CourseLighting* course,bool fixedLightTextures=false);
+    bool retailLightingReady(const CourseLighting* course) const {return retail_==course;}
     // Current course fog object (RetailFogState::value), once per frame.
     void setRetailFog(const RetailFog& fog);
     float fov() const { return fov_; }
@@ -220,7 +248,7 @@ public:
     Vec3 cameraBackward() const { return {mainView_.r[2].x,mainView_.r[2].y,mainView_.r[2].z}; }
     // World point -> top-screen pixels with the active camera; viewZ < 0 is in front.
     bool projectTop(Vec3 world,float& x,float& y,float& viewZ) const;
-    void begin(Vec3 eye,Vec3 target,Vec3 up);
+    void begin(Vec3 eye,Vec3 target,Vec3 up,bool mirror=false);
     void beginSourceCamera(const float* view,const float* projection);
     // Called per submesh after its default textures and fixed-function state
     // are bound: the binder configures every combiner and may override any of it.
@@ -241,11 +269,14 @@ public:
     // GX EnvCamera texture coordinates for UV1 (texture unit 1) from the view-space
     // normals of `transform`, followed by the material SRT as GX rows
     // {a,b,tx,c,d,ty}. Stays set for later draws until clearEnvironmentUv().
-    void setEnvironmentUv(const C3D_Mtx& transform,const float (&uv)[6]);
+    // texture2 keeps UV0/UV1 independent and writes EnvCamera to unit 2.
+    void setEnvironmentUv(const C3D_Mtx& transform,const float (&uv)[6],bool texture2=false);
     // Replaces only UV1's SRT (GX rows); environment mapping state is unchanged.
     void setUv1Transform(const float (&uv)[6]);
     // Offset added to UV0 and UV1, replacing the submesh's authored scroll.
     void setUvOffset(float u,float v);
+    // Material-binder only: use the active render eye, including Mirror winding.
+    void setMaterialCullNow(GPU_CULLMODE mode);
     void clearEnvironmentUv();
     // While set, draw() renders each submesh's rigid parts with their bone.
     void setRigidPose(const RigidPose* pose);
@@ -256,7 +287,7 @@ public:
     void setSkinPalette(const float* palette,unsigned bones,unsigned stride);
     // While set, draw() applies these to submeshes [0,count).
     void setOverrides(const SubmeshOverride* overrides,unsigned count);
-    // Course-object -shadow meshes are closed shadow volumes. z-pass stencil
+    // Course-object -shadow meshes are closed shadow volumes. z-fail stencil
     // counting marks the geometry drawn so far inside a volume, which is then
     // multiplied by darkness once. Call after everything that receives shadows.
     struct ShadowVolume {const Model* model;C3D_Mtx transform;};
@@ -269,6 +300,8 @@ public:
     // Native MenuKartModel icon: centered 192x44 crop of the source camera,
     // projected into its authored pane. Restores the current scene camera.
     void drawMenuIcon(const Model&,const C3D_Mtx&,const UiQuad&);
+    // Full-frame menu-model layer over a race/demo camera; keeps model depth
+    // internally but composites in front of the previously rendered world.
     // Billboard in the active camera's basis. Positive forwardOffset moves
     // toward the camera's viewing direction; upOffset uses camera up.
     void drawCameraFacing(const Model& model,Vec3 anchor,float upOffset,float forwardOffset,float scale);
@@ -289,6 +322,7 @@ public:
     // RKRace effects through the NW4R EF draw strategies (src/nw4r_ef_draw.cpp). Drawing
     // advances the strategies' tracked axes, as EF does.
     void drawEffects(RaceEffects& effects,const Texture* textures);
+    // Immediate ceremony UI layer, with the same camera/depth as its trophy.
     void drawCinemaBars(float topHeight,float bottomHeight,float opacity);
     void drawScreenFade(float opacity,bool white);
     // Screen-space sprite in top-screen pixels (origin top-left), texture
@@ -344,6 +378,7 @@ public:
     uint32_t animationFrame=0;
     // RRGGBB00 added after the model's material colour, preserving texture alpha.
     // Zero outside Star racer draws; no model/texture mutation is involved.
+    static constexpr uint32_t InkBlack=1u; // reserved low byte: RGB black, original alpha
     uint32_t additiveColor=0;
 private:
     // Recording (src/render_thread.cpp).
@@ -412,7 +447,7 @@ private:
     const uint8_t* presented_[2]={nullptr,nullptr};
     float screenParallax_=0;
     // Clip-space sign of screen-right on the tilted projections' row 1.
-    float horizontalSign_=-1.f;
+    float horizontalSign_=-1.f,verticalSign_=1.f;
     C3D_Mtx eyeProjection(const C3D_Mtx& center) const;
     C3D_Mtx screenProjection(float parallax) const;
     C3D_RenderTarget* topTarget() const {return eye_?targetRight_:target_;}
@@ -432,14 +467,15 @@ private:
     // NW4R EF: materials/texture sizes follow the effect resources (rebuilt with the
     // render thread idle); the draw list is built where the frame is recorded and
     // submitted where it is drawn.
-    void updateEffectState(RaceEffects& effects);
+    void updateEffectState(const RaceEffects& effects);
     void buildEffectList(RaceEffects& effects,const C3D_Mtx& view,ef::DrawList& list);
     void effectListNow(const RaceEffects& effects,const ef::DrawList& list,const Texture* textures);
     void drawEffectsImmediate(RaceEffects& effects,const Texture* textures);
     void requestBloomNow(const CourseBloom& settings);
     void applyBloomNow();
     void shadowVolumesNow(const ShadowVolume* volumes,unsigned count,float darkness);
-    void environmentUvNow(const C3D_Mtx& transform,const float (&uv)[6]);
+    void environmentUvNow(const C3D_Mtx& transform,const float (&uv)[6],bool texture2=false);
+    void normalMatrixNow(const C3D_Mtx& modelView,bool environment=false);
     void uv1TransformNow(const float (&uv)[6]);
     void clearEnvironmentUvNow();
     void cinemaBarsNow(float topHeight,float bottomHeight,float opacity);
@@ -469,6 +505,7 @@ private:
     unsigned menuIconDrawCount_=0;
     int projectionLoc_=-1,modelViewLoc_=-1,lightLoc_=-1,uvScrollLoc_=-1;
     int envRowLoc_[3]={-1,-1,-1},envParamLoc_=-1,uv1RowLoc_[2]={-1,-1};
+    int normalRowLoc_[3]={-1,-1,-1};
     int uvRowLoc_[4]={-1,-1,-1,-1},tintLoc_=-1;
     bool uvDirty_=false,tintDirty_=false;
     void resetMaterialUniforms();
@@ -480,9 +517,10 @@ private:
     bool retailTextureDynamic_[2]{};
     float retailFog_[8]{};      // type, enabled, start, end, r, g, b, ramp type
     // Light textures generated; light uniforms, light-texture state or unit 2 to restore after a submesh.
+    bool fixedLightTextures_=false;
     bool retailTexturesValid_=false,retailLightDirty_=false,retailTextureDirty_=false,retailFogBound_=false;
     int lightDiffLoc_=-1,lightDirLoc_=-1,lightFnLoc_=-1,fogParamLoc_=-1,retailBoolLoc_=-1;
-    int environmentMappedLoc_=-1,diffuseLightingLoc_=-1;
+    int environmentMappedLoc_=-1,environmentTexture2Loc_=-1,environmentPrimaryLoc_=-1,diffuseLightingLoc_=-1,projectedWaterLoc_=-1;
     bool retailUniformLocations();
     void retailBeginFrame();
     void retailShutdown();
@@ -491,7 +529,7 @@ private:
     bool retailLight(const Submesh& s);
     // Combiners/textures of a retail submesh after the generic setup; returns
     // true when it owns the environment rows (light textures).
-    bool retailCombiners(const Submesh& s,const C3D_Mtx& modelView,bool backdrop,bool additive,uint32_t additiveRgb);
+    bool retailCombiners(const Submesh& s,const C3D_Mtx& modelView,bool backdrop,bool additive,uint32_t additiveRgb,uint32_t constant);
     void retailEnvironment(const C3D_Mtx& modelView);
     void retailEndSubmesh();
     const RigidPose* rigid_=nullptr;
@@ -504,22 +542,33 @@ private:
     bool initBloom();
     void freeBloom();
     void bloomPass(C3D_RenderTarget* target,unsigned width,unsigned height);
-    void bloomQuad(const C3D_Tex& source,unsigned sourceWidth,unsigned sourceHeight,float width,float height,float du,float dv,unsigned secondWidth=0,unsigned secondHeight=0);
-    C3D_Tex sceneTex_{},bloomTex_[3]{};
+    void bloomQuad(const C3D_Tex& source,unsigned sourceWidth,unsigned sourceHeight,float width,float height,float du,float dv,unsigned secondWidth=0,unsigned secondHeight=0,const C3D_Tex* secondSource=nullptr);
+    void freeStadiumScreen();
+    void captureStadiumScreenNow();
+    C3D_Tex stadiumTex_[2]{};
+    C3D_RenderTarget* stadiumTarget_[2]{};
+    unsigned stadiumRead_=0;
+    bool stadiumRequested_=false,stadiumFrame_=false,stadiumPending_=false;
+    bool stadiumVisible_=true;
+    unsigned stadiumRenderFrames_=0;
+    bool stadiumCaptureFrame_=false;
+    std::vector<Bounds> stadiumScreens_;
+    C3D_Tex sceneTex_{},bloomTex_[4]{};
     C3D_RenderTarget* sceneTarget_=nullptr;
-    C3D_RenderTarget* bloomTarget_[3]={nullptr,nullptr,nullptr};
+    C3D_RenderTarget* bloomTarget_[4]{};
     Vertex* bloomVertices_=nullptr;
     unsigned bloomCount_=0;
     bool bloomRequested_=false,bloomFrame_=false,bloomFailed_=false;
     const CourseBloom* bloomSettings_=nullptr;
     C3D_Tex white_{};
     static constexpr int kOverlayCapacity=48;
-    static constexpr unsigned kBloomVertices=6*40;
+    static constexpr unsigned kBloomVertices=6*42;
     Vertex* overlay_=nullptr;
     int overlayCount_=0;
     // Authored Wii HUD panes include layered frames, glyphs and animation quads.
     static constexpr int kSpriteCapacity=512;
     Vertex* sprites_=nullptr;
+    // Each water draw owns its sampled vertices until the next GPU frame fence.
     // The sprite writers' current buffer: the top screen's (sprites_), or after
     // beginBottom the bottom screen's own quads, the last kBottomSpriteCapacity*6
     // vertices of the existing text_ allocation (no LINEAR is added). The bottom

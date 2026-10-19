@@ -35,6 +35,9 @@ public:
     void draw(Renderer&, const MenuState&, const UiTransitionView& = {});
     void reset(Renderer&);
     bool hasDriver() const { return shownDriver_ >= 0; }
+    // The page's controls are on the lower screen: the preview is centred and larger, and the
+    // decorative backdrop model (the trophy) is not drawn on those pages.
+    void setCenteredPreview(bool on) { centered_ = on; }
     struct Entry;
 private:
     Entry* find(int kind,int id);
@@ -43,6 +46,7 @@ private:
     void show(Renderer&,int kind,int id);
     std::vector<std::unique_ptr<Entry>> entries_;
     int shownDriver_=-1,shownBackground_=-1,shownMachine_=-1;
+    bool centered_=false;
     int driverClip_=-1,driverFace_=-1,backgroundClip_=-1;
     unsigned backgroundFrame_=0,driverFrame_=0;
     std::uint32_t clock_=1;

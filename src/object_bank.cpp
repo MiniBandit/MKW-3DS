@@ -1,6 +1,7 @@
 #include "mkw/object_bank.hpp"
 #include <mkw/asset_pack.hpp>
 #include <mkw/render_metrics.hpp>
+#include <mkw/normal_matrix.hpp>
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -29,7 +30,8 @@ unsigned samples(unsigned frames,unsigned step){return frames<=1?1:(frames-1+ste
 }
 void ObjectBank::reset(){
     std::free(data_);data_=nullptr;vertices_=matrices_=shapes_=0;weighted_=false;
-    source_=nullptr;ranges_=nullptr;bind_=nullptr;shared_={};sharedVertices_.reset();nodes_.clear();chr_.clear();pat_.clear();srt_.clear();clr_.clear();rigidParts_.clear();registerAlpha_.clear();
+    source_=nullptr;ranges_=nullptr;bind_=nullptr;shared_={};sharedVertices_.reset();nodes_.clear();chr_.clear();pat_.clear();srt_.clear();clr_.clear();morph_.clear();rigidParts_.clear();registerAlpha_.clear();
+    callbackSteps_.clear();callbackRecipes_.clear();callbackClips_.clear();callbackBind_=nullptr;
 }
 bool ObjectBank::load(const char* path){
     reset();
@@ -103,18 +105,55 @@ bool ObjectBank::load(const char* path){
         for(unsigned j=0;j<c.count;++j)if(c.shapes[j]>=shapes_){reset();return false;}
         clr_.push_back(c);
     }
-    if(at<size){
+    while(at<size){
         const auto* header=take(8);
-        if(!header||std::memcmp(header,"MORF",4)||u32(header+4)>chr_.size()){reset();return false;}
+        if(!header){reset();return false;}
+        if(!std::memcmp(header,"JCB1",4)){
+            const unsigned count=u32(header+4);const auto* dimensions=take(8);
+            if(!callbackSteps_.empty()||!count||count>256||!dimensions||u32(dimensions)!=matrices_||u32(dimensions+4)!=chr_.size()){reset();return false;}
+            callbackSteps_.resize(count);
+            for(unsigned i=0;i<count;++i){
+                const auto* p=take(sizeof(CallbackStep));if(!p){reset();return false;}
+                std::memcpy(&callbackSteps_[i],p,sizeof(CallbackStep));auto& s=callbackSteps_[i];s.name[31]=0;
+                if(s.parent < -1||s.parent>=static_cast<int32_t>(i)){reset();return false;}
+            }
+            auto floats=[&](size_t n)->const float*{
+                const auto* p=reinterpret_cast<const float*>(take(n*4));if(!p)return nullptr;
+                for(size_t i=0;i<n;++i)if(!std::isfinite(p[i]))return nullptr;
+                return p;
+            };
+            callbackBind_=floats(size_t(count)*18);if(!callbackBind_){reset();return false;}
+            for(unsigned i=0;i<matrices_;++i){
+                const auto* n=take(4);if(!n||!u32(n)||u32(n)>64){reset();return false;}
+                CallbackRecipe recipe{u32(n),reinterpret_cast<const CallbackTerm*>(take(size_t(u32(n))*sizeof(CallbackTerm)))};
+                if(!recipe.terms){reset();return false;}
+                for(unsigned j=0;j<recipe.count;++j){const auto& t=recipe.terms[j];
+                    if(t.step>=count||!std::isfinite(t.weight)){reset();return false;}
+                    for(float v:t.inverse)if(!std::isfinite(v)){reset();return false;}
+                }
+                callbackRecipes_.push_back(recipe);
+            }
+            for(const auto& chr:chr_){
+                const auto* p=take(12);if(!p||u32(p)!=chr.frames||u32(p+4)!=chr.loop||!u32(p+8)||u32(p+8)>64){reset();return false;}
+                CallbackClip c{u32(p),u32(p+4),u32(p+8),nullptr};
+                c.data=floats(size_t(samples(c.frames,c.step))*count*18);if(!c.data){reset();return false;}
+                callbackClips_.push_back(c);
+            }
+            continue;
+        }
+        if(std::memcmp(header,"MORF",4)||!morph_.empty()||u32(header+4)>chr_.size()){reset();return false;}
         for(unsigned i=0;i<u32(header+4);++i){
-            const auto* record=take(12);if(!record){reset();return false;}
-            const unsigned clip=u32(record),count=u32(record+4),frames=u32(record+8);
-            if(clip>=chr_.size()||frames!=chr_[clip].frames||count>vertices_){reset();return false;}
-            const auto* indices=take(size_t(count)*4);
-            const auto* deltas=take(size_t(count)*24);
-            const auto* weights=take(size_t(frames)*4);
-            if(!indices||!deltas||!weights){reset();return false;}
-            for(unsigned j=0;j<count;++j)if(u32(indices+j*4)>=vertices_){reset();return false;}
+            const auto* p=take(12);if(!p){reset();return false;}
+            Morph m{};m.clip=u32(p);m.count=u32(p+4);m.frames=u32(p+8);
+            if(m.clip>=chr_.size()||m.count>vertices_||m.frames!=chr_[m.clip].frames){reset();return false;}
+            m.vertices=reinterpret_cast<const uint32_t*>(take(size_t(m.count)*4));
+            m.deltas=reinterpret_cast<const float*>(take(size_t(m.count)*24));
+            m.weights=reinterpret_cast<const float*>(take(size_t(m.frames)*4));
+            if(!m.vertices||!m.deltas||!m.weights){reset();return false;}
+            for(unsigned v=0;v<m.count;++v)if(m.vertices[v]>=vertices_||(v&&m.vertices[v]<=m.vertices[v-1])){reset();return false;}
+            for(unsigned v=0;v<m.count*6;++v)if(!std::isfinite(m.deltas[v])){reset();return false;}
+            for(unsigned f=0;f<m.frames;++f)if(!std::isfinite(m.weights[f])){reset();return false;}
+            morph_.push_back(m);
         }
     }
     if(at!=size){reset();return false;}
@@ -142,6 +181,56 @@ void ObjectBank::pose(int clip,float frame,float* out) const {
         float* m=out+c.animated[i]*12;const float* x=a+i*12;const float* y=b+i*12;
         for(unsigned k=0;k<12;++k)m[k]=x[k]+(y[k]-x[k])*s.t;
     }
+}
+namespace {
+void callbackMultiply(const float* a,const float* b,float* out){
+    for(unsigned r=0;r<3;++r)for(unsigned c=0;c<4;++c){
+        float v=a[r*4]*b[c]+a[r*4+1]*b[4+c]+a[r*4+2]*b[8+c];
+        out[r*4+c]=c==3?v+a[r*4+3]:v;
+    }
+}
+}
+bool ObjectBank::poseCallbacks(int clip,float frame,const JointCallback* callbacks,unsigned count,
+        float* out,std::vector<float>& scratch) const {
+    if(!hasJointCallbacks()||!callbacks||!count||!out)return false;
+    constexpr float identity[12]={1,0,0,0,0,1,0,0,0,0,1,0};bool unchanged=true;
+    for(unsigned i=0;i<count;++i){
+        if(!callbacks[i].node||!callbacks[i].matrix)return false;
+        bool found=false;for(const auto& s:callbackSteps_)if(!std::strcmp(s.name,callbacks[i].node)){found=true;break;}
+        if(!found)return false;
+        for(unsigned c=0;c<12;++c){if(!std::isfinite(callbacks[i].matrix[c]))return false;unchanged&=callbacks[i].matrix[c]==identity[c];}
+    }
+    if(unchanged){pose(clip,frame,out);return true;}
+    const size_t nodes=callbackSteps_.size(),stride=nodes*18;
+    const float* a=callbackBind_;const float* b=a;float t=0;
+    if(clip>=0&&unsigned(clip)<callbackClips_.size()){
+        const auto& c=callbackClips_[clip];const auto sample=sampleClip(c.frames,c.step,c.loop,frame);
+        a=c.data+size_t(sample.a)*stride;b=c.data+size_t(sample.b)*stride;t=sample.t;
+    }
+    scratch.resize(nodes*15);float* world=scratch.data();float* scale=world+nodes*12;
+    for(size_t i=0;i<nodes;++i){
+        float local[12],parent[12];const auto* x=a+i*18;const auto* y=b+i*18;
+        auto value=[&](unsigned k){return x[k]+(y[k]-x[k])*t;};
+        for(unsigned k=0;k<12;++k)local[k]=value(k);
+        const int p=callbackSteps_[i].parent;const auto* base=p<0?identity:world+size_t(p)*12;
+        for(unsigned r=0;r<3;++r)for(unsigned c=0;c<4;++c)parent[r*4+c]=base[r*4+c]*(c<3?value(12+c):1.f);
+        auto* m=world+i*12;callbackMultiply(parent,local,m);
+        for(unsigned k=0;k<count;++k)if(!std::strcmp(callbackSteps_[i].name,callbacks[k].node)){
+            float turned[12];callbackMultiply(m,callbacks[k].matrix,turned);std::copy_n(turned,12,m);
+        }
+        for(unsigned k=0;k<3;++k)scale[i*3+k]=value(15+k);
+    }
+    // CalcWorld applies each node's own scale only after all descendants and
+    // callbacks. Matrix recipes then reproduce NodeMix's inverse-bind blends.
+    for(size_t i=0;i<nodes;++i)for(unsigned r=0;r<3;++r)for(unsigned c=0;c<3;++c)world[i*12+r*4+c]*=scale[i*3+c];
+    for(unsigned i=0;i<matrices_;++i){
+        auto* m=out+i*12;std::fill_n(m,12,0.f);
+        for(unsigned j=0;j<callbackRecipes_[i].count;++j){
+            const auto& term=callbackRecipes_[i].terms[j];float part[12];callbackMultiply(world+size_t(term.step)*12,term.inverse,part);
+            for(unsigned k=0;k<12;++k)m[k]+=part[k]*term.weight;
+        }
+    }
+    return true;
 }
 bool ObjectBank::material(int pat,float patFrame,int srt,float srtFrame,int clr,float clrFrame,SubmeshOverride* out,unsigned count) const {
     // Submesh i is shape i: the cooker preserves vertices and starts one
@@ -197,6 +286,7 @@ void ObjectBank::markRegisterAlpha(const Model& model){
     }
 }
 bool ObjectBank::makeRigid(Model& model){
+    if(morphing())return false;
     if(!ready()||rigid()||!vertices_||vertices_!=model.vertexCount)return false;
     for(const auto& s:model.submeshes)for(unsigned i=s.first;i+2<s.first+s.count;i+=3){
         const auto m=source_[model.indices[i]].matrix;
@@ -231,7 +321,7 @@ bool ObjectBank::makeRigid(Model& model){
     return true;
 }
 bool ObjectBank::gpuSkin(Model& model) const {
-    if(!vertices_||vertices_!=model.vertexCount||matrices_>Renderer::MaxSkinBones)return false;
+    if(morphing()||!vertices_||vertices_!=model.vertexCount||matrices_>Renderer::MaxSkinBones)return false;
     for(unsigned i=0;i<vertices_;++i){
         const auto& v=source_[i];
         model.vertices[i].position={v.p[0],v.p[1],v.p[2]};model.vertices[i].normal={float(v.matrix*3),0,0};
@@ -243,9 +333,14 @@ bool ObjectBank::shareSkinnedVertices(){
     if(!sharedVertices_)sharedVertices_=buildSkinRepresentatives(source_,vertices_);
     return bool(sharedVertices_);
 }
-void ObjectBank::skin(const float* palette,Model& model,bool normals) const {
+void ObjectBank::skin(const float* palette,Model& model,bool normals,int clip,float frame) const {
     if(!vertices_||model.vertexCount!=vertices_)return;
-    if(!normals&&shared_.ready()){
+    const Morph* morph=nullptr;float weight=0;
+    for(const auto& m:morph_)if(int(m.clip)==clip){
+        morph=&m;const auto s=sampleClip(m.frames,1,chr_[m.clip].loop,frame);
+        weight=m.weights[s.a]+(m.weights[s.b]-m.weights[s.a])*s.t;break;
+    }
+    if(!morph&&!normals&&shared_.ready()){
         auto& unique=sharedPositionScratch();
         for(unsigned u=0;u<shared_.first.size();++u){
             const auto& v=source_[shared_.first[u]];const float* m=palette+v.matrix*12;
@@ -255,7 +350,15 @@ void ObjectBank::skin(const float* palette,Model& model,bool normals) const {
         flushGpuData(model.vertices,vertices_*sizeof(Vertex));
         return;
     }
-    const uint16_t* representative=normals?sharedVertices_.get():nullptr;
+    const uint16_t* representative=normals&&!morph?sharedVertices_.get():nullptr;
+    std::array<std::array<Vec3,3>,128> normalRows;
+    if(normals)for(unsigned matrix=0;matrix<matrices_;++matrix){
+        const float* m=palette+matrix*12;
+        const Vec3 rows[3]={{m[0],m[1],m[2]},{m[4],m[5],m[6]},{m[8],m[9],m[10]}};
+        Vec3 inverse[3];normalMatrix(rows,inverse);
+        std::copy(std::begin(inverse),std::end(inverse),normalRows[matrix].begin());
+    }
+    unsigned morphVertex=0;
     for(unsigned i=0;i<vertices_;++i){
         if(representative&&representative[i]!=i){
             // The first matching source index is always earlier in this loop.
@@ -264,9 +367,17 @@ void ObjectBank::skin(const float* palette,Model& model,bool normals) const {
             model.vertices[i].position=first.position;model.vertices[i].normal=first.normal;
             continue;
         }
-        const auto& v=source_[i];const float* m=palette+v.matrix*12;
+        auto v=source_[i];
+        if(morph&&morphVertex<morph->count&&morph->vertices[morphVertex]==i){
+            const auto* delta=morph->deltas+morphVertex++*6;
+            for(unsigned k=0;k<3;++k){v.p[k]+=delta[k]*weight;v.n[k]+=delta[k+3]*weight;}
+        }
+        const float* m=palette+v.matrix*12;
         model.vertices[i].position={m[0]*v.p[0]+m[1]*v.p[1]+m[2]*v.p[2]+m[3],m[4]*v.p[0]+m[5]*v.p[1]+m[6]*v.p[2]+m[7],m[8]*v.p[0]+m[9]*v.p[1]+m[10]*v.p[2]+m[11]};
-        if(normals)model.vertices[i].normal=normalized(Vec3{m[0]*v.n[0]+m[1]*v.n[1]+m[2]*v.n[2],m[4]*v.n[0]+m[5]*v.n[1]+m[6]*v.n[2],m[8]*v.n[0]+m[9]*v.n[1]+m[10]*v.n[2]});
+        if(normals){
+            const auto& rows=normalRows[v.matrix];const Vec3 n{v.n[0],v.n[1],v.n[2]};
+            model.vertices[i].normal=normalized(Vec3{dot(rows[0],n),dot(rows[1],n),dot(rows[2],n)});
+        }
     }
     flushGpuData(model.vertices,vertices_*sizeof(Vertex));
 }
@@ -290,6 +401,13 @@ bool ObjectBank::animatedBounds(Bounds& out) const {
         }
     };
     include(bind_);
+    for(const auto& m:morph_)for(unsigned j=0;j<m.count;++j){
+        const auto& v=source_[m.vertices[j]];const auto* mat=bind_+v.matrix*12;const auto* delta=m.deltas+j*6;
+        for(unsigned f=0;f<m.frames;++f){
+            const Vec3 p{v.p[0]+delta[0]*m.weights[f],v.p[1]+delta[1]*m.weights[f],v.p[2]+delta[2]*m.weights[f]};
+            out.include({mat[0]*p.x+mat[1]*p.y+mat[2]*p.z+mat[3],mat[4]*p.x+mat[5]*p.y+mat[6]*p.z+mat[7],mat[8]*p.x+mat[9]*p.y+mat[10]*p.z+mat[11]});
+        }
+    }
     std::vector<float> palette(size_t(matrices_)*12);
     for(const auto& c:chr_){
         const unsigned n=samples(c.frames,c.step);
