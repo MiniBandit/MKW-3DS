@@ -117,7 +117,8 @@ void RacerVisuals::step(unsigned tick,const RaceItems& items){
                 s.frozenInIce=K::System::RaceConfig::Instance()->raceScenario().course==K::Course::N64_Sherbet_Land&&status.onBit(K::Kart::eStatus::InRespawn,K::Kart::eStatus::AfterRespawn);s.speed=kart->move()->speed();
         s.drift=status.onBit(K::Kart::eStatus::DriftManual,K::Kart::eStatus::DriftAuto);s.driftDirection=kart->move()->hopStickX();
         s.boost=status.onBit(K::Kart::eStatus::Boost);s.trick=status.onBit(K::Kart::eStatus::InATrick,K::Kart::eStatus::ZipperTrick);
-        s.hit=status.onBit(K::Kart::eStatus::InAction,K::Kart::eStatus::Burnout,K::Kart::eStatus::Shocked);
+        // Shocked lasts the whole shrink; the strike itself is an action.
+        s.hit=status.onBit(K::Kart::eStatus::InAction,K::Kart::eStatus::Burnout);
         s.accelerating=status.onBit(K::Kart::eStatus::Accelerate);s.braking=status.onBit(K::Kart::eStatus::Brake);
         const auto* race=K::System::RaceManager::Instance();
         const auto& player=race->player(i+1);

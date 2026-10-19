@@ -3160,10 +3160,14 @@ int main()
             }
             // Preserve the Wii input lattice used by ghost records.
             int stick = std::clamp(int(std::lround(pad.dx * 7.f / 156.f)), -7, 7);
+            // Up/down tilts the nose in the air (Kinoko KartMove::calcDive),
+            // up positive as on the Wii stick.
+            int stickY = std::clamp(int(std::lround(pad.dy * 7.f / 156.f)), -7, 7);
             if (garageTest)
             {
                 buttons = 1;
                 stick = frames % fixtureFrames < 32 ? -4 : 4;
+                stickY = 0;
             }
             auto *controller = K::System::KPadDirector::Instance()->hostController();
             auto start = svcGetSystemTick();
@@ -3179,7 +3183,7 @@ int main()
                 bool jumpAction = false;
                 // Restore current human input every simulation tick before any
                 // temporary autopilot override, including catch-up frame exits.
-                controller->setInputsRawStick(buttons, stick + 7, 7, trick);
+                controller->setInputsRawStick(buttons, stick + 7, stickY + 7, trick);
                 if (fullRace)
                 {
                     // After the goal retail hands the player to its AI
@@ -3701,8 +3705,8 @@ int main()
                 signals.driftDirection = kart->move()->hopStickX();
                 signals.boost = boost > 0;
                 signals.trick = inTrick;
-                signals.hit = kart->status().onBit(K::Kart::eStatus::InAction, K::Kart::eStatus::Burnout,
-                                                   K::Kart::eStatus::Shocked);
+                // Shocked lasts the whole shrink; the strike itself is an action.
+                signals.hit = kart->status().onBit(K::Kart::eStatus::InAction, K::Kart::eStatus::Burnout);
                 signals.finished = fullRace ? raceGrid.finished()
                                             : K::System::RaceManager::Instance()->stage() ==
                                                   K::System::RaceManager::Stage::FinishGlobal;
