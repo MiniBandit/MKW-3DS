@@ -651,7 +651,7 @@ def cook(root, output, course_only=False):
         index, pixel_index = entries(source), entries(pixels)
         namespace = archive + '_'
         texture_archives[namespace] = (pixels, pixel_index)
-        creature_sources.append({'path': str(path.relative_to(root)),
+        creature_sources.append({'path': path.relative_to(root).as_posix(),
                                  'sha256': hashlib.sha256(source).hexdigest(),
                                  'breft_sha256': hashlib.sha256(pixels).hexdigest()})
         queue = list(roots)
