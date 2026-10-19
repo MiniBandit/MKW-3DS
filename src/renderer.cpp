@@ -683,7 +683,8 @@ void Renderer::drawAtScreenNow(const Model& model,const Vertex* vertices,const C
     const C3D_Mtx original=projection_;
     C3D_Mtx tilt;Mtx_PerspTilt(&tilt,C3D_AngleFromDegrees(90.f),1.f,1.f,2.f,false);
     const float vertical=(tilt.r[0].y<0?-1.f:1.f)*(120.f-y)/120.f;
-    const float horizontal=(tilt.r[1].x<0?-1.f:1.f)*(x-200.f)/200.f;
+    const float halfW=bottomPass_?160.f:200.f; // the lower screen is 320 wide
+    const float horizontal=(tilt.r[1].x<0?-1.f:1.f)*(x-halfW)/halfW;
     for(unsigned col=0;col<4;++col){
         projection_.r[0].c[col]=scaleY*original.r[0].c[col]+vertical*original.r[3].c[col];
         projection_.r[1].c[col]=scaleX*original.r[1].c[col]+horizontal*original.r[3].c[col];

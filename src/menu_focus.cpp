@@ -96,7 +96,10 @@ void uiFocusAdvance(MenuState& state,unsigned ticks){
    const auto* clip=entry.clip;if(!clip||clip->duration<=0||clip->rate<=0)break;
    entry.frame+=clip->rate;
    if(entry.frame<clip->duration)continue;
-   if(clip->loop)entry.frame=std::fmod(entry.frame,clip->duration);
+   // The main menu's group frames (TopMenu*Waku) author Select as a 10-frame
+   // light burst: looped it flashed six times a second, so it plays once and holds.
+   if(clip->loop&&slot>=UiFocusButtonCount&&entry.phase==UiFocusPhase::Select)entry.frame=clip->duration;
+   else if(clip->loop)entry.frame=std::fmod(entry.frame,clip->duration);
    else if(*clip->next){
     entry.phase=!std::strcmp(clip->next,"Select")?UiFocusPhase::Select:UiFocusPhase::Free;
     entry.clip=uiFindAnimationClip(uiFocusControlName(state,slot),"Select",clip->next);entry.frame=0;

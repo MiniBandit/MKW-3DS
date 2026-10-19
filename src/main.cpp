@@ -317,13 +317,55 @@ static void saveRightEye(mkw::Renderer &renderer, const char *path)
         report(line.c_str());
     }
 }
+// The last race frame as a texture (top row first, 8x8 tiles in Morton order,
+// as the lower screen's glyph atlas), drawn behind the pause menu.
+static bool snapshotTop(mkw::Renderer &renderer, mkw::Texture &out)
+{
+    out.reset();
+    std::vector<uint8_t> rgb(400 * 240 * 3);
+    if (!renderer.captureTop(rgb.data(), 0) || !C3D_TexInit(&out.gpu, 512, 256, GPU_RGB565))
+        return false;
+    std::vector<uint16_t> texels(512 * 256, 0);
+    for (unsigned y = 0; y < 240; ++y)
+        for (unsigned x = 0; x < 400; ++x)
+        {
+            const unsigned ix = x & 7, iy = y & 7;
+            const unsigned morton = (ix & 1) | ((iy & 1) << 1) | ((ix & 2) << 1) | ((iy & 2) << 2) | ((ix & 4) << 2) |
+                                    ((iy & 4) << 3);
+            const uint8_t *p = &rgb[3 * (y * 400 + x)];
+            texels[((y / 8) * (512 / 8) + x / 8) * 64 + morton] = uint16_t((p[0] >> 3) << 11 | (p[1] >> 2) << 5 | p[2] >> 3);
+        }
+    C3D_TexLoadImage(&out.gpu, texels.data(), GPU_TEXFACE_2D, 0);
+    C3D_TexFlush(&out.gpu);
+    C3D_TexSetFilter(&out.gpu, GPU_NEAREST, GPU_NEAREST);
+    C3D_TexSetWrap(&out.gpu, GPU_CLAMP_TO_EDGE, GPU_CLAMP_TO_EDGE);
+    out.ready = true;
+    return true;
+}
 // Stereo menus (docs/STEREO_3D.md), Mario Kart 7's garage: the backdrop pane
 // (quad 0) at the garage's back wall behind the selection models, enlarged
 // about the screen centre by its shift so neither eye bares an edge; the
 // models in front of it; the other panes on the screen plane.
 static void drawMenuBackdrop(mkw::Renderer &renderer, mkw::MenuRenderer &menuRenderer,
-                             const std::vector<mkw::UiQuad> &quads)
+                             const std::vector<mkw::UiQuad> &quads, const mkw::Texture *paused = nullptr)
 {
+    if (paused && paused->ready)
+    {
+        // The pause menu over the frozen race, dimmed, instead of the backdrop pane.
+        mkw::Renderer::MaterialQuad q{};
+        const float u = 400.f / 512.f, v = 240.f / 256.f;
+        const float x[4] = {0, 400, 0, 400}, y[4] = {0, 0, 240, 240}, us[4] = {0, u, 0, u}, vs[4] = {0, 0, v, v};
+        for (unsigned k = 0; k < 4; ++k)
+        {
+            q.x[k] = x[k];
+            q.y[k] = y[k];
+            q.u[k] = us[k];
+            q.v[k] = vs[k];
+            q.color[k] = 0x8c8c8cffu;
+        }
+        renderer.drawScreenMaterialQuads(paused, &q, 1, 0x00000000u, 0xffffffffu);
+        return;
+    }
     const float parallax = mkw::MenuModels::backdropParallax(renderer);
     if (parallax == 0 || quads.empty())
     {
@@ -817,6 +859,8 @@ int main()
     // below) frees them. The menus never draw race assets.
     bool raceResident = false, raceGraphicsSuspended = false;
     std::function<void()> releaseRace, suspendRaceGraphics;
+    // The race as it was when paused, behind the pause menu (heap: one Texture).
+    auto pauseSnapshot = std::make_unique<mkw::Texture>();
     std::function<bool()> restoreRaceGraphics;
     // Retail course fog object (StaticR 0x805A30C8..0x805A36CC): KMP AREA
     // type 2 selects the BFG state; DK Summit fades on the race timer.
@@ -846,6 +890,9 @@ int main()
         renderer.waitForGpu();
         if (menu.page == mkw::UiPage::Pause)
         {
+            // The last race frame is still on the top screen.
+            if (!snapshotTop(renderer, *pauseSnapshot))
+                pauseSnapshot->reset();
             if (suspendRaceGraphics)
                 suspendRaceGraphics();
             std::vector<mkw::UiQuad> paused, confirmation;
@@ -929,6 +976,7 @@ int main()
         auto leave = [&](mkw::UiAction action) {
             loader.stop();
             renderer.waitForGpu();
+            pauseSnapshot->reset();
             menuBottom.disable(renderer);
             menuAudio.close();
             menuModels.reset(renderer);
@@ -1214,7 +1262,10 @@ int main()
             menuRenderer.uploadMovies();
             menuProfile->mark(MenuStage::Movies);
             renderer.drawScreenFade(1.f, false);
-            drawMenuBackdrop(renderer, menuRenderer, quads);
+            drawMenuBackdrop(renderer, menuRenderer, quads,
+                             visual.page == mkw::UiPage::Pause || visual.page == mkw::UiPage::QuitConfirm
+                                 ? pauseSnapshot.get()
+                                 : nullptr);
             menuProfile->mark(MenuStage::Background);
             menuModels.draw(renderer, visual, motion);
             menuProfile->mark(MenuStage::Scene);
@@ -1242,6 +1293,26 @@ int main()
             renderer.end();
             menuProfile->mark(MenuStage::Submit);
             menuProfile->end(renderer, unsigned(quads.size()));
+            // QA (menu autoplay): one picture of each screen of a settled pause menu.
+            if (kQa && autoplay && pauseSnapshot->ready && visual.page == mkw::UiPage::Pause && visual.age == 90)
+            {
+                std::vector<uint8_t> top(400 * 240 * 3), bottom(320 * 240 * 3);
+                const bool haveBottom = renderer.captureBottom(bottom.data());
+                if (renderer.captureTop(top.data()))
+                    if (FILE *f = fopen("sdmc:/3ds/mkw-3ds/pause-top.ppm", "wb"))
+                    {
+                        fprintf(f, "P6\n400 240\n255\n");
+                        fwrite(top.data(), 1, top.size(), f);
+                        fclose(f);
+                    }
+                if (haveBottom)
+                    if (FILE *f = fopen("sdmc:/3ds/mkw-3ds/pause-bottom.ppm", "wb"))
+                    {
+                        fprintf(f, "P6\n320 240\n255\n");
+                        fwrite(bottom.data(), 1, bottom.size(), f);
+                        fclose(f);
+                    }
+            }
             // QA (autoplay + menu-capture.txt): sample menu frames for review.
             static const unsigned menuCaptureEvery = [] {
                 unsigned n = 0;
@@ -1326,7 +1397,10 @@ int main()
             ok &= menuIcons.prepare(renderer, visual);
             menuModels.begin(renderer);
             renderer.drawScreenFade(1.f, false);
-            drawMenuBackdrop(renderer, menuRenderer, quads);
+            drawMenuBackdrop(renderer, menuRenderer, quads,
+                             visual.page == mkw::UiPage::Pause || visual.page == mkw::UiPage::QuitConfirm
+                                 ? pauseSnapshot.get()
+                                 : nullptr);
             if (models)
                 menuModels.draw(renderer, visual);
             menuRenderer.draw(renderer, quads, false, 1, ~0u, &menuIcons);
