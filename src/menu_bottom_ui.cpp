@@ -12,6 +12,16 @@ bool belongs(UiPage page,unsigned slot,unsigned count){
 constexpr float AreaX=8,AreaY=34,AreaW=304,AreaH=166,MaxScale=1.35f;
 struct Placement {bool valid=false;float x0=0,y0=0,scale=1,ox=0,oy=0;unsigned count=0,columns=0;UiPage page=UiPage::Strap;};
 // The placement is computed once per page shape from its settled layout.
+// The preview is centred on the top screen, so its name plate (lower left) follows it.
+void centerNamePlate(const MenuState& state,std::vector<UiQuad>& quads){
+    if(state.page!=UiPage::Character&&state.page!=UiPage::Vehicle)return;
+    auto plate=[](const UiQuad& q){return q.slot==~0u&&!q.bottom&&q.y>=165&&q.y+q.h<=206&&q.x<200&&q.w<200;};
+    float x0=1e9f,x1=-1e9f;
+    for(const auto& q:quads)if(plate(q)){x0=std::min(x0,q.x);x1=std::max(x1,q.x+q.w);}
+    if(x1<=x0)return;
+    const float dx=200-(x0+x1)*.5f;
+    for(auto& q:quads)if(plate(q))q.x+=dx;
+}
 Placement& cached(const MenuState& state){
     static std::array<Placement,12> cache{};
     for(auto& entry:cache)if(entry.valid&&entry.page==state.page&&entry.count==state.count()&&entry.columns==state.columns())return entry;
@@ -50,6 +60,7 @@ bool movesControls(UiPage page){
 void relocateControls(const MenuState& state,std::vector<UiQuad>& quads,MenuBottomMap& map){
     map=MenuBottomMap{};
     if(state.page==UiPage::Vehicle){
+        centerNamePlate(state,quads);
         // The vehicle buttons are 3D models drawn with a depth buffer, which the lower
         // screen's target does not have. The lower screen lists the vehicles itself
         // (menu_bottom.cpp), so the top screen drops its list.
@@ -60,6 +71,7 @@ void relocateControls(const MenuState& state,std::vector<UiQuad>& quads,MenuBott
     Placement& place=cached(state);
     if(!place.valid||place.page!=state.page||place.count!=state.count()||place.columns!=state.columns())place=compute(state);
     if(!place.valid)return;
+    centerNamePlate(state,quads);
     map.valid=true;map.page=state.page;
     for(auto& q:quads){
         if(!belongs(state.page,q.slot,state.count())||q.bottom)continue;

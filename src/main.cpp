@@ -893,6 +893,7 @@ int main()
         mkw::MenuBottomMap bottomMap;
         if (!autoplay && !menuBottom.borrow(renderer))
             menuBottom.enable(renderer);
+        menuModels.setCenteredPreview(menuBottom.active());
         auto last = svcGetSystemTick();
         double pending = 0;
         unsigned menuSourceTicks = 0;
@@ -1266,6 +1267,7 @@ int main()
         mkw::MenuBottomScreen qaBottom;
         mkw::MenuBottomLayout qaBottomLayout;
         qaBottom.enable(renderer);
+        menuModels.setCenteredPreview(qaBottom.active());
         bool ok = true;
         unsigned captured = 0, expected = std::size(pages), motionFrames = 0;
         std::vector<uint8_t> pixels(400 * 240 * 3);

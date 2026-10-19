@@ -434,7 +434,7 @@ static void composeMenuImpl(const MenuState& s,const UiRaceView& race,std::vecto
    Pose movie=child(cups,control("CourseSelectMovie","RaceCupMovie"));
    c.panel("course_movie_frame",movie);c.movie("cup_movie_",selectedCup,"course_movie_frame","black_base",movie);
    const unsigned highlighted=(unsigned(double(s.age)*59.94/60.0)/120)%4;
-   for(unsigned i=0;i<4;++i){Pose p=child(courses,numbered("CupSelectCourse",i,"Course"));
+   for(unsigned i=0;i<4;++i){Pose p=child(courses,numbered("CupSelectCourse",i,"Course"));p.focusSlot=~0u; // the course list stays on the top screen beside its preview
     c.text(CourseNames[selectedCup*4+i],i==highlighted?"cup_course_select":"cup_course_free",p);
     if(preload)c.text(CourseNames[selectedCup*4+i],i==highlighted?"cup_course_free":"cup_course_select",p);
    }

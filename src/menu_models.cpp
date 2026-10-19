@@ -429,7 +429,12 @@ namespace mkw
     }
     void MenuModels::draw(Renderer &renderer, const MenuState &state, const UiTransitionView &motion)
     {
-        if (auto *background = shownBackground_ >= 0 ? find(Background, shownBackground_) : nullptr; background && background->resident())
+        // With the controls on the lower screen, selection pages show the preview alone.
+        const bool previewOnly = centered_ && (state.page == UiPage::Character || state.page == UiPage::Vehicle ||
+                                               state.page == UiPage::Drift || state.page == UiPage::Cup ||
+                                               state.page == UiPage::Course || state.page == UiPage::BattleCup ||
+                                               state.page == UiPage::BattleStage || state.page == UiPage::Ghost);
+        if (auto *background = shownBackground_ >= 0 && !previewOnly ? find(Background, shownBackground_) : nullptr; background && background->resident())
         {
             // BackModelMgr::Update's original rates (USA808d5f18) continue across
             // selection pages; a page's age is not the model's animation clock.
@@ -485,7 +490,7 @@ namespace mkw
             // horizontal scale to 608/832 before the 608x456 UI reaches the LCD.
             C3D_Mtx matrix;
             Mtx_Identity(&matrix);
-            const auto placement = uiMenuModelPlacement(state.page, motion);
+            const auto placement = uiMenuModelPlacement(state.page, motion, centered_ && (state.page == UiPage::Character || state.page == UiPage::Vehicle || state.page == UiPage::Drift || state.page == UiPage::Course));
             const float x = 200.f + placement.x * 400.f / 608.f;
             const float y = 120.f - placement.y * display::MenuScaleY;
             constexpr unsigned ids[] = {0, 1, 2, 6, 7, 8, 3, 4, 5, 9, 10, 11};
@@ -509,7 +514,7 @@ namespace mkw
             Mtx_Identity(&matrix);
             Mtx_Translate(&matrix, 0.f, -150.f, -15.f, true);
             Mtx_Scale(&matrix, 1.6f, 1.6f, 1.6f);
-            const auto placement = uiMenuModelPlacement(state.page, motion);
+            const auto placement = uiMenuModelPlacement(state.page, motion, centered_ && (state.page == UiPage::Character || state.page == UiPage::Vehicle || state.page == UiPage::Drift || state.page == UiPage::Course));
             renderer.drawAtScreen(*driver->model, matrix, 200.f + placement.x * 400.f / 608.f,
                                   120.f - placement.y * display::MenuScaleY, 1.f,
                                   2.f * 400.f / 832.f * placement.scale, 2.f * display::MenuScaleY * placement.scale);

@@ -143,6 +143,7 @@ void MenuBottomScreen::draw(Renderer& renderer,const MenuBottomLayout& layout,bo
     // Letters: one textured quad each, in the widget's colour.
     count=0;
     auto text=[&](const char* s,float x,float y,float size,std::uint32_t color){
+        x=float(int(x+.5f));y=float(int(y+.5f)); // whole pixels: nearest sampling of a 5 x 7 font needs the pixel grid
         for(;*s;++s,x+=6*size){
             const int g=glyphIndex(static_cast<unsigned char>(*s));
             if(g<0||count>=Capacity)continue;
