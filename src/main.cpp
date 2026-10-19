@@ -967,6 +967,20 @@ int main()
                     const auto &widget = bottomLayout.widgets[unsigned(hit)];
                     if (widget.back)
                         input.back = true;
+                    else if (menu.page == mkw::UiPage::Confirm && widget.slot >= 0)
+                    {
+                        // The lower screen shows the page before Confirm: a tap picks that cup, course
+                        // or stage and starts the race.
+                        auto &sel = menu.selection;
+                        const unsigned slot = unsigned(widget.slot);
+                        if (sel.mode == mkw::UiMode::GrandPrix)
+                            sel.course = slot * 4;
+                        else if (sel.mode == mkw::UiMode::Battle)
+                            sel.battleStage = sel.battleStage / 5 * 5 + slot;
+                        else
+                            sel.course = sel.course / 4 * 4 + slot;
+                        input.accept = true;
+                    }
                     else if (widget.slot >= 0 && menu.selectSlot(unsigned(widget.slot)))
                         input.accept = true;
                 }

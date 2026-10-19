@@ -96,11 +96,26 @@ void composeMenuBottom(const MenuState& state,MenuBottomLayout& layout,const Mii
         default:break;
         }
         (void)title; // the page's own title bar is drawn by the menu quads
-        for(unsigned slot=0;slot<state.count()&&slot<moved->rects.size();++slot){
+        for(unsigned slot=0;slot<moved->slots&&slot<moved->rects.size();++slot){
             const auto& r=moved->rects[slot];
             if(!r.present)continue;
             auto* t=b.tile(r.x0,r.y0,r.x1-r.x0,r.y1-r.y0,"",int(slot),true);
             if(t)t->hidden=true;
+        }
+        // Battle stage names (their converted text sprites are other strings): drawn here, with a shadow.
+        auto shadowed=[&](float x,float y,const char* text,float size){
+            const float width=float(std::strlen(text))*6*size-size;
+            b.label(x-width*.5f+1,y+1,text,size,0x000000ffu);b.label(x-width*.5f,y,text,size,0xffffffffu);
+        };
+        if(state.page==UiPage::BattleStage){
+            const unsigned first=std::min(state.selection.battleStage/5,1u)*5;
+            for(unsigned slot=0;slot<5&&slot<moved->rects.size();++slot){
+                const auto& r=moved->rects[slot];
+                if(r.present)shadowed((r.x0+r.x1)*.5f,(r.y0+r.y1)*.5f-3.5f,UiBattleStageNames[first+slot],1);
+            }
+        }else if(state.page==UiPage::BattleCup){
+            const unsigned first=std::min(state.cursor,1u)*5;
+            for(unsigned i=0;i<5;++i)shadowed(160,146+i*12.f,UiBattleStageNames[first+i],1);
         }
         if(moved->back.present){
             if(auto* t=b.tile(moved->back.x0,moved->back.y0,moved->back.x1-moved->back.x0,moved->back.y1-moved->back.y0,"",-1,true)){t->hidden=true;t->back=true;}

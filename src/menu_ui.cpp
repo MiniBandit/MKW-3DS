@@ -308,8 +308,6 @@ static void composeMenuImpl(const MenuState& s,const UiRaceView& race,std::vecto
    underlayView.selectedControl=transition->underlaySelectedControl;
   }
   composeMenuImpl(base,race,q,underlayView.confirming||underlayView.preload?&underlayView:nullptr);
-  // The page under the confirmation stays where it is: only the OK button below is a control.
-  for(auto& quad:q)quad.slot=~0u;
  }
  Composer c(s,q,transition);const unsigned driver=std::min(s.selection.driver,unsigned(UiCharacters.size()-1));
  const bool preload=transition&&transition->preload;
@@ -417,6 +415,7 @@ static void composeMenuImpl(const MenuState& s,const UiRaceView& race,std::vecto
   // The chosen cup draws last (retail lifts it to z+200) over its neighbours.
   for(unsigned n=0;n<8;++n){const unsigned i=n<selectedCup?n:n==7?selectedCup:n+1;
    Pose p=child(cups,numbered(pickCup?"CupSelectCup":"CourseSelectCup",i));const char* base=i==selectedCup?"cup_select":"cup_free";
+   if(!pickCup)p.focusSlot=~0u; // on the course page the cup is a heading, not a control
    if(!pickCup){
     // CtrlMenuCourseSelectCupSub::calcSelf (USA 807de7d4): t advances 20 per
     // frame to 300. The chosen cup slides to the CupSelectCupNULL origin and
@@ -450,7 +449,8 @@ static void composeMenuImpl(const MenuState& s,const UiRaceView& race,std::vecto
   const char* names[]={"Wii Stages","Retro Stages"};
   const Pose cups=control("BattleCupSelectNULL","CupSelectCupNULL"),stages=control("BattleCupSelectNULL","CupSelectCourseNULL");
   for(unsigned i=0;i<2;++i){
-   const Pose p=child(cups,numbered(pick?"BattleCupSelectCup":"BattleStageSelectCup",i));
+   Pose p=child(cups,numbered(pick?"BattleCupSelectCup":"BattleStageSelectCup",i));
+   if(!pick)p.focusSlot=~0u; // on the stage page the cup is a heading, not a control
    const char* base=i==cup?"cup_select":"cup_free";
    c.panel(base,p);c.icon("battle_cup_",i,base,"icon",p);
    if(i==cup||(pick&&uiFocusAnimation(s,i).changing())){
@@ -463,8 +463,7 @@ static void composeMenuImpl(const MenuState& s,const UiRaceView& race,std::vecto
    const unsigned highlighted=(unsigned(double(s.age)*59.94/60.0)/120)%5;
    for(unsigned i=0;i<5;++i){
     const Pose p=child(stages,numbered("BattleCupSelectStage",i,"Course"));
-    c.text(UiBattleStageNames[cup*5+i],i==highlighted?"battle_course_select":"battle_course_free",p);
-    if(preload)c.text(UiBattleStageNames[cup*5+i],i==highlighted?"battle_course_free":"battle_course_select",p);
+    (void)highlighted; // the stage names are drawn by the lower screen (menu_bottom.cpp): the converted text sprites for them are other strings
    }
   }else{
    // The selected stage's native atlas region is split across five controls,
@@ -473,8 +472,8 @@ static void composeMenuImpl(const MenuState& s,const UiRaceView& race,std::vecto
     const Pose p=child(stages,numbered("BattleStageSelectStage",i));
     const char* base=s.cursor==i?"course_select":"course_free";
     c.movieButton(base,p);c.movie("battle_preview_",cup*5+std::min(s.cursor,4u),base,"black_base",p,1,0,float(i)/5,1,float(i+1)/5);
-    c.movieOverlay(base,p);c.text(UiBattleStageNames[cup*5+i],base,p);
-    if(s.cursor==i)c.glow("course",p,UiBattleStageNames[cup*5+i]);
+    c.movieOverlay(base,p);
+    if(s.cursor==i)c.glow("course",p);
    }
   }
   c.chrome(pick?"Cups":"Stages");break;
@@ -493,7 +492,10 @@ static void composeMenuImpl(const MenuState& s,const UiRaceView& race,std::vecto
   c.panel("confirm_bottom",control("MenuObiBottomRaceConfirm","MenuEndConfirmObiBottom"));
   c.text("Start Race","header_text",control("MenuObiTitleText","MenuEndConfirmObiTitleText"));
   Pose back=control("Back","ButtonBackMenuEndConfirm");c.panel("back_free",back);c.inPane("button_back","back_free","text",back);
-  c.button("confirm",0,control("MenuEndConfirm","ButtonOK"),"OK");break;
+  const auto okFirst=q.size();
+  c.button("confirm",0,control("MenuEndConfirm","ButtonOK"),"OK");
+  for(auto i=okFirst;i<q.size();++i)q[i].slot=UiConfirmOkSlot; // the OK button stays on the top screen
+  break;
  }
  case UiPage::Pause:{
   c.chrome("Pause");const char* variants[]={"ButtonContinue","ButtonRestart","ButtonQuit"};
