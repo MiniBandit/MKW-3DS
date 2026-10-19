@@ -41,6 +41,11 @@ struct BottomView {
     bool standingsVisible=false;  // Mario Kart 7: from the start of the race
     uint32_t tick=0;              // simulation step (animations advance at 60 Hz)
     float fade=0;                 // black over the screen while leaving the race (1 opaque)
+    // The course tour (the opening fly-over): the whole course is shown and the camera's
+    // position and viewing direction move along it, as in Mario Kart DS.
+    bool tour=false;
+    float tourX=0,tourZ=0;        // camera position (world XZ)
+    float tourHeadX=0,tourHeadZ=-1;
 };
 // Fills view from the running race, read-only: racer positions, ranks and
 // characters, each racer's item window picture, the local kart's heading,
@@ -51,7 +56,8 @@ class RaceBottomScreen {
 public:
     // Worst case by construction: fill 1, map 1, start line 24, 24 items as
     // blast rings (4 each) 96, racers 12 x 3 + searchlight 1, column 2,
-    // standings 12 x 4, timer 10, leave fade 1 = 220.
+    // standings 12 x 4, timer 10, leave fade 1 = 220. The course tour's camera marker (4 quads)
+    // shows only while the standings are hidden (the fly-over), so it fits the same budget.
     static constexpr unsigned QuadCapacity=1+1+24+BottomView::MaxItems*4+12*3+1+2+12*4+10+1;
     RaceBottomScreen();
     ~RaceBottomScreen();

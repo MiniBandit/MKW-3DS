@@ -57,6 +57,9 @@ def digest(path):
 
 def cook_course(course, force, mii_manifest=None):
     if mii_manifest is None: mii_manifest = ROOT / 'assets/mii/course-portraits/course-textures.json'
+    # The baked Mii portraits are optional art (assets/ is not in the repository): without them the
+    # billboards and statues keep the course's own textures, as before.
+    if mii_manifest is not None and not Path(mii_manifest).is_file(): mii_manifest = None
     folder = ROOT / 'assets/courses' / course['key']
     manifest = OUT / f"models/course_{course['id']:02d}_visuals.list"
     stamp = ROOT / 'build/object-exports' / course['key'] / 'stamp.json'

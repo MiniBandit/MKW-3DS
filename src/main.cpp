@@ -4709,6 +4709,16 @@ int main()
                 // The lower LCD: the race read, never written (src/race_bottom_screen.cpp).
                 mkw::fillBottomView(bottomView, raceGrid, *raceItems, intro.active(), physicsSteps,
                                     results.leaveFade());
+                if (intro.active())
+                {
+                    // The opening fly-over: the lower screen follows the camera along the whole-course map.
+                    const auto eye = intro.eye(), target = intro.target();
+                    bottomView.tour = true;
+                    bottomView.tourX = eye.x;
+                    bottomView.tourZ = eye.z;
+                    bottomView.tourHeadX = target.x - eye.x;
+                    bottomView.tourHeadZ = target.z - eye.z;
+                }
                 renderer.beginBottom();
                 bottomScreen.draw(renderer, bottomView);
                 if (endMenu && !autoplay && resultsBottom.borrow(renderer))

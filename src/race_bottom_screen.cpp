@@ -185,7 +185,7 @@ void RaceBottomScreen::draw(Renderer& renderer,const BottomView& view){
     const unsigned elapsed=m.started?std::min<unsigned>(view.tick-m.lastTick,30u):0u;
     m.lastTick=view.tick;m.started=true;
     for(unsigned i=0;i<elapsed;++i){
-        m.blend=std::clamp(m.blend+(m.overviewWanted?1.f:-1.f)/12.f,0.f,1.f);
+        m.blend=std::clamp(m.blend+((m.overviewWanted||view.tour)?1.f:-1.f)/12.f,0.f,1.f); // the tour shows the whole course
         m.standings=std::clamp(m.standings+(view.standingsVisible?1.f:-1.f)/16.f,0.f,1.f);
         ++m.roulette;
     }
@@ -293,6 +293,18 @@ void RaceBottomScreen::draw(Renderer& renderer,const BottomView& view){
             m.add(art,x-hs+offset,y-hs,x+hs+offset,y+hs,alpha);
             m.add(art,x-hf,y-hf,x+hf,y+hf,0xffffff00u|alpha);
         }
+    }
+    // The tour's camera: a marker on the map with the viewing cone along its direction.
+    if(atlas&&view.tour){
+        const float x=screenX(view.tourX),y=screenY(view.tourZ);
+        float hx=view.tourHeadX,hy=view.tourHeadZ;const float l=std::sqrt(hx*hx+hy*hy);
+        if(l>1e-4f&&onMap(x,y,24)){
+            hx/=l;hy/=l;const float px=-hy,py=hx;
+            const float tx=x+hx*LightH*1.4f,ty=y+hy*LightH*1.4f,w=LightW*.7f;
+            const float cxs[4]={tx-px*w,tx+px*w,x-px*w,x+px*w},cys[4]={ty-py*w,ty+py*w,y-py*w,y+py*w};
+            m.addCorners(RaceMapSearchlight,cxs,cys,LightColor);
+        }
+        if(onMap(x,y,6)){m.add(RaceMapWhite,x-4,y-4,x+4,y+4,0x000000ffu);m.add(RaceMapWhite,x-3,y-3,x+3,y+3,0xff3030ffu);}
     }
     const unsigned overlayCount=m.count-overlayFirst;
 
