@@ -118,6 +118,16 @@ bool MenuState::supportsRace()const{
  return raceMode(selection.mode)&&(selection.mode!=UiMode::GrandPrix||raceEngineClass(selection.engineClass))&&!selection.teams&&raceDriver(selection.driver)&&raceVehicle(selection.vehicle)&&courseReady;
 }
 
+bool MenuState::selectSlot(unsigned slot){
+ normalize(selection);
+ if(slot>=count())return false;
+ const unsigned previousCursor=cursor;
+ cursor=slot;
+ if(cursor!=previousCursor)focusAge=0;
+ uiFocusSelect(*this,previousCursor);unavailable=false;
+ return true;
+}
+
 void MenuState::advance(unsigned ticks){age+=ticks;focusAge+=ticks;uiFocusAdvance(*this,ticks);}
 
 void MenuState::enter(UiPage next){

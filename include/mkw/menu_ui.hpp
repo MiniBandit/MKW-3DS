@@ -58,6 +58,9 @@ public:
  bool finalRace=false;
  UiFocusState focus{};
  UiAction input(UiInput);
+ // Touch: highlights a control as the d-pad would (the caller then sends accept
+ // or back through input). False when the page has no such control.
+ bool selectSlot(unsigned slot);
  void advance(unsigned ticks);
  void enter(UiPage);
  void raceStarted(){enter(UiPage::Race);}

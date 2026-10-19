@@ -48,6 +48,9 @@
 #include <mkw/animation.hpp>
 #include <mkw/asset_loader.hpp>
 #include <mkw/asset_pack.hpp>
+#include <mkw/overlay.hpp>
+#include <mkw/menu_bottom_screen.hpp>
+#include <mkw/mii_store.hpp>
 #include <mkw/balloon_battle.hpp>
 #include <mkw/bullet_bill.hpp>
 #include <mkw/camera_shake.hpp>
@@ -549,6 +552,11 @@ int main()
                 romfsExit();
         }
     } assets;
+    // Files a quick update carries in its RomFS (romfs:/overlay/) replace the
+    // same relative path from here on; no other thread has started yet.
+    if (assets.mounted)
+        mkw::overlay::init();
+    report(mkw::overlay::active() ? "update overlay: active" : "update overlay: none");
     // The full CIA carries the game files in its RomFS. A quick update is
     // installed over it and runs this code with that RomFS, so the files there
     // are used only when they are the content this code expects (content.txt,
@@ -596,6 +604,8 @@ int main()
         gfxExit();
         return 1;
     }
+    // Miis the game can list (miis/miis.txt): none until an update or the player adds some.
+    report(mkw::miiStore().load() ? "miis: loaded" : "miis: none");
     bool qaMode = false;
     if (kQa)
         for (const char *test : {"trace", "smoke", "controls", "replay", "effects", "animation", "roster", "garage",
@@ -875,6 +885,12 @@ int main()
         if (!loader.start())
             report("FAIL menu asset thread; loading on demand");
         mkw::pack::open();
+        // The lower screen shows the page's choices to touch (menu_bottom.hpp). A
+        // paused race keeps its own lower-screen target, so only a menu with none.
+        mkw::MenuBottomScreen menuBottom;
+        mkw::MenuBottomLayout bottomLayout;
+        if (!autoplay && !renderer.bottomEnabled())
+            menuBottom.enable(renderer);
         auto last = svcGetSystemTick();
         double pending = 0;
         unsigned menuSourceTicks = 0;
@@ -905,6 +921,7 @@ int main()
         auto leave = [&](mkw::UiAction action) {
             loader.stop();
             renderer.waitForGpu();
+            menuBottom.disable(renderer);
             menuAudio.close();
             menuModels.reset(renderer);
             menuIcons.reset(renderer);
@@ -934,6 +951,23 @@ int main()
                                bool(down & KEY_Y)};
             if (!revealed)
                 input = {};
+            // A tap on the lower screen selects and accepts a control (or goes back),
+            // as the d-pad and A/B do; only on the page the layout was made for.
+            if (menuBottom.active() && revealed && (down & KEY_TOUCH) && !transition.active() &&
+                bottomLayout.page == menu.page)
+            {
+                touchPosition touch{};
+                hidTouchRead(&touch);
+                const int hit = mkw::hitMenuBottom(bottomLayout, float(touch.px), float(touch.py));
+                if (hit >= 0)
+                {
+                    const auto &widget = bottomLayout.widgets[unsigned(hit)];
+                    if (widget.back)
+                        input.back = true;
+                    else if (widget.slot >= 0 && menu.selectSlot(unsigned(widget.slot)))
+                        input.accept = true;
+                }
+            }
             if (autoplay)
             {
                 input = autopilot->menu(menu, revealed && !transition.active());
@@ -1162,6 +1196,12 @@ int main()
             menuRenderer.draw(renderer, quads, false, 1, ~0u, &menuIcons);
             if (motion.blackAlpha > 0)
                 renderer.drawScreenFade(motion.blackAlpha, false);
+            if (menuBottom.active())
+            {
+                mkw::composeMenuBottom(visual, bottomLayout, &mkw::miiStore(),
+                                       [](unsigned course) -> const char * { return Courses[course].name; });
+                menuBottom.draw(renderer, bottomLayout);
+            }
             menuProfile->mark(MenuStage::Foreground);
             renderer.end();
             menuProfile->mark(MenuStage::Submit);
