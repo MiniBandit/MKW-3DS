@@ -27,9 +27,8 @@ if [[ ! -x .venv/bin/python ]]; then
     python -m venv .venv
 fi
 
-if [[ ! -f .venv/mkw-dependencies-installed ]]; then
+if ! .venv/bin/python -c "import numpy, PIL, Crypto" >/dev/null 2>&1; then
     .venv/bin/python -m pip install -r requirements.txt
-    touch .venv/mkw-dependencies-installed
 fi
 
 export PYTHONUTF8=1 PYTHONUNBUFFERED=1
