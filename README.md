@@ -55,7 +55,7 @@ steps are skipped. If it fails, share `build-cia-log.txt` when asking for help.
 
 You can also generate your `.cia` file using [Docker Engine](https://docs.docker.com/engine/install/) (Linux only) or [Docker Desktop](https://docs.docker.com/desktop/) (Windows, macOS, Linux):
 - Put your `.iso` or `.wbfs` file inside the `mkw-rom` folder
-- Open a terminal inside the project's root and run the following command:
+- Open a terminal window inside the project's root and run the following command:
   ```
   docker compose run --build --rm builder bash /workspace/build-mkw-cia-docker.sh
   ```
