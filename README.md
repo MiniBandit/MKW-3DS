@@ -52,8 +52,8 @@ window and press Enter. *(New: please report how it goes.)*
 
 **v0.6.0 needs a new build.** Its converted game files changed, so a game built
 with v0.5.x can't be updated to v0.6.0 with an update CIA: run the v0.6.0
-builder, install the new CIA and copy the new `build/release/sd-card/3ds`
-folder to your SD card.
+builder **in a new, empty folder** (not your old builder folder), install the
+new CIA and copy the new `build/release/sd-card/3ds` folder to your SD card.
 
 The first build takes about 30–60 minutes. Your CIA is saved to
 `build/release/mkw-3ds.cia`. If a build stops partway, run it again: finished
