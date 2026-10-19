@@ -69,7 +69,7 @@ const char* uiFocusControlName(const MenuState& state,unsigned slot){
  case UiPage::BattleStage:return "BattleStageSelectStage";
  case UiPage::Ghost:return "TimeAttackGhostList";
  case UiPage::Confirm:return "MenuEndConfirm";
- case UiPage::Pause:return uiPauseMenuControl(state);
+ case UiPage::Pause:case UiPage::Results:return uiPauseMenuControl(state);
  case UiPage::QuitConfirm:return "YesNoButton";
  case UiPage::Error:return "ConfirmOK";
  default:return "";

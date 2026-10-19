@@ -139,7 +139,7 @@ bool movesControls(UiPage page){
     case UiPage::Mode:case UiPage::EngineClass:case UiPage::Character:case UiPage::Vehicle:case UiPage::Drift:
     case UiPage::Cup:case UiPage::Course:case UiPage::BattleCup:case UiPage::BattleStage:case UiPage::VSMode:case UiPage::BattleMode:
     case UiPage::License:case UiPage::MainMenu:case UiPage::Ghost:case UiPage::Confirm:case UiPage::Pause:case UiPage::QuitConfirm:
-    case UiPage::Title:case UiPage::Strap:case UiPage::Intro:
+    case UiPage::Results:case UiPage::Title:case UiPage::Strap:case UiPage::Intro:
         return true;
     default:return false;
     }
@@ -194,7 +194,8 @@ void relocateControls(const MenuState& state,std::vector<UiQuad>& quads,MenuBott
         const bool background=!std::strcmp(key,"background"),bar=!std::strcmp(key,"header")||!std::strcmp(key,"footer")||!std::strcmp(key,"footer_help"),
                    back=!std::strcmp(key,"back_free")||!std::strcmp(key,"button_back"),
                    title=!std::strncmp(key,"text_style_",11)&&q.y<30;
-        if(!background&&!bar&&!back&&!title)continue;
+        // The end-of-race menu has no Back: neither its button nor the footer it sits on.
+        if((!background&&!bar&&!back&&!title)||(state.page==UiPage::Results&&(back||std::strncmp(key,"footer",6)==0)))continue;
         UiQuad copy=q;copy.x*=ChromeScale;copy.w*=ChromeScale;copy.bottom=true;
         if(!std::strcmp(key,"back_free"))map.back={true,copy.x,copy.y,copy.x+copy.w,copy.y+copy.h};
         chrome.push_back(copy);

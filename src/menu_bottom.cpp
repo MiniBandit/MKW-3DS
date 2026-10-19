@@ -119,7 +119,7 @@ void composeMenuBottom(const MenuState& state,MenuBottomLayout& layout,const Mii
         }
         if(moved->back.present){
             if(auto* t=b.tile(moved->back.x0,moved->back.y0,moved->back.x1-moved->back.x0,moved->back.y1-moved->back.y0,"",-1,true)){t->hidden=true;t->back=true;}
-        }else if(state.page!=UiPage::Title&&state.page!=UiPage::Strap&&state.page!=UiPage::Intro)b.back();
+        }else if(state.page!=UiPage::Title&&state.page!=UiPage::Strap&&state.page!=UiPage::Intro&&state.page!=UiPage::Results)b.back();
         if(state.unavailable)b.label(86,170,"NOT AVAILABLE YET",1.5f,0xff6060ffu);
         return;
     }

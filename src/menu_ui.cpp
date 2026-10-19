@@ -292,7 +292,7 @@ std::vector<UiQuad> composeMenu(const MenuState& state,const UiRaceView& race){s
 static void composeMenuImpl(const MenuState& s,const UiRaceView& race,std::vector<UiQuad>& q,const UiTransitionView* transition){
  // The race and its end-of-race menu draw themselves (RaceFlowUi draws the
  // retail result boards and buttons over the running race).
- q.clear();q.reserve(256);if(s.page==UiPage::Race||s.page==UiPage::Results)return;
+ q.clear();q.reserve(256);if(s.page==UiPage::Race)return;
  if(s.page==UiPage::Confirm){
   MenuState base=s;
   if(transition&&transition->underlay)base=*transition->underlay;
@@ -503,6 +503,14 @@ static void composeMenuImpl(const MenuState& s,const UiRaceView& race,std::vecto
   // original race controller's delays and shared common_w004 animations.
   for(unsigned i=0;i<3;++i){auto p=control(uiPauseMenuControl(s),variants[i]);p.y=90.f-float(i)*85;
    c.button("button",i,p,i==0?"Continue":i==1?"Restart":"Quit");}break;
+ }
+ case UiPage::Results:{
+  // The end-of-race menu for the lower screen (the race loop moves it there; the top
+  // keeps RaceFlowUi's own boards and buttons). The pause menu's authored buttons.
+  c.chrome("Results");const char* variants[]={"ButtonContinue","ButtonQuit"};
+  const unsigned n=s.count();
+  for(unsigned i=0;i<n;++i){auto p=control(uiPauseMenuControl(s),variants[i]);p.y=45.f-float(i)*85;
+   c.button("button",i,p,i==0?"Continue":"Quit");}break;
  }
  case UiPage::QuitConfirm:{
   c.chrome("Quit this race?");auto yes=control("YesNoButton","Option0"),no=control("YesNoButton","Option1");

@@ -53,7 +53,7 @@ const char* uiSelectedMenuControl(const MenuState& state,bool back){
  case UiPage::BattleStage:return "BattleStageSelectStage";
  case UiPage::Ghost:return "TimeAttackGhostList";
  case UiPage::Confirm:return "MenuEndConfirm";
- case UiPage::Pause:return uiPauseMenuControl(state);
+ case UiPage::Pause:case UiPage::Results:return uiPauseMenuControl(state);
  case UiPage::QuitConfirm:return "YesNoButton";
  case UiPage::Error:return "ConfirmOK";
  default:return "";
@@ -77,7 +77,7 @@ float uiMenuMaxDelay(const MenuState& state){
  case UiPage::BattleStage:return maximum("BattleStageSelectStage");
  case UiPage::Ghost:return maximum("TimeAttackGhostList");
  case UiPage::Confirm:return maximum("MenuEndConfirm");
- case UiPage::Pause:return maximum(uiPauseMenuControl(state));
+ case UiPage::Pause:case UiPage::Results:return maximum(uiPauseMenuControl(state));
  case UiPage::QuitConfirm:return maximum("YesNoButton");
  case UiPage::Error:return delay("ConfirmOK","OK");
  default:return 0;

@@ -1715,6 +1715,7 @@ int main()
     mkw::MenuBottomScreen resultsBottom;
     const auto resultsBottomLayoutStorage = std::make_unique<mkw::MenuBottomLayout>();
     mkw::MenuBottomLayout &resultsBottomLayout = *resultsBottomLayoutStorage;
+    mkw::MenuBottomMap resultsMap; // where the end-of-race buttons sit on the lower screen
     bool resultsReported = false;
     bool raceSavePending=false;
     auto flushRaceSave=[&](){
@@ -4450,6 +4451,15 @@ int main()
                 // by runMenu once the race is released.
                 if (menu.page == mkw::UiPage::Pause || menu.page == mkw::UiPage::QuitConfirm)
                     mkw::composeMenu(menu, uiRace, raceQuads);
+                else if (endMenu && !autoplay && bottomScreen.active())
+                {
+                    // The end-of-race buttons in the Wii art on the lower screen (touch).
+                    mkw::composeMenu(menu, uiRace, raceQuads);
+                    mkw::relocateControls(menu, raceQuads, resultsMap);
+                    raceQuads.erase(std::remove_if(raceQuads.begin(), raceQuads.end(),
+                                                   [](const mkw::UiQuad &q) { return !q.bottom; }),
+                                    raceQuads.end());
+                }
                 else
                     raceQuads.clear();
                 if (menuRenderer.needsPrepare(raceQuads))
@@ -4801,8 +4811,10 @@ int main()
                 bottomScreen.draw(renderer, bottomView);
                 if (endMenu && !autoplay && resultsBottom.borrow(renderer))
                 {
-                    mkw::composeMenuBottom(menu, resultsBottomLayout);
-                    resultsBottom.draw(renderer, resultsBottomLayout, false);
+                    mkw::composeMenuBottom(menu, resultsBottomLayout, nullptr, nullptr,
+                                           resultsMap.valid ? &resultsMap : nullptr);
+                    resultsBottom.draw(renderer, resultsBottomLayout, false,
+                                       [&] { menuRenderer.draw(renderer, raceQuads, true, 0, ~0u); });
                 }
                 else if (resultsBottomLayout.page == mkw::UiPage::Results)
                     resultsBottomLayout.page = mkw::UiPage::Race;
