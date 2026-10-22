@@ -24,9 +24,11 @@ namespace mkw {
 // draw (race_grid.cpp: random characters and vehicles, banks ~14 MiB instead of
 // the old fixed karts' ~11 MiB) a 3 MiB reserve left the sound ~2.4 MiB: the
 // voice group was demoted, the wave cache got 0 bytes and BNK_VCL_SE failed.
+static bool keepBanksLinear=false;
+void DriverAnimation::keepLinear(bool on){keepBanksLinear=on;}
 static uint8_t* allocateBank(size_t size,bool& linear){
     constexpr size_t LinearReserve=(15u<<20)/2;
-    linear=linearSpaceFree()>size+LinearReserve;
+    linear=keepBanksLinear||linearSpaceFree()>size+LinearReserve;
     if(linear)if(void* p=linearAlloc(size))return static_cast<uint8_t*>(p);
     linear=false;return static_cast<uint8_t*>(std::aligned_alloc(16,(size+15)&~size_t(15)));
 }

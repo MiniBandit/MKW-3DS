@@ -36,6 +36,7 @@ struct RaceAudioKart {
  std::uint32_t status[5]{};     // KartState bits = retail KartStatus bitfields 0-4
  std::uint16_t moveFlags = 0;   // KartMove flags (retail Movement+0x254; bit 2 SSMT charged)
  std::uint8_t driftState = 0;   // 0 none, 1 MT charging, 2 MT, 3 SMT
+ bool canWheelie = false;       // KartMove vt+0x3c (fn_1_81118; bikes 0x80588FE0)
  std::uint8_t wheels = 0;
  std::uint8_t floorType[4]{};   // lowest set KCL type bit of each wheel's closest floor
  std::uint16_t floorVariant[4]{};
@@ -60,6 +61,8 @@ struct RaceAudioKart {
  bool ghost = false;            // a Time Trial ghost (Kart::Link isGhost)
  std::uint16_t airtime = 0;     // KartState airtime: frames off the ground
  bool slipCharging = false, slipBoost = false;   // drafting, slipstream boost (retail status 64, 65)
+ std::uint16_t starTimer = 0;   // KartMove Star frames left (activateStar sets 450)
+ std::uint16_t bulletEnd = 0;   // the Bullet's end-phase timer (ItemHud::bulletEnd), 0: not ending
  std::uint32_t actionCount = 0; // KartAction starts so far, and the last one started
  std::int8_t action = -1;
  bool finished = false; std::uint8_t rank = 0;   // RaceManager: finished, finishing position
@@ -84,6 +87,10 @@ struct RaceAudioObjectSound {
  enum Call : std::uint8_t { Start, Hold, StartNew, Voice, Animation };
  std::uint16_t slot = 0, sound = 0; std::uint8_t call = Start; float value = 0;
 };
+// A Rainbow Road star ring's SE_CN_RBW_STAR_RING calls of one tick (Kinoko ObjectStarRing,
+// retail calc 0x806BFED0): on each listed local racer's KartActor with its count, then on the
+// ring's own actor (registry slot) only if none of those started.
+struct RaceAudioStarRing { std::uint8_t slot = 0xff; std::uint16_t karts = 0; std::uint8_t kartCount[12]{}; bool ring = false; std::uint8_t ringCount = 0; };
 class RaceItems;
 struct RaceAudioFrame {
  std::uint32_t tick = 0;
@@ -98,6 +105,9 @@ struct RaceAudioFrame {
  std::uint8_t karts = 0;
  std::uint8_t mode = 1;          // RaceConfig game mode (0 GP, 1 VS, 3 battle)
  std::uint16_t goalVoice[3]{};   // the local racer's goal voices (TOP, GOD, BAD), 0: none
+ // Time Trial: the result RacePage_beforeCalc hands fn_1_27CBF0 (PAL 0x80857274): 0 a new best
+ // time, 1 in the top five, 2 not ranked, 3 no voice, 4 not known (no voice yet).
+ std::uint8_t timeTrialResult = 4;
  std::array<RaceAudioKart, 12> kart{};
  // Items: active objects, this tick's sound cues (kept until delivered), the
  // racers whose roulette spins, and each racer's orbiting triple shells.
@@ -127,6 +137,8 @@ struct RaceAudioFrame {
  bool objectsReady = false;     // the race groups are in (RaceSound): objects' own loops may start
  std::array<RaceAudioObject, 128> object{};
  std::array<RaceAudioObjectSound, 48> objectSound{};
+ std::uint8_t starRings = 0;     // this tick's star ring calls, kept until delivered
+ std::array<RaceAudioStarRing, 8> starRing{};
 };
 
 // Main thread (src/race_audio_frame.cpp): Kinoko's karts and the camera view.
@@ -139,6 +151,9 @@ void fillRaceAudioItems(RaceAudioFrame& frame, const RaceItems& items);
 // the registry restarts with each race scene.
 void fillRaceAudioObjects(RaceAudioFrame& frame);
 void resetRaceAudioObjects();
+// A Wiggler body segment (Kinoko Field::ObjectBase) a kart or an item touched this step
+// without damaging it: the next step's objects voice it (src/race_audio_frame.cpp).
+void noteRaceAudioHanachanBump(const void* segment);
 
 class RaceAudioLayer final : public SoundLayer {
 public:
@@ -155,6 +170,12 @@ public:
  std::array<std::atomic<std::uint32_t>, Families> started{};
  std::atomic<std::uint32_t> driftFrames{0};   // audible karts drifting on the ground, summed per frame
  std::atomic<std::uint32_t> voiceStarts{0};   // character voices started
+ // Diagnostic: the local racer's last voice requests, (tick << 13) | (playing or pending type
+ // << 8) | (type << 3) | result (0 started, 1 kept the current voice, 2 no picker, 3 no
+ // sound, 4 actor toggled off, 5 Bullet, 6 the engine refused, 7 started but lost its hardware
+ // voice within 4 frames); drops of a damage or wheelie voice.
+ std::array<std::atomic<std::uint32_t>, 16> localVoiceLog{};
+ std::atomic<std::uint32_t> localVoiceHead{0}, localVoiceDrops{0};
  std::atomic<std::uint32_t> resultVoice{0};   // the last result voice played (sound id)
  std::atomic<std::uint32_t> itemSounds{0};    // item sounds started (all kinds below)
  std::atomic<std::uint32_t> homingFrames{0}, alarmFrames{0}, alarmDropped{0}; // a Red/Blue homing on the local racer; SE_ITM_ALARM held; its notes without a voice

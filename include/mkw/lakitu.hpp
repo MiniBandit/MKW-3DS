@@ -9,6 +9,9 @@ struct LakituInput {
     const Kinoko::Kart::KartObject* kart=nullptr;
     unsigned stage=0,timer=0,lap=1,lapCount=3;
     bool introHeld=true,finished=false;
+    // JugemManager_createJugems (PAL 0x8071E480): a Time Trial replay's Lakitu has no
+    // goal switch (fn_1_211CA0), so no flag at its finish.
+    bool goal=true;
     Vec3 cameraForward{0,0,1};
     // JugemManager_setVisible (PAL 0x8071E7AC): the race camera hides its
     // player's Lakitu while looking back (0x805A66D8). Drawing only.

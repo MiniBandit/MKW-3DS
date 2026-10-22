@@ -413,4 +413,28 @@ private:
     unsigned sparkFrames_=0,smokeFrames_=0,flameStarts_=0;
     bool sparked_=false,smoked_=false;
 };
+
+// KartEffect's stand-still mini-turbo update (PAL fn_1_1A29F8 0x806B2DAC). KartMove::calcSsmt
+// (fn_1_72518 0x805828CC) calls it on each frame it finds the charge already full (75,
+// 0x808B5B38) with ChargingSSMT (status 57) set, and on each frame it enters with the
+// charged and leeway flags (+0x254 bits 2 and 5) set and ChargingSSMT clear (the leeway
+// after letting go). It sets +0x90, so that frame's KartEffect update skips the drift group
+// (0x80695BA8); +0x91 is the last update's +0x90 (0x80696CF0). With +0x91 clear it only
+// restarts the blue 1T bursts (rk_driftSpark1L1T/1R1T, +0x530 handles 10..15); with it set
+// it emits the blue drift sparks rk_driftSpark1L/1R_Spark00/01 (handles 2..5) at the rear
+// wheels, a bike's by the stick (+0x614 LB, RB or CB, fn_1_192B6C). The 1T bursts and the
+// wheel spin of the charge (rk_wheelSpin0..2 while +0x43 = status 57) are not ported here.
+class SsmtSparks {
+public:
+    static constexpr int16_t FullCharge=75;
+    bool called=false,wasCalled=false; // fn_1_1A29F8 in this step (+0x90) and in the last one (+0x91)
+    // After a step: ChargingSSMT and KartMove's SSMT charge (+0x14c) and flags.
+    void step(bool charging,int16_t charge,bool charged,bool leeway){
+        wasCalled=called;
+        called=charging?charge_>=FullCharge:charged_&&leeway_;
+        charge_=charge;charged_=charged;leeway_=leeway;
+    }
+private:
+    int16_t charge_=0;bool charged_=false,leeway_=false; // as the step found them
+};
 }

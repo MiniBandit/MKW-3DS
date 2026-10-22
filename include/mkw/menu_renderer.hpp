@@ -29,6 +29,8 @@ public:
  // Synchronous residency (outside a frame, GPU already drained).
  bool needsPrepare(const std::vector<UiQuad>&,bool stableClock=true) const;
  bool prepare(const std::vector<UiQuad>&,bool stableClock=true);
+ // LINEAR bytes the set's sprites not yet resident take (UiSpriteInfo::gpuBytes).
+ std::uint32_t missingBytes(const std::vector<UiQuad>&) const;
  bool updateMovies(std::uint64_t elapsed60HzTicks); // blocking, QA only
  void draw(Renderer&,const std::vector<UiQuad>&,bool bottom,unsigned first=0,unsigned end=~0u,MenuVehicleIcons* icons=nullptr);
  // Retires every texture and stream (GPU-safe) and cancels pending loads.

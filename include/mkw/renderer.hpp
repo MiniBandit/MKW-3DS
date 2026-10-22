@@ -335,6 +335,12 @@ public:
     bool captureTop(uint8_t* rgb,unsigned eye=0);
     // The same for the bottom screen's target (320*240*3 bytes); false without one.
     bool captureBottom(uint8_t* rgb);
+    // Outside a frame: the top screen's last frame (left eye) as a 256x512 RGBA8
+    // texture (VRAM, else LINEAR) laid out as bloom's scene texture: texel (x,y)
+    // is window (x,y). A GPU copy; false when neither memory has room.
+    bool captureTopTexture(Texture& texture);
+    // Draws such a capture over the whole top screen, opaque.
+    void drawTopCapture(const Texture& texture);
     // Whether the last finished frame showed both eyes (QA captures).
     bool stereoShown() const {return stereoShown_;}
     // QA, after captureTop of a stereo frame: whether the LCD framebuffer

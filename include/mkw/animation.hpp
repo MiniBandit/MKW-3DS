@@ -11,6 +11,12 @@ public:
     ~DriverAnimation(){reset();}
     bool load(const char* path,const Model& model);
     void reset();
+    // Whether the loaded bank sits in LINEAR (allocateBank) rather than the heap.
+    bool inLinear() const {return data_&&dataLinear_;}
+    // While on, banks go to LINEAR whenever it holds them, without the race
+    // reserve; the heap stays the fallback. Pause resume only: the player's
+    // banks return to the LINEAR they left (main.cpp restoreRaceGraphics).
+    static void keepLinear(bool on);
     // Menu PlayAnmNoBlend replaces the active palette without a gameplay blend.
     void clearPoseTransition(){lastClip_=-1;hasPreviousPose_=false;cachedSettled_=false;}
     int find(const char* name) const;

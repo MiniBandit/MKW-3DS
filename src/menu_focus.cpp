@@ -80,7 +80,7 @@ const char* uiFocusControlName(const MenuState& state,unsigned slot){
  case UiPage::Ghost:return "TimeAttackGhostList";
  case UiPage::Confirm:return "MenuEndConfirm";
  case UiPage::Pause:return uiPauseMenuControl(state);
- case UiPage::QuitConfirm:return "YesNoButton";
+ case UiPage::QuitConfirm:return uiPauseMenuControl(state); // AfterMenuEndConfirm's animations (menu_ui.cpp)
  case UiPage::Error:case UiPage::NoGhosts:return "ConfirmOK";
  default:return "";
  }

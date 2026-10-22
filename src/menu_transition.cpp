@@ -54,7 +54,7 @@ const char* uiSelectedMenuControl(const MenuState& state,bool back){
  case UiPage::Ghost:return "TimeAttackGhostList";
  case UiPage::Confirm:return "MenuEndConfirm";
  case UiPage::Pause:return uiPauseMenuControl(state);
- case UiPage::QuitConfirm:return "YesNoButton";
+ case UiPage::QuitConfirm:return uiPauseMenuControl(state); // AfterMenuEndConfirm's animations (menu_ui.cpp)
  case UiPage::Error:case UiPage::NoGhosts:return "ConfirmOK";
  default:return "";
  }
@@ -83,7 +83,8 @@ float uiMenuMaxDelay(const MenuState& state){
  case UiPage::Confirm:return std::max({delay("MenuEndConfirm","ButtonOK"),delay("Back","ButtonBackMenuEndConfirm"),delay("RaceConfirmBack","BlackBack"),
                                        delay("MenuObiTopRaceConfirm","MenuEndConfirmObiTop"),delay("MenuObiBottomRaceConfirm","MenuEndConfirmObiBottom")});
  case UiPage::Pause:return maximum(uiPauseMenuControl(state));
- case UiPage::QuitConfirm:return maximum("YesNoButton");
+ // AfterMenuEndConfirm.brctr start frames: ButtonConfirmContinue 4, ButtonConfirmQuit 2.
+ case UiPage::QuitConfirm:return 4.f;
  case UiPage::Error:return delay("ConfirmOK","OK");
  // ConfirmPage_onInit (PAL 0x805C1EB8): MenuObiTitleText, ConfirmOK/OK,
  // Back/ButtonBackPopup and MessageWindowHalf.
@@ -111,8 +112,12 @@ float uiMenuExitHold(const MenuState& state,bool back){
 
 bool uiMenuChangesSection(UiPage from,UiPage to,UiAction action){
  if(action!=UiAction::None)return action!=UiAction::ResumeRace;
+ // The pause pages' Quit, Change Course and Change Character change section
+ // (RaceMenuPage_onButtonFront, PAL 0x8085A0F4, cases 1/5/6/0x18); only the
+ // GP Quit pushes page 0x2C (QuitConfirm) in the race section.
+ const bool leavesPause=(from==UiPage::Pause||from==UiPage::QuitConfirm)&&to!=UiPage::Pause&&to!=UiPage::QuitConfirm&&to!=UiPage::Race;
  return (from==UiPage::MainMenu&&to==UiPage::Mode)||(from==UiPage::Mode&&to==UiPage::MainMenu)
-     ||from==UiPage::Intro||to==UiPage::Intro||from==UiPage::Race||to==UiPage::Race;
+     ||from==UiPage::Intro||to==UiPage::Intro||from==UiPage::Race||to==UiPage::Race||leavesPause;
 }
 
 void MenuTransition::reset(){

@@ -10,6 +10,17 @@ namespace mkw {
 enum class UiPage {Title,MainMenu,Mode,Character,Vehicle,Drift,Cup,Course,Confirm,Race,Pause,QuitConfirm,Results,Error,Strap,License,EngineClass,VSMode,BattleMode,BattleCup,BattleStage,Ghost,Intro,NoGhosts,TimeAttackBack};
 enum class UiAction {None,StartRace,RestartRace,ResumeRace,Exit};
 enum class UiMode {GrandPrix,TimeTrials,VS,Battle};
+// The retail pause pages' buttons, in list order (RaceMenuPage vf+0x6C/+0x70;
+// ids index the variant table PAL 0x808DA7A8): Grand Prix (page 0x17), VS
+// (0x18) and Battle (0x1A) have {Continue, Quit}; Time Trials (0x19) has
+// {Continue, Restart, Change Course, Change Character, Quit}.
+enum class UiPauseButton {Continue,Quit,Restart,ChangeCourse,ChangeCharacter};
+inline unsigned uiPauseButtonCount(UiMode mode){return mode==UiMode::TimeTrials?5u:2u;}
+inline UiPauseButton uiPauseButton(UiMode mode,unsigned slot){
+ constexpr UiPauseButton TimeTrials[5]={UiPauseButton::Continue,UiPauseButton::Restart,UiPauseButton::ChangeCourse,UiPauseButton::ChangeCharacter,UiPauseButton::Quit};
+ if(mode==UiMode::TimeTrials)return TimeTrials[slot<5?slot:4];
+ return slot==0?UiPauseButton::Continue:UiPauseButton::Quit;
+}
 enum class UiEngineClass {CC50,CC100,CC150,Mirror};
 struct UiMainMenuControl {unsigned group;float x,y;};
 // Seven source child controls in four frames. Centers combine the original

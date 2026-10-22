@@ -86,11 +86,9 @@ struct Lakitu::Impl {
     std::unique_ptr<Kinoko::Field::JugemMove> move;
     Mode mode=Mode::Away;Phase phase=Phase::Drop;Interp interp;
     unsigned phaseTimer=0,ascendTimer=0,introFrames=0,lastLap=1,tick=0;
-    bool started=false,wasRespawning=false,wasFinished=false,released=false;
+    bool started=false,wasRespawning=false,released=false;
     bool visible=true; // LakituInput::visible of the last step
     float reverseActivation=0;bool reverseOn=false;
-    // Direct placement (pickup, goal): position, facing, oscillation phases.
-    Vec3 pos{},goalFrom{},goalTo{},forward{0,0,1};float phaseX=0,phaseY=0;
     Vector3f anchor; // JugemMove +0x1c as last set here (the rescue ascent adds to it)
     C3D_Mtx world{};
     Attachment attachment=None;int digit=-1;std::array<uint32_t,6> lamps{};
@@ -132,15 +130,6 @@ struct Lakitu::Impl {
     void glide(Vec3 anchor){
         move->setAwayOrDescending(true);move->setAnchorPos(egg(anchor));move->setForwardFromKartObjMainRot(true);
     }
-    void place(Vec3 at,Vec3 face,bool oscillate){
-        // JugemMove's yaw basis and (0,40,0) body offset, without the kart follow.
-        forward=normalized(lerp(forward,normalized(face,forward),.08f),forward);
-        const Vec3 up{0,1,0},right=normalized(cross(up,forward),{1,0,0}),f=cross(right,up);
-        Vec3 p=at;
-        if(oscillate){phaseX=std::fmod(phaseX+.04f,2*Pi);phaseY=std::fmod(phaseY+.08f,2*Pi);p=p+right*(80.f*std::cos(phaseX))+up*(30.f*std::sin(phaseY));}
-        p=p+up*40.f;
-        const float m[12]={right.x,up.x,f.x,p.x,right.y,up.y,f.y,p.y,right.z,up.z,f.z,p.z};store(world,m);
-    }
 };
 Lakitu::Lakitu():impl_(std::make_unique<Impl>()){}
 Lakitu::~Lakitu()=default;
@@ -166,7 +155,7 @@ void Lakitu::unload(){
 }
 void Lakitu::reset(){
     auto& m=*impl_;m.mode=Mode::Away;m.move.reset();m.kart=nullptr;m.introFrames=0;m.lastLap=1;m.started=false;
-    m.wasRespawning=m.wasFinished=false;m.reverseActivation=0;m.reverseOn=false;m.attachment=None;m.tick=0;m.visible=true;
+    m.wasRespawning=false;m.reverseActivation=0;m.reverseOn=false;m.attachment=None;m.tick=0;m.visible=true;
 }
 void Lakitu::step(const LakituInput& in){
     auto& m=*impl_;m.visible=in.visible;if(!m.ready||!in.kart)return;
@@ -192,9 +181,14 @@ void Lakitu::step(const LakituInput& in){
         m.mode=Mode::Rescue;m.phase=Phase::Stay;m.phaseTimer=0;m.attachment=None;m.clips("wait","pickup");
         m.move->init();m.move->setPos(m.rescueTarget(),true);m.move->setAwayOrDescending(true);
         m.move->setForwardFromKartObjMainRot(true);m.move->setDescending(false);m.anchor=Vector3f::zero;
-    }else if(in.finished&&!m.wasFinished){
-        m.mode=Mode::Goal;m.phase=Phase::Drop;m.interp.init(60);m.attachment=Flag;m.forward=forwardH*-1.f;m.clips("jg_wy","wait");
-        m.goalFrom=m.cameraFrame(forwardH,{0,2000,700});m.goalTo=m.cameraFrame(forwardH,{0,120,700});m.pos=m.goalFrom;
+    }else if(in.goal&&in.finished&&m.mode==Mode::Away){
+        // JugemSwitchGoal (fn_1_215B08 0x80725EBC) is on while the racer has finished
+        // (+0x38 & 2, not a forced end 0x40); the idle state (fn_1_2130F0 0x807234A4) enters
+        // the goal state from it, again each time Lakitu has left. Goal enter fn_1_214CAC
+        // (0x80725060): the flag and jg_wy, a 60-frame sine ease (0x808C95C8), JugemMove
+        // re-inited at the kart-relative spawn (0,2000,700) (bss 0x809C2AC4).
+        m.mode=Mode::Goal;m.phase=Phase::Drop;m.interp.init(60);m.attachment=Flag;m.clips("jg_wy","wait");
+        m.move->init();m.move->setPos(egg(m.upright({0,2000,700})),true);m.move->setForwardFromKartObjPosDelta(true);
     }else if(in.lap>m.lastLap&&in.lap>=2&&in.lap<=in.lapCount&&!in.finished&&m.mode!=Mode::Start&&m.mode!=Mode::Rescue){
         // JugemSwitchLap (0x80725BD8): fires only when Raceinfo maxLap rises.
         m.begin(Mode::Lap,Phase::Drop,10,m.cameraFrame(forwardH,{-10,2000,0}));
@@ -205,7 +199,7 @@ void Lakitu::step(const LakituInput& in){
         m.begin(Mode::Reverse,Phase::Drop,40,m.upright({0,2000,0}));m.move->setForwardFromKartObjPosDelta(true);
         m.attachment=Reverse;m.digit=-1;m.clips("jg_no","jg_no");
     }
-    m.wasRespawning=respawning;m.wasFinished=in.finished;m.lastLap=in.lap;
+    m.wasRespawning=respawning;m.lastLap=in.lap;
     auto& move=*m.move;
     switch(m.mode){
     case Mode::Away:break;
@@ -273,20 +267,28 @@ void Lakitu::step(const LakituInput& in){
         move.calc();break;
     }
     case Mode::Goal:{
+        // Goal calc fn_1_214DBC (0x80725170): JugemMove glides to the kart-relative
+        // (0,120,700) (bss 0x809C2ADC) and holds there; once the kart is over 2000
+        // (0x808C95BC) from Lakitu he goes idle, and the idle state re-enters the goal.
+        constexpr Vec3 spawn{0,2000,700},stay{0,120,700};
+        const float distance=length(kartPos-vec(move.transPos()));
         if(m.phase==Phase::Drop){
-            const bool done=m.interp.calc();m.pos=lerp(m.goalFrom,m.goalTo,m.interp.rate);
+            const bool done=m.interp.calc();
+            move.setAwayOrDescending(true);move.setAnchorPos(egg(m.upright(lerp(spawn,stay,m.interp.rate))));
             if(done)m.phase=Phase::Stay;
-        }else if(m.phase==Phase::Stay){
-            m.pos=m.goalTo;
-            if(length(kartPos-m.goalTo)>2000.f){m.phase=Phase::Ascend;m.phaseTimer=0;}
         }else{
-            m.pos=m.pos+(m.phaseTimer<10?Vec3{0,30,0}:Vec3{0,80,0});
-            if(++m.phaseTimer>=70)m.mode=Mode::Away;
+            move.setAwayOrDescending(false);move.setAnchorPos(egg(m.upright(stay)));
+            if(distance>2000.f)m.mode=Mode::Away;
         }
-        m.place(m.pos,kartPos-m.pos,true);break;
+        if(status.offBit(KK::eStatus::InCannon))move.setDescending(true);
+        else{move.setAwayOrDescending(true);move.setDescending(false);}
+        move.setForwardFromKartObjPosDelta(false);
+        // Falling out (state bit 4): Lakitu rises at (0,50,0) a frame (bss 0x809C2914).
+        if(status.onBit(KK::eStatus::BeforeRespawn)){move.setRiseVel(Vector3f(0.f,50.f,0.f));move.setRising(true);}
+        move.calc();break;
     }
     }
-    if(m.mode==Mode::Start||m.mode==Mode::Lap||m.mode==Mode::Reverse||m.mode==Mode::Rescue){
+    if(m.mode==Mode::Start||m.mode==Mode::Lap||m.mode==Mode::Reverse||m.mode==Mode::Rescue||m.mode==Mode::Goal){
         const auto& t=move.transform();float rows[12];
         for(unsigned r=0;r<3;++r)for(unsigned c=0;c<4;++c)rows[r*4+c]=t[r,c];
         store(m.world,rows);

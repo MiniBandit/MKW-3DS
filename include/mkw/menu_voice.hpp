@@ -20,22 +20,17 @@ public:
   const auto range=MenuVoiceRanges[character][event];
   auto& picker=pickers_[character][event];
   const unsigned count=range.last-range.first+1;
-  unsigned index=0;
-  if(count==2)index=random(2);
-  else if(count>2){
-   unsigned available[32],n=0;
-   for(unsigned i=0;i<count;++i)if(!(picker.mask&(1u<<i))&&int(i)!=picker.last)available[n++]=i;
-   // The last unplayed sample is always eligible; a completed cycle resets
-   // below while retaining last, preventing a repeat across cycle boundaries.
-   if(!n)for(unsigned i=0;i<count;++i)if(!(picker.mask&(1u<<i)))available[n++]=i;
-   index=available[random(n)];
-  }
-  picker.last=int(index);picker.mask|=1u<<index;
-  if(picker.mask==((1u<<count)-1))picker.mask=0;
-  return range.first+index;
+  // The menu pickers' pick (fn_1_35704C, PAL 0x80867400), not the race one: two
+  // variants alternate after a random first pick; more are random, never the last
+  // one played. fn_1_357118 (0x808674CC) then keeps the pick as the last one.
+  int index=0;
+  if(count==2)index=picker.last<0?int(random(2)):picker.last==0?1:0;
+  else if(count>2)do index=int(random(count));while(index==picker.last);
+  if(count>=2)picker.last=index;
+  return range.first+unsigned(index);
  }
 private:
- struct Picker {unsigned mask=0;int last=-1;};
+ struct Picker {int last=-1;};
  Picker pickers_[24][2]{};
  std::uint32_t rng_=0x9e3779b9u;
  unsigned random(unsigned n){rng_^=rng_<<13;rng_^=rng_>>17;rng_^=rng_<<5;return n?rng_%n:0;}

@@ -1753,6 +1753,37 @@ bool Renderer::captureTop(uint8_t* rgb,unsigned eye){
     linearFree(linear);
     return true;
 }
+bool Renderer::captureTopTexture(Texture& texture){
+    texture.reset();
+    if(!ready_)return false;
+    // Every recorded frame has been drawn into the target.
+    waitForGpu();
+    if(!C3D_TexInitVRAM(&texture.gpu,256,512,GPU_RGBA8)){
+        if(!C3D_TexInit(&texture.gpu,256,512,GPU_RGBA8)){texture.gpu={};return false;}
+        // No dirty CPU cache line may later overwrite what the copy engine writes.
+        C3D_TexFlush(&texture.gpu);
+    }
+    // Colour buffers and textures share the 8x8-tile layout, memory rows counting
+    // down from the top (window y = height-1-row). The 240x400 buffer's 50 tile
+    // rows become the texture's last 50 (rows 112..511), each padded from 240 to
+    // 256 texels: texel (x,y) is window (x,y), as in a texture-backed target.
+    constexpr u32 Row=240*8*4,Pad=(256-240)*8*4,Skip=(512-400)*256*4;
+    C3D_SyncTextureCopy(static_cast<u32*>(target_->frameBuf.colorBuf),GX_BUFFER_DIM(Row>>4,0),
+        reinterpret_cast<u32*>(static_cast<uint8_t*>(texture.gpu.data)+Skip),GX_BUFFER_DIM(Row>>4,Pad>>4),Row*(400/8),8);
+    C3D_TexSetFilter(&texture.gpu,GPU_LINEAR,GPU_LINEAR);
+    C3D_TexSetWrap(&texture.gpu,GPU_CLAMP_TO_EDGE,GPU_CLAMP_TO_EDGE);
+    texture.ready=true;
+    return true;
+}
+void Renderer::drawTopCapture(const Texture& texture){
+    // Screen point (X,Y) is window (240-Y,400-X), the texel bloomQuad samples;
+    // material quad UVs count v from the top (v = 1 - t).
+    static constexpr float corners[4][2]={{0,0},{400,0},{0,240},{400,240}};
+    static constexpr float uv[4][2]={{240.f/256,1-400.f/512},{240.f/256,1},{0,1-400.f/512},{0,1}};
+    static constexpr uint32_t white[4]={0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu};
+    // lerp(C0,C1,texture) with both alphas 255: the frame's own alpha is not used.
+    drawScreenMaterialQuad(&texture,corners,uv,white,0x000000ffu,0xffffffffu,1.f);
+}
 bool Renderer::captureBottom(uint8_t* rgb){
     if(!ready_||!rgb||!bottomTarget_)return false;
     drain();

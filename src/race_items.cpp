@@ -31,7 +31,7 @@ void RaceItems::reset(const std::vector<ItemBox>& boxes,unsigned racers,uint32_t
     itemSpawnTimers_={1800,1800,900,1200};
     blooperCaster_=MaxRacers;blooperSelectionFrame_=blooperStartFrame_=blooperBusyUntil_=0;
     powTimer_=0;powUser_=MaxRacers;powTargets_={};
-    deployments_={};wheelieReference_={};mushroomUses_={};mushroomPulse_={};
+    deployments_={};wheelieReference_={};mushroomUses_={};mushroomPulse_={};heldMotion_={};throwPitch_={};
     karts_->resetKarts();
     events_.clear();events_.reserve(64);sounds_.clear();sounds_.reserve(32);stepSounds_=0;count_=std::min(racers,MaxRacers);rng_=seed?seed:1;frame_=0;active_=contactsDone_=false;
 }
@@ -243,6 +243,7 @@ void RaceItems::updateHeldItems(unsigned player,ItemWorldQuery query){
     state.previous=state.positions;
     if(state.age<65535)++state.age;
     const HeldFrame frame=heldFrame(state.up,state.lift,racer,wheelieReference_[player]);
+    noteHeldFrame(player,frame.anchor,frame.right,frame.up,frame.forward);
     // The source computes positions using the previous tick's terrain volume,
     // then grows the object and updates its separate contact volume.
     if(trailing(h.heldKind)){
@@ -354,6 +355,13 @@ void RaceItems::releaseHeld(unsigned player,bool backwards){
         sound(ItemSoundCue::Release,player,kind,a.position,!backwards);
         a.scale=std::max(.8f,deployments_[player].scales[slot]);
         a.radius=prop.releasedContact*a.scale;a.terrainRadius=prop.terrain*a.scale;
+        // A shell's launch (fn_1_2A4DC4 0x807B5178) writes only the velocity's x and z: y stays
+        // the held object's last step (fn_1_28E808 0x8079EBBC: position - previous).
+        // A forward throw before the shell has grown to 0.8 (0x808A612C) leaves from the kart (getPos).
+        if(kind==ItemKind::GreenShell||kind==ItemKind::RedShell){
+            a.velocity.y=deployments_[player].positions[slot].y-deployments_[player].previous[slot].y;
+            if(!backwards&&deployments_[player].scales[slot]<.8f)a.position=racers_[player].position;
+        }
         removeHeld(player,unsigned(slot),false);break;
     }
 }
@@ -399,6 +407,7 @@ void RaceItems::use(unsigned player,bool backwards){
         // (0x80791AFC); the ring starts at its centre, without radius (fn_1_2841A8 0x8079455C).
         state.up=racer.up;
         const HeldFrame frame=heldFrame(state.up,state.lift,racer,wheelieReference_[player]);
+        noteHeldFrame(player,frame.anchor,frame.right,frame.up,frame.forward);
         if(trailing(kind)){state.trailing.init(trailingPose(racer,frame));state.positions=state.trailing.positions;}
         else state.positions.fill(frame.anchor+frame.up*(racer.itemGeometry[2]*racer.scale.y));
         // TripleTrailPrepare 8078a534 / SpinPrepare 8078b664: SE_ITM_EQUIP for the triples.
@@ -448,12 +457,21 @@ void RaceItems::use(unsigned player,bool backwards){
         }
         break;
     case ItemKind::ThunderCloud:h.cloud=CloudDuration;karts_->setThunderCloud(player,true);sound(ItemSoundCue::CloudOn,player);break;
-    default:
-        spawn(player,kind,backwards);
+    default:{
+        auto& a=spawn(player,kind,backwards);
         // ItemHolderPlayer_useBlueShell 0x807a3c00 flags the tethered Blue (+0x154), so
         // ItemHolderPlayerb4_use sets +0x78 = 7 until the next update releases it (0x80789c5c).
-        if(kind==ItemKind::BlueShell)h.slotLock=ItemKind::BlueShell;
+        if(kind==ItemKind::BlueShell){
+            h.slotLock=ItemKind::BlueShell;
+            // That release (PAL fn_1_2828B4 0x80792C68, the +0x154 branch) also ends the tether:
+            // fn_1_288574 0x80798928 -> fn_1_2C23E4 0x807D2798, the holder's put / throw voice and
+            // throw pose by obj +0x78 bit 25. fn_1_28853C sets it and the Blue's release
+            // (vtable 0x808D23D8 +0x20, 0x807AC634) returns 1 on every path, so it stays set:
+            // always the throw (ITM_TRW). Retail calls it one update after the use.
+            sound(ItemSoundCue::Release,player,kind,a.position,true);
+        }
         break;
+    }
     }
     if(--h.charges==0)h.item=ItemKind::None;
 }
@@ -514,6 +532,7 @@ void RaceItems::updateHolder(unsigned i){
     auto& h=hud_[i];
     // ItemHolderPlayer_update clears +0x238 first on every path (PAL 0x807979D8 / 0x807979E8).
     mushroomPulse_[i]=false;
+    updateThrowPitch(i);
     // The tethered Blue Shell leaves on the update after its use and frees the slot.
     if(h.slotLock==ItemKind::BlueShell)h.slotLock=ItemKind::None;
     tick(h.ink);
@@ -546,12 +565,23 @@ void RaceItems::updateHolder(unsigned i){
         }
         if(h.bullet)h.bullet=uint16_t(std::max(1u,BulletDuration-std::min<unsigned>(bullet.elapsed,BulletDuration)));
         else{bullet={};karts_->setBullet(i,false);if(h.slotLock==ItemKind::Bullet)h.slotLock=ItemKind::None;}
+        // KartKiller's end-phase timer (+0x12, PAL 0x8059BDFC): reset to 0 where `ending`
+        // becomes 1, then one more each step.
+        h.bulletEnd=h.bullet&&bullet.ending?uint16_t(bullet.ending-1):0;
     }
     if(cloudSlot_[i]&&!--cloudSlot_[i]&&h.item==ItemKind::ThunderCloud&&!h.charges)h.item=ItemKind::None;
     if(h.cloud)updateCloud(i);
     if(h.golden&&!--h.golden){h.item=ItemKind::None;h.charges=0;}
     // Respawning (fn_1_288494) clears the inventory, the roulette and the slot lock.
     if(racers_[i].unavailable&&!racers_[i].inCannon){applyLoss(i,{true,true,false});h.slotLock=ItemKind::None;}
+    // ItemHolderPlayer_update (0x80797928): while the racer has finished (+0x38 & 2) its
+    // inventory is cleared every frame (fn_1_2AC640 0x807BC9F4): no item, no count, and the
+    // trailing items despawn (ItemHolderItem_despawn 0x80795F68: no drop, no break). The
+    // Thunder Cloud never enters the retail inventory (ItemHolder_spawnTc), so its slot stays.
+    if(racers_[i].finished){
+        if(h.item!=ItemKind::ThunderCloud){h.item=ItemKind::None;h.charges=0;h.golden=0;}
+        if(h.deployed){heldDropTicks_[i]=0;for(unsigned slot=0;slot<3;++slot)removeHeld(i,slot,false);}
+    }
     auto& drop=inventoryDrops_[i];
     if(drop.ticks&&--drop.ticks&&(drop.ticks==7||drop.ticks==5||drop.ticks==3)&&drop.count){
         const auto velocity=drop.velocity[--drop.count];

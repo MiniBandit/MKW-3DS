@@ -36,6 +36,7 @@
 #include <game/field/obj/ObjectPakkunF.hh>
 #include <game/field/obj/ObjectPenguin.hh>
 #include <game/field/obj/ObjectPress.hh>
+#include <game/field/obj/ObjectStarRing.hh>
 #include <game/field/obj/ObjectVolcanoBall.hh>
 #include <game/field/obj/ObjectVolcanoBallLauncher.hh>
 #include <game/field/obj/ObjectWanwan.hh>
@@ -781,6 +782,15 @@ void drawObakeBlock(ObjectDraw& d,Visual& v){
     v.drawn=objectMatrix(t,block.scale());v.drawnValid=true;
     d.submit(v.main.model,v.drawn,{});
 }
+// Rainbow Road's star rings (Kinoko ObjectStarRing; retail cannon class type 3, init 806bfddc,
+// calc 806bfed0): StarRing_wait loops until a racer enters the cannon, then the first ring
+// built plays StarRing_shot once and the wait starts again from frame 0. The SRT0 plays from load.
+void drawStarRing(ObjectDraw& d,Visual& v){
+    const auto& ring=*static_cast<const K::Field::ObjectStarRing*>(v.object);
+    Anim a=loopAt(v.main,float(d.tick));
+    a.clip=ring.shot()?v.clips[0]:v.clips[1];a.frame=ring.animFrame();
+    d.submit(v.main.model,v.placement,a);
+}
 bool hidden(const Visual& v,int course){
     // Effects, sound sources and triggered splashes have no idle model; item
     // boxes are race items. Coconut Mall keeps its validated palm/escalator path.
@@ -951,6 +961,7 @@ bool classifyObject(Visual& v,const ObjectAssets& assets,int course){
         v.rate=1.25f;
     }else if(named(v,"StarRing")){
         v.main=assets.tracks(v.main.model,"StarRing_wait");
+        if(live){v.present=drawStarRing;v.clips[0]=clip(v.main,"StarRing_shot");v.clips[1]=clip(v.main,"StarRing_wait");}
     }else if(named(v,"pylon01")){
         v.variant=v.geo->setting(0);
     }else if(named(v,"sun")||named(v,"SpaceSun")||named(v,"EarthRing")){

@@ -520,7 +520,11 @@ static void composeMenuImpl(const MenuState& s,const UiRaceView& race,std::vecto
  const char* modes[]={"Grand Prix","Time Trials","VS","Battle"};
  // The first quad is always the background, allowing the original 3D menu
  // scene to be inserted between it and the authored controls.
- if(s.page!=UiPage::Confirm)c.panel(s.page==UiPage::Title||s.page==UiPage::Intro?"title_scene":s.page==UiPage::MainMenu||s.page==UiPage::License?"title_blur_scene":"background");
+ // The race sections (Section_addPages PAL 0x8062C3A4: 0x1E GP, 0x1F TT, 0x20 VS,
+ // 0x28 Battle) have no MenuBG page: the pause pages and page 0x2C lie over the
+ // frozen race (main.cpp), so they compose no background either.
+ const bool raceSection=s.page==UiPage::Pause||s.page==UiPage::QuitConfirm;
+ if(s.page!=UiPage::Confirm&&!raceSection)c.panel(s.page==UiPage::Title||s.page==UiPage::Intro?"title_scene":s.page==UiPage::MainMenu||s.page==UiPage::License?"title_blur_scene":"background");
  // MenuBG's eAFLoop (bg_Loop.brlan) translates line0's texture by T 0..100
  // over 3500 frames; line0 repeats every 8 layout units (v 0..160 across its
  // 1280-unit height), so the stripes rise 8*T units. The cooked panel is that
@@ -739,16 +743,30 @@ static void composeMenuImpl(const MenuState& s,const UiRaceView& race,std::vecto
   Pose back=control("Back","ButtonBackMenuEndConfirm");c.panel("back_free",back);c.inPane("button_back","back_free","text",back);
   c.button("confirm",0,control("MenuEndConfirm","ButtonOK"),"OK");break;
  }
+ // RaceMenuPage_onInit (PAL 0x80858D60) creates only the list's PushButtons,
+ // each at its own variant's 16:9 pose (button/ctrl/PauseMenu*.brctr), over
+ // the frozen race: no obi, title or Back button. Captions are BMG 0x3EB-0x3EF;
+ // the menu cook has no "Continue Game" / "Quit Game" (0x3EB/0x3EC), so those
+ // two show the cooked "Continue" / "Quit" until it does. The PadInfo
+ // controller diagram (sections 0x1E/0x20/0x24/0x28) is not cooked.
  case UiPage::Pause:{
-  c.chrome("Pause");const char* variants[]={"ButtonContinue","ButtonRestart","ButtonQuit"};
-  // The native port has three actions. Retain that layout, while using the
-  // original race controller's delays and shared common_w004 animations.
-  for(unsigned i=0;i<3;++i){auto p=control(uiPauseMenuControl(s),variants[i]);p.y=90.f-float(i)*85;
-   c.button("button",i,p,i==0?"Continue":i==1?"Restart":"Quit");}break;
+  const char* variants[]={"ButtonContinue","ButtonQuit","ButtonRestart","ButtonChangeCourse","ButtonChangeCharacter"};
+  const char* captions[]={"Continue","Quit","Restart","Change Course","Change Character"};
+  for(unsigned i=0;i<s.count();++i){const auto b=unsigned(uiPauseButton(s.selection.mode,i));
+   c.button("button",i,control(uiPauseMenuControl(s),variants[b]),captions[b]);}
+  break;
  }
+ // Page 0x2C (ctor PAL 0x806250F0): AfterMenuEndConfirm's ButtonConfirmContinue
+ // and ButtonConfirmQuit (ids 23/24, BMG 0x3E9 "Continue" / 0x3EA "Quit") under
+ // RaceMessageWindow with BMG 0x44D. That control is not in the menu cook: its
+ // 16:9 poses and start frames are the brctr's, and its common_w004_menu
+ // animations are the pause controls' (the same nine brlan files). The message
+ // window (game_image race_message_half) and BMG 0x44D are not cooked.
  case UiPage::QuitConfirm:{
-  c.chrome("Quit this race?");auto yes=control("YesNoButton","Option0"),no=control("YesNoButton","Option1");
-  yes.x=no.x=0;yes.y=50;no.y=-55;c.button("button",0,yes,"Yes");c.button("button",1,no,"No");break;
+  constexpr struct {float y,delay;const char* caption;} buttons[2]={{-150.f,4.f,"Continue"},{-75.f,2.f,"Quit"}};
+  for(unsigned i=0;i<2;++i){auto p=control(uiPauseMenuControl(s),"ButtonContinue");p.x=0;p.y=buttons[i].y;p.delay=buttons[i].delay;
+   c.button("button",i,p,buttons[i].caption);}
+  break;
  }
  case UiPage::Error:{c.chrome("Race unavailable");auto p=control("ConfirmOK","OK");p.x=p.y=0;
   c.button("button",0,p,"Choose another course");break;}

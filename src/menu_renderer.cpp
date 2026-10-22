@@ -170,6 +170,11 @@ bool MenuRenderer::prepare(const std::vector<UiQuad>& quads,bool){
  for(unsigned i=0;i<streams.size();++i)if(streams[i])s.openStream(i);
  return ok;
 }
+std::uint32_t MenuRenderer::missingBytes(const std::vector<UiQuad>& quads)const{
+ const auto& s=*impl_;const auto needed=neededSprites(quads);std::uint32_t bytes=0;
+ for(unsigned i=0;i<needed.size();++i)if(needed[i]&&!s.slots[i].texture)bytes+=UiSprites[i].gpuBytes;
+ return bytes;
+}
 bool MenuRenderer::updateMovies(std::uint64_t ticks){bool ok=true;for(auto& m:impl_->movies)if(m)ok=m->uploadBlocking(ticks)&&ok;return ok;}
 void MenuRenderer::draw(Renderer& renderer,const std::vector<UiQuad>& quads,bool bottom,unsigned first,unsigned end,MenuVehicleIcons* icons){
  for(unsigned i=first;i<std::min(end,unsigned(quads.size()));++i){const auto& q=quads[i];

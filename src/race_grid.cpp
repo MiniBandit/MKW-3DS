@@ -469,13 +469,42 @@ uint16_t RaceGrid::bulletNoEndPlayers() const{
 void RaceGrid::afterStep(){
     auto* manager=Kinoko::System::RaceManager::Instance();if(!manager)return;
     forwardBumps();
+    // RaceinfoPlayer_endRace -> fn_1_238B8 (0x80533C6C): once the mode's end test passes
+    // (GP fn_1_25B74 / VS fn_1_25CA0: the local player has finished), RaceMode vf+0x24
+    // (fn_1_23880) calls vf+0xC (fn_1_25A34 0x80535DE8), which ends the race at once for
+    // every racer still running (fn_1_23F34 0x805342E8, forced). Finished racers use no
+    // items (ItemHolderPlayer_update 0x80797928) and their AI turns to post-race driving.
+    // Not ported: VS also ends when the local player is the only one left (fn_1_25CA0).
+    using Scenario=Kinoko::System::RaceConfig::Scenario;
+    const auto* config=Kinoko::System::RaceConfig::Instance();
+    if(config&&config->raceScenario().gameMode==Scenario::GameMode::Versus&&count_&&manager->player(0).finished())
+        for(unsigned i=1;i<count_;++i){
+            const auto& p=manager->player(i);if(p.finished())continue;
+            // fn_1_23F34's estimate: the current time x (laps + 1) / race completion, from
+            // 100 minutes x (laps + 2 - completion) before lap 1; fn_1_242D0 truncates the
+            // scaled milliseconds, then 17 ms is added (0x80890184).
+            constexpr float Finish=1.f+3.f; // 0x8089017C + 3 laps (RaceConfig +0xB90 & 4 clear)
+            const auto& now=manager->timerManager().currentTimer();
+            const bool started=p.raceCompletion()>1.f;
+            const float scale=started?float(double(Finish)/p.raceCompletion()):std::clamp(1.f+Finish-p.raceCompletion(),1.f,100.f);
+            const uint32_t base=started?(uint32_t(now.min)*60u+now.sec)*1000u+now.mil:100u*60000u;
+            const uint32_t ms=uint32_t(float(base)*scale);
+            const Kinoko::System::Timer t(uint16_t(ms/60000u),uint8_t(ms/1000u%60u),uint16_t(ms%1000u));
+            manager->endRaceEstimated(i,t+17.f);
+        }
     std::array<unsigned,Capacity> order{};for(unsigned i=0;i<count_;++i)order[i]=i;
     std::sort(order.begin(),order.begin()+count_,[&](unsigned a,unsigned b){
         // A Time Trial ghost never takes a place from the player.
         if(ghost(a)!=ghost(b))return ghost(b);
         const auto& x=manager->player(a);const auto& y=manager->player(b);
         if(x.finished()!=y.finished())return x.finished();
-        if(x.finished())return x.finishOrder()<y.finishOrder();
+        // fn_1_23324 (0x805336D8) ranks finished racers by 6000099 - time ms + 0.01 x index:
+        // the earlier time first, a tie to the higher index. Estimated times keep the order.
+        if(x.finished()){
+            auto ms=[](const Kinoko::System::Timer& t){return (uint32_t(t.min)*60u+t.sec)*1000u+t.mil;};
+            const uint32_t tx=ms(x.raceTimer()),ty=ms(y.raceTimer());
+            return tx!=ty?tx<ty:a>b;
+        }
         if(x.raceCompletion()!=y.raceCompletion())return x.raceCompletion()>y.raceCompletion();
         return a<b;
     });

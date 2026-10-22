@@ -5,6 +5,9 @@
 #include <game/field/ObjectCollisionKart.hh>
 #include <game/field/ObjectCollisionSphere.hh>
 #include <game/field/ObjectDirector.hh>
+#include <game/field/BoxColManager.hh>
+#include <game/field/ObjectDrivableDirector.hh>
+#include <game/field/obj/ObjectDrivable.hh>
 #include <game/field/obj/ObjectItemboxPress.hh>
 #include <game/field/RailInterpolator.hh>
 #include <game/field/RailManager.hh>
@@ -19,6 +22,7 @@
 #include <game/system/RaceManager.hh>
 #include <game/system/RaceConfig.hh>
 #include <game/system/ResourceManager.hh>
+#include "mkw/race_audio.hpp"
 #endif
 #include <algorithm>
 #include <cmath>
@@ -40,7 +44,8 @@ ItemSurface nativeSurface(Vec3 previous,Vec3 position,float radius,uint32_t type
     static_assert(ItemKclMask==KCL_TYPE_6CEBDFFF);
     const auto flags=K::Field::KCLTypeMask(types);
     if(!K::Field::CollisionDirector::Instance()->checkSphereFull(radius,sourceVec(position),sourceVec(previous),flags,&info,&mask,0))return {};
-    return {nativeVec(info.tangentOff),nativeVec(info.floorNrm),nativeVec(info.wallNrm),bool(mask&(KCL_TYPE_BIT(COL_TYPE_FALL_BOUNDARY)|KCL_TYPE_BIT(COL_TYPE_SOLID_OOB))),bool(mask&KCL_TYPE_BIT(COL_TYPE_CANNON_TRIGGER)),uint32_t(mask)};
+    return {nativeVec(info.tangentOff),nativeVec(info.floorNrm),nativeVec(info.wallNrm),bool(mask&(KCL_TYPE_BIT(COL_TYPE_FALL_BOUNDARY)|KCL_TYPE_BIT(COL_TYPE_SOLID_OOB))),bool(mask&KCL_TYPE_BIT(COL_TYPE_CANNON_TRIGGER)),uint32_t(mask),
+            nativeVec(info.bbox.min),nativeVec(info.bbox.max),info.floorDist,info.wallDist,info.perpendicularity};
 }
 // The patched Kinoko KartAction/KartMove carry the retail gates; this only forwards.
 class NativeKarts final:public ItemKarts{
@@ -92,11 +97,47 @@ public:
         const size_t n=director->checkItemObjectCollision(K::s16(type),K::u8(owner<12?owner:12),sourceVec(position),sourceVec(velocity),radius,held);
         unsigned out=0;
         for(size_t i=0;i<n&&out<max;++i)hits[out++]={nativeVec(director->hitDepth(i)),int16_t(director->reaction(i))};
+        // A Wiggler segment's item callback (PAL fn_1_1B6A8C): any item but a Bob-omb (object 9)
+        // flags it for the head's voice; GeoHitTableItemObj row 0xe2 never damages it.
+        for(size_t i=0;i<n;++i)if(type!=9&&director->collidingObject(i)->id()==K::Field::ObjectId::Hanachan)
+            noteRaceAudioHanachanBump(static_cast<const K::Field::ObjectBase*>(director->collidingObject(i)));
         return out;
     }
 };
 // Our own interpolator on the rail Kinoko's RailManager built for a KMP
 // route (initialised twice like retail objects, so a smooth rail moves).
+// One s_itembox drop step as retail runs it (init RMCP 80829280): CollisionDirector::
+// checkSphereFullPush (0x8078F784) with the box's ride record, which ObjDrivableManager
+// (0x8081BFA0) hands to each drivable near the sphere. A drivable that hits takes the record
+// when the deepest collision entry so far is deeper than the one it holds (ObjectKCL 0x8081AFB4,
+// VolcanoPiece 0x808199A8 -> fn_1_2AD424 0x807BD7D8, from 0). push is the hit's tangentOff.
+struct BoxDrop{bool hit=false;Vec3 push{};const K::Field::ObjectDrivable* ride=nullptr;};
+BoxDrop dropStep(Vec3 at){
+    auto* director=K::Field::CollisionDirector::Instance();
+    const K::Field::KCLTypeMask types=K::Field::KCLTypeMask(0x6cebdfff);
+    const auto p=sourceVec(at);
+    K::Field::CollisionInfo info{};info.reset();K::Field::KCLTypeMask mask=0;
+    director->resetCollisionEntries(&mask);
+    BoxDrop d;float held=0;
+    d.hit=K::Field::CourseColMgr::Instance()->checkSphereFullPush(1.f,ItemBoxRadius,nullptr,p,K::EGG::Vector3f::inf,types,&info,&mask);
+    if(!K::Field::ObjectDrivableDirector::Instance()->objects().empty()){
+        auto* units=K::Field::BoxColManager::Instance();units->search(ItemBoxRadius,p,K::Field::eBoxColFlag::Drivable);
+        while(auto* obj=units->getNextDrivable()){
+            if(!obj->checkSphereFullPush(ItemBoxRadius,p,K::EGG::Vector3f::inf,types,&info,&mask,0))continue;
+            d.hit=true;
+            if(mask)director->findClosestCollisionEntry(&mask,K::Field::KCLTypeMask(0xffffffff));
+            if(const auto* e=director->closestCollisionEntry();e&&e->dist>held){held=e->dist;d.ride=obj;}
+        }
+    }
+    if(d.hit)d.push=nativeVec(info.bbox.min+info.bbox.max);
+    return d;
+}
+// Drivables whose ride slots are the ObjectKCL ones (VolcanoRock 0x808D6868, VolcanoPiece
+// 0x808D5150): vf+0x104 returns 1, vf+0x110 (0x807FEA60) keeps the box's offset from the
+// object's position and vf+0x114 (0x806813D8) adds the position back; no rotation (vf+0x118).
+bool ridesPosition(const K::Field::ObjectDrivable& obj){
+    return obj.id()==K::Field::ObjectId::VolcanoRock||obj.id()==K::Field::ObjectId::VolcanoPiece;
+}
 std::shared_ptr<K::Field::RailInterpolator> boxRail(int path,float speed,unsigned start){
     const auto* map=K::System::CourseMap::Instance();
     if(path<0||!K::Field::RailManager::Instance()||unsigned(path)>=map->getPointInfoCount())return nullptr;
@@ -127,7 +168,7 @@ ItemRacer snapshot(unsigned i){
     r.up={pose[0,1],pose[1,1],pose[2,1]};r.scale=nativeVec(k->scale());
     const auto& stats=k->param()->stats();
     r.itemGeometry={stats.itemUnk170,stats.itemUnk174,stats.itemUnk178,stats.itemUnk17c};
-    r.speedRatio=k->move()->speedRatioCapped();r.hop=k->move()->hopPosY();
+    r.speedRatio=k->move()->speedRatioCapped();r.hop=k->move()->hopPosY();r.baseSpeed=k->move()->statBaseSpeed();
     r.shellTargetUnavailable=status.onBit(S::TriggerRespawn,S::InRespawn,S::AfterRespawn,static_cast<S>(83));
     // Retail 7eaec/7ea0c use distinct masks. Retain unnamed source bits
     // where Kinoko has no producer yet; do not substitute unrelated flags.
@@ -145,6 +186,8 @@ ItemRacer snapshot(unsigned i){
     r.mega=status.onBit(S::Mega)?uint16_t(std::max<int>(1,k->move()->megaTimer())):0;
     r.bullet=status.onBit(S::Bullet);r.shocked=status.onBit(S::Shocked);r.crushed=status.onBit(S::Crushed);
     r.inAction=status.onBit(S::InAction);
+    r.zipper=status.onBit(S::HalfPipeRamp,S::OverZipper);r.stickyRoad=status.onBit(S::StickyRoad);
+    r.airtimeOver20=status.onBit(S::AirtimeOver20);r.vanished=status.onBit(S::Vanished);r.stickX=k->inputs()->currentState().stick.x;
     r.wheelie=status.onBit(S::Wheelie);
     r.rearWheel=nativeVec(k->tirePhysics(k->param()->tireCount()-1)->pos());
     r.wheelieReferenceFrame=K::System::RaceManager::Instance()->timer()==60;
@@ -173,6 +216,8 @@ void RaceItems::unhookNative(){
 }
 void RaceItems::stepMovers(){
     using Status=K::Field::RailInterpolator::Status;
+    // s_itembox on a drivable (calc 8082945c, before the drivables' own calc this step).
+    for(const auto& r:rides_)boxes_[r.box].position=nativeVec(r.object->pos())+r.offset;
     for(auto& p:presses_){
         auto& box=boxes_[p.box];const auto* rail=p.object->railInterpolator();
         if(p.object->state()==0||!rail){p.taken=false;box.active=false;box.respawn=0;continue;}
@@ -225,7 +270,7 @@ void RaceItems::stepMovers(){
 }
 void RaceItems::resetFromCourse(unsigned count,uint32_t seed){
     std::vector<ItemBox> boxes;const auto* map=K::System::CourseMap::Instance();
-    std::vector<ItemBoxMover> movers;std::vector<ItemBoxLine> lines;
+    std::vector<ItemBoxMover> movers;std::vector<ItemBoxLine> lines;std::vector<ItemBoxRide> rides;
     for(unsigned i=0;i<map->getGeoObjCount();++i){const auto* obj=map->getGeoObj(i);if(!(obj->presenceFlag()&1))continue;
         const unsigned id=obj->id();
         if(id==0x65){
@@ -234,9 +279,22 @@ void RaceItems::resetFromCourse(unsigned count,uint32_t seed){
             // KMP Euler rotation/scale; arbitrary authored airborne rows stay high.
             boxes.push_back(courseItemBox(nativeVec(obj->pos()),int16_t(obj->setting(6)),i));
         }else if(id==0x76){
-            // s_itembox (RMCP 80829280) drops from its placement in 50-unit
-            // steps onto the floor below, then hovers like a regular box. It
-            // stays where it landed; retail also rides moving roads with it.
+            // s_itembox (RMCP ctor 80829208, init 80829280, calc 8082945c). Retail drops it
+            // from its ObjItemBox position (placement + (0,180 + setting 6,0), 808285b0) in
+            // 50-unit steps while y > 0 and moves the hit by -tangentOff. On a drivable its calc
+            // keeps it at that object's position plus the landing offset, (0,180,0)
+            // (0x809C4324) and setting 6.
+            const int16_t lift=int16_t(obj->setting(6));
+            Vec3 drop=nativeVec(obj->pos())+Vec3{0,ItemBoxHeight+float(lift),0};
+            BoxDrop landed;
+            for(;drop.y>0;drop.y-=50)if((landed=dropStep(drop)).hit)break;
+            if(landed.hit&&landed.ride&&ridesPosition(*landed.ride)){
+                ItemBox box=courseItemBox(drop-landed.push,lift,i);
+                rides.push_back({landed.ride,uint16_t(boxes.size()),box.position-nativeVec(landed.ride->pos())});
+                boxes.push_back(box);continue;
+            }
+            // Elsewhere it stays where it landed (retail rides the Rainbow Road aurora and the
+            // Bowser's Castle twisted road too; their ride slots are not ported).
             Vec3 at=nativeVec(obj->pos());
             for(unsigned step=0;step<1000;++step){
                 K::Field::CollisionInfo info{};info.reset();K::Field::KCLTypeMask mask=0;
@@ -292,7 +350,7 @@ void RaceItems::resetFromCourse(unsigned count,uint32_t seed){
     static NativeKarts native;
     setKarts(&native);
     reset(boxes,count,seed);
-    movers_=std::move(movers);lines_=std::move(lines);presses_=std::move(presses);
+    movers_=std::move(movers);lines_=std::move(lines);presses_=std::move(presses);rides_=std::move(rides);
     for(const auto& p:presses_)boxes_[p.box].active=false;
     for(const auto& m:movers_)if(m.kind==ItemBoxMover::Kind::Line)boxes_[m.box].active=false;
     size_t kmpSize=0;const void* kmp=K::System::ResourceManager::Instance()->getFile("course.kmp",&kmpSize,K::System::ArchiveId::Course);

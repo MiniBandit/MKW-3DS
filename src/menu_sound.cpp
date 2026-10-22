@@ -8,6 +8,13 @@ namespace {
 using namespace snd;
 constexpr std::uint16_t BgmSlots[2] = {1, 2};
 constexpr std::uint16_t VoiceSlot = 3;
+constexpr std::uint16_t TitleVoiceSlot = 4;   // the menu character manager's title handle (+0x14)
+// SWITCH (Phil, 2026-10-22): the cooked set has one title picture, "mario2" = title variant 1
+// (tools/cook_menu_ui.py ui_title_scene / ui_title_blur_scene). Until the other four are
+// cooked the title variant stays 1 (Mario's lines, with retail's rare-line rule), so the voice
+// matches the picture. Set to false in the re-cook batch, together with the per-variant
+// pictures, to restore TitlePage_onInit's random 1-of-5 pick.
+constexpr bool OnlyMario2TitlePictureCooked = true;
 // Retail page ids (Section::CreatePageById jump table, 805f24dc).
 int retailPage(UiPage page) {
  switch (page) {
@@ -111,7 +118,7 @@ void MenuSound::input(const MenuState& before, const MenuState& after, const UiI
   // (RaceSound::pause(false) only resumes the players).
   if (after.page == UiPage::Race) { ui(id::SE_RC_PAUSE_OFF); return; }
   const bool leaving = action == UiAction::RestartRace || action == UiAction::StartRace ||
-                       (before.page==UiPage::Pause&&before.cursor==1&&key.accept&&!key.back) ||
+                       (before.page==UiPage::Pause&&uiPauseButton(before.selection.mode,before.cursor)==UiPauseButton::Restart&&key.accept&&!key.back) ||
                        (pageChanged && after.page != UiPage::Pause && after.page != UiPage::QuitConfirm && after.page != UiPage::Results && (key.accept || key.start));
   if (leaving) { ui(id::SE_RC_PAUSE_EXIT_GAME); return; }
  }
@@ -175,6 +182,8 @@ void MenuSound::startBgm(UiPage page) {
  slot_ = slot_ == BgmSlots[0] ? BgmSlots[1] : BgmSlots[0];
  bgm_ = sound;
  SoundSystem::instance().play(sound, slot_);
+ // SinglePlayer::PlaySound (PAL 0x806F8C30): W_BGM_TITLE arms the title voice, 60 frames out (0x80868780).
+ if (sound == id::W_BGM_TITLE) { title_.armed = true; title_.delay = 0x3c; }
  // SinglePlayer::StartSound (806f4180): PrepareStreams with the current layer's stems.
  const int layer = layerOf(page);
  if (sound == id::SEQ_O_SELECT) {
@@ -201,6 +210,57 @@ void MenuSound::enterSection(Section next, UiPage page) {
  loaded_ = next;
  pendingStart_ = next == Section::Title || next == Section::Single ? 1 : -1;
  (void)page;
+ // TitlePage_onInit (PAL 0x8063ACD8..0x8063AD24) with unlock flag 0x38 set: a title
+ // variant 0-4 other than the last one (Util::Random nextU32(5)).
+ if (next == Section::Title) {
+  if (OnlyMario2TitlePictureCooked) title_.variant = 1;   // see the switch at the top
+  else do title_.variant = int(title_.random(5)); while (title_.variant == title_.lastVariant);
+  title_.lastVariant = title_.variant;
+  title_.active = false;
+ }
+}
+
+// fn_1_12A520 (PAL 0x8063A8D4) on the title page's activation -> fn_1_3583E0 (0x80868794):
+// the voice for the variant; the rare lines (1 in 15 / 1 in 5 from the shared random) not twice
+// running and not within 10 plays of the last one.
+void MenuSound::titleActivate() {
+ TitleVoice& t = title_;
+ t.sound = 0xFFFFFFFF;
+ t.track = Track{};   // +0x2440 vt+8: the track back to 1.0
+ if (SoundSystem::instance().slotAttached(TitleVoiceSlot)) { t.armed = false; return; }
+ auto rareLine = [&](unsigned odds, std::uint32_t rare, std::uint32_t common, int extraDelay) {
+  if (t.random(odds) == 0 && !t.rare && t.rareWait < 1) { t.sound = rare; t.delay += extraDelay; t.rare = true; }
+  else { t.sound = common; t.rare = false; }
+ };
+ switch (t.variant) {
+ case 0: t.sound = id::VO_TITLE_MR_MK; t.rare = false; break;                                     // "mario1"
+ case 1: rareLine(15, id::VO_TITLE_MR_MK_MISS, id::VO_TITLE_MR_MK_WIHEE, 0x3c); break;            // "mario2"
+ case 2: rareLine(5, id::VO_TITLE_PC_PKW, id::VO_TITLE_PC_MKW, 0); break;                         // "peach"
+ case 3: rareLine(5, id::VO_TITLE_LG_LKW, id::VO_TITLE_LG_MKF, 0); break;                         // "luiji"
+ case 4: t.sound = id::VO_TITLE_KP_LAUGH; t.rare = false; break;                                  // "koopa"
+ default: t.armed = false; break;
+ }
+}
+
+// fn_1_358284 (PAL 0x80868638), every frame: an armed voice plays when its delay runs out if
+// the title page (0x57) is on screen (2D, RSAR player); leaving the page moves the playing
+// voice's track volume to 0.5 over 30 frames.
+void MenuSound::titleFrame(UiPage page) {
+ TitleVoice& t = title_;
+ auto& sound = SoundSystem::instance();
+ const bool onTitle = page == UiPage::Title;
+ if (t.armed && --t.delay < 1) {
+  if (t.sound != 0xFFFFFFFF && onTitle) {
+   sound.play(t.sound, TitleVoiceSlot);
+   if (t.rare) t.rareWait = 10; else if (--t.rareWait < 0) t.rareWait = 0;
+  }
+  t.sound = 0xFFFFFFFF; t.armed = false;
+ }
+ if (sound.slotAttached(TitleVoiceSlot)) {
+  if (t.wasTitle && !onTitle) t.track.set(0.5f, 0x1e);
+  if (t.track.calc()) post(SoundCommand::TrackVolume, TitleVoiceSlot, 0xFFFF, t.track.value);
+  t.wasTitle = onTitle;
+ }
 }
 
 void MenuSound::frame(const MenuState& visual, bool revealed, unsigned steps) {
@@ -212,6 +272,9 @@ void MenuSound::frame(const MenuState& visual, bool revealed, unsigned steps) {
  // and failed to fit behind them (no menu voices). The BGM still waits for the page.
  if ((revealed || section_ == Section::None) && next != section_ && next != Section::Race) enterSection(next, visual.page);
  if (pendingStart_ > 0 && revealed && sound.sceneReady()) { pendingStart_ = -1; startBgm(visual.page); }
+ // TitlePage_onActivate (PAL 0x8063AD64), once each time the title page comes on screen.
+ if (visual.page != UiPage::Title) title_.active = false;
+ else if (section_ == Section::Title && !title_.active) { title_.active = true; titleActivate(); }
  const int layer = layerOf(visual.page);
  if (bgm_ != 0xFFFFFFFF && layer != layer_) { applyLayer(layer, 30); if (layer != 6) layer_ = layer; }
  // ConfirmPage BeforeIn / AfterOut (PAL 0x805C2324 / 0x805C2340): the page
@@ -229,6 +292,7 @@ void MenuSound::frame(const MenuState& visual, bool revealed, unsigned steps) {
    if (v != postedVolume_) { post(SoundCommand::Volume, slot_, 0, v); postedVolume_ = v; }
    if (bgm_ == id::SEQ_O_SELECT) for (int t = 0; t < 4; ++t) if (stems_[t].calc()) post(SoundCommand::TrackVolume, slot_, 1u << t, stems_[t].value);
   }
+  titleFrame(visual.page);
   // One game frame for the audio thread's BasicSound updates.
   SoundCommand c; c.type = SoundCommand::Layer; sound.post(c);
  }
@@ -242,6 +306,7 @@ void MenuSound::fadeOut() {
  // (PAL 0x8070F4D0) fades the other players, the menu voice among them.
  if (bgm_ != 0xFFFFFFFF) sound.stopSlot(slot_, 20);
  sound.stopSlot(VoiceSlot, 20);
+ sound.stopSlot(TitleVoiceSlot, 20);   // the title voice is on player 8 too
  bgm_ = 0xFFFFFFFF;
 }
 

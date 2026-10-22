@@ -70,6 +70,13 @@ struct ItemRacer {
     // kartParam.bin itemUnk170/174/178/17c, exposed for held-item geometry.
     std::array<float,4> itemGeometry{100,80,-12,-15};
     float speedRatio=0,hop=0;
+    /// KartObjectProxy::getBaseSpeed (0x805910B0, KartMove +0x14): caps the inherited speed
+    /// of a backward throw (0x80795030).
+    float baseSpeed=0;
+    /// Status 41 / 42 (half-pipe ramp, over a zipper: a shell's launch starts its slope timer,
+    /// 0x807B5178), 16 (sticky road), 15 (airtime over 20) and 83 (vanished), for the throw.
+    bool zipper=false,stickyRoad=false,airtimeOver20=false,vanished=false;
+    float stickX=0; ///< The pad's stick X (KPad current state, getInput +0x30).
     bool bike=false;
     Vec3 velocity{};
     bool haveVelocity=false;

@@ -11,7 +11,7 @@
 #include <memory>
 #include <vector>
 
-namespace Kinoko::Field {class RailInterpolator;class ObjectItemboxPress;}
+namespace Kinoko::Field {class RailInterpolator;class ObjectItemboxPress;class ObjectBase;}
 namespace mkw {
 enum class ItemKind : uint8_t {
     GreenShell=0, RedShell=1, Banana=2, FakeBox=3, Mushroom=4,
@@ -26,6 +26,9 @@ struct ItemHud {
     ItemKind item=ItemKind::None;
     uint16_t roulette=0, star=0, mega=0, bullet=0, ink=0, cloud=0, golden=0, pow=0;
     uint16_t inkDelay=0;
+    // The Bullet's end-phase timer (KartKiller +0x12, PAL 0x8059CC60): 1 on the first step
+    // after the end starts, 0 otherwise. Its fly sound pitch follows it (0x8070C758).
+    uint16_t bulletEnd=0;
     uint8_t charges=0;
     bool deployed=false;
     ItemKind rouletteIcon=ItemKind::None;
@@ -75,6 +78,9 @@ struct ItemBoxLine { std::vector<uint16_t> movers; int32_t timer=0,period=0; uin
 // Toad's Factory belt slot (Kinoko ObjectItemboxPress): a box from the route
 // point marked 2 to the belt end; collected boxes stay gone for that pass.
 struct ItemBoxPress { const Kinoko::Field::ObjectItemboxPress* object=nullptr; uint16_t box=0,reveal=0xffff; bool taken=false; };
+// An s_itembox that landed on a drivable object it rides (retail RMCP calc 8082945c): its
+// position is the object's position plus this offset.
+struct ItemBoxRide { const Kinoko::Field::ObjectBase* object=nullptr; uint16_t box=0; Vec3 offset{}; };
 struct ItemActor {
     ItemKind kind=ItemKind::None;
     Vec3 position{}, previous{}, velocity{},flightDirection{0,0,1};
@@ -106,6 +112,13 @@ struct ItemActor {
     uint8_t ownerImmunity=30;
     float blastInitialScale=1,bounceImpulse=0;
     uint8_t floorBounces=0;
+    // Green / Red shell movement (fn_1_2A5140): the velocity direction +0x1b0 (flightDirection
+    // is +0x1a4), and ItemObj_update's air frames +0x15c (counted to 6, cleared on a floor) with
+    // the flag it leaves for the next update, +0x78 bit 0x20 (5 or more).
+    Vec3 shellDirection{0,0,1};
+    uint8_t airFrames=0;bool airborne=false;
+    // +0x15e: frames left after a solid-OOB floor (ItemObj_update 0x8079EFEC), 0 when off.
+    uint16_t solidFallTimer=0;
     ShellGuidance guidance{};
     Vec3 visualPosition()const{return kind==ItemKind::BlueShell&&!explosion&&guidance.phase<4?Vec3{position.x,guidance.visualY,position.z}:position;}
     bool diving()const{return kind==ItemKind::BlueShell&&!explosion&&guidance.phase==5;}
@@ -124,7 +137,10 @@ enum class ItemEffect : uint8_t { Mushroom, Spin, Launch, Explosion, Shrink, Cru
 // for a Lightning bolt and 1 for the Thunder Cloud's strike.
 struct ItemEvent { ItemEffect effect; uint8_t player; uint16_t frames=0; Vec3 direction{}; int8_t action=-1; float scale=1; uint8_t source=0xff; };
 // types: the KCL type bits the sphere touched (ColInfo +0xd4 in the retail scatter state).
-struct ItemSurface { Vec3 correction{}, floorNormal{}, wallNormal{}; bool kill=false; bool cannon=false; uint32_t types=0; };
+struct ItemSurface { Vec3 correction{}, floorNormal{}, wallNormal{}; bool kill=false; bool cannon=false; uint32_t types=0;
+    // The rest of the ColInfo (Kinoko CollisionInfo; retail item +0xd8): the push box, the
+    // floor and wall distances (-FLT_MIN when none) and the wall perpendicularity.
+    Vec3 low{},high{}; float floorDist=-1.17549435e-38f,wallDist=-1.17549435e-38f,perpendicularity=0; };
 // Sound cues: where retail item objects and holders call Audio::ItemActor, the
 // holder's KartActor or its CharacterActor (docs/AUDIO_SOURCE.md "Items").
 enum class ItemSoundCue : uint8_t {
@@ -241,6 +257,7 @@ private:
     std::vector<ItemBoxMover> movers_;
     std::vector<ItemBoxLine> lines_;
     std::vector<ItemBoxPress> presses_;
+    std::vector<ItemBoxRide> rides_;
     void stepMovers();
     std::array<ItemActor,MaxActors> actors_{};
     std::array<bool,MaxActors> freeAtStepStart_{};
@@ -281,6 +298,17 @@ private:
         Vec3 up{0,1,0};float lift=0; // heldFrame(): holder +0x64, +0xcc
     };
     std::array<HeldState,MaxRacers> deployments_{};
+    // Item::PlayerObj as its frame rebuild fn_1_281AA8 (0x80791E5C) leaves it, kept across
+    // deployments: the anchor +0x7c, its change since the last rebuild +0x9c, the axes Y +0x64
+    // and Z +0x70, and +0xac (moving along Z, or in an action or trick); X +0x58 and the speed
+    // ratio +0x98 for the forward throw's sideways part.
+    struct HeldMotion { Vec3 anchor{},delta{},right{1,0,0},up{0,1,0},forward{0,0,1};float ratio=0;bool ahead=false; };
+    std::array<HeldMotion,MaxRacers> heldMotion_{};
+    // ItemHolderPlayer +0x40 (ItemHolderPlayer_update 0x80797928): the eased slope a throw's
+    // direction takes as its vertical part, with the holder's last kart position +0x24, and
+    // +0x23c, the stick X it follows at 1/15 per step (a forward throw's sideways aim).
+    struct ThrowPitch { Vec3 last{};float pitch=0,slope=0,aim=0;bool placed=false; };
+    std::array<ThrowPitch,MaxRacers> throwPitch_{};
     // Holder +0xc0 / +0xc4 / +0xc8 (fn_1_285210 0x807955C4): the last wheel's kart-frame y and
     // z and its height above the kart on race frame 60, for heldFrame()'s wheelie lift.
     std::array<Vec3,MaxRacers> wheelieReference_{};
@@ -333,6 +361,12 @@ private:
     void shatter(ItemActor& actor);
     void moveShellRoute(ItemActor& actor,ItemWorldQuery query,int target,bool blue);
     void shellTerrain(ItemActor& actor,ItemWorldQuery query,bool blue,bool route,bool approach=false);
+    void moveShell(ItemActor& actor,ItemWorldQuery query,Vec3& up,float target);
+    Vec3 backwardThrow(unsigned player,float& speed)const;
+    Vec3 forwardThrow(unsigned player,float base,float& speed)const;
+    Vec3 finishThrow(unsigned player,Vec3 dir)const;
+    void noteHeldFrame(unsigned player,Vec3 anchor,Vec3 right,Vec3 up,Vec3 forward);
+    void updateThrowPitch(unsigned player);
     int redRouteTarget(unsigned player)const;
     int redTarget(const ItemActor& actor,bool ranked)const;
     int blueTarget(const ItemActor& actor)const;

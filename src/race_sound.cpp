@@ -64,6 +64,16 @@ void post(SoundCommand::Type type, std::uint16_t slot, std::uint32_t id, float v
  SoundCommand c; c.type = type; c.slot = slot; c.id = id; c.value = value; c.frames = frames;
  SoundSystem::instance().post(c);
 }
+// The goal voices with a Time Trial version (PAL table 0x808B00E8, 46 rows of seven
+// words; count at 0x808B00E4): the voice, its Time Trial voice and that voice's group.
+struct GoalTimeAttackRow { std::uint16_t goal, timeAttack, group; };
+constexpr GoalTimeAttackRow GoalTimeAttack[46] = {
+ {1245,1254,83},{1247,1255,84},{1253,1256,85},{1377,1386,99},{1378,1387,100},{1379,1388,101},{1380,1389,102},{1383,1390,103},
+ {1384,1391,104},{1385,1392,105},{1628,1636,132},{1629,1637,133},{1992,2001,173},{1994,2002,174},{2249,2258,201},{2250,2259,202},
+ {2251,2260,203},{2255,2261,204},{2257,2262,205},{2386,2392,219},{2387,2393,220},{2389,2394,221},{2390,2395,222},{2391,2396,223},
+ {2772,2781,263},{2774,2782,264},{2904,2913,278},{2905,2914,279},{2906,2915,280},{3135,3144,296},{3137,3145,297},{3138,3146,298},
+ {3139,3147,299},{3141,3148,300},{3142,3149,301},{3143,3150,302},{3271,3280,316},{3273,3281,317},{3274,3282,318},{3276,3283,319},
+ {3277,3284,320},{3278,3285,321},{3279,3286,322},{3916,3925,389},{3917,3926,390},{3918,3927,391}};
 // Goal voice variant per character and result: retail draws one of three
 // groups without repeating (VoiceGroupTable); the last pick is kept per run.
 std::uint8_t lastGoal[24][3] = {};
@@ -156,6 +166,9 @@ void RaceSound::Bgm::calc() {
 }
 
 // ------------------------------------------------------------ RaceRSARPlayer
+// Diagnostic only (dumpLocalVoices): the drop count already logged, and dumps this race.
+static std::uint32_t localVoiceDropsSeen = 0;
+static unsigned localVoiceDumps = 0;
 void RaceSound::begin(const Setup& s) {
  auto& sys = SoundSystem::instance();
  if (active_) quit();
@@ -164,6 +177,7 @@ void RaceSound::begin(const Setup& s) {
  if (!sys.available()) return;
  active_ = true; paused_ = false; leaving_ = false; state_ = 0; countdown_ = 0; tick_ = 0; maxLap_ = 1; finished_ = false; rank_ = 1;
  goalVoice_[0] = goalVoice_[1] = goalVoice_[2] = 0;
+ localVoiceDropsSeen = layer_.localVoiceDrops.load(); localVoiceDumps = 0;
  alteration_ = 3; wasMega_ = wasStar_ = false; wobble_ = 0;
  alterVolume_ = fanfareVolume_ = bgmVolume_ = bgmPitch_ = 1; postedBgmVolume_ = postedBgmPitch_ = -1; postedSlot_ = -1;
  bgm_ = Bgm{};
@@ -222,8 +236,15 @@ void RaceSound::planScene() {
   if (r.local && voice::Goal[r.character][0])
    for (unsigned k = 0; k < 3; ++k) {
     const std::uint32_t variant = goalVariant(r.character, k);
-    if (!single) voiceGroups.push_back(base + 4 + k * 3 + variant);
+    std::uint32_t group = base + 4 + k * 3 + variant;
     goalVoice_[k] = std::uint16_t(voice::Goal[r.character][k] + variant);
+    // Outside GP and VS (RaceConfig +0xB70 not 0 or 1) a goal voice with a Time Trial
+    // version swaps to it and its group: fn_1_356110 (PAL 0x808664C4) loads it,
+    // fn_1_354938 (0x80864CEC) plays it.
+    if (s.mode > 1)
+     for (const auto& row : GoalTimeAttack)
+      if (row.goal == goalVoice_[k]) { goalVoice_[k] = row.timeAttack; group = row.group; break; }
+    if (!single) voiceGroups.push_back(group);
    }
   if (cannonCourse(course) && !single) voiceGroups.push_back(base + 2 + (r.local ? 0 : 1));
  }
@@ -503,10 +524,30 @@ void RaceSound::postVolumes(bool force) {
  postedSlot_ = slot;
 }
 
+// Diagnostic only: the local racer's voice log (RaceAudioLayer::localVoiceLog), at the status
+// ticks and whenever a damage or wheelie voice did not start (at most 12 times a race).
+// Entries are tick:type/result<playing-or-pending type, in hex.
+static void dumpLocalVoices(const RaceAudioLayer& l, unsigned tick, const char* why) {
+ FILE* log = std::fopen("sdmc:/3ds/mkw-3ds/audio-race-status.txt", "a");
+ if (!log) return;
+ const std::uint32_t head = l.localVoiceHead.load(), n = std::min<std::uint32_t>(head, std::uint32_t(l.localVoiceLog.size()));
+ std::fprintf(log, "  local voices %s tick=%u drops=%lu:", why, tick, (unsigned long)l.localVoiceDrops.load());
+ for (std::uint32_t k = head - n; k != head; ++k) {
+  const std::uint32_t x = l.localVoiceLog[k % l.localVoiceLog.size()].load();
+  std::fprintf(log, " %lu:%02x/%u<%02x", (unsigned long)(x >> 13), unsigned((x >> 3) & 0x1f), unsigned(x & 7), unsigned((x >> 8) & 0x1f));
+ }
+ std::fputc('\n', log);
+ std::fclose(log);
+}
+
 void RaceSound::step(const Frame& f, RaceAudioFrame* actors) {
  if (!active_ || paused_) return;
  auto& sys = SoundSystem::instance();
  ++tick_;
+ if (layer_.localVoiceDrops.load() != localVoiceDropsSeen) {
+  localVoiceDropsSeen = layer_.localVoiceDrops.load();
+  if (localVoiceDumps < 12) { ++localVoiceDumps; dumpLocalVoices(layer_, tick_, "drop"); }
+ }
  // Bounded release diagnostics for silent race actors; no per-frame file I/O.
 #ifdef MKW_RELEASE
  if (tick_ == 300 || tick_ == 900 || tick_ == 1800) {
@@ -540,6 +581,7 @@ void RaceSound::step(const Frame& f, RaceAudioFrame* actors) {
 #endif
    std::fclose(log);
   }
+  dumpLocalVoices(layer_, tick_, "status");
  }
  if (planPending_) {
   // LINEAR settled (45 unchanged ticks) or 150 ticks into the race: plan now.
@@ -634,7 +676,7 @@ void RaceSound::step(const Frame& f, RaceAudioFrame* actors) {
   a.objectsReady = groupsIn;
   a.raceState = std::uint8_t(state_); a.alteration = std::uint8_t(alteration_); a.engineClass = std::uint8_t(std::min(setup_.engineClass, 2u));
   // A frame dropped by a full ring keeps its cues for the next one.
-  if (layer_.push(a)) { for (auto& k : a.kart) { k.cues = 0; k.bumpedBy = 0; k.objectHits = 0; k.fallBoundary = 0xff; k.kartSounds = 0; } a.itemSounds = 0; a.ambienceOps = 0; a.objectSounds = 0; }
+  if (layer_.push(a)) { for (auto& k : a.kart) { k.cues = 0; k.bumpedBy = 0; k.objectHits = 0; k.fallBoundary = 0xff; k.kartSounds = 0; } a.itemSounds = 0; a.ambienceOps = 0; a.objectSounds = 0; a.starRings = 0; }
  }
  SoundCommand c; c.type = SoundCommand::Layer; sys.post(c);
 }

@@ -102,6 +102,7 @@ enum Status {
  Wheelie = 29, InAction = 32, TriggerRespawn = 33, InCannon = 36, ChargingSSMT = 57, Star = 63, Shocked = 71, InRespawn = 77,
  Mega = 79, Crushed = 80, Bullet = 91,
  JumpPadOn = 30, InATrick = 38, OverZipper = 42, HalfPipeTrick = 47, Trickable = 62, JumpPadMushroomTrigger = 70, AfterRespawn = 78,
+ Boosting = 20, RampBoosting = 31, WheelieBumped = 66,
 };
 f32 length(Vec3f v) { return std::sqrt(v.x * v.x + v.y * v.y + v.z * v.z); }
 
@@ -212,7 +213,8 @@ struct Slot {
 };
 
 struct KartAudio {
- bool present = false, local = false;
+ bool present = false, local = false;   // +0xe0: KartObjectProxy::isLocal (0x80590650), status 129: a type-0 racer only
+ bool ghost = false;            // +0xe1: KartObjectProxy::isGhost (0x80590678), status 134 (KartSnd_init 0x80707534)
  bool muted = false;            // LinkedRaceActor+0x1d (KartActor+0xb1): toggled off, far from the listener
  Actor3D actor; bool placed = false;
  EngineMgr engine;
@@ -235,9 +237,11 @@ struct KartAudio {
  int thunderA = 690, thunderB = 540;  // +0x4c, +0x50: the shock effect counters (Effects::Player::Reset)
  f32 fxSpeed = 0;                     // +0x6e8: |velocity|
  s8 wallFrames = 0, bushFrames = 0, bumpFxFrames = 0;   // +0x7b4, +0x7b7, +0x7b8 (capped 100)
+ s16 windFrames = 200;                // +0x998: frames since the wheelie wind was driven (fn_1_1A0DFC sets 200)
  bool fxWater = false, fxLava = false, fxIce = false;   // +0x79, +0x7a, +0x7b: this fall's splash played
  int rbwTimer = -1; f32 rbwY = 0;     // +0x64, +0x70: frames since a Rainbow fall (-1 none), its height
  bool wasAfterRespawn = false;        // status 78 last frame (KartMove::calcRespawnBoost clears it)
+ u32 actionCount = 0;                 // KartAction starts seen at the last update
  template <class F> void eachSlot(F f) { for (auto& s : limited) f(s); f(engineSlot); f(driftSlot); f(mtSlot); f(roadSlot); }
 };
 
@@ -314,7 +318,7 @@ struct VoiceAudio {
  int finishFrames = 0; bool finishDone = false;   // +0x6d4, +0x6f9
  bool echoNext = false, fellInWater = false, wasWheelie = false; // +0x6fe, +0x700
  u32 actionCount = 0; u16 airtime = 0, airtimeBefore = 0;   // action and driver-airtime trackers
- bool wasStar = false, wasMega = false, wasSlipBoost = false;
+ bool wasStar = false, wasSlipBoost = false; u16 starTimer = 0;
  f32 lastSpeed = 0, lastRatio = 0;      // the kart's speed and capped ratio at the previous tick
  Rng rng;
 };
@@ -440,6 +444,10 @@ u32 objectIdleLoop(u16 id, unsigned mode) {
  case 0x141: return 0x223;                                                  // PeachHunsuiGC: ENV_FOUNTAIN
  case 0x140: return 0x353;                                                  // MarioGo64c: 64M_BILLBOARD_MV
  case 0x2dc: case 0x2dd: return 0x1ed;                                      // the demo crowds: AWARD_AUD
+ // Not fn_1_1FDA94's table, the same effect: dc_sandcone's calc (PAL fn_1_177008 0x806873BC,
+ // vtable 0x808C1470 +0x14) ends with Object::HoldSoundLimited(0.0, SE_CN_SBK_SAND_FALL)
+ // every frame, with no condition (ObjFlow sound mode 1).
+ case 0x209: return 0x2cc;
  default: return 0;
  }
 }
@@ -570,6 +578,9 @@ struct RaceAudioLayer::Impl {
  // KartActor::HoldSoundLimited (8070169c) over the four shared slots.
  Slot* holdLimited(Engine& e, KartAudio& k, u32 id) {
   if (k.muted && id != sid::StarState && id != sid::MegaState && id != sid::KillerFly) return nullptr;
+  // PAL 0x80708040: the draft's wind (SE_VCL_SLASH_WIND) and the shock's crackle
+  // (SE_ITM_THNDR_STATE) only on a local racer's actor.
+  if ((id == sid::SlashWind || id == sid::ThndrState) && !k.local) return nullptr;
   if (Slot* s = limitedWith(e, k, id)) { e.holdSound(s->h, id); return s; }
   Slot* slot = freeLimited(e, k, id);
   if (!slot) return nullptr;
@@ -581,6 +592,10 @@ struct RaceAudioLayer::Impl {
  // KartActor::StartSoundLimited (80701934).
  Slot* startLimited(Engine& e, KartAudio& k, u32 id, f32 param = 0) {
   using namespace sid;
+  // PAL 0x807082D8: a ghost's actor starts nothing, except when player 0 is a ghost too
+  // (RaceConfig::isTimeAttackReplay 0x80532030, the ghost-list replay setupGhostReplay
+  // 0x805E1D5C; the port's Watch Replay driver is not flagged a ghost, so not here).
+  if (k.ghost && !(frame.kart[0].present && frame.kart[0].ghost)) return nullptr;
   if (k.muted && id != Cannon && id != CannonMove && id != RbwStarRing && id != RbwStarRingMove && id != RcGoal && id != RcBattleFinish)
    return nullptr;
   if (id == HpipeCheer || id == HpipeCheerL || id == SkateCheer || id == SkateActionCheer || id == JumpAction || id == MiniJump) {
@@ -671,9 +686,10 @@ struct RaceAudioLayer::Impl {
   startIn(e, k, k.roadSlot, sid::RunKibashi + k.plankAlt);
   k.plankAlt = k.plankAlt ? 0 : 1;
  }
- // KartActor::PlayMTSounds (80702a20): drift slip on the surface, MT sparks.
+ // KartActor::PlayMTSounds (80702a20): drift slip on the surface, MT sparks. No finish
+ // test: a racer that has finished keeps its drift sounds (PAL 0x807093C4).
  void playMT(Engine& e, KartAudio& k, const RaceAudioKart& in) {
-  if (in.finished || !k.onGround) return;
+  if (!k.onGround) return;
   if (bit(in.status, DriftAuto)) k.driftState = 1;
   if (k.driftState && owner) owner->driftFrames.fetch_add(1, std::memory_order_relaxed);
   if (!(in.moveFlags & 4)) {
@@ -704,8 +720,10 @@ struct RaceAudioLayer::Impl {
   else holdIn(e, k, k.roadSlot, id);
  }
  // KartActor::PlayBoostSound / PlayRampSound (80702208 / 807023a4): restart
- // the dash only once it has played 48 sequence ticks.
+ // the dash only once it has played 48 sequence ticks. Never for a ghost, even in a
+ // replay (PAL 0x80708BAC / 0x80708D48 test +0xe1 first).
  void playDash(Engine& e, KartAudio& k, u32 id) {
+  if (k.ghost) return;
   if (Slot* s = limitedWith(e, k, id)) {
    if (e.seqTick(s->h) <= 0x30) return;
    e.stop(s->h, 0);
@@ -713,8 +731,9 @@ struct RaceAudioLayer::Impl {
   startLimited(e, k, id);
  }
  // fn_1_1F8B30 (80702540): jump pads. The bouncy mushrooms rise 0.1 in pitch
- // per bounce within 140 frames, up to four.
+ // per bounce within 140 frames, up to four. Never for a ghost (PAL 0x80708EE4).
  void playJumpPad(Engine& e, KartAudio& k, bool mushroom) {
+  if (k.ghost) return;
   if (mushroom) {
    if (limitedWith(e, k, sid::KinokoJump)) return;
    f32 pitch = 1.0f;
@@ -754,7 +773,7 @@ struct RaceAudioLayer::Impl {
   if (c & cue::Boost) playDash(e, k, sid::Dash);
   if (c & cue::BoostRamp) playDash(e, k, sid::DashJ);
   if (c & (cue::JumpPad | cue::JumpPadMushroom)) playJumpPad(e, k, c & cue::JumpPadMushroom);
-  if (!in.finished && (c & cue::Hop)) startLimited(e, k, sid::MiniJump);
+  if (c & cue::Hop) startLimited(e, k, sid::MiniJump);   // PlayerSub10_hop (PAL 0x8057DA5C): every hop
   if ((c & cue::Cannon) && k.local) startLimited(e, k, frame.course == 0xd ? sid::RbwStarRingMove : sid::CannonMove);
   if (c & cue::BushWall) startLimited(e, k, sid::ColShigemi);
   if (c & cue::Horn) playHorn(e, k, in);
@@ -780,6 +799,12 @@ struct RaceAudioLayer::Impl {
   if (c & cue::Press) startLimited(e, k, sid::DmgPress);
   if (c & cue::Spin) startLimited(e, k, sid::Spin);
   if (c & cue::BlowSide) startNewLimited(e, k, sid::PoihanaBlow);
+  // Actions 4 and 6 (the launches, Kinoko calcAction4 = PAL fn_1_58980 0x80568D34): every
+  // frame the thrown kart touches the ground (status 9) KartActor vt+0xE4 SE_VCL_COL_CAR.
+  // That calc first runs the step after the start, so not on a start's own step.
+  if (bit(in.status, InAction) && bit(in.status, GroundStart) && (in.action == 4 || in.action == 6) && in.actionCount == k.actionCount)
+   startNewLimited(e, k, sid::ColCar);
+  k.actionCount = in.actionCount;
   // The Bullet Bill: Kart::Movement::ActivateBullet resets the kart (vf_0x2c 8057d11c:
   // SE_ITM_THNDR_BIG), Kart::Killer::Activate (805b08e4) and cancelBullet (805b11d0).
   const bool bullet = bit(in.status, Bullet);
@@ -970,6 +995,23 @@ struct RaceAudioLayer::Impl {
   // UpdateWaterEffects (PAL 0x8069C7F0) -> SetRoadState (0x8070B8DC): only the
   // local kart's sounds follow GCN Peach Beach's tide.
   if (k.local) k.roadState = in.seaState;
+  // The wheelie's wind (Effects::Player 0x80695BA8 -> fn_1_18A384 0x8069A738 -> fn_1_18A98C
+  // 0x8069AD40): only a local racer's effects run it, one screen, not before a respawn.
+  // While wheeling (status 29) on a vehicle that can (KartMove vt+0x3C), without a boost
+  // (20), ramp boost (31), wheelie bump (66) or cannon (36), the wind effect is driven and
+  // its update fn_1_195A80 (0x806A5E34) holds SE_VCL_SLASH_WIND (HoldSoundLimited). After the
+  // last such frame the counter +0x998 runs a 10-frame fade (+0x99A): one frame without, then
+  // nine more held. (Its moving-road and Toad's Factory belt cases are not ported.)
+  if (k.local && !k.fxBeforeRespawn) {
+   const u32* w = in.status;
+   const s16 c = k.windFrames;
+   bool hold = c >= 1 && c < 10;
+   k.windFrames = s16(c + 1 > 200 ? 100 : c + 1);
+   if (bit(w, Wheelie) && in.canWheelie && !bit(w, Boosting) && !bit(w, RampBoosting) && !bit(w, WheelieBumped) && !bit(w, InCannon)) {
+    hold = true; k.windFrames = 0;
+   }
+   if (hold) holdLimited(e, k, sid::SlashWind);
+  }
  }
 
  // KartActor::Update (80700d2c).
@@ -986,6 +1028,9 @@ struct RaceAudioLayer::Impl {
    for (auto& a : ambiences) if (e.attached(a.slot.h)) a.track.set(0.0f, 300);
   }
   k.lapFinished = in.finished;
+  // PAL 0x807077BC: a ghost's actor (+0xe1) runs nothing below, in a replay too: no
+  // engine, road, drift, spark, landing or Bullet sound.
+  if (k.ghost) return;
   // Respawning: KartActor::Reset clears the actor velocity (no Doppler jump).
   if (bit(w, BeforeRespawn) || bit(w, TriggerRespawn) || bit(w, InRespawn)) k.actor.velocity = {};
   if (bit(w, BeforeRespawn)) return;
@@ -993,16 +1038,20 @@ struct RaceAudioLayer::Impl {
    for (u32 id = sid::Dash; id <= sid::LDashJ; ++id) if (Slot* s = limitedWith(e, k, id)) e.stop(s->h, 10);
   updateKcl(k, in);
   k.onGround = bit(w, AnyWheelCollision);
-  k.driftState = in.finished ? 0 : in.driftState;
+  k.driftState = in.driftState;            // +0xe9 = getDriftState(), finished or not
   k.objectFrames = s8(std::min(k.objectFrames + 1, 100));
   k.objectSpeed = length(in.velocity);
   k.bumpFrames = s8(std::min(k.bumpFrames + 1, 0x7e));
   k.bullet = bit(w, Bullet);
   if (k.bullet) holdLimited(e, k, sid::KillerFly);
+  // The Bullet's end phase (KartKiller PAL 0x8059CC60 -> fn_1_1FC3A4 0x8070C758): the fly
+  // sound's pitch is 1 - 0.4 t over t = timer / 70 (0x808B6840), 0.6 from t = 1.
+  if (in.bulletEnd)
+   if (Slot* s = limitedWith(e, k, sid::KillerFly)) { const f32 t = f32(in.bulletEnd) / 70.0f; e.setPitch(s->h, t < 1.0f ? 1.0f - 0.4f * t : 0.6f); }
   if (k.killerOffPending && !limitedWith(e, k, sid::KillerOff)) { k.killerOffPending = false; k.actor.userParam &= ~0x400u; }
   if (k.muted || k.bullet) return;
   k.ssmtRoad = false;
-  if (!in.finished && k.onGround && bit(w, ChargingSSMT)) {
+  if (k.onGround && bit(w, ChargingSSMT)) {
    k.ssmtRoad = true;
    u32 id = driftSound(k);
    if (id == sid::SlipBoard) id = sid::SlipSand;
@@ -1076,7 +1125,11 @@ struct RaceAudioLayer::Impl {
   const RaceAudioKart& in = frame.kart[i];
   v = VoiceAudio{};
   v.character = in.character; v.local = in.local;
-  v.enabled = in.character < 24;              // Mii voices are not used by this port
+  // +0x6FF is set only while +0x6FC is clear (Link PAL 0x80863A9C). +0x6FC is KartState
+  // +0x14 bit 6 (status 134), which KartState init (0x805943B4) sets for a racer of type 3:
+  // a ghost (the Time Trial ghosts) never voices. Watch Replay's driver is a type-0 racer
+  // in retail (race_audio_frame.cpp) and voices.
+  v.enabled = in.character < 24 && !in.ghost;   // Mii voices are not used by this port
   v.finishDone = !v.local;
   v.actor.userParam = 0x11u | (v.local ? 0x200u : 0u);
   v.rng.x ^= 0x85ebca6bu * u32(i + 1);
@@ -1207,12 +1260,21 @@ struct RaceAudioLayer::Impl {
   owner->itemStarted[kind].fetch_add(1, std::memory_order_relaxed);
  }
  // CharacterActor::PlayCharacterSound (808604e4).
+ // Diagnostic only (no effect on what plays): the local racer's voice requests and how each
+ // ended, kept in RaceAudioLayer::localVoiceLog for audio-race-status.txt.
+ void noteLocalVoice(const VoiceAudio& v, int type, int cur, int result) {
+  if (!owner || !v.local) return;
+  const u32 n = owner->localVoiceHead.fetch_add(1, std::memory_order_relaxed);
+  owner->localVoiceLog[n % owner->localVoiceLog.size()].store((frame.tick & 0x7ffffu) << 13 | u32(cur & 0x1f) << 8 | u32(type & 0x1f) << 3 | u32(result & 7), std::memory_order_relaxed);
+  if (result && (unsigned(type - 0x11) <= 4 || unsigned(type - 0xf) <= 1)) owner->localVoiceDrops.fetch_add(1, std::memory_order_relaxed);
+ }
  bool voicePlay(Engine& e, int i, int type) {
   VoiceAudio& v = voices[i];
   if (!v.enabled) return false;
   v.fellInWater = false;
+  const int cur = voicePlaying(e, v) ? v.curType : v.pendingType;
   const int mode = voiceGate(e, i, type);
-  if (!mode) return false;
+  if (!mode) { noteLocalVoice(v, type, cur, 1); return false; }
   int t = type;
   if (type == 0x18) { t = 0x14; v.echoNext = true; }
   else if (type == 0x19) {
@@ -1220,14 +1282,15 @@ struct RaceAudioLayer::Impl {
    t = v.character == 1 ? 0x12 : v.character == 4 ? 0x13 : 7;
   } else if (type == 0x1b && v.curType == 0x18) { type = 0x1a; t = 0x1a; }
   t = voice::Remap[v.character][v.local ? 1 : 0][t & 31];
-  if (t < 0 || t >= 29) { v.echoNext = false; return false; }
+  if (t < 0 || t >= 29) { v.echoNext = false; noteLocalVoice(v, type, cur, 2); return false; }
   if (mode == 3) stopVoice(e, v, 2);
   Picker& pk = v.picker[t];
   const s32 id = pk.pick(v.rng);
-  if (id == s32(VoDummy)) return false;
+  if (id == s32(VoDummy)) { noteLocalVoice(v, type, cur, 3); return false; }
   bool twoD = false, ok;
   if (mode == 2 || (v.local && v.curType != 0x18 && unsigned(type - 0x16) < 3)) { ok = voiceStart2D(e, v.main, id); twoD = true; }
   else ok = voiceStart(e, i, v.main, id);
+  noteLocalVoice(v, type, cur, ok ? 0 : twoD ? 6 : karts[i].muted ? 4 : bit(frame.kart[i].status, Bullet) ? 5 : 6);
   if (ok) {
    voiceStarted(e, i, id, type, v.main, false, false, twoD);
    pk.note(id);
@@ -1365,9 +1428,12 @@ struct RaceAudioLayer::Impl {
   }
   if (c & cue::PowerHit) voiceRequest(e, i, 5);                    // CheckKartCollision power-up contact
   if (c & cue::Bump) voicePlay(e, i, std::fabs(in.bump) > 24.0f ? 0x12 : 5);   // fn_1_355180 from fn_1_609F4
-  const bool star = bit(w, Star), mega = bit(w, Mega);
-  if ((star && !v.wasStar) || (mega && !v.wasMega)) voiceRequest(e, i, 2);   // ActivateStar / ActivateMega
-  v.wasStar = star; v.wasMega = mega;
+  // ActivateStar (PAL 0x80580268) and ActivateMega (0x80580B14) call PlayCharacterSound(2) on
+  // every activation, also one that renews a running Star or Mega: a Star that starts or whose
+  // timer is reset (Kinoko sets 450 only there), and Kinoko's activateMega cue.
+  const bool star = bit(w, Star);
+  if ((star && (!v.wasStar || in.starTimer > v.starTimer)) || (c & cue::MegaUse)) voiceRequest(e, i, 2);
+  v.wasStar = star; v.starTimer = in.starTimer;
   if (c & cue::StartFail) voiceRequest(e, i, 7);                   // KartBurnout start
   if (c & (cue::Trick | cue::ZipperTrick)) voiceRequest(e, i, 0xb); // Kart::Trick::Start, half-pipe trick fn_1_64AAC
   if (c & cue::Cannon) voiceRequest(e, i, 0xc);                    // Kart::Movement::EnterCannon
@@ -1380,7 +1446,7 @@ struct RaceAudioLayer::Impl {
   }
   const bool wheelie = bit(w, Wheelie);
   if ((c & cue::Wheelie) || (wheelie && !v.wasWheelie)) {           // fn_1_354FDC from StartWheelie
-   const int t = bit(w, Wheelie) ? 0xf : 0x10;
+   const int t = in.canWheelie ? 0xf : 0x10;                        // fn_1_81118: VO_*_WLE, else WLE_FAIL
    if (v.pendingType == -1 || voicePriority(v, v.pendingType, t)) { v.pendingType = t; v.pendingDelay = t == 0xf ? 10 : 0x14; }
   }
   v.wasWheelie = wheelie;
@@ -1469,10 +1535,18 @@ struct RaceAudioLayer::Impl {
    if (v.slipFrames < 0x1e && v.curType == 0x1c && voicePlaying(e, v)) stopVoice(e, v, 0x14);
   }
   v.inSlip = false;
+  // Diagnostic only: a local voice gone within 4 frames of its start lost its hardware voice
+  // (no NDSP channel, or stolen); every character clip lasts 0.14 s (8 frames) or more, and
+  // stopVoice clears curFrames first.
+  if (v.local && v.curFrames >= 0 && v.curFrames < 4 && !voicePlaying(e, v)) noteLocalVoice(v, v.curType, v.curType, 7);
   v.curFrames = voicePlaying(e, v) ? v.curFrames + 1 : -1;
-  if (v.local && in.finished && !v.finishDone && !bit(w, Bullet) && ++v.finishFrames > 0x78 && !bit(w, InAction)
-      && (frame.mode == 0 || frame.mode == 1))
-   finishVoice(e, i, 0x1d + int(resultOf(in)));
+  if (v.local && in.finished && !v.finishDone && !bit(w, Bullet) && ++v.finishFrames > 0x78 && !bit(w, InAction)) {
+   // fn_1_27CBF0 (PAL 0x8078CFA4): GP / VS by rank, Time Trial by RacePage_beforeCalc's result
+   // (3: no voice ever, 4: not known yet). Battle's team result has no port counterpart.
+   const unsigned result = frame.mode == 0 || frame.mode == 1 ? resultOf(in) : frame.mode == 2 ? frame.timeTrialResult : 4u;
+   if (result <= 2) finishVoice(e, i, 0x1d + int(result));
+   else if (result == 3) v.finishDone = true;
+  }
   if (v.pendingType != -1 && --v.pendingDelay < 1) { const int t = v.pendingType; v.pendingType = -1; v.pendingDelay = 0; voicePlay(e, i, t); }
   if (v.echoId != -1) {
    if (v.echoDelay < 0) { if (e.attached(v.echo.h)) e.stop(v.echo.h, 0); resetEcho(v); }
@@ -1963,6 +2037,15 @@ struct RaceAudioLayer::Impl {
     if (o.id == 0xd) for (auto& s : o.limited) if (e.attached(s.h) && e.soundId(s.h) == loop) e.setVolume(s.h, 0.5f);
    }
   }
+  // Rainbow Road's star rings (calc 0x806BFED0): each local racer's KartActor call, then the
+  // ring's own (fn_1_310148) only if none of them started (+0xEE).
+  for (int n = 0; n < frame.starRings && n < int(frame.starRing.size()); ++n) {
+   const RaceAudioStarRing& r = frame.starRing[n];
+   bool started = false;
+   for (int i = 0; i < 12; ++i)
+    if ((r.karts & (1u << i)) && karts[i].present && startLimited(e, karts[i], sid::RbwStarRing, f32(r.kartCount[i]))) started = true;
+   if (r.ring && !started && r.slot < frame.objects && r.slot < objects.size()) objectStart(e, objects[r.slot], sid::RbwStarRing, f32(r.ringCount));
+  }
   for (int n = 0; n < frame.objectSounds; ++n) {
    const RaceAudioObjectSound& c = frame.objectSound[n];
    if (c.slot >= frame.objects || c.slot >= objects.size()) continue;
@@ -2128,12 +2211,14 @@ void RaceAudioLayer::gameFrame(Engine& e) {
   auto& k = m.karts[i];
   const auto& in = m.frame.kart[i];
   if (in.present && !k.present) {
-   k = KartAudio{}; k.present = true; k.local = in.local; k.engine.init(in, m.frame.engineClass);
+   // KartSnd_init (PAL 0x80707534): +0xe0 is isLocal (a type-0 racer), +0xe1 isGhost
+   // (a TT ghost; Watch Replay's driver is neither a ghost nor non-local, see the frame).
+   k = KartAudio{}; k.present = true; k.local = in.local && !in.ghost; k.ghost = in.ghost; k.engine.init(in, m.frame.engineClass);
    // LinkedRaceActor::Link -> KartActor::DisableConditional / UpdateUserParam3:
    // full volume within Distance[2], interior Distance[1] (Audio::Manager
    // +0x8b0 = 2, +0x8ac = 1); KartActor::Link adds 0x300 for a local kart
    // (0x100: no Doppler on the player's own kart).
-   k.actor.userParam = 0x12u | (in.local ? 0x300u : 0u);
+   k.actor.userParam = 0x12u | (k.local ? 0x300u : 0u);
    m.voiceLink(i);   // the racer's CharacterActor
   }
  }

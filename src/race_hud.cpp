@@ -415,6 +415,13 @@ struct RaceHud::Impl {
     std::array<ThunderCloudVisual,12> clouds{};
     std::array<uint16_t,12> previousCloud{};
     std::array<std::unique_ptr<DriverAnimation>,21> animations;
+    // Per-object CHR0 frames (retail AnmObj frame, advanced by its rate each update): each
+    // Blue Shell's "fly" by actor slot, each racer's Bullet "wait". GPU-skinned banks draw
+    // every object at its own frame.
+    struct Wings { float frame=0;uint16_t age=0;bool live=false; };
+    std::array<Wings,RaceItems::MaxActors> blueWings{};
+    std::array<float,12> bulletFrame{};
+    int blueFly=0,bulletWait=0;
     std::unique_ptr<Model> box;
     std::unique_ptr<Model> bombCore;
     // Retail drop-shadow volumes (tools/cook_item_shadows.py); optional, as older SD cards
@@ -510,8 +517,14 @@ bool RaceHud::load(){
             // normals: skin positions only (the same position arithmetic).
             auto animation=std::make_unique<DriverAnimation>();
             if(animation->load(path,*impl_->models[i])){animation->skinNormals(true);impl_->animations[i]=std::move(animation);}
+            // Blue Shells and Bullets animate per object (several at once, each from its own
+            // start): skinned on the GPU with one palette per draw. A rejected GPU setup keeps
+            // the CPU skinning above (one shared pose).
+            if((i==7||i==15)&&impl_->animations[i])impl_->animations[i]->prepareLitSkinning(*impl_->models[i]);
         }
     }
+    if(impl_->animations[7])impl_->blueFly=std::max(0,impl_->animations[7]->find("fly"));
+    if(impl_->animations[15])impl_->bulletWait=std::max(0,impl_->animations[15]->find("wait"));
     if(impl_->models[3])bakeMaskUv(*impl_->models[3],FakeBoxMaterials);
     for(unsigned i=1;i<=12;++i)valid&=impl_->ranks[i].load(HudRanks[i].path);
     for(unsigned i=0;i<10;++i)valid&=impl_->digits[i].load(HudDigits[i].path);
@@ -532,6 +545,9 @@ void RaceHud::stepWorld(const RaceItems& items,Vec3 cameraBackward,bool started,
             const auto& sourceUp=kart->move()->smoothedUp();const Vec3 up{sourceUp.x,sourceUp.y,sourceUp.z};
             impl_->bulletUp[i]=impl_->wasBullet[i]?normalized(lerp(impl_->bulletUp[i],up,BulletUpSmoothing)):up;
         }
+        // The Bullet's start (fn_1_8B404 0x8059B7B8) plays kart_killer "wait" (its only clip,
+        // a loop) at frame 0, rate 1 (0x80891FA8 / 0x80891FAC).
+        impl_->bulletFrame[i]=effect.bullet&&impl_->wasBullet[i]?impl_->bulletFrame[i]+1:0;
         impl_->wasBullet[i]=bool(effect.bullet);
         if(effect.cloud){
             auto& cloud=impl_->clouds[i];const auto& p=kart->pos();const auto& d=kart->move()->dir();
@@ -545,6 +561,19 @@ void RaceHud::stepWorld(const RaceItems& items,Vec3 cameraBackward,bool started,
         }
     }
     for(unsigned i=0;i<impl_->previousCloud.size();++i)impl_->previousCloud[i]=items.hud(i).cloud;
+    // Blue Shell wings: togezo_koura CHR0 "fly", anim 0 of ItemObjBlue's table (0x808D22F0:
+    // fly, wait). Its release (vtable 0x808D23D8 +0x20, fn_1_29C280 0x807AC634) and launch
+    // (+0x30, fn_1_29E338 0x807AE6EC) play it at frame 0, rate 1 (fn_1_47018 0x805573CC: AnmObj
+    // SetFrame 0x808A5AF8, SetUpdateRate 0x808A5AFC). State 4's enter (fn_1_29D7A0 0x807ADB54)
+    // sets the rate to 1.6 (0x808A5C5C), state 5's (the dive, fn_1_29DB60 0x807ADF14) to 0; no
+    // other Blue state touches it. The guidance phase is that state index.
+    for(unsigned k=0;k<RaceItems::MaxActors;++k){
+        const auto& a=items.actors()[k];auto& wings=impl_->blueWings[k];
+        if(!a.active||a.kind!=ItemKind::BlueShell||a.explosion){wings.live=false;continue;}
+        if(!wings.live||a.age<wings.age){wings.frame=0;wings.live=true;}
+        else wings.frame+=a.guidance.phase==5?0.f:a.guidance.phase==4?1.6f:1.f;
+        wings.age=a.age;
+    }
     auto& w=impl_->window;const auto& held=items.hud(0);
     // CtrlRaceItemWindow_calcSelf (0x807e4c54): the inventory item (+0x8c) with its
     // count as the picture variant, else the slot lock (+0x78) with variant 1. The
@@ -680,6 +709,17 @@ void RaceHud::drawWorld(Renderer& renderer,const RaceItems& items,Vec3 viewer,un
             if(clip>=0)impl_->animations[i]->apply(*impl_->models[i],clip,float(start-left),tick);
             continue;
         }
+        if(i==7||i==15){
+            // GPU-skinned banks are posed per object where drawn. The CPU fallback shares
+            // one pose: the first object's.
+            auto& bank=*impl_->animations[i];if(bank.gpuSkinned())continue;
+            float frame=0;
+            if(i==7){for(const auto& wings:impl_->blueWings)if(wings.live){frame=wings.frame;break;}}
+            else for(unsigned p=0;p<Kinoko::System::RaceConfig::Instance()->raceScenario().playerCount;++p)
+                if(items.hud(p).bullet){frame=impl_->bulletFrame[p];break;}
+            bank.apply(*impl_->models[i],i==7?impl_->blueFly:impl_->bulletWait,frame,tick);
+            continue;
+        }
         int clip=impl_->animations[i]->find(i==6?"wait_a":"wait");
         // Reduced quality: one pose per animationStep ticks (apply reuses it).
         const unsigned step=renderQuality().animationStep,poseTick=step?tick/step*step:tick;
@@ -724,6 +764,13 @@ void RaceHud::drawWorld(Renderer& renderer,const RaceItems& items,Vec3 viewer,un
         t.r[2].x=x.z;t.r[2].y=y.z;t.r[2].z=z.z;t.r[2].w=position.z;
         if(!quality.tooSmall({model->minimum,model->maximum},t,camera)){
             if(blast&&impl_->blastMaterials)drawBlast(renderer,*model,t,actor.age,actor.kind==ItemKind::BlueShell);
+            else if(auto* wings=!blast&&actor.kind==ItemKind::BlueShell?impl_->animations[7].get():nullptr;wings&&wings->gpuSkinned()){
+                // This shell's own wing frame (stepWorld); one clip, so pose() never blends.
+                const auto& own=impl_->blueWings[&actor-items.actors().data()];
+                renderer.setSkinPalette(wings->pose(impl_->blueFly,own.live?own.frame:0.f,tick),wings->matrixCount(),21);
+                renderer.draw(*model,t);
+                renderer.setSkinPalette(nullptr,0,12);
+            }
             else renderer.draw(*model,t);
         }
         model->vertices=originalVertices;
@@ -744,7 +791,11 @@ void RaceHud::drawWorld(Renderer& renderer,const RaceItems& items,Vec3 viewer,un
             const auto& p=kart->pos();
             const Vec3 position=bulletVisualPosition({p.x,p.y,p.z},impl_->bulletUp[i],kart->bsp().initialYPos);
             auto t=body;t.r[0].w=position.x;t.r[1].w=position.y;t.r[2].w=position.z;
+            // This racer's own "wait" frame since its Bullet started (stepWorld).
+            auto* arms=impl_->animations[15].get();const bool skinned=arms&&arms->gpuSkinned();
+            if(skinned)renderer.setSkinPalette(arms->pose(impl_->bulletWait,impl_->bulletFrame[i],tick),arms->matrixCount(),21);
             renderer.draw(*impl_->models[15],t);
+            if(skinned)renderer.setSkinPalette(nullptr,0,12);
         }
         if(effect.cloud&&impl_->models[14]){
             const auto& cloud=impl_->clouds[i];

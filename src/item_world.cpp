@@ -77,6 +77,8 @@ ItemActor& RaceItems::spawn(unsigned player,ItemKind kind,bool backwards,const V
     if(it==actors_.end())it=std::find_if(actors_.begin(),actors_.end(),[](const ItemActor& a){return !a.active;});
     if(it==actors_.end())it=std::max_element(actors_.begin(),actors_.end(),[](const ItemActor& a,const ItemActor& b){return a.age<b.age;});
     auto& a=*it;a={};a.kind=kind;a.owner=int8_t(player);a.active=true;a.lifetime=1800;
+    // The Blue Shell's launch (fn_1_29E338 0x807AE6EC) never reads the backward input.
+    if(kind==ItemKind::BlueShell)backwards=false;
     Vec3 direction=normalized(racers_[player].forward,{0,0,1});
     const bool trap=kind==ItemKind::Banana||kind==ItemKind::FakeBox;
     if(backwards||trap)direction=-direction;
@@ -90,14 +92,12 @@ ItemActor& RaceItems::spawn(unsigned player,ItemKind kind,bool backwards,const V
     // bounce counter at 9 forward / 4 backward and destroys it below zero.
     if(kind==ItemKind::GreenShell){
         a.lifetime=1501;a.bounceLimit=backwards?5:10;
-        // 297ebc -> 29a6e4 -> 27fe48/27fff0: ordinary straight driving
-        // inherits signed speed, including the source backward subtraction.
-        // Drift-side aim/special movement predicates remain in the audit.
-        const Vec3 motion=itemMotion(racers_[player]);const float speed=length(motion);
-        const bool movingForward=dot(motion,racers_[player].forward)>0;
-        a.travelSpeed=backwards?(movingForward?30.f-speed:30.f+speed):(movingForward?85.f+speed:85.f-speed);
-        a.flightDirection=normalized(direction*(backwards?40.f:35.f)+(movingForward?(backwards?-motion:motion):Vec3{}),direction);
+        // fn_1_29E7E4 (0x807AEB98) -> fn_1_2A4DC4: the speed and direction from the held frame.
+        a.flightDirection=backwards?backwardThrow(player,a.travelSpeed):forwardThrow(player,85.f,a.travelSpeed);
         a.velocity=a.flightDirection*a.travelSpeed;
+        // fn_1_2A4DC4 (0x807B5178): +0x1b0 starts as the direction; a throw from a half-pipe ramp
+        // or over a zipper (status 41 / 42) starts the 30-frame slope timer +0x1d8.
+        a.shellDirection=a.flightDirection;a.guidance.slopeTicks=racers_[player].zipper?30:0;
     }
     if(trapItem(kind)){
         const auto& r=racers_[player];const Vec3 motion=itemMotion(r);
@@ -305,9 +305,15 @@ void RaceItems::updateActor(ItemActor& a,ItemWorldQuery query){
             updateScattered(a,query);
         }else if(a.kind==ItemKind::RedShell||a.kind==ItemKind::BlueShell){
             updateShell(a,query);
+        }else if(a.kind==ItemKind::GreenShell){
+            // fn_1_29E8B0 (0x807AEC64): after 900 frames the next bounce breaks it (+0x1c8 = 0),
+            // then the shared shell movement toward 105 (0x808A5DC0).
+            if(a.age>900)a.bounces=uint8_t(a.bounceLimit-1);
+            moveShell(a,query,a.up,105.f);
+            if(!a.active||a.dying)return;
+            a.yaw=std::atan2(a.velocity.x,a.velocity.z);
+            if(a.position.y<-100000){a.active=false;return;}
         }else{
-            // Green's retail update moves first, projects at KCL contact, then
-            // applies gravity/speed convergence for the following frame.
             if(trapItem(a.kind)&&!a.settled){
                 const float drag=a.kind==ItemKind::Banana?(a.backwards?.97f:.999f):a.kind==ItemKind::FakeBox?(a.backwards?.97f:.996f):(a.backwards?.973f:.999f);
                 a.velocity=a.velocity*drag;
@@ -319,10 +325,7 @@ void RaceItems::updateActor(ItemActor& a,ItemWorldQuery query){
                 if(length(surface.floorNormal)>.1f){
                     const Vec3 normal=normalized(surface.floorNormal);const float into=dot(a.velocity,normal);
                     a.up=normal;
-                    if(a.kind==ItemKind::GreenShell){
-                        a.flightDirection=normalized(a.flightDirection-normal*dot(a.flightDirection,normal),a.flightDirection);
-                        a.velocity=a.flightDirection*a.travelSpeed-normal*2.5f;
-                    }else if(trapItem(a.kind)){
+                    if(trapItem(a.kind)){
                         // fn_1_294794 (0x807A4BB8): a Bob-omb thuds on a bounce (+0x74 bit 0x10 from
                         // fn_1_2A71BC 0x807B7570); its landing plays the land sound below, never both.
                         if(a.kind==ItemKind::Bobomb&&a.floorBounces)sound(ItemSoundCue::Bounce,a);
@@ -339,8 +342,7 @@ void RaceItems::updateActor(ItemActor& a,ItemWorldQuery query){
                             a.velocity={};a.settled=true;
                         }
                     }else if(into<0)a.velocity=a.velocity-normal*into;
-                }else if(a.kind==ItemKind::GreenShell)a.velocity.y-=a.velocity.y>0?4.2f:2.f;
-                else if(trapItem(a.kind)){
+                }else if(trapItem(a.kind)){
                     a.settled=false;
                     const float gravity=a.kind==ItemKind::Banana?(a.backwards?1.8f:2.2f):a.kind==ItemKind::FakeBox?(a.backwards?1.8f:2.1f):(a.backwards?2.8f:2.3f);
                     const float terminal=std::clamp(100.f+150.f*(float(a.age)-150.f)/(30.f-150.f),100.f,250.f);
@@ -350,7 +352,7 @@ void RaceItems::updateActor(ItemActor& a,ItemWorldQuery query){
                     if(a.kind==ItemKind::RedShell){shatter(a);return;}
                     if(into<0){
                         a.velocity=a.velocity-normal*(2*into);a.flightDirection=normalized(a.flightDirection-normal*(2*dot(a.flightDirection,normal)),a.flightDirection);
-                        if(++a.bounces>=a.bounceLimit||(a.kind==ItemKind::GreenShell&&a.age>900)){shatter(a);return;}
+                        if(++a.bounces>=a.bounceLimit){shatter(a);return;}
                         if(shell(a.kind))sound(ItemSoundCue::WallBounce,a);   // fn_1_2A5140: SE_ITM_KAME_HANSHA
                     }
                 }
@@ -358,10 +360,6 @@ void RaceItems::updateActor(ItemActor& a,ItemWorldQuery query){
                 const float gravity=a.kind==ItemKind::Banana?(a.backwards?1.8f:2.2f):a.kind==ItemKind::FakeBox?(a.backwards?1.8f:2.1f):(a.backwards?2.8f:2.3f);
                 const float terminal=std::clamp(100.f+150.f*(float(a.age)-150.f)/(30.f-150.f),100.f,250.f);
                 a.velocity.y=std::max(-terminal,a.velocity.y-gravity);
-            }
-            if(a.kind==ItemKind::GreenShell){
-                if(!query)a.velocity.y-=a.velocity.y>0?4.2f:2.f;
-                a.travelSpeed+=.01f*(105.f-a.travelSpeed);
             }
             if(a.position.y<-100000){a.active=false;return;}
         }

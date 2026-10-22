@@ -16,7 +16,10 @@
 #include <game/field/ObjectDirector.hh>
 #include <game/field/ObjectDrivableDirector.hh>
 #include <game/field/obj/ObjectBase.hh>
+#include <game/field/obj/ObjectBird.hh>
+#include <game/field/obj/ObjectHanachan.hh>
 #include <game/field/obj/ObjectId.hh>
+#include <game/field/obj/ObjectStarRing.hh>
 #include <game/system/CourseMap.hh>
 #include <game/system/RaceConfig.hh>
 #include <game/system/RaceManager.hh>
@@ -85,6 +88,33 @@ std::uint8_t objectSlot(const K::Field::ObjectBase* o) {
   if (m == 1 || m == 3) slot = registry.add(o, nullptr, std::uint16_t(o->id()), m);
  }
  return slot < 0 ? 0xff : std::uint8_t(slot);
+}
+// The Wiggler's contact voice (ObjectHanachan::calc, PAL fn_1_1B94AC 0x806C9860): a body
+// segment's kart or item callback (fn_1_1B68E0 / fn_1_1B6A8C, vtable +0xC0 / +0xC4) sets its
+// +0xb0 when the reaction on the object is not a damage one (3-6); the next calc gives each
+// flagged segment SE_CC_HANACHAN_V_COL on the head (+0xd8) with Object::StartSound
+// (fn_1_3101A8, actor vt+0x40) and clears the flag. The head's own flag is never read.
+struct HanachanBumps {
+ std::array<const K::Field::ObjectBase*, 12> part{}, last{};   // flagged in this step / the last one
+ std::size_t parts = 0, lasts = 0;
+};
+HanachanBumps hanachanBumps;
+// Before the tick's object cues are taken: the last step's segments voice. Kinoko builds the
+// segments before the Wiggler, so the last object of a segment's placement is its
+// ObjectHanachan (as course_objects.cpp links it), whose part 0 is the head.
+void voiceHanachanBumps() {
+ auto& b = hanachanBumps;
+ const auto* dir = K::Field::ObjectDirector::Instance();
+ for (std::size_t n = 0; dir && n < b.lasts; ++n) {
+  bool live = false;
+  for (const auto* o : dir->objects()) live |= o == b.last[n];
+  if (!live) continue;
+  const K::Field::ObjectBase* owner = nullptr;
+  for (const auto* o : dir->objects()) if (o->mapObj() == b.last[n]->mapObj()) owner = o;
+  if (owner && owner != b.last[n] && owner->id() == K::Field::ObjectId::Hanachan)
+   static_cast<const K::Field::ObjectHanachan*>(owner)->part(0)->cueSound(0x26e, K::Field::ObjectBase::SoundCall::Voice);
+ }
+ b.last = b.part; b.lasts = b.parts; b.parts = 0;
 }
 // ObjectActor::Update idle loops (PAL fn_1_1FDA94) on objects Kinoko leaves out.
 bool idleLoopObject(std::uint16_t id) {
@@ -210,6 +240,7 @@ void fillRaceAudioFrame(RaceAudioFrame& f, snd::Vec3f eye, snd::Vec3f target, sn
   std::memcpy(k.status, &kart->status(), sizeof k.status);
   k.moveFlags = move->ssmtCharged() ? 4 : 0;
   k.driftState = std::uint8_t(move->driftState());
+  k.canWheelie = move->canWheelie();
   k.wheels = std::uint8_t(std::min<unsigned>(kart->tireCount(), 4));
   for (unsigned w = 0; w < k.wheels; ++w) {
    const auto& c = kart->tirePhysics(std::uint16_t(w))->hitboxGroup()->collisionData();
@@ -237,21 +268,36 @@ void fillRaceAudioFrame(RaceAudioFrame& f, snd::Vec3f eye, snd::Vec3f target, sn
    h.variant = o->mapObj() ? o->mapObj()->setting(0) : 0;
    h.slot = objectSlot(o);
   }
+  // A Wiggler segment's kart callback (fn_1_1B68E0), in or out of an action: any reaction on
+  // the object but 3 or 5 (5 = a Star, Mega or Bullet kart, GeoHitTableKartObj row 0xe2, which
+  // starts its damage hop instead); a ghost's contact counts only in a replay
+  // (RaceConfig::isTimeAttackReplay).
+  if (player.type != K::System::RaceConfig::Player::Type::Ghost || scenario.players[0].type == K::System::RaceConfig::Player::Type::Ghost)
+   for (unsigned n = 0; n < taken.objectContactCount; ++n)
+    if (const auto* o = static_cast<const K::Field::ObjectBase*>(taken.objectContacts[n].object);
+        o && o->id() == K::Field::ObjectId::Hanachan && taken.objectContacts[n].reaction != 3 && taken.objectContacts[n].reaction != 5)
+     noteRaceAudioHanachanBump(o);
   if (taken.fallBoundary != 0xff) k.fallBoundary = taken.fallBoundary;
   for (unsigned n = 0; n < taken.kartSoundCount && k.kartSounds < 4; ++n) k.kartSound[k.kartSounds++] = taken.kartSounds[n];
   k.seaState = seaState(*kart);
   k.boostRampType = kart->state()->boostRampType();
   k.airtime = std::uint16_t(std::min<std::uint32_t>(kart->state()->airtime(), 0xffff));
   k.slipCharging = move->slipstreamCharging(); k.slipBoost = move->slipstreamBoost();
+  k.starTimer = std::uint16_t(std::max(0, int(move->starTimer())));
   k.actionCount = kart->action()->startCount(); k.action = std::int8_t(kart->action()->lastStarted());
   if (const auto* race = K::System::RaceManager::Instance()) {   // one RaceManager player per scenario racer
    const auto& p = race->player(i);
    k.finished = p.finished(); k.rank = std::uint8_t(p.finishOrder());
   }
   k.vehicle = std::uint8_t(player.vehicle); k.character = std::uint8_t(player.character);
-  k.ghost = player.type == K::System::RaceConfig::Player::Type::Ghost;
-  // Watch the Replay: the ghost driving player 0 is the one the camera follows.
-  k.local = player.type == K::System::RaceConfig::Player::Type::Local || (i == 0 && player.type == K::System::RaceConfig::Player::Type::Ghost);
+  // Watch the Replay: Kinoko drives player 0 with the ghost, but for sound it is retail's
+  // replayed racer. RaceMenuPage's Watch Replay (PAL 0x8085A0F4 case 4/10) only sets the
+  // camera mode to 1; the racer stays a type-0 Local one and Scenario::postInitControllers
+  // (0x8052ED28: mode 1 after mode 0) gives it a ghost controller. So its KartActor and
+  // CharacterActor see a local racer without status 134 (KartState ctor 0x805943B4).
+  const bool replayDriver = i == 0 && player.type == K::System::RaceConfig::Player::Type::Ghost;
+  k.ghost = player.type == K::System::RaceConfig::Player::Type::Ghost && !replayDriver;
+  k.local = player.type == K::System::RaceConfig::Player::Type::Local || replayDriver;
  }
 }
 
@@ -282,13 +328,21 @@ void fillRaceAudioItems(RaceAudioFrame& f, const RaceItems& items) {
   const bool spin = h.deployed && (h.heldKind == ItemKind::TripleGreenShell || h.heldKind == ItemKind::TripleRedShell);
   f.orbit[i] = spin ? h.heldCharges : 0;
   f.cloud[i] = h.cloud;
+  f.kart[i].bulletEnd = h.bulletEnd;
  }
 }
 
 void resetRaceAudioObjects() {
  registry = ObjectRegistry{};
+ hanachanBumps = HanachanBumps{};
  K::Field::ObjectBase::SoundCue drop[96];
  while (K::Field::ObjectBase::TakeSoundCues(drop, 96) == 96) {}
+}
+
+void noteRaceAudioHanachanBump(const void* segment) {
+ auto& b = hanachanBumps;
+ for (std::size_t i = 0; i < b.parts; ++i) if (b.part[i] == segment) return;
+ if (b.parts < b.part.size()) b.part[b.parts++] = static_cast<const K::Field::ObjectBase*>(segment);
 }
 
 void fillRaceAudioObjects(RaceAudioFrame& f) {
@@ -324,6 +378,7 @@ void fillRaceAudioObjects(RaceAudioFrame& f) {
   }
  }
  f.pocha = registry.pocha;
+ voiceHanachanBumps();
  K::Field::ObjectBase::SoundCue cues[96];
  const std::size_t n = K::Field::ObjectBase::TakeSoundCues(cues, 96);
  for (std::size_t i = 0; i < n; ++i) {
@@ -332,6 +387,32 @@ void fillRaceAudioObjects(RaceAudioFrame& f) {
   if (slot < 0) { const int m = dir->flowTable().soundMode(c.object->id()); slot = registry.add(c.object, nullptr, std::uint16_t(c.object->id()), m == 3 ? 3 : 1); }
   if (slot < 0 || f.objectSounds >= f.objectSound.size()) continue;
   f.objectSound[f.objectSounds++] = {std::uint16_t(slot), c.sound, std::uint8_t(c.call), c.value};
+ }
+ // Rainbow Road's star rings: this tick's SE_CN_RBW_STAR_RING calls.
+ for (const auto* o : objects) {
+  if (o->id() != K::Field::ObjectId::StarRing) continue;
+  const auto& c = static_cast<const K::Field::ObjectStarRing*>(o)->soundCalls();
+  if ((!c.karts && !c.ring) || f.starRings >= f.starRing.size()) continue;
+  RaceAudioStarRing& r = f.starRing[f.starRings++];
+  r.slot = objectSlot(o); r.karts = c.karts; r.ring = c.ring; r.ringCount = c.ringCount;
+  std::copy(c.kartCount.begin(), c.kartCount.end(), r.kartCount);
+ }
+ // A seagull flock's leader holds SE_CC_KAMOME_SING every frame: ObjectBirdLeader::calc (PAL
+ // 0x8077C504, vtable 0x808D0BE8 +0x14) ends with Object::HoldSoundLimited (fn_1_310168, value
+ // 0.0) on its own actor (base LoadSound, slot +0x54); the followers' calc (0x8077C7F0) has no
+ // sound. Kinoko adds the leader, then the followers, then the ObjectBird (createObjects), so
+ // the last object of a seagull placement is the ObjectBird that names its leader.
+ for (std::size_t k = 0; k < objects.size(); ++k) {
+  const auto* o = objects[k];
+  if (o->id() != K::Field::ObjectId::Seagull) continue;
+  bool last = true;
+  for (std::size_t j = k + 1; j < objects.size() && last; ++j) last = objects[j]->mapObj() != o->mapObj();
+  if (!last) continue;
+  const auto* leader = static_cast<const K::Field::ObjectBird*>(o)->leader();
+  const int m = leader ? dir->flowTable().soundMode(leader->id()) : 0;
+  if ((m != 1 && m != 3) || f.objectSounds >= f.objectSound.size()) continue;
+  const std::uint8_t slot = objectSlot(leader);
+  if (slot != 0xff) f.objectSound[f.objectSounds++] = {slot, 0x240, std::uint8_t(RaceAudioObjectSound::Hold), 0.0f};
  }
  // The emitters follow the listener (RaceMgr::UpdatePlayerMatrix's position, RaceMgr +0x144).
  const float scale = f.listenerScale;
