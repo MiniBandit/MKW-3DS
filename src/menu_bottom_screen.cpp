@@ -150,6 +150,12 @@ void MenuBottomScreen::drawTopText(Renderer& renderer,const MenuTopTexts& texts)
 
 void MenuBottomScreen::draw(Renderer& renderer,const MenuBottomLayout& layout,bool beginFrame,const std::function<void()>& between){
     if(!on_)return;
+    // A borrowed lower screen goes away with the race that owned it (the menus
+    // release the race behind them): drawing on would land on the top screen.
+    if(!renderer.bottomEnabled()){
+        if(owned_||!renderer.enableBottom()){on_=false;return;}
+        owned_=true;
+    }
     if(beginFrame)renderer.beginBottom();
     // The lower screen's quads (fills, then letters) share one capacity.
     constexpr unsigned Capacity=Renderer::BottomQuadCapacity-Icons::Capacity-2;
