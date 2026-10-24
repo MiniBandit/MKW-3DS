@@ -49,8 +49,9 @@ rem Show the build and keep a copy in build-cia-log.txt. UTF-8 text on Windows t
 set "PYTHONUTF8=1"
 set "MKW_DISC=%disc%"
 rem Windows PowerShell's Tee-Object writes UTF-16, so each line goes to the log as UTF-8 instead.
+rem It exits with Python's own code: Windows PowerShell can otherwise end with 1 when Python wrote to stderr.
 set "PYTHONUNBUFFERED=1"
-powershell -NoProfile -ExecutionPolicy Bypass -Command "Set-Content -Path 'build-cia-log.txt' -Value $null -Encoding UTF8; & '.venv\Scripts\python.exe' 'tools\release\build_cia.py' $env:MKW_DISC 2>&1 | ForEach-Object { $line=$_.ToString(); $line; Add-Content -Path 'build-cia-log.txt' -Value $line -Encoding UTF8 }; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Set-Content -Path 'build-cia-log.txt' -Value $null -Encoding UTF8; & '.venv\Scripts\python.exe' 'tools\release\build_cia.py' $env:MKW_DISC 2>&1 | ForEach-Object { $line=$_.ToString(); $line; Add-Content -Path 'build-cia-log.txt' -Value $line -Encoding UTF8 }; exit $LASTEXITCODE"
 if errorlevel 1 (echo Build failed. See build-cia-log.txt for details. & goto :end)
 echo Log: "%CD%\build-cia-log.txt"
 goto :end
