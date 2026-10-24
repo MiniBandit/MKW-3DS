@@ -1,11 +1,9 @@
-Two-screen menus: touch buttons and
-  the Wii art on the lower screen
-Course tour on the lower screen
-  during the fly-over
-Save data with four licenses (Epic)
-Race graphics, driver animation,
-  effects, CPU drivers, items and
-  sound fixes, Rosalina's Luma (Epic)
-Circle Pad up/down tilts in the air
-Old 3DS: lighter object detail
-  (Codiak540)
+Bug fixes:
+Old 3DS: VS and Grand Prix races
+  no longer crash when loading
+Menus no longer move to the top
+  screen after a race
+The course tour shows the whole
+  course during the fly-over
+This screen is no longer covered
+  by the menus' lower screen
