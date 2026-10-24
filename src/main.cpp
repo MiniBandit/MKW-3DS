@@ -619,13 +619,19 @@ int main()
     asm volatile("vmrs %0, fpscr" : "=r"(fpscr));
     fpscr = (fpscr & ~(3u << 22)) | (1u << 24);
     asm volatile("vmsr fpscr, %0" ::"r"(fpscr));
-    void *memory = memalign(32, K::MEMORY_SPACE_SIZE);
+    // Kinoko's arena: 16 MiB, but 13 MiB on Old 3DS, whose whole heap is about
+    // 29.6 MiB. The heaviest course (Koopa Cape) uses about 11.5 MiB of it; the
+    // 3 MiB returned keep a twelve-racer race within the Old 3DS heap.
+    bool arenaNew3ds = false;
+    APT_CheckNew3DS(&arenaNew3ds);
+    const size_t arenaSize = arenaNew3ds ? size_t(K::MEMORY_SPACE_SIZE) : size_t(13u << 20);
+    void *memory = memalign(32, arenaSize);
     if (!memory)
     {
         report("FAIL simulation heap reservation");
         return startupFailure("Simulation memory allocation failed.");
     }
-    auto *heap = K::EGG::ExpHeap::create(memory, K::MEMORY_SPACE_SIZE, K::DEFAULT_OPT);
+    auto *heap = K::EGG::ExpHeap::create(memory, arenaSize, K::DEFAULT_OPT);
     if (!heap)
     {
         report("FAIL simulation heap create");
@@ -634,7 +640,7 @@ int main()
     heap->becomeCurrentHeap();
     K::EGG::SceneManager::SetRootHeap(heap);
     char line[256];
-    LOGF("heap_reserved=%lu heap_free=%lu fpscr=%08x", (unsigned long)K::MEMORY_SPACE_SIZE,
+    LOGF("heap_reserved=%lu heap_free=%lu fpscr=%08x", (unsigned long)arenaSize,
          (unsigned long)heap->getAllocatableSize(), fpscr);
     K::EGG::Vector3f test(3, 4, 0);
     LOGF("math_length=%.9f bits=%08lx", test.length(), (unsigned long)K::f2u(test.length()));
@@ -767,9 +773,13 @@ int main()
     mkw::UiRaceView uiRace;
     // Wii presentation is confined to the upper LCD. Keep both lower buffers
     // black rather than allocating a second GPU render target.
+    // The first launch of a version keeps its what's-new text on the lower screen
+    // until the title screen is left (the menus' lower screen would cover it).
+    bool startScreenShown = false;
     if (fullRace)
     {
         const int whatsNew = firstLaunchOfVersion();
+        startScreenShown = whatsNew != 0;
         for (unsigned i = 0; i < 2; ++i)
         {
             u16 w = 0, h = 0;
@@ -943,9 +953,17 @@ int main()
         const auto bottomLayoutStorage = std::make_unique<mkw::MenuBottomLayout>();
         mkw::MenuBottomLayout &bottomLayout = *bottomLayoutStorage;
         mkw::MenuBottomMap bottomMap;
-        if (!autoplay && !menuBottom.borrow(renderer))
-            menuBottom.enable(renderer);
-        menuModels.setCenteredPreview(menuBottom.active());
+        auto openMenuBottom = [&] {
+            const bool opening = menu.page == mkw::UiPage::Strap || menu.page == mkw::UiPage::Intro ||
+                                 menu.page == mkw::UiPage::Title;
+            if (startScreenShown && opening)
+                return;
+            startScreenShown = false;
+            if (!autoplay && !menuBottom.active() && !menuBottom.borrow(renderer))
+                menuBottom.enable(renderer);
+            menuModels.setCenteredPreview(menuBottom.active());
+        };
+        openMenuBottom();
         auto last = svcGetSystemTick();
         double pending = 0;
         unsigned menuSourceTicks = 0;
@@ -993,6 +1011,8 @@ int main()
             // the race section for an unrelated menu or a different race.
             if (raceResident && !menu.retainsRaceAssets())
                 releaseRace();
+            if (startScreenShown)
+                openMenuBottom();
             menuProfile->begin(unsigned(menu.page), transition.active());
             hidScanInput();
             unsigned down = hidKeysDown();
@@ -2626,7 +2646,9 @@ int main()
             auto& sound=mkw::SoundSystem::instance();
             // Carried results music owns its bank until the next scene is ready.
             // Otherwise release menu residency before planning race sound waves.
-            if(fullRace&&!sound.carryingMusic()){
+            // Old 3DS has no LINEAR left for that bank beside a twelve-racer race's
+            // sound: there the music stops when the next race loads.
+            if(fullRace&&(!sound.carryingMusic()||!new3ds)){
                 raceSound.quit();sound.stop();
                 if(sound.start())menuSound.resetAfterEngineRestart();
             }
@@ -3602,8 +3624,10 @@ int main()
                     if (kQa && physicsSteps % 300 == 0)
                     {
                         const auto &hi = raceItems->hud(0);
-                        LOGF("hb step=%u stage=%u lap=%u rank=%u finished=%d item=%d", physicsSteps, stage,
-                             raceGrid.lap(), raceGrid.rank(), int(raceGrid.finished()), int(hi.item));
+                        LOGF("hb step=%u stage=%u lap=%u rank=%u finished=%d item=%d heap_used=%lu linear_free=%lu scene_free=%lu", physicsSteps, stage,
+                             raceGrid.lap(), raceGrid.rank(), int(raceGrid.finished()), int(hi.item),
+                             (unsigned long)mallinfo().uordblks, (unsigned long)linearSpaceFree(),
+                             (unsigned long)(K::EGG::Heap::getCurrentHeap() ? K::EGG::Heap::getCurrentHeap()->getAllocatableSize() : 0));
                     }
                     mkw::LakituInput jugem;
                     jugem.kart = kart;
