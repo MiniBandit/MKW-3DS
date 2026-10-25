@@ -53,6 +53,7 @@
 #include <mkw/menu_bottom_ui.hpp>
 #include <mkw/notification_led.hpp>
 #include <mkw/ceremony_scene.hpp>
+#include <mkw/coin_runners.hpp>
 #include <mkw/staff_credits.hpp>
 #include <mkw/menu_movie.hpp>
 #include <mkw/mii_store.hpp>
@@ -147,6 +148,8 @@ static bool fullRace = false, automaticDrift = false;
 static bool balloonBattleMode = false;
 static unsigned battleTicks = 0;
 static mkw::BalloonBattle balloonBattle;
+static bool coinRunnersMode = false; // Battle with coins (balloonBattleMode covers both battle rules)
+static mkw::CoinRunners coinRunners;
 // Kinoko engine class: 0 = 50cc, 1 = 100cc, 2 = 150cc (Grand Prix choice; VS and Time Trials race 150cc).
 static unsigned engineClass = 2;
 // Time Trials: one racer, no item boxes, a Triple Mushroom at the start, and
@@ -1757,7 +1760,8 @@ int main()
     }
     auto applySelection = [&](bool newSession=true) {
         timeTrial=menu.selection.mode==mkw::UiMode::TimeTrials;
-        balloonBattleMode=menu.selection.mode==mkw::UiMode::Battle&&!menu.selection.coinRunners;
+        balloonBattleMode=menu.selection.mode==mkw::UiMode::Battle; // both battle rules share the arena flow
+        coinRunnersMode=balloonBattleMode&&menu.selection.coinRunners;
         newRecord=false;activeLicense=std::min(menu.selection.license,3u);
         // The license screen starts on the license raced with last.
         if(FILE* f=fopen("sdmc:/3ds/mkw-3ds/last-license.txt","w")){fprintf(f,"%u\n",activeLicense);fclose(f);}
@@ -1797,6 +1801,9 @@ int main()
         raceLoadStart = svcGetSystemTick();
     }
     std::unique_ptr<mkw::Model> battleBalloonModel;
+    // Coin Runners' coin and its shadow: the arena's own (models/obj<NN>_coin__*).
+    std::unique_ptr<mkw::Model> coinModel, coinShadowModel;
+    int coinModelCourse = -1;
     bool battleAssetsReady = true;
     if (balloonBattleMode)
     {
@@ -2059,8 +2066,9 @@ int main()
         for (unsigned i = 0; i < n; ++i)
             order[i] = i;
         std::stable_sort(order.begin(), order.begin() + n, [&](unsigned a, unsigned b) {
-            return balloonBattleMode ? balloonBattle.rank(a) < balloonBattle.rank(b)
-                                     : raceGrid.rank(a) < raceGrid.rank(b);
+            return coinRunnersMode     ? coinRunners.rank(a) < coinRunners.rank(b)
+                   : balloonBattleMode ? balloonBattle.rank(a) < balloonBattle.rank(b)
+                                       : raceGrid.rank(a) < raceGrid.rank(b);
         });
         std::array<mkw::RaceResultEntry, 12> rows{};
         int length = kQa ? snprintf(line, sizeof line, "results race %u/%u:", vsSet.race, raceCount()) : 0;
@@ -2072,7 +2080,9 @@ int main()
             r.character = uint8_t(scenario.players[i].character);
             r.human = i == 0;
             r.team = scenario.teams ? mkw::RaceTeam(scenario.players[i].team) : mkw::RaceTeam::None;
-            r.previous = balloonBattleMode ? uint16_t(balloonBattle.score(i)) : vsSet.points[i];
+            r.previous = coinRunnersMode     ? uint16_t(coinRunners.coins(i))
+                         : balloonBattleMode ? uint16_t(balloonBattle.score(i))
+                                             : vsSet.points[i];
             r.gain = (balloonBattleMode || timeTrial) ? 0 : uint16_t(mkw::RaceResultsFlow::points(n, p + 1));
             if (!balloonBattleMode)
                 vsSet.points[i] = uint16_t(std::min(99999u, unsigned(r.previous) + r.gain));
@@ -2507,6 +2517,42 @@ int main()
             return;
         battleTicks = 0;
         balloonBattle.reset(raceGrid.count());
+        if (balloonBattleMode && !coinRunnersMode && !battleBalloonModel)
+        {
+            // The first race of the session may not have been a battle.
+            battleBalloonModel = std::make_unique<mkw::Model>();
+            if (!battleBalloonModel->load("models/battle_balloon_red.gmdl"))
+                battleBalloonModel.reset();
+        }
+        if (coinRunnersMode)
+        {
+            // The arena's coin spots: its placed objects of type 0x73.
+            std::vector<mkw::Vec3> spots;
+            if (const auto *map = K::System::CourseMap::Instance())
+                for (u16 i = 0; i < map->getGeoObjCount(); ++i)
+                    if (const auto *o = map->getGeoObj(i); o && o->id() == 0x73)
+                        spots.push_back(vec(o->pos()));
+            coinRunners.reset(raceGrid.count(), spots);
+            if (coinModelCourse != int(courseChoice))
+            {
+                int arena = 0;
+                std::sscanf(Courses[courseChoice].models, "models/course_%d", &arena);
+                char name[64];
+                coinModel = std::make_unique<mkw::Model>();
+                snprintf(name, sizeof name, "models/obj%02d_coin__coin_000.gmdl", arena);
+                if (!coinModel->load(name))
+                {
+                    coinModel.reset();
+                    report("FAIL Coin Runners coin model");
+                }
+                coinShadowModel = std::make_unique<mkw::Model>();
+                snprintf(name, sizeof name, "models/obj%02d_coin__coin_shadow_000.gmdl", arena);
+                if (!coinShadowModel->load(name))
+                    coinShadowModel.reset();
+                coinModelCourse = int(courseChoice);
+            }
+            LOGF("coin runners spots=%u", unsigned(spots.size()));
+        }
         if (!raceGrid.reset())
         {
             trackLoadFailed = true;
@@ -3655,7 +3701,12 @@ int main()
                     {
                         if (balloonBattleMode && !results.active() && e.action >= 0 &&
                             (e.effect != mkw::ItemEffect::PowStomp || e.action == 1))
-                            balloonBattle.loseBalloon(e.player, e.source);
+                        {
+                            if (coinRunnersMode)
+                                coinRunners.hit(e.player, vec(K::Kart::KartObjectManager::Instance()->object(e.player)->pos()));
+                            else
+                                balloonBattle.loseBalloon(e.player, e.source);
+                        }
                         if (e.effect == mkw::ItemEffect::Explosion && e.action < 0)
                             cameraShake.blast(e.direction, vec(kart->pos()));
                         // POW stomps shake the user's and the targets' cameras (0x807d9b10 -> 0x8058a778).
@@ -3692,7 +3743,16 @@ int main()
                     const unsigned stage = unsigned(race->stage());
                     if (balloonBattleMode && stage >= 2 && !results.active() &&
                         battleTicks < mkw::BalloonBattle::DurationTicks)
+                    {
                         ++battleTicks;
+                        if (coinRunnersMode)
+                        {
+                            std::array<mkw::Vec3, mkw::CoinRunners::MaxRacers> positions{};
+                            for (unsigned r = 0; r < raceGrid.count() && r < positions.size(); ++r)
+                                positions[r] = vec(K::Kart::KartObjectManager::Instance()->object(r)->pos());
+                            coinRunners.step(positions);
+                        }
+                    }
                     const bool roundFinished =
                         balloonBattleMode ? battleTicks >= mkw::BalloonBattle::DurationTicks : cameraInput.finished;
                     if (selectedRaceMode == 0)
@@ -3728,7 +3788,9 @@ int main()
                     if (roundFinished && !flow.finished)
                     {
                         raceEvents.emit(mkw::RaceEvent::Finish, physicsSteps,
-                                        int(balloonBattleMode ? balloonBattle.rank(0) : raceGrid.rank()));
+                                        int(coinRunnersMode     ? coinRunners.rank(0)
+                                            : balloonBattleMode ? balloonBattle.rank(0)
+                                                                : raceGrid.rank()));
                         results.finish();
                         if (!qaMode && !replay && selectedRaceMode <= 2)
                         {
@@ -4974,7 +5036,28 @@ int main()
                                                                    instance));
                     }
             }
-            if (balloonBattleMode && battleBalloonModel)
+            if (coinRunnersMode && coinModel)
+            {
+                // The coins, turning; the shadow model under each.
+                const float spin = float(physicsSteps % 360) * 3.14159265f / 90.f;
+                const auto camera = renderer.cameraPosition();
+                for (const auto &c : coinRunners.field())
+                {
+                    if (!c.active)
+                        continue;
+                    const mkw::Vec3 d = c.position - camera;
+                    if (d.x * d.x + d.z * d.z > 9000.f * 9000.f)
+                        continue;
+                    C3D_Mtx m;
+                    Mtx_Identity(&m);
+                    Mtx_Translate(&m, c.position.x, c.position.y, c.position.z, true);
+                    if (coinShadowModel)
+                        renderer.draw(*coinShadowModel, m);
+                    Mtx_RotateY(&m, spin, true);
+                    renderer.draw(*coinModel, m);
+                }
+            }
+            if (balloonBattleMode && !coinRunnersMode && battleBalloonModel)
             {
                 for (unsigned racer = 0; racer < raceGrid.count(); ++racer)
                 {
@@ -5006,7 +5089,10 @@ int main()
             {
                 auto *race = K::System::RaceManager::Instance();
                 raceHud.drawOverlay(renderer, *raceItems, unsigned(race->stage()), race->timer(),
-                                    balloonBattleMode ? balloonBattle.rank(0) : raceGrid.rank(), raceGrid.lap(),
+                                    coinRunnersMode     ? coinRunners.rank(0)
+                                    : balloonBattleMode ? balloonBattle.rank(0)
+                                                        : raceGrid.rank(),
+                                    raceGrid.lap(),
                                     balloonBattleMode ? battleTicks >= mkw::BalloonBattle::DurationTicks
                                                       : raceGrid.finished(),
                                     physicsSteps, results.finishFrame(), results.hudSlide());
@@ -5016,8 +5102,11 @@ int main()
                     const unsigned seconds = battleTicks >= mkw::BalloonBattle::DurationTicks
                                                  ? 0
                                                  : (mkw::BalloonBattle::DurationTicks - battleTicks) / 60u;
-                    snprintf(status, sizeof status, "BALLOONS %u  SCORE %u", balloonBattle.balloons(0),
-                             balloonBattle.score(0));
+                    if (coinRunnersMode)
+                        snprintf(status, sizeof status, "COINS %u", coinRunners.coins(0));
+                    else
+                        snprintf(status, sizeof status, "BALLOONS %u  SCORE %u", balloonBattle.balloons(0),
+                                 balloonBattle.score(0));
                     snprintf(timer, sizeof timer, "TIME %u:%02u", seconds / 60, seconds % 60);
                     renderer.drawScreenText(status, 12, 14, 1.f, 0xffffffffu);
                     renderer.drawScreenText(timer, 12, 28, 1.f, 0xffffffffu);
