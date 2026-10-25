@@ -52,6 +52,7 @@
 #include <mkw/menu_bottom_screen.hpp>
 #include <mkw/menu_bottom_ui.hpp>
 #include <mkw/notification_led.hpp>
+#include <mkw/ceremony_scene.hpp>
 #include <mkw/mii_store.hpp>
 #include <mkw/balloon_battle.hpp>
 #include <mkw/bullet_bill.hpp>
@@ -154,6 +155,7 @@ static std::array<mkw::LicenseSave,4> licenseSaves{};
 static std::array<bool,4> damagedLicenses{};
 static unsigned activeLicense=0,selectedRaceMode=1;
 static bool selectedTeams=false,selectedMirror=false;
+static bool ceremonySetupForTest=false; // QA: ceremony-test.txt plays the ceremony before the first menu
 static mkw::RaceTeam selectedHumanTeam=mkw::RaceTeam::Red;
 static mkw::LicenseRecords activeRecords{};
 static mkw::CpuRoster selectedRoster;
@@ -764,6 +766,11 @@ int main()
     APT_CheckNew3DS(&new3ds);
     loadSaves();
     mkw::MenuState menu;
+    if (kQa && exists("sdmc:/3ds/mkw-3ds/ceremony-test.txt"))
+    {
+        // QA: the award ceremony before the first menu (Mario, Luigi, Peach on Peach's bike; Mushroom Cup).
+        ceremonySetupForTest = true;
+    }
     if (FILE *f = fopen("sdmc:/3ds/mkw-3ds/last-license.txt", "r"))
     {
         unsigned last = 0;
@@ -878,6 +885,10 @@ int main()
     // below) frees them. The menus never draw race assets.
     bool raceResident = false, raceGraphicsSuspended = false;
     std::function<void()> releaseRace, suspendRaceGraphics;
+    // The Grand Prix award ceremony: set up when a cup's final standings appear,
+    // played when its last race is left with Next (before the menus).
+    mkw::CeremonySetup ceremonySetup;
+    bool ceremonyReady = false, ceremonyPending = false;
     // The race as it was when paused, behind the pause menu (heap: one Texture).
     auto pauseSnapshot = std::make_unique<mkw::Texture>();
     std::function<bool()> restoreRaceGraphics;
@@ -903,8 +914,70 @@ int main()
     // Set when the race faded out for a section change (the end-of-race menu):
     // the next menu page starts with the scene fader's fade in.
     bool sectionFadeIn = false;
+    auto playCeremony = [&]() {
+        renderer.waitForGpu();
+        if (raceResident && releaseRace)
+            releaseRace();
+        // The stages are Mario Circuit's castle town (winning) and its outskirts (losing);
+        // set before loading, the drivers' and trophy's lighting is fixed from it.
+        renderer.setRetailLighting(mkw::courseLighting("Race/Course/castle_course.szs"), true);
+        auto scene = std::make_unique<mkw::CeremonyScene>();
+        if (!scene->load(ceremonySetup))
+        {
+            report("FAIL ceremony load");
+            return;
+        }
+        auto &sound = mkw::SoundSystem::instance();
+        sound.finishCarriedMusic(30);
+        if (sound.available())
+            sound.play(scene->music(), 30);
+        const float menuFov = renderer.fov();
+        renderer.setDeferred(false);
+        for (unsigned frame = 0; aptMainLoop() && scene->step(); ++frame)
+        {
+            hidScanInput();
+            if (scene->skippable() && (hidKeysDown() & (KEY_A | KEY_B | KEY_START)))
+                break;
+            scene->draw(renderer);
+            renderer.end();
+            // QA (ceremony-test.txt): a picture every second.
+            if (kQa && exists("sdmc:/3ds/mkw-3ds/ceremony-test.txt") && frame % 60 == 0)
+            {
+                std::vector<uint8_t> pixels(400 * 240 * 3);
+                char path[64];
+                snprintf(path, sizeof path, "sdmc:/3ds/mkw-3ds/ceremony-%04u.ppm", frame);
+                if (renderer.captureTop(pixels.data()))
+                    if (FILE *f = fopen(path, "wb"))
+                    {
+                        fprintf(f, "P6\n400 240\n255\n");
+                        fwrite(pixels.data(), 1, pixels.size(), f);
+                        fclose(f);
+                    }
+            }
+        }
+        if (sound.available())
+            sound.stopSlot(30, 30);
+        renderer.waitForGpu();
+        scene->release();
+        renderer.setRetailLighting(nullptr);
+        renderer.setFov(menuFov);
+    };
     auto runMenu = [&]() {
         mkw::notificationLed().clear(); // pause and menus: the LED is off
+        if (ceremonySetupForTest)
+        {
+            ceremonySetupForTest = false;
+            ceremonySetup = {};
+            ceremonySetup.podium = !exists("sdmc:/3ds/mkw-3ds/ceremony-lose.txt");
+            ceremonySetup.top = {mkw::CeremonyDriver{0, false}, mkw::CeremonyDriver{7, false}, mkw::CeremonyDriver{16, true}};
+            ceremonySetup.player = {0, false};
+            ceremonyPending = ceremonyReady = true;
+        }
+        if (ceremonyPending)
+        {
+            ceremonyPending = ceremonyReady = false;
+            playCeremony();
+        }
         renderer.frameSync = true;
         renderer.setDeferred(false);
         renderer.waitForGpu();
@@ -3603,6 +3676,29 @@ int main()
                             raceEvents.emit(mkw::RaceEvent::TotalsShown, physicsSteps, int(vsSet.race));
                             // Commit the completed cup when final standings become
                             // available, without waiting for entry into the ceremony.
+                            if (results.finalRace() && selectedRaceMode == 0 && !replay)
+                            {
+                                const auto &scenario = K::System::RaceConfig::Instance()->raceScenario();
+                                auto driverOf = [&](const mkw::RaceResultEntry &row) {
+                                    return mkw::CeremonyDriver{row.character,
+                                                               scenario.players[row.racer].vehicle >= K::Vehicle::Standard_Bike_S};
+                                };
+                                ceremonySetup = {};
+                                ceremonySetup.cup = courseChoice / 4;
+                                for (unsigned place = 0; place < results.rowCount(); ++place)
+                                {
+                                    const auto &row = results.row(place);
+                                    if (place < 3)
+                                        ceremonySetup.top[place] = driverOf(row);
+                                    if (row.human)
+                                    {
+                                        ceremonySetup.player = driverOf(row);
+                                        ceremonySetup.playerPlace = place;
+                                        ceremonySetup.podium = place < 3;
+                                    }
+                                }
+                                ceremonyReady = results.rowCount() >= 3;
+                            }
                             if (results.finalRace() && selectedRaceMode == 0 && !qaMode && !replay)
                             {
                                 for (unsigned place = 0; place < results.rowCount(); ++place)
@@ -3640,6 +3736,8 @@ int main()
                             flushRaceSave();
                             sectionFadeIn = true;
                             vsSet.next = results.chosen() == 0 && !results.finalRace();
+                            ceremonyPending = ceremonyReady && results.finalRace() && results.chosen() == 0 &&
+                                              selectedRaceMode == 0;
                             if (menu.page == mkw::UiPage::Results)
                             {
                                 menu.cursor = unsigned(std::max(0, results.chosen()));
