@@ -55,6 +55,7 @@ public:
  unsigned cursor=0,age=0,focusAge=0;bool unavailable=false;
  bool ledOn=false; // the notification LED setting (pause menu toggle), set by the game
  unsigned licenseUsed=0; // bit i: license i holds saved data (its card is filled), set by the game
+ std::array<std::array<char,11>,4> licenseName{}; // each license's Mii name (ASCII), set by the game
  // Results is the retail VS end-of-race menu (VSRaceEnd): Next Race / Quit
  // Game, or only Next after the final race of a VS set (IsFinalRace).
  bool finalRace=false;

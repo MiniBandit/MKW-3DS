@@ -54,6 +54,7 @@
 #include <mkw/notification_led.hpp>
 #include <mkw/ceremony_scene.hpp>
 #include <mkw/coin_runners.hpp>
+#include <mkw/license_identity.hpp>
 #include <mkw/staff_credits.hpp>
 #include <mkw/menu_movie.hpp>
 #include <mkw/mii_store.hpp>
@@ -1197,8 +1198,15 @@ int main()
             menu.ledOn = mkw::notificationLed().enabled();
             menu.licenseUsed = 0;
             for (unsigned i = 0; i < 4; ++i)
+            {
                 if (licenseSaves[i].occupied)
                     menu.licenseUsed |= 1u << i;
+                // The Mii's name in the letters the lower screen draws.
+                auto &label = menu.licenseName[i];
+                label.fill(0);
+                for (unsigned c = 0; c < 10 && licenseSaves[i].name[c]; ++c)
+                    label[c] = licenseSaves[i].name[c] < 128 ? char(licenseSaves[i].name[c]) : '?';
+            }
             menuProfile->begin(unsigned(menu.page), transition.active());
             hidScanInput();
             unsigned down = hidKeysDown();
@@ -1253,6 +1261,31 @@ int main()
                     return leave(mkw::UiAction::Exit);
             }
             const auto beforeInput = menu;
+            // A new license: the console's own Mii selector chooses its Mii (name and
+            // appearance are saved with it); cancelling stays on the license page.
+            if (input.accept && menu.page == mkw::UiPage::License && !transition.active() && menu.cursor < 4 &&
+                !licenseSaves[menu.cursor].occupied && !autoplay && !qaMode)
+            {
+                renderer.waitForGpu();
+                MiiSelectorConf conf;
+                miiSelectorInit(&conf);
+                miiSelectorSetOptions(&conf, MIISELECTOR_CANCEL);
+                miiSelectorSetTitle(&conf, "Choose a Mii for this license.");
+                MiiSelectorReturn chosen{};
+                miiSelectorLaunch(&conf, &chosen);
+                if (!chosen.no_mii_selected && miiSelectorChecksumIsValid(&chosen))
+                {
+                    auto &save = licenseSaves[menu.cursor];
+                    std::memcpy(save.nativeMii.data(), &chosen.mii, save.nativeMii.size());
+                    std::memcpy(save.name.data(), &chosen.mii.mii_name, sizeof save.name); // packed field: copied bytewise
+                    save.miiId = mkw::licenseMiiId(save.nativeMii);
+                    save.occupied = true;
+                    mkw::writeNativeMii(DATA, save.nativeMii);
+                    persistLicense(menu.cursor, save);
+                }
+                else
+                    input.accept = false;
+            }
             auto action = transition.input(menu, input);
             menuSound.input(beforeInput, menu, input, action);
             if (action != mkw::UiAction::None)

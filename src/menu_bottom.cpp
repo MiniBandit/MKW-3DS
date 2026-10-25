@@ -120,7 +120,9 @@ void composeMenuBottom(const MenuState& state,MenuBottomLayout& layout,const Mii
         if(state.page==UiPage::License)for(unsigned slot=0;slot<4&&slot<moved->rects.size();++slot){
             const auto& r=moved->rects[slot];
             if(!r.present||!((state.licenseUsed>>slot)&1u))continue;
-            char text[16];std::snprintf(text,sizeof text,"LICENSE %u",slot+1);
+            char text[16];
+            if(state.licenseName[slot][0])std::snprintf(text,sizeof text,"%s",state.licenseName[slot].data());
+            else std::snprintf(text,sizeof text,"LICENSE %u",slot+1);
             // In the card's name bar (top right, beside the Mii's frame).
             const float width=float(std::strlen(text))*6-1,cx=r.x0+(r.x1-r.x0)*.67f,y=r.y0+(r.y1-r.y0)*.1f;
             b.label(cx-width*.5f+1,y+1,text,1,0x000000ffu);
