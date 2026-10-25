@@ -53,6 +53,8 @@
 #include <mkw/menu_bottom_ui.hpp>
 #include <mkw/notification_led.hpp>
 #include <mkw/ceremony_scene.hpp>
+#include <mkw/staff_credits.hpp>
+#include <mkw/menu_movie.hpp>
 #include <mkw/mii_store.hpp>
 #include <mkw/balloon_battle.hpp>
 #include <mkw/bullet_bill.hpp>
@@ -156,6 +158,7 @@ static std::array<bool,4> damagedLicenses{};
 static unsigned activeLicense=0,selectedRaceMode=1;
 static bool selectedTeams=false,selectedMirror=false;
 static bool ceremonySetupForTest=false; // QA: ceremony-test.txt plays the ceremony before the first menu
+static bool creditsForTest=false;        // QA: credits-test.txt plays the staff credits before the first menu
 static mkw::RaceTeam selectedHumanTeam=mkw::RaceTeam::Red;
 static mkw::LicenseRecords activeRecords{};
 static mkw::CpuRoster selectedRoster;
@@ -766,6 +769,7 @@ int main()
     APT_CheckNew3DS(&new3ds);
     loadSaves();
     mkw::MenuState menu;
+    creditsForTest = kQa && exists("sdmc:/3ds/mkw-3ds/credits-test.txt");
     if (kQa && exists("sdmc:/3ds/mkw-3ds/ceremony-test.txt"))
     {
         // QA: the award ceremony before the first menu (Mario, Luigi, Peach on Peach's bike; Mushroom Cup).
@@ -962,8 +966,96 @@ int main()
         renderer.setRetailLighting(nullptr);
         renderer.setFov(menuFov);
     };
+    // The staff credits: the credits movie on top (every frame, its own soundtrack) and
+    // Mario Kart Wii's staff roll scrolling up the lower screen, ending with the movie.
+    auto playCredits = [&](bool trueEnding) {
+        renderer.waitForGpu();
+        mkw::StaffRoll roll;
+        roll.load();
+        auto film = std::make_unique<mkw::MenuMovie>();
+        if (!film->open(trueEnding ? "movies/ending_true.gmv" : "movies/ending_normal.gmv", false))
+        {
+            report("FAIL credits movie");
+            return;
+        }
+        // Ready once its first frame is uploaded (the GPU is idle here).
+        for (unsigned wait = 0; wait < 600 && !film->ready() && !film->failed() && aptMainLoop(); ++wait)
+        {
+            film->request(0);
+            film->setRows(0, 256);
+            film->upload();
+            gspWaitForVBlank();
+        }
+        if (!film->ready())
+        {
+            report("FAIL credits movie");
+            return;
+        }
+        mkw::MenuMovieAudio track;
+        track.open(trueEnding ? "movies/ending_true.wav" : "movies/ending_normal.wav", false);
+        mkw::MenuBottomScreen lower;
+        if (!lower.borrow(renderer))
+            lower.enable(renderer);
+        auto layout = std::make_unique<mkw::MenuBottomLayout>();
+        const float seconds = film->framesPerSecond() > 0 ? float(film->frameCount()) / film->framesPerSecond() : 138.f;
+        const float speed = roll.scrollLength() / std::max(seconds * 60.f, 1.f);
+        renderer.setDeferred(false);
+        renderer.setRetailLighting(nullptr);
+        for (uint64_t tick = 0; aptMainLoop() && !film->finished(); ++tick)
+        {
+            hidScanInput();
+            if (tick > 180 && (hidKeysDown() & KEY_START))
+                break;
+            film->request(tick);
+            film->setRows(0, 192);
+            track.update();
+            renderer.begin({0, 0, 1000}, {0, 0, 0}, {0, 1, 0});
+            film->upload();
+            renderer.drawScreenFade(1.f, false);
+            if (const auto *picture = film->texture())
+            {
+                // The 256x192 picture in its 256x256 texture (the rest is padding): 320x240, centred.
+                const float v = 192.f / float(std::max<u16>(picture->gpu.height, 1));
+                renderer.drawScreenSpriteRegion(*picture, 40, 0, 320, 240, 0, 0, 1, v);
+            }
+            roll.layout(float(tick) * speed, *layout);
+            lower.draw(renderer, *layout, true);
+            renderer.end();
+            // QA (credits-test.txt): both screens every 10 seconds.
+            if (kQa && creditsForTest && tick % 600 == 300)
+            {
+                std::vector<uint8_t> top(400 * 240 * 3), bottom(320 * 240 * 3);
+                char path[64];
+                snprintf(path, sizeof path, "sdmc:/3ds/mkw-3ds/credits-%05u.ppm", unsigned(tick));
+                if (renderer.captureTop(top.data()))
+                    if (FILE *f = fopen(path, "wb"))
+                    {
+                        fprintf(f, "P6\n400 240\n255\n");
+                        fwrite(top.data(), 1, top.size(), f);
+                        fclose(f);
+                    }
+                snprintf(path, sizeof path, "sdmc:/3ds/mkw-3ds/credits-%05u-bottom.ppm", unsigned(tick));
+                if (renderer.captureBottom(bottom.data()))
+                    if (FILE *f = fopen(path, "wb"))
+                    {
+                        fprintf(f, "P6\n320 240\n255\n");
+                        fwrite(bottom.data(), 1, bottom.size(), f);
+                        fclose(f);
+                    }
+            }
+        }
+        track.close();
+        renderer.waitForGpu();
+        film->close();
+        lower.disable(renderer);
+    };
     auto runMenu = [&]() {
         mkw::notificationLed().clear(); // pause and menus: the LED is off
+        if (creditsForTest)
+        {
+            playCredits(exists("sdmc:/3ds/mkw-3ds/credits-true.txt"));
+            creditsForTest = false;
+        }
         if (ceremonySetupForTest)
         {
             ceremonySetupForTest = false;
@@ -977,6 +1069,9 @@ int main()
         {
             ceremonyPending = ceremonyReady = false;
             playCeremony();
+            // A Special Cup podium at 150cc rolls the credits; in Mirror, the full ending.
+            if (ceremonySetup.podium && ceremonySetup.cup == 3 && (engineClass == 2 || selectedMirror))
+                playCredits(selectedMirror);
         }
         renderer.frameSync = true;
         renderer.setDeferred(false);
