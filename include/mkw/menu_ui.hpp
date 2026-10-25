@@ -53,7 +53,8 @@ class MenuState {
 public:
  UiPage page=UiPage::Strap;UiSelection selection{};
  unsigned cursor=0,age=0,focusAge=0;bool unavailable=false;
- bool ledOn=false; // the notification LED setting (pause menu toggle), set by the game
+ // The license's settings shown on the pause menu's lower screen, set by the game.
+ uint8_t ledMode=0,ledBrightness=100;bool shadowsOn=true;
  unsigned licenseUsed=0; // bit i: license i holds saved data (its card is filled), set by the game
  std::array<std::array<char,11>,4> licenseName{}; // each license's Mii name (ASCII), set by the game
  // Results is the retail VS end-of-race menu (VSRaceEnd): Next Race / Quit
@@ -93,7 +94,7 @@ inline constexpr unsigned UiConfirmOkSlot=100;
 // UiQuad::slot of the cup heading on the course and stage pages (art of the page, not a control).
 inline constexpr unsigned UiHeadingSlot=101;
 // The pause menu's lower-screen notification LED toggle.
-inline constexpr unsigned UiLedToggleSlot=102;
+inline constexpr unsigned UiLedToggleSlot=102,UiLedBrightnessSlot=103,UiShadowToggleSlot=104;
 struct UiQuad {unsigned sprite;float x,y,w,h,alpha=1;uint32_t tint=0xffffffff;bool bottom=false;float u0=0,v0=0,u1=1,v1=1;unsigned movie=~0u;std::array<uint32_t,4> corners{{0xffffffff,0xffffffff,0xffffffff,0xffffffff}};bool additive=false;unsigned vehicleIcon=~0u;uint32_t vehicleColor0=0,vehicleColor1=0xffffffff;unsigned slot=~0u;};
 struct UiRacer {unsigned driver=0,rank=1,lap=1;bool finished=false;float x=0,z=0;};
 struct UiRaceView {std::array<UiRacer,12> racers{};unsigned count=0;unsigned milliseconds=0;};

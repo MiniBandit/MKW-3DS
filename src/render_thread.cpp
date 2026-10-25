@@ -86,7 +86,8 @@ struct ClearEnvironmentCommand {static constexpr uint16_t Type=CmdClearEnvironme
 struct RigidCommand {static constexpr uint16_t Type=CmdRigid;const RigidPose* pose;};
 struct SkinCommand {static constexpr uint16_t Type=CmdSkin;const float* palette;unsigned bones,stride;};
 struct OverridesCommand {static constexpr uint16_t Type=CmdOverrides;const SubmeshOverride* overrides;unsigned count;};
-struct ShadowsCommand {static constexpr uint16_t Type=CmdShadows;const Renderer::ShadowVolume* volumes;unsigned count;float darkness;};
+struct ShadowsCommand {static constexpr uint16_t Type=CmdShadows;const Renderer::ShadowVolume* volumes;unsigned count;
+    const Renderer::ShadowCaster* casters;unsigned casterCount;Renderer::ShadowPlane plane;float darkness;};
 struct SparksCommand {static constexpr uint16_t Type=CmdSparks;const SparkSpec* specs;unsigned specCount;const Spark* sparks;unsigned count;const Texture* textures;};
 // The NW4R EF draw list is built while the frame records (FrameList::effects).
 struct EffectsCommand {static constexpr uint16_t Type=CmdEffects;const RaceEffects* effects;const ef::DrawList* list;const Texture* textures;};
@@ -308,7 +309,7 @@ void Renderer::execute(FrameList& list){
         case CmdRigid:rigid_=static_cast<const RigidCommand*>(body)->pose;break;
         case CmdSkin:{const auto& c=*static_cast<const SkinCommand*>(body);skinPalette_=c.palette;skinBones_=c.bones;skinStride_=c.stride;break;}
         case CmdOverrides:{const auto& c=*static_cast<const OverridesCommand*>(body);overrides_=c.overrides;overrideCount_=c.overrides?c.count:0;break;}
-        case CmdShadows:{const auto& c=*static_cast<const ShadowsCommand*>(body);drawShadowVolumes(c.volumes,c.count,c.darkness);break;}
+        case CmdShadows:{const auto& c=*static_cast<const ShadowsCommand*>(body);shadowsNow(c.volumes,c.count,c.casters,c.casterCount,c.plane,c.darkness);break;}
         case CmdSparks:{const auto& c=*static_cast<const SparksCommand*>(body);drawSparksNow(c.specs,c.specCount,c.sparks,c.count,c.textures);break;}
         case CmdEffects:{const auto& c=*static_cast<const EffectsCommand*>(body);effectListNow(*c.effects,*c.list,c.textures);break;}
         case CmdCinema:{const auto& c=*static_cast<const CinemaCommand*>(body);drawCinemaBars(c.top,c.bottom,c.opacity);break;}
@@ -584,11 +585,25 @@ void Renderer::clearEnvironmentUv(){
     if(!recording()){clearEnvironmentUvNow();return;}
     command<ClearEnvironmentCommand>();
 }
-void Renderer::drawShadowVolumes(const ShadowVolume* volumes,unsigned count,float darkness){
-    if(!count)return;
-    if(!recording()){shadowVolumesNow(volumes,count,darkness);return;}
-    const ShadowVolume* copied=copy(volumes,count);
-    auto& c=command<ShadowsCommand>();c.volumes=copied;c.count=count;c.darkness=darkness;
+void Renderer::drawShadows(const ShadowVolume* volumes,unsigned count,const ShadowCaster* casters,unsigned casterCount,
+                           const ShadowPlane& plane,float darkness){
+    if(!count&&!casterCount)return;
+    if(!recording()){shadowsNow(volumes,count,casters,casterCount,plane,darkness);return;}
+    const ShadowVolume* copied=count?copy(volumes,count):nullptr;
+    ShadowCaster* copiedCasters=nullptr;
+    if(casterCount){
+        copiedCasters=static_cast<ShadowCaster*>(data(sizeof(ShadowCaster)*casterCount));
+        for(unsigned i=0;i<casterCount;++i){
+            auto& c=copiedCasters[i];c=casters[i];
+            // The skinning palette as it is now: each bone's 3x4 rows, packed.
+            if(c.palette&&c.bones&&c.bones<=MaxSkinBones){
+                float* rows=static_cast<float*>(data(std::size_t(c.bones)*12*sizeof(float)));
+                for(unsigned b=0;b<c.bones;++b)std::memcpy(rows+b*12,casters[i].palette+b*casters[i].stride,12*sizeof(float));
+                c.palette=rows;c.stride=12;
+            }else{c.palette=nullptr;c.bones=0;}
+        }
+    }
+    auto& c=command<ShadowsCommand>();c.volumes=copied;c.count=count;c.casters=copiedCasters;c.casterCount=casterCount;c.plane=plane;c.darkness=darkness;
 }
 void Renderer::drawSparks(const DriftEffects& effects,const Texture* textures){
     if(!effects.ready)return;

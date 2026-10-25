@@ -1,5 +1,6 @@
 #include <mkw/menu_bottom.hpp>
 #include <mkw/menu_bottom_ui.hpp>
+#include <mkw/game_settings.hpp>
 #include <mkw/mii_store.hpp>
 #include <algorithm>
 #include <cstdio>
@@ -128,7 +129,14 @@ void composeMenuBottom(const MenuState& state,MenuBottomLayout& layout,const Mii
             b.label(cx-width*.5f+1,y+1,text,1,0x000000ffu);
             b.label(cx-width*.5f,y,text,1,0xffffffffu);
         }
-        if(state.page==UiPage::Pause)b.tile(222,206,92,28,state.ledOn?"LED ON":"LED OFF",int(UiLedToggleSlot),true,1.5f);
+        if(state.page==UiPage::Pause){
+            // The license's settings: LED mode, LED brightness, dynamic shadow.
+            // Between the last button and the footer.
+            char bright[16];std::snprintf(bright,sizeof bright,"BRIGHT %u",unsigned(state.ledBrightness));
+            b.tile(30,183,96,18,ledModeLabel(LedMode(state.ledMode)),int(UiLedToggleSlot),true,1);
+            b.tile(130,183,74,18,bright,int(UiLedBrightnessSlot),state.ledMode!=0,1);
+            b.tile(208,183,82,18,state.shadowsOn?"SHADOW ON":"SHADOW OFF",int(UiShadowToggleSlot),true,1);
+        }
         if(moved->back.present){
             if(auto* t=b.tile(moved->back.x0,moved->back.y0,moved->back.x1-moved->back.x0,moved->back.y1-moved->back.y0,"",-1,true)){t->hidden=true;t->back=true;}
         }else if(state.page!=UiPage::Title&&state.page!=UiPage::Strap&&state.page!=UiPage::Intro&&state.page!=UiPage::Results)b.back();

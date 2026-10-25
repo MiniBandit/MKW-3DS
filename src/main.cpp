@@ -54,6 +54,8 @@
 #include <mkw/notification_led.hpp>
 #include <mkw/ceremony_scene.hpp>
 #include <mkw/coin_runners.hpp>
+#include <mkw/dynamic_shadow.hpp>
+#include <mkw/game_settings.hpp>
 #include <mkw/license_identity.hpp>
 #include <mkw/staff_credits.hpp>
 #include <mkw/menu_movie.hpp>
@@ -786,6 +788,9 @@ int main()
             menu.selection.license = last;
         fclose(f);
     }
+    // The settings of the license in use (LED, shadow); reloaded when another is chosen.
+    unsigned settingsLicense = menu.selection.license;
+    mkw::loadGameSettings(settingsLicense);
     mkw::MenuRenderer menuRenderer;
     // Original animation banks keep palette workspaces; they must not occupy
     // the 3DS main thread's small stack alongside the race renderer.
@@ -1195,7 +1200,11 @@ int main()
                 releaseRace();
             if (startScreenShown)
                 openMenuBottom();
-            menu.ledOn = mkw::notificationLed().enabled();
+            if (menu.selection.license != settingsLicense)
+                mkw::loadGameSettings(settingsLicense = menu.selection.license);
+            menu.ledMode = uint8_t(mkw::gameSettings().led);
+            menu.ledBrightness = mkw::gameSettings().brightness;
+            menu.shadowsOn = mkw::gameSettings().shadows;
             menu.licenseUsed = 0;
             for (unsigned i = 0; i < 4; ++i)
             {
@@ -1235,7 +1244,17 @@ int main()
                     if (widget.back)
                         input.back = true;
                     else if (widget.slot == int(mkw::UiLedToggleSlot))
-                        mkw::notificationLed().setEnabled(!mkw::notificationLed().enabled());
+                        mkw::cycleLedMode();
+                    else if (widget.slot == int(mkw::UiLedBrightnessSlot))
+                    {
+                        if (mkw::gameSettings().led != mkw::LedMode::Off)
+                            mkw::cycleLedBrightness();
+                    }
+                    else if (widget.slot == int(mkw::UiShadowToggleSlot))
+                    {
+                        mkw::gameSettings().shadows = !mkw::gameSettings().shadows;
+                        mkw::saveGameSettings();
+                    }
                     else if (menu.page == mkw::UiPage::Confirm && widget.slot >= 0)
                     {
                         // The lower screen shows the page before Confirm: a tap picks that cup, course
@@ -2396,6 +2415,10 @@ int main()
     tailActor.fill(-1);
     std::vector<std::unique_ptr<mkw::Model>> track, sky;
     std::unique_ptr<mkw::Model> vehicle, driver, vehicleShadow;
+    // The player's dynamic shadow: the course's sun and the ground last driven on.
+    mkw::ShadowSun shadowSun;
+    mkw::Renderer::ShadowPlane shadowGround{};
+    bool shadowGroundSet = false;
     std::array<std::unique_ptr<mkw::Model>, 4> wheels;
     std::array<std::unique_ptr<mkw::Model>, 9> accessories;
     std::unique_ptr<mkw::DriverAnimation> bodyAnimation;
@@ -2741,6 +2764,10 @@ int main()
             retailFogArea = -1;
         }
         renderer.setRetailLighting(mkw::courseLighting(Courses[courseChoice].archive), true);
+        shadowSun = mkw::shadowSun(mkw::courseLighting(Courses[courseChoice].archive));
+        if (kQa && exists("sdmc:/3ds/mkw-3ds/shadow-test.txt"))
+            shadowSun = {{1, -1, 0}, false}; // QA: a low sun from the side
+        shadowGroundSet = false;
         if (!renderer.retailLightingReady(mkw::courseLighting(Courses[courseChoice].archive)))
         {
             trackLoadFailed = true;
@@ -4142,11 +4169,24 @@ int main()
                 signals.accelerating = kart->status().onBit(K::Kart::eStatus::Accelerate);
                 signals.braking = kart->status().onBit(K::Kart::eStatus::Brake);
                 if (fullRace)
-                    mkw::notificationLed().update(
-                        {menu.page == mkw::UiPage::Race && !intro.active() && !raceGrid.finished(),
-                         kart->status().onBit(K::Kart::eStatus::InAction, K::Kart::eStatus::Crushed),
-                         kart->status().onBit(K::Kart::eStatus::Shocked), kart->status().onBit(K::Kart::eStatus::Star),
-                         kart->status().onBit(K::Kart::eStatus::Boost)});
+                {
+                    mkw::LedFrame led;
+                    const bool running = menu.page == mkw::UiPage::Race && !intro.active() && !raceGrid.finished();
+                    const auto raceStage = K::System::RaceManager::Instance()->stage();
+                    led.countdown = running && raceStage == K::System::RaceManager::Stage::Countdown;
+                    led.racing = running && raceStage >= K::System::RaceManager::Stage::Race;
+                    led.hit = kart->status().onBit(K::Kart::eStatus::InAction, K::Kart::eStatus::Crushed);
+                    led.shocked = kart->status().onBit(K::Kart::eStatus::Shocked);
+                    led.star = kart->status().onBit(K::Kart::eStatus::Star);
+                    led.boost = kart->status().onBit(K::Kart::eStatus::Boost);
+                    led.mega = raceItems->hud(0).mega > 0;
+                    led.bullet = raceItems->hud(0).bullet > 0;
+                    led.finalLap = raceGrid.lap() >= 3;
+                    led.rainbowRoad = Courses[courseChoice].id == K::Course::Rainbow_Road;
+                    const unsigned charge = unsigned(kart->move()->driftState());
+                    led.drift = charge >= 3 ? 2 : charge == 2 ? 1 : 0;
+                    mkw::notificationLed().update(led);
+                }
                 signals.countdown = unsigned(K::System::RaceManager::Instance()->stage()) <= 1;
                 if (fullRace)
                     mkw::driverItemSignals(signals, *raceItems, 0);
@@ -4978,6 +5018,35 @@ int main()
             // worker reads VehicleAnimation's lazy matrices.
             const C3D_Mtx playerShadowTransform = vehicleAnimation.body();
             const bool playerCastsShadow = vehicleShadow && (!fullRace || !raceItems->hud(0).bullet);
+            // The dynamic shadow: the ground under the wheels touching it (else
+            // the ground last touched while the kart is close above it).
+            bool silhouettes = false;
+            if (playerCastsShadow && mkw::gameSettings().shadows && mkw::renderQuality().shadowVolumes &&
+                !cameraKart->status().onBit(K::Kart::eStatus::BeforeRespawn, K::Kart::eStatus::InRespawn))
+            {
+                mkw::Vec3 point{}, normal{};
+                unsigned grounded = 0;
+                for (unsigned i = 0; i < cameraKart->tireCount(); ++i)
+                    if (const auto &contact = cameraKart->collisionData(i); contact.bFloor)
+                    {
+                        point = point + vec(cameraKart->wheelEdgePos(i));
+                        normal = normal + vec(contact.floorNrm);
+                        ++grounded;
+                    }
+                if (grounded)
+                {
+                    shadowGround.point = point / float(grounded);
+                    shadowGround.normal = mkw::normalized(normal, {0, 1, 0});
+                    shadowGroundSet = true;
+                }
+                if (shadowGroundSet)
+                {
+                    const float height = mkw::dot(vec(cameraKart->pos()) - shadowGround.point, shadowGround.normal);
+                    shadowGround.light = mkw::shadowLightDirection(shadowSun, renderer.cameraRight(),
+                                                                   renderer.cameraUp(), renderer.cameraBackward());
+                    silhouettes = height > -100.f && height < 300.f;
+                }
+            }
             // Test fixtures count clips while posing: they pose on this thread.
             playerJobQueued = fullRace && !animationTest && !effectsTest && mkw::jobWorker().running();
             if (playerJobQueued)
@@ -4999,8 +5068,8 @@ int main()
             renderer.setCourseLighting(false);
             if (fullRace)
                 opponents.draw(renderer, *raceItems, vec(cameraKart->pos()), physicsSteps,
-                               playerCastsShadow ? vehicleShadow.get() : nullptr, &playerShadowTransform);
-            else if (playerCastsShadow)
+                               playerCastsShadow && !silhouettes ? vehicleShadow.get() : nullptr, &playerShadowTransform);
+            else if (playerCastsShadow && !silhouettes)
             {
                 mkw::Renderer::ShadowVolume shadow{vehicleShadow.get(), playerShadowTransform};
                 renderer.drawShadowVolumes(&shadow, 1, .5f);
@@ -5023,6 +5092,34 @@ int main()
                 renderer.setSkinPalette(nullptr, 0, 12);
             };
             driverEffectAnchor.reset();
+            if (silhouettes && vehicle)
+            {
+                // The player's kart, driver and wheels flattened along the sun, with the
+                // kart's own shadow volume in the same pass (overlaps darken once).
+                std::array<mkw::Renderer::ShadowCaster, 8> casters{};
+                unsigned casterCount = 0;
+                auto cast = [&](const mkw::DriverAnimation *bank, const mkw::Model *model, const C3D_Mtx &matrix) {
+                    if (!model || casterCount == casters.size())
+                        return;
+                    const bool gpu = bank && bank->gpuSkinned();
+                    casters[casterCount++] = {model, model->vertices, matrix, gpu ? bank->palette() : nullptr,
+                                              gpu ? bank->matrixCount() : 0u, 21};
+                };
+                const C3D_Mtx body = vehicleAnimation.body();
+                cast(bodyAnimation.get(), vehicle.get(), body);
+                if (driver)
+                {
+                    C3D_Mtx seated = body;
+                    const auto &choice = selectedVehicle();
+                    if (!replay)
+                        Mtx_Translate(&seated, 0, choice.seatY, choice.seatZ, true);
+                    cast(&driverAnimation, driver.get(), seated);
+                }
+                for (unsigned i = 0; i < vehicleAnimation.wheelCount(); ++i)
+                    cast(nullptr, wheels[vehicleAnimation.modelIndex(i)].get(), vehicleAnimation.wheel(i));
+                const mkw::Renderer::ShadowVolume volume{vehicleShadow.get(), playerShadowTransform};
+                renderer.drawShadows(&volume, 1, casters.data(), casterCount, shadowGround, .5f);
+            }
             if (vehicle && (!fullRace || !raceItems->hud(0).bullet))
             {
                 renderer.additiveColor =

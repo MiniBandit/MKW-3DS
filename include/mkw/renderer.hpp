@@ -246,6 +246,8 @@ public:
     // (or its QA override) above zero.
     bool stereoWanted() const {return targetRight_&&slider()>0;}
     Vec3 cameraBackward() const { return {mainView_.r[2].x,mainView_.r[2].y,mainView_.r[2].z}; }
+    Vec3 cameraRight() const { return {mainView_.r[0].x,mainView_.r[0].y,mainView_.r[0].z}; }
+    Vec3 cameraUp() const { return {mainView_.r[1].x,mainView_.r[1].y,mainView_.r[1].z}; }
     // World point -> top-screen pixels with the active camera; viewZ < 0 is in front.
     bool projectTop(Vec3 world,float& x,float& y,float& viewZ) const;
     void begin(Vec3 eye,Vec3 target,Vec3 up,bool mirror=false);
@@ -291,7 +293,15 @@ public:
     // counting marks the geometry drawn so far inside a volume, which is then
     // multiplied by darkness once. Call after everything that receives shadows.
     struct ShadowVolume {const Model* model;C3D_Mtx transform;};
-    void drawShadowVolumes(const ShadowVolume* volumes,unsigned count,float darkness);
+    void drawShadowVolumes(const ShadowVolume* volumes,unsigned count,float darkness){drawShadows(volumes,count,nullptr,0,{},darkness);}
+    // Dynamic silhouette shadows: casters (optionally GPU-skinned, palette rows of
+    // `stride` floats) flattened along `light` onto the ground plane through
+    // `point`. They are marked in the volumes' stencil pass, so where a silhouette
+    // and a volume overlap the ground is still darkened once.
+    struct ShadowCaster {const Model* model;const Vertex* vertices;C3D_Mtx transform;const float* palette;unsigned bones,stride;};
+    struct ShadowPlane {Vec3 point,normal,light;};
+    void drawShadows(const ShadowVolume* volumes,unsigned count,const ShadowCaster* casters,unsigned casterCount,
+                     const ShadowPlane& plane,float darkness);
     // Translate the rendered image in LCD pixels after perspective projection.
     // Wii menu models are rendered with a centered camera into a texture before
     // their UI pane moves; world translation would change the viewing angle.
@@ -473,7 +483,8 @@ private:
     void drawEffectsImmediate(RaceEffects& effects,const Texture* textures);
     void requestBloomNow(const CourseBloom& settings);
     void applyBloomNow();
-    void shadowVolumesNow(const ShadowVolume* volumes,unsigned count,float darkness);
+    void shadowsNow(const ShadowVolume* volumes,unsigned count,const ShadowCaster* casters,unsigned casterCount,
+                    const ShadowPlane& plane,float darkness);
     void environmentUvNow(const C3D_Mtx& transform,const float (&uv)[6],bool texture2=false);
     void normalMatrixNow(const C3D_Mtx& modelView,bool environment=false);
     void uv1TransformNow(const float (&uv)[6]);

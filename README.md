@@ -132,6 +132,11 @@ to switch it off. Nothing is recorded without that file.
 | SELECT | Speedometer on/off |
 | Touch screen | Menus: tap a button on the lower screen. Races: switch the lower-screen map view |
 
+Each license keeps its own settings, changed on the pause menu's lower screen:
+the notification LED (off; items; items and race events; items, events and
+drifts), its brightness (50 to 100%), and the dynamic shadow your kart and
+driver cast along the course's light.
+
 ## Contributing
 
 Bug reports and suggestions go in [Issues](../../issues). Pull requests are welcome.

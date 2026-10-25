@@ -1381,7 +1381,8 @@ void Renderer::drawNow(const Model& model,const Vertex* vertices,const C3D_Mtx& 
 void Renderer::setMaterialCullNow(GPU_CULLMODE mode){
     C3D_CullFace(cameraCull(mode,view_));
 }
-void Renderer::shadowVolumesNow(const ShadowVolume* volumes,unsigned count,float darkness){
+void Renderer::shadowsNow(const ShadowVolume* volumes,unsigned count,const ShadowCaster* casters,unsigned casterCount,
+                          const ShadowPlane& plane,float darkness){
     flushSprites();
     sceneDepthMap(projection_);
     uploadProjection(projectionLoc_,projection_);
@@ -1411,6 +1412,45 @@ void Renderer::shadowVolumesNow(const ShadowVolume* volumes,unsigned count,float
     drawAll(GPU_CULL_FRONT_CCW);
     C3D_StencilOp(GPU_STENCIL_KEEP,GPU_STENCIL_INCR_WRAP,GPU_STENCIL_KEEP);
     drawAll(GPU_CULL_BACK_CCW);
+    if(casterCount){
+        // Silhouettes: x' = x - L(n.x - d)/(n.L) flattens each caster onto the
+        // ground plane (lifted slightly against z-fighting) along the light L.
+        // A pixel not yet inside a volume is marked once; the terrain in front
+        // of the plane (depth test) hides the part that would float under it.
+        const Vec3 n=plane.normal,L=plane.light;const float nl=dot(n,L);
+        if(nl<-.05f){
+            const float d=dot(n,plane.point)+3.f;
+            C3D_Mtx project;Mtx_Identity(&project);
+            const float l[3]={L.x,L.y,L.z},nv[3]={n.x,n.y,n.z};
+            for(unsigned r=0;r<3;++r){
+                for(unsigned c=0;c<3;++c)project.r[r].c[3-c]=(r==c?1.f:0.f)-l[r]*nv[c]/nl;
+                project.r[r].w=l[r]*d/nl;
+            }
+            C3D_CullFace(GPU_CULL_NONE);
+            C3D_StencilTest(true,GPU_EQUAL,0,0xff,0xff);
+            C3D_StencilOp(GPU_STENCIL_KEEP,GPU_STENCIL_KEEP,GPU_STENCIL_INCR);
+            // Colour writes stay on, blended to leave the colour as it is: with every
+            // write masked the stencil was not marked (Azahar).
+            C3D_DepthTest(true,GPU_GEQUAL,GPU_WRITE_COLOR);
+            C3D_AlphaBlend(GPU_BLEND_ADD,GPU_BLEND_ADD,GPU_ZERO,GPU_ONE,GPU_ZERO,GPU_ONE);
+            C3D_BoolUnifSet(GPU_VERTEX_SHADER,skinnedNormalsLoc_,false);
+            auto* attr=C3D_GetAttrInfo();AttrInfo_Init(attr);
+            AttrInfo_AddLoader(attr,0,GPU_FLOAT,3);AttrInfo_AddLoader(attr,1,GPU_FLOAT,3);AttrInfo_AddLoader(attr,2,GPU_FLOAT,4);AttrInfo_AddLoader(attr,3,GPU_UNSIGNED_BYTE,4);
+            for(unsigned i=0;i<casterCount;++i){
+                const auto& caster=casters[i];if(!caster.model||!caster.model->indexCount||!caster.vertices)continue;
+                const bool skinned=caster.palette&&caster.bones&&caster.bones<=MaxSkinBones;
+                if(skinned)for(unsigned b=0;b<caster.bones;++b){const float* m=caster.palette+b*caster.stride;
+                    for(unsigned r=0;r<3;++r)C3D_FVUnifSet(GPU_VERTEX_SHADER,bonesLoc_+int(b*3+r),m[r*4],m[r*4+1],m[r*4+2],m[r*4+3]);}
+                C3D_BoolUnifSet(GPU_VERTEX_SHADER,skinnedLoc_,skinned);
+                C3D_Mtx flat,mv;Mtx_Multiply(&flat,&project,&caster.transform);Mtx_Multiply(&mv,&view_,&flat);
+                C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER,modelViewLoc_,&mv);
+                auto* buf=C3D_GetBufInfo();BufInfo_Init(buf);BufInfo_Add(buf,caster.vertices,sizeof(Vertex),4,0x3210);
+                C3D_DrawElements(GPU_TRIANGLES,caster.model->indexCount,C3D_UNSIGNED_SHORT,caster.model->indices);
+                stats_.triangles+=caster.model->indexCount/3;++stats_.drawCalls;
+            }
+            C3D_BoolUnifSet(GPU_VERTEX_SHADER,skinnedLoc_,false);
+        }
+    }
     // Shade each marked pixel once and clear its count for later volumes.
     C3D_DepthTest(false,GPU_ALWAYS,GPU_WRITE_COLOR);
     C3D_StencilTest(true,GPU_NOTEQUAL,0,0xff,0xff);
