@@ -56,6 +56,7 @@
 #include <mkw/coin_runners.hpp>
 #include <mkw/dynamic_shadow.hpp>
 #include <mkw/game_settings.hpp>
+#include <mkw/intro_banner.hpp>
 #include <mkw/license_identity.hpp>
 #include <mkw/staff_credits.hpp>
 #include <mkw/menu_movie.hpp>
@@ -2420,6 +2421,7 @@ int main()
     std::unique_ptr<mkw::Model> vehicle, driver, vehicleShadow;
     // The player's dynamic shadow: the course's sun and the ground last driven on.
     mkw::ShadowSun shadowSun;
+    mkw::IntroBanner introBanner;
     mkw::Renderer::ShadowPlane shadowGround{};
     bool shadowGroundSet = false;
     std::array<std::unique_ptr<mkw::Model>, 4> wheels;
@@ -2771,6 +2773,29 @@ int main()
         if (kQa && exists("sdmc:/3ds/mkw-3ds/shadow-test.txt"))
             shadowSun = {{1, -1, 0}, false}; // QA: a low sun from the side
         shadowGroundSet = false;
+        if (fullRace)
+        {
+            // The course preview's banner: mode or cup, class or race number, course.
+            static constexpr const char *Digits[] = {"0", "1", "2", "3", "4", "5", "6", "7", "8", "9"};
+            const char *engine = selectedMirror     ? "Mirror"
+                                 : engineClass == 0 ? "50cc"
+                                 : engineClass == 1 ? "100cc"
+                                                    : "150cc";
+            std::array<const char *, 4> first{};
+            char cupName[32];
+            std::snprintf(cupName, sizeof cupName, "%s Cup", Courses[courseChoice].cup);
+            if (balloonBattleMode)
+                first = {coinRunnersMode ? "Coin Runners" : "Balloon Battle", selectedTeams ? "Team Race" : nullptr};
+            else if (timeTrial)
+                first = {"Time Trials", engine};
+            else if (selectedRaceMode == 0)
+                first = {cupName, Digits[std::clamp(vsSet.race, 1u, 4u)], "/", "4"};
+            else
+                first = {selectedTeams ? "Team Race" : "VS Race", engine};
+            introBanner.load(first, Courses[courseChoice].name);
+        }
+        else
+            introBanner.release();
         if (!renderer.retailLightingReady(mkw::courseLighting(Courses[courseChoice].archive)))
         {
             trackLoadFailed = true;
@@ -3765,6 +3790,7 @@ int main()
                     if (!intro.active())
                         endIntro();
                 }
+                introBanner.step(intro.active());
                 if (fullRace)
                 {
                     raceGrid.afterStep();
@@ -5287,6 +5313,8 @@ int main()
             // Stereo layers (Mario Kart 7's): the HUD and result boards 4 px
             // behind the screen; the full-screen wipe and the pause menu on the
             // screen plane.
+            if (fullRace)
+                introBanner.draw(renderer);
             if (fullRace && !intro.active())
             {
                 auto *race = K::System::RaceManager::Instance();
