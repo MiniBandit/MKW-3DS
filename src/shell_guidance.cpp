@@ -175,6 +175,9 @@ void RaceItems::updateShell(ItemActor& a,ItemWorldQuery query){
         }else if((s.phase==4||s.phase==5)&&a.target>=0){
             const auto& r=racers_[a.target];
             if(s.phase==5&&(missing(r)||s.ticks>60)){a.active=false;return;}
+            // Not in the original: a shell still locked on once its target has
+            // finished would circle the finished racer; it breaks instead.
+            if(r.finished){shatter(a);return;}
             if(missing(r)){a.velocity+=s.homing;s.homing={};s.pending=6;a.target=-1;}
             else{
                 // 2984c0 (0x807a44f4): retain kart-follow velocity and a separate capped
