@@ -14,6 +14,7 @@ public:
     bool load();
     void reset();
     void resetAnimation();
+    bool lowDetailTest=false; // QA: every opponent at the low-detail tier
     void step(unsigned tick,const RaceItems& items);
     // Poses and culls every opponent for this frame, on the job worker where
     // possible. Call after Renderer::begin; race state must not change until draw.

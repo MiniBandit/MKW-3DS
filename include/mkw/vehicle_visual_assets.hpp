@@ -12,6 +12,8 @@ namespace mkw {
 struct VehicleVisualAssets {
  const GarageChoice* choice=nullptr;
  std::unique_ptr<Model> body,driver,shadow;
+ // The original low-detail driver (one rigid, seated mesh) when the builder cooked it.
+ std::unique_ptr<Model> driverLod;
  std::array<std::unique_ptr<Model>,4> wheels;
  std::array<std::unique_ptr<Model>,9> extras;
  std::unique_ptr<DriverAnimation> animation,bodyAnimation;

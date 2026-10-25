@@ -2202,6 +2202,7 @@ int main()
     };
     auto raceItems = std::make_unique<mkw::RaceItems>();
     mkw::RacerVisuals opponents;
+    opponents.lowDetailTest = kQa && exists("sdmc:/3ds/mkw-3ds/lod-test.txt");
     mkw::RaceHud raceHud;
     // The lower LCD during races (docs/BOTTOM_SCREEN.md); menus keep it black.
     mkw::RaceBottomScreen bottomScreen;

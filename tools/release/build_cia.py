@@ -56,6 +56,7 @@ COOK_STEPS=[
  ('karts and bikes',['{py}','tools/cook_garage.py','{disc}',SD],[SD+'/models/garage.json']),
  ('full roster',['{py}','tools/cook_full_roster.py','--jobs','{jobs}'],['build/roster']),
  ('race racer lighting',['{py}','tools/cook_racer_lighting.py'],['build/roster/models/garage.json']),
+ ('distant drivers',['{py}','tools/cook_driver_lod.py'],['build/roster/models/mario_mdf_kart_driver_lod.gmdl']),
  ('team vehicles',['{py}','tools/cook_team_vehicles.py','{disc}','--jobs','{jobs}'],['build/team-vehicles/team-vehicles.json']),
  ('driver effect roots',['{py}','tools/cook_driver_effects.py','--jobs','{jobs}'],['build/driver-effects/receipt.json']),
  ('driver look data',['{py}','tools/cook_driver_look.py'],['include/mkw/driver_look_data.hpp']),

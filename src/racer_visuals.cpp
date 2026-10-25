@@ -34,12 +34,13 @@ struct RacerVisuals::Impl {
         VehicleAnimation vehicle;
         struct Clock {int clip=-1;unsigned start=0;} bodyClock;
         std::array<Clock,9> extraClocks;
+        uint8_t detail=0; // distance tier (prepareRacer)
     };
     std::array<std::unique_ptr<Racer>,11> racers;
     unsigned count=0;
     // One frame's pose and visibility per racer (prepareRacer), drawn in order.
     struct Prepared {
-        bool draw=false,bodyVisible=false,driverVisible=false;
+        bool draw=false,bodyVisible=false,driverVisible=false,driverLow=false;
         uint32_t additive=0;
         C3D_Mtx body{},seated{};
         unsigned wheels=0;std::array<bool,4> wheelVisible{};std::array<C3D_Mtx,4> wheel{};
@@ -47,6 +48,7 @@ struct RacerVisuals::Impl {
         unsigned extras=0;std::array<Extra,9*4> extra{};
     };
     std::array<Prepared,11> prepared;
+    bool lowDetailTest=false;
     std::array<Job,11> jobs;
     std::array<bool,11> queued{};
     struct Frame {Impl* impl=nullptr;ViewFrustum view{};const RaceItems* items=nullptr;Vec3 viewer{};unsigned tick=0;bool open=false;Vec3 camera{};ClipFrustum world{};} frame;
@@ -83,6 +85,7 @@ bool RacerVisuals::load(){
         freeze(r->driver,r->animation);freeze(r->body,r->bodyAnimation);
         for(unsigned n=0;n<r->extras.size();++n)freeze(r->extras[n],r->extraAnimation[n]);
         for(auto& wheel:r->wheels)if(wheel){wheel->freezeLighting();wheel->enableStaticCulling();}
+        if(r->driverLod){r->driverLod->freezeLighting();r->driverLod->enableStaticCulling();}
         if(unsigned(player.character)==23){
             r->luma=std::make_unique<LumaVisual>();
             if(!r->luma->load()){reset();return false;}
@@ -184,14 +187,33 @@ void RacerVisuals::Impl::prepareRacer(unsigned i){
     out.draw=true;out.body=transform;out.seated=seated;
     if(r->luma)r->luma->prepare(view,r->vehicle,tick);
     r->animation->setBraidWorld(seated);
-    out.driverVisible=!tiny(*r->driver,seated)&&r->animation->apply(*r->driver,r->animation->find(name),frame,tick,expression,faceFrame,&frustum);
+    // Distance tiers (with hysteresis, scaled for a Mega racer): 0 the animated
+    // driver; 1 the original low-detail driver, not animated; 2 also without
+    // front wheels; 3 without the driver.
+    {
+        const float scale=std::max(1.f,r->vehicle.maxScale()),d=std::sqrt(dot(position-camera,position-camera))/scale;
+        static constexpr float Enter[3]={1700,6000,9500},Leave[3]={1400,5500,8800};
+        unsigned tier=r->detail;
+        while(tier<3&&d>Enter[tier])++tier;
+        while(tier>0&&d<Leave[tier-1])--tier;
+        if(lowDetailTest)tier=1;
+        if(!r->driverLod)tier=0;
+        r->detail=uint8_t(tier);
+    }
+    if(r->detail==0)
+        out.driverVisible=!tiny(*r->driver,seated)&&r->animation->apply(*r->driver,r->animation->find(name),frame,tick,expression,faceFrame,&frustum);
+    else if(r->detail<3){
+        out.driverLow=true;
+        out.driverVisible=!tiny(*r->driverLod,seated)&&view.visible(*r->driverLod,seated);
+    }
     out.additive=starMaterialColor(items.hud(i+1).star)|
         (items.hud(i+1).ink&&!items.hud(i+1).inkDelay?Renderer::InkBlack:0u);
     out.bodyVisible=animate(r->bodyAnimation.get(),*r->body,r->bodyClock,false,transform);
     out.wheels=r->vehicle.wheelCount();
     for(unsigned w=0;w<out.wheels;++w){
         out.wheel[w]=r->vehicle.wheel(w);const auto& model=r->wheels[r->vehicle.modelIndex(w)];
-        out.wheelVisible[w]=model&&!tiny(*model,out.wheel[w])&&view.visible(*model,out.wheel[w]);
+        const bool front=r->choice->bike?r->vehicle.modelIndex(w)==0:r->vehicle.modelIndex(w)<2;
+        out.wheelVisible[w]=model&&!(front&&r->detail>=2)&&!tiny(*model,out.wheel[w])&&view.visible(*model,out.wheel[w]);
     }
     for(unsigned j=0;j<9;++j)if(r->extras[j]){
         for(unsigned n=0;n<r->vehicle.accessoryCount(GarageExtraNames[j]);++n)
@@ -203,7 +225,7 @@ void RacerVisuals::Impl::prepareRacer(unsigned i){
     }
 }
 void RacerVisuals::prepare(const Renderer& renderer,const RaceItems& items,Vec3 viewer,unsigned tick){
-    auto& d=*impl_;
+    auto& d=*impl_;d.lowDetailTest=lowDetailTest;
     d.openFrame(renderer,items,viewer,tick);
     auto& worker=jobWorker();
     for(unsigned i=0;i<11;++i){
@@ -244,7 +266,10 @@ void RacerVisuals::draw(Renderer& renderer,const RaceItems& items,Vec3 viewer,un
         if(!out.draw)continue;
         renderer.additiveColor=out.additive;
         if(out.bodyVisible)drawSkinned(r->bodyAnimation.get(),*r->body,out.body);
-        if(out.driverVisible)drawSkinned(r->animation.get(),*r->driver,out.seated);
+        if(out.driverVisible){
+            if(out.driverLow)renderer.draw(*r->driverLod,out.seated);
+            else drawSkinned(r->animation.get(),*r->driver,out.seated);
+        }
         if(r->luma)r->luma->draw(renderer);
         for(unsigned w=0;w<out.wheels;++w)if(out.wheelVisible[w])renderer.draw(*r->wheels[r->vehicle.modelIndex(w)],out.wheel[w]);
         for(unsigned e=0;e<out.extras;++e){const auto& x=out.extra[e];if(x.visible)drawSkinned(r->extraAnimation[x.part].get(),*r->extras[x.part],x.matrix);}
