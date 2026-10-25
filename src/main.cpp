@@ -776,6 +776,7 @@ int main()
     loadSaves();
     mkw::MenuState menu;
     creditsForTest = kQa && exists("sdmc:/3ds/mkw-3ds/credits-test.txt");
+    const bool warningTest = kQa && exists("sdmc:/3ds/mkw-3ds/warning-test.txt");
     if (kQa && exists("sdmc:/3ds/mkw-3ds/ceremony-test.txt"))
     {
         // QA: the award ceremony before the first menu (Mario, Luigi, Peach on Peach's bike; Mushroom Cup).
@@ -3467,7 +3468,11 @@ int main()
                 accumulator = 0;
             }
             if (fullRace && (down & KEY_SELECT))
-                raceHud.speedometer = !raceHud.speedometer;
+            {
+                mkw::gameSettings().speedometer = !mkw::gameSettings().speedometer;
+                mkw::saveGameSettings();
+            }
+            raceHud.speedometer = mkw::gameSettings().speedometer;
             if (qaMode && ((down & KEY_SELECT) || (!replay && (down & (KEY_X | KEY_Y)))))
             {
                 renderer.waitForGpu();
@@ -3565,12 +3570,22 @@ int main()
             else if (selectedMirror && trick == K::System::Trick::Right)
                 trick = K::System::Trick::Left;
             // Preserve the Wii input lattice used by ghost records.
-            int stick = std::clamp(int(std::lround(pad.dx * 7.f / 156.f)), -7, 7);
+            // The Circle Pad to the Wii stick's -7..7: a wider centre dead zone (a
+            // resting thumb no longer steers), the rest of the travel rescaled.
+            auto stickAxis = [](int value) {
+                constexpr float Dead = 22.f, Full = 150.f;
+                const float magnitude = std::abs(float(value));
+                if (magnitude < Dead)
+                    return 0;
+                const int steps = std::clamp(int(std::lround((magnitude - Dead) * 7.f / (Full - Dead))), 0, 7);
+                return value < 0 ? -steps : steps;
+            };
+            int stick = stickAxis(pad.dx);
             if (selectedMirror)
                 stick = -stick;
             // Up/down tilts the nose in the air (Kinoko KartMove::calcDive),
             // up positive as on the Wii stick.
-            int stickY = std::clamp(int(std::lround(pad.dy * 7.f / 156.f)), -7, 7);
+            int stickY = stickAxis(pad.dy);
             if (garageTest)
             {
                 buttons = 1;
@@ -4170,7 +4185,59 @@ int main()
                 signals.braking = kart->status().onBit(K::Kart::eStatus::Brake);
                 if (fullRace)
                 {
+                    // Incoming threats for the HUD and the LED: shells homing on the
+                    // player within 6000 units, and Star, Mega and Bullet Bill racers
+                    // closing in from behind within 2500.
+                    const mkw::Vec3 me = vec(kart->pos()), front = mkw::normalized(vec(kart->bodyFront()), {0, 0, 1});
+                    const mkw::Vec3 side = mkw::normalized(mkw::cross({0, 1, 0}, front), {1, 0, 0});
+                    std::array<mkw::RaceHud::Warning, 16> found{};
+                    unsigned foundCount = 0;
+                    auto warn = [&](mkw::ItemKind kind, mkw::Vec3 at, float distance) {
+                        if (foundCount == found.size())
+                            return;
+                        const mkw::Vec3 d = mkw::normalized(at - me, front * -1.f);
+                        // Seen from the camera behind the kart: +side is to the left (right in Mirror).
+                        found[foundCount++] = {uint8_t(kind), (selectedMirror ? 1.f : -1.f) * mkw::dot(d, side), distance};
+                    };
+                    if (!raceGrid.finished())
+                    {
+                        for (const auto &actor : raceItems->actors())
+                            if (actor.active && !actor.explosion && actor.target == 0 &&
+                                (actor.kind == mkw::ItemKind::RedShell || actor.kind == mkw::ItemKind::BlueShell))
+                                if (const float d = mkw::length(actor.position - me); d < 6000.f)
+                                    warn(actor.kind, actor.position, d);
+                        const unsigned racers = K::System::RaceConfig::Instance()->raceScenario().playerCount;
+                        for (unsigned i = 1; i < racers && i < 12; ++i)
+                        {
+                            const auto &h = raceItems->hud(i);
+                            const mkw::ItemKind power = h.bullet  ? mkw::ItemKind::Bullet
+                                                        : h.mega ? mkw::ItemKind::MegaMushroom
+                                                        : h.star ? mkw::ItemKind::Star
+                                                                 : mkw::ItemKind::None;
+                            if (power == mkw::ItemKind::None)
+                                continue;
+                            const auto *other = K::Kart::KartObjectManager::Instance()->object(i);
+                            const mkw::Vec3 at = vec(other->pos());
+                            const float d = mkw::length(at - me);
+                            const bool behind = mkw::dot(at - me, front) < 0;
+                            const bool closing = mkw::dot(vec(other->velocity()) - vec(kart->velocity()), me - at) > 0;
+                            if (d < 2500.f && behind && closing)
+                                warn(power, at, d);
+                        }
+                    }
+                    if (kQa && warningTest)
+                    {
+                        // QA: a Red Shell close on the left, a Star racer further back on the right.
+                        found[0] = {uint8_t(mkw::ItemKind::RedShell), -.7f, 900.f};
+                        found[1] = {uint8_t(mkw::ItemKind::Star), .6f, 2200.f};
+                        foundCount = 2;
+                    }
+                    std::sort(found.begin(), found.begin() + foundCount,
+                              [](const auto &a, const auto &b) { return a.distance < b.distance; });
+                    raceHud.warningCount = std::min(foundCount, unsigned(raceHud.warnings.size()));
+                    std::copy_n(found.begin(), raceHud.warningCount, raceHud.warnings.begin());
                     mkw::LedFrame led;
+                    led.warning = raceHud.warningCount && raceHud.warnings[0].distance < 2500.f;
                     const bool running = menu.page == mkw::UiPage::Race && !intro.active() && !raceGrid.finished();
                     const auto raceStage = K::System::RaceManager::Instance()->stage();
                     led.countdown = running && raceStage == K::System::RaceManager::Stage::Countdown;

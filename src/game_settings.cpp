@@ -26,13 +26,15 @@ void loadGameSettings(unsigned license){
         if(std::sscanf(line,"led=%u",&v)==1&&v<=3)settings.led=LedMode(v);
         else if(std::sscanf(line,"bright=%u",&v)==1&&v>=50&&v<=100)settings.brightness=uint8_t(v/10*10);
         else if(std::sscanf(line,"shadows=%u",&v)==1)settings.shadows=v!=0;
+        else if(std::sscanf(line,"speedometer=%u",&v)==1)settings.speedometer=v!=0;
     }
     std::fclose(f);
 }
 void saveGameSettings(){
     char name[48];path(name,current);
     if(FILE* f=std::fopen(name,"w")){
-        std::fprintf(f,"led=%u\nbright=%u\nshadows=%u\n",unsigned(settings.led),unsigned(settings.brightness),settings.shadows?1u:0u);
+        std::fprintf(f,"led=%u\nbright=%u\nshadows=%u\nspeedometer=%u\n",unsigned(settings.led),unsigned(settings.brightness),
+                     settings.shadows?1u:0u,settings.speedometer?1u:0u);
         std::fclose(f);
     }
 }

@@ -1,5 +1,7 @@
 #pragma once
 #include <algorithm>
+#include <array>
+#include <cstdint>
 #include <memory>
 #include <mkw/math.hpp>
 #include <mkw/race_hud_layout.hpp>
@@ -36,6 +38,11 @@ public:
     // exitSlide: the race-end CtrlRaceBase hide slide 0..1, or -1.
     void drawOverlay(Renderer&,const RaceItems&,unsigned stage,unsigned timer,unsigned rank,unsigned lap,bool finished,unsigned tick,int finishFrame=-1,float exitSlide=-1.f);
     bool speedometer=true; // SELECT toggles it during a race
+    // Incoming threats (not in the original; Mario Kart 7 style): shells homing on
+    // the player and powered-up racers closing in, nearest first. Shown at the top
+    // centre, placed toward the side they come from, flashing red when close.
+    struct Warning {uint8_t kind=20;float side=0;float distance=0;}; // kind: ItemKind (20 none)
+    std::array<Warning,4> warnings{};unsigned warningCount=0;
 private:
     struct Impl;std::unique_ptr<Impl> impl_;
 };

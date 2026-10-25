@@ -7,7 +7,8 @@ namespace mkw {
 // what it shows changes. What it reacts to follows the license's LED mode
 // (game_settings.hpp), scaled by its brightness:
 //  - Items: boosts (orange), lightning (yellow), the Star (rainbow), the Mega
-//    Mushroom (red and grey) and the Bullet Bill (grey and white);
+//    Mushroom (red and grey), the Bullet Bill (grey and white) and incoming
+//    threats (orange-red blinking, above everything but Rainbow Road's last lap);
 //  - Events as well: hits (red), the countdown (magenta) and GO (blue), the
 //    final lap (a white flash; on Rainbow Road a rainbow for the whole lap);
 //  - Drifts as well: blue or orange while a mini-turbo is charged, a cyan or
@@ -24,6 +25,7 @@ struct LedFrame {
     bool finalLap=false;
     bool rainbowRoad=false;
     uint8_t drift=0;      // charged mini-turbo: 0 none, 1 blue, 2 orange
+    bool warning=false;   // a shell or powered-up racer is about to reach the player
 };
 
 class NotificationLed {
@@ -37,7 +39,7 @@ public:
     void clear();
 private:
     // Sustained colours first, then one-shot flashes; later ones win.
-    enum class Show : uint8_t { None, DriftBlue, DriftOrange, Countdown, Bullet, Mega, Star, RainbowLap,
+    enum class Show : uint8_t { None, DriftBlue, DriftOrange, Countdown, Bullet, Mega, Star, Warning, RainbowLap,
                                 ReleaseBlue, ReleaseOrange, Boost, Go, FinalLap, Hit, Shocked };
     void write(Show show);
     bool open_=false;

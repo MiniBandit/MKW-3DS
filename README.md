@@ -129,13 +129,17 @@ to switch it off. Nothing is recorded without that file.
 | D-pad | Trick / wheelie (Wii Classic Controller style) |
 | L | Use item |
 | START | Pause |
-| SELECT | Speedometer on/off |
+| SELECT | Speedometer on/off (remembered per license) |
 | Touch screen | Menus: tap a button on the lower screen. Races: switch the lower-screen map view |
 
 Each license keeps its own settings, changed on the pause menu's lower screen:
 the notification LED (off; items; items and race events; items, events and
 drifts), its brightness (50 to 100%), and the dynamic shadow your kart and
 driver cast along the course's light.
+
+In races, Red and Blue Shells homing on you and Star, Mega Mushroom and
+Bullet Bill racers closing in from behind appear at the top of the screen,
+on the side they come from, flashing red when close.
 
 ## Contributing
 

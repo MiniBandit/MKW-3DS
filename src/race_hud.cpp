@@ -616,6 +616,19 @@ void RaceHud::drawOverlay(Renderer& renderer,const RaceItems& items,unsigned sta
         for(int i=0;i<n;++i){const unsigned d=unsigned(text[i]-'0');gold(impl_->digits[d],HudDigits[d],{Right-Size-float(n-1-i)*Advance,Top+lift,Size,Size});}
         renderer.drawScreenText("KM/H",Right-26,Top+Size+3+lift,1.f,0xffffffffu);
     }
+    // Incoming threats: a small item frame each, top centre, toward their side.
+    if(!finished&&exitSlide<0)for(unsigned i=0;i<std::min(warningCount,unsigned(warnings.size()));++i){
+        const auto& warning=warnings[i];
+        if(warning.kind>=20)continue;
+        constexpr float Size=30;
+        const float x=200+std::clamp(warning.side,-1.f,1.f)*90-Size*.5f+float(i)*4,y=6+float(i)*3;
+        const bool close=warning.distance<1500;
+        const uint32_t tint=close&&(tick/6)%2?0xff5050ffu:0xffffffffu;
+        const float alpha=std::clamp(1.3f-warning.distance/6000.f,.55f,1.f);
+        renderer.drawScreenSpriteRegion(impl_->extras[HudFrame],x-3,y-3,Size+6,Size+6,0,0,HudExtras[HudFrame].u,HudExtras[HudFrame].v,alpha,tint);
+        const unsigned k=warning.kind;
+        renderer.drawScreenSpriteRegion(impl_->icons[k],x,y,Size,Size,0,0,HudItems[k].u,HudItems[k].v,alpha,tint);
+    }
     rank=std::clamp(rank,1u,12u);
     auto& rs=impl_->rankSpin;
     if(!rs.shown){rs.shown=rank;rs.lastTick=tick;}

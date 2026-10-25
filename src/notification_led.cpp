@@ -69,6 +69,7 @@ void NotificationLed::write(Show show){
     case Show::Bullet:p=pulse(Grey,White,3);break;
     case Show::Mega:p=pulse(Red,Grey,3);break;
     case Show::Star:p=rainbow(1);break;
+    case Show::Warning:{static constexpr uint8_t Off[3]={0,0,0},Alert[3]={255,50,0};p=pulse(Off,Alert,1);break;}
     case Show::RainbowLap:p=rainbow(6);break;
     case Show::ReleaseBlue:p=flash(0,255,255,0);break;
     case Show::ReleaseOrange:p=flash(255,110,0,0);break;
@@ -105,6 +106,9 @@ void NotificationLed::update(const LedFrame& f){
     else if(drifts&&last_.drift&&!f.drift&&f.boost)next=last_.drift>1?Show::ReleaseOrange:Show::ReleaseBlue;
     else if(f.boost&&!last_.boost&&!f.star)next=Show::Boost;
     last_=f;
+    // A warning outranks the item flashes (not hits or lightning).
+    const bool warning=f.warning&&!(events&&f.finalLap&&f.rainbowRoad);
+    if(warning&&next!=Show::Hit&&next!=Show::Shocked){hold_=0;write(Show::Warning);return;}
     if(next!=Show::None&&(hold_==0||next>=showing_)){hold_=FlashFrames;write(next);return;}
     if(hold_){--hold_;return;}
     // Otherwise what lasts, highest first.
