@@ -212,7 +212,8 @@ void RaceBottomScreen::draw(Renderer& renderer,const BottomView& view){
     auto clampAxis=[](float c,float half,float lo,float hi){return hi-lo<=2*half?(lo+hi)*.5f:std::clamp(c,lo+half,hi-half);};
     cx=clampAxis(cx,MapW*.5f*upp,course.x0,course.x1);cz=clampAxis(cz,ScreenH*.5f*upp,course.z0,course.z1);
     cx+=((course.x0+course.x1)*.5f-cx)*b;cz+=((course.z0+course.z1)*.5f-cz)*b;
-    auto screenX=[&](float x){return MapCX+(x-cx)/upp;};
+    const float side=view.mirror?-1.f:1.f;
+    auto screenX=[&](float x){return MapCX+side*(x-cx)/upp;};
     auto screenY=[&](float z){return MapCY+(z-cz)/upp;};
     const Texture* mapTexture=b>.5f&&m.overview.ready?&m.overview:m.map.ready?&m.map:nullptr;
     const unsigned mapFirst=m.count;
@@ -221,7 +222,8 @@ void RaceBottomScreen::draw(Renderer& renderer,const BottomView& view){
         const float wx0=cx-MapW*.5f*upp,wx1=cx+MapW*.5f*upp,wz0=cz-ScreenH*.5f*upp,wz1=cz+ScreenH*.5f*upp;
         const float u0=(wx0-course.x0)/frameW,u1=(wx1-course.x0)/frameW,v0=(wz0-course.z0)/frameH,v1=(wz1-course.z0)/frameH;
         q.x[0]=MapX;q.y[0]=0;q.x[1]=ScreenW;q.y[1]=0;q.x[2]=MapX;q.y[2]=ScreenH;q.x[3]=ScreenW;q.y[3]=ScreenH;
-        q.u[0]=u0;q.v[0]=v0;q.u[1]=u1;q.v[1]=v0;q.u[2]=u0;q.v[2]=v1;q.u[3]=u1;q.v[3]=v1;
+        const float ul=view.mirror?u1:u0,ur=view.mirror?u0:u1;
+        q.u[0]=ul;q.v[0]=v0;q.u[1]=ur;q.v[1]=v0;q.u[2]=ul;q.v[2]=v1;q.u[3]=ur;q.v[3]=v1;
         for(auto& c:q.color)c=0xffffffffu;
     }
     const unsigned mapCount=m.count-mapFirst;
@@ -280,7 +282,7 @@ void RaceBottomScreen::draw(Renderer& renderer,const BottomView& view){
             if(!onMap(x,y,face))continue;
             if(r.local){
                 // The searchlight points along the kart, its apex on the face.
-                float hx=view.headingX,hy=view.headingZ;const float l=std::sqrt(hx*hx+hy*hy);
+                float hx=side*view.headingX,hy=view.headingZ;const float l=std::sqrt(hx*hx+hy*hy);
                 if(l>1e-4f){
                     hx/=l;hy/=l;const float px=-hy,py=hx;
                     const float tx=x+hx*LightH,ty=y+hy*LightH,w=LightW*.5f;
@@ -299,7 +301,7 @@ void RaceBottomScreen::draw(Renderer& renderer,const BottomView& view){
     // The tour's camera: a marker on the map with the viewing cone along its direction.
     if(atlas&&view.tour){
         const float x=screenX(view.tourX),y=screenY(view.tourZ);
-        float hx=view.tourHeadX,hy=view.tourHeadZ;const float l=std::sqrt(hx*hx+hy*hy);
+        float hx=side*view.tourHeadX,hy=view.tourHeadZ;const float l=std::sqrt(hx*hx+hy*hy);
         if(l>1e-4f&&onMap(x,y,24)){
             hx/=l;hy/=l;const float px=-hy,py=hx;
             const float tx=x+hx*LightH*1.4f,ty=y+hy*LightH*1.4f,w=LightW*.7f;

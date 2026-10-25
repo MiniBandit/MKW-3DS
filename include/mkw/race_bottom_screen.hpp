@@ -36,6 +36,7 @@ struct BottomView {
     unsigned items=0;
     std::array<BottomItem,MaxItems> item{};
     float headingX=0,headingZ=-1; // the local kart's forward direction (world XZ)
+    bool mirror=false;            // Mirror: the map is flipped left to right, as the course on top
     bool timerVisible=false;      // CtrlRaceTime: shown once the countdown runs
     uint32_t milliseconds=0;      // official race time (the player's own once finished)
     bool standingsVisible=false;  // Mario Kart 7: from the start of the race

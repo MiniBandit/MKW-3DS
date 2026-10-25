@@ -1578,7 +1578,8 @@ int main()
         selectedRaceMode=timeTrial?2:menu.selection.mode==mkw::UiMode::GrandPrix?0:balloonBattleMode?3:1;
         selectedTeams=selectedRaceMode==1&&menu.selection.teams;
         const unsigned cc=selectedRaceMode==0?unsigned(menu.selection.engineClass):selectedRaceMode==1?licenseSaves[activeLicense].settings.vsClass:2u;
-        selectedMirror=cc==3;engineClass=std::min(cc,2u);
+        selectedMirror=cc==3||(kQa&&exists("sdmc:/3ds/mkw-3ds/mirror-test.txt")); // QA: force Mirror
+        engineClass=std::min(cc,2u);
         if(!timeTrial&&(newSession||!selectedRoster.ready)){
             const auto& flags=licenseSaves[activeLicense].unlockFlags;
             selectedRoster.characters(driverChoice,flags,rosterRandom);
@@ -3255,8 +3256,16 @@ int main()
                 else if (!qaMode && (held & (KEY_X | KEY_Y)))
                     trick = padTrick();
             }
+            // Mirror: the course is shown flipped, so the player's left and right are too
+            // (steering, drift direction and side tricks); the simulation is unchanged.
+            if (selectedMirror && trick == K::System::Trick::Left)
+                trick = K::System::Trick::Right;
+            else if (selectedMirror && trick == K::System::Trick::Right)
+                trick = K::System::Trick::Left;
             // Preserve the Wii input lattice used by ghost records.
             int stick = std::clamp(int(std::lround(pad.dx * 7.f / 156.f)), -7, 7);
+            if (selectedMirror)
+                stick = -stick;
             // Up/down tilts the nose in the air (Kinoko KartMove::calcDive),
             // up positive as on the Wii stick.
             int stickY = std::clamp(int(std::lround(pad.dy * 7.f / 156.f)), -7, 7);
@@ -4821,6 +4830,7 @@ int main()
                 // The lower LCD: the race read, never written (src/race_bottom_screen.cpp).
                 mkw::fillBottomView(bottomView, raceGrid, *raceItems, intro.active(), physicsSteps,
                                     results.leaveFade());
+                bottomView.mirror = selectedMirror;
                 if (intro.active())
                 {
                     // The opening fly-over: the lower screen follows the camera along the whole-course map.
