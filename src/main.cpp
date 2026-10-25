@@ -764,6 +764,13 @@ int main()
     APT_CheckNew3DS(&new3ds);
     loadSaves();
     mkw::MenuState menu;
+    if (FILE *f = fopen("sdmc:/3ds/mkw-3ds/last-license.txt", "r"))
+    {
+        unsigned last = 0;
+        if (fscanf(f, "%u", &last) == 1 && last < 4)
+            menu.selection.license = last;
+        fclose(f);
+    }
     mkw::MenuRenderer menuRenderer;
     // Original animation banks keep palette workspaces; they must not occupy
     // the 3DS main thread's small stack alongside the race renderer.
@@ -1017,6 +1024,10 @@ int main()
             if (startScreenShown)
                 openMenuBottom();
             menu.ledOn = mkw::notificationLed().enabled();
+            menu.licenseUsed = 0;
+            for (unsigned i = 0; i < 4; ++i)
+                if (licenseSaves[i].occupied)
+                    menu.licenseUsed |= 1u << i;
             menuProfile->begin(unsigned(menu.page), transition.active());
             hidScanInput();
             unsigned down = hidKeysDown();
@@ -1497,6 +1508,7 @@ int main()
             }
             menu.enter(page.page);
             menu.cursor = page.cursor;
+            menu.licenseUsed = 0b0101; // QA: licenses 1 and 3 in use, 2 and 4 new
             menu.advance(300); // long enough for every entrance and focus animation to finish
             for (unsigned tick = 0; tick < 6; ++tick)
             {
@@ -1532,6 +1544,7 @@ int main()
             menu.selection.vehicle = 4;
             menu.enter(test.page);
             menu.cursor = test.cursor;
+            menu.licenseUsed = 0b0101; // QA: licenses 1 and 3 in use, 2 and 4 new
             menu.advance(54);
             for (unsigned tick = 0; tick < 6; ++tick)
             {
@@ -1578,6 +1591,8 @@ int main()
         timeTrial=menu.selection.mode==mkw::UiMode::TimeTrials;
         balloonBattleMode=menu.selection.mode==mkw::UiMode::Battle&&!menu.selection.coinRunners;
         newRecord=false;activeLicense=std::min(menu.selection.license,3u);
+        // The license screen starts on the license raced with last.
+        if(FILE* f=fopen("sdmc:/3ds/mkw-3ds/last-license.txt","w")){fprintf(f,"%u\n",activeLicense);fclose(f);}
         activeRecords=licenseSaves[activeLicense].records;loadBestTimes();
         courseChoice=balloonBattleMode?CourseCount-10+menu.selection.battleStage:menu.selection.course;
         driverChoice=menu.selection.driver;vehicleChoice=menu.selection.vehicle;automaticDrift=menu.selection.automatic;

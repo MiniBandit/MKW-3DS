@@ -117,6 +117,15 @@ void composeMenuBottom(const MenuState& state,MenuBottomLayout& layout,const Mii
             const unsigned first=std::min(state.cursor,1u)*5;
             for(unsigned i=0;i<5;++i)shadowed(160,146+i*12.f,UiBattleStageNames[first+i],1);
         }
+        if(state.page==UiPage::License)for(unsigned slot=0;slot<4&&slot<moved->rects.size();++slot){
+            const auto& r=moved->rects[slot];
+            if(!r.present||!((state.licenseUsed>>slot)&1u))continue;
+            char text[16];std::snprintf(text,sizeof text,"LICENSE %u",slot+1);
+            // In the card's name bar (top right, beside the Mii's frame).
+            const float width=float(std::strlen(text))*6-1,cx=r.x0+(r.x1-r.x0)*.67f,y=r.y0+(r.y1-r.y0)*.1f;
+            b.label(cx-width*.5f+1,y+1,text,1,0x000000ffu);
+            b.label(cx-width*.5f,y,text,1,0xffffffffu);
+        }
         if(state.page==UiPage::Pause)b.tile(222,206,92,28,state.ledOn?"LED ON":"LED OFF",int(UiLedToggleSlot),true,1.5f);
         if(moved->back.present){
             if(auto* t=b.tile(moved->back.x0,moved->back.y0,moved->back.x1-moved->back.x0,moved->back.y1-moved->back.y0,"",-1,true)){t->hidden=true;t->back=true;}

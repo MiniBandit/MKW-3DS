@@ -335,7 +335,10 @@ static void composeMenuImpl(const MenuState& s,const UiRaceView& race,std::vecto
   }break;
  case UiPage::License:{
   c.chrome("Select License");
-  for(unsigned i=0;i<4;++i){char name[32];std::snprintf(name,sizeof name,"License%u",i);Pose p=control(i<2?"LicenseSelectT":"LicenseSelectB",name,i);auto base=c.buttonState(i<2?"license_top_empty":"license_bottom_empty",i);c.panel(base.c_str(),p);c.text("NEW",base.c_str(),p,0xffffffff,"new");if(i==s.cursor)c.glow(i<2?"license_top_empty":"license_bottom_empty",p);
+  for(unsigned i=0;i<4;++i){char name[32];std::snprintf(name,sizeof name,"License%u",i);Pose p=control(i<2?"LicenseSelectT":"LicenseSelectB",name,i);
+   // A license holding saved data shows the filled card; an empty one says NEW.
+   const bool used=(s.licenseUsed>>i)&1u;const char* family=used?"license":i<2?"license_top_empty":"license_bottom_empty";
+   auto base=c.buttonState(family,i);c.panel(base.c_str(),p);if(!used)c.text("NEW",base.c_str(),p,0xffffffff,"new");if(i==s.cursor)c.glow(family,p);
   }
   Pose option=control("LicenseSelectS","Option");c.panel("option_free",option);c.text("Settings","option_free",option);
   break;
