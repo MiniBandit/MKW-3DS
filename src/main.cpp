@@ -1770,6 +1770,9 @@ int main()
         driverChoice=menu.selection.driver;vehicleChoice=menu.selection.vehicle;automaticDrift=menu.selection.automatic;
         selectedRaceMode=timeTrial?2:menu.selection.mode==mkw::UiMode::GrandPrix?0:balloonBattleMode?3:1;
         selectedTeams=selectedRaceMode==1&&menu.selection.teams;
+        // Team VS: the player's side is drawn at random for each new set, as the Wii's
+        // single-player team setup does; the CPUs alternate around it.
+        if(selectedTeams&&newSession)selectedHumanTeam=(svcGetSystemTick()>>4)&1?mkw::RaceTeam::Blue:mkw::RaceTeam::Red;
         const unsigned cc=selectedRaceMode==0?unsigned(menu.selection.engineClass):selectedRaceMode==1?licenseSaves[activeLicense].settings.vsClass:2u;
         selectedMirror=cc==3||(kQa&&exists("sdmc:/3ds/mkw-3ds/mirror-test.txt")); // QA: force Mirror
         engineClass=std::min(cc,2u);

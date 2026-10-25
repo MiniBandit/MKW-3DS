@@ -96,6 +96,7 @@ void fillBottomView(BottomView& v,const RaceGrid& grid,const RaceItems& items,bo
         auto& r=v.racer[i];r.x=p.x;r.z=p.z;r.local=i==0;
         r.character=uint8_t(std::min<unsigned>(unsigned(scenario.players[i].character),23));
         r.rank=uint8_t(std::clamp(grid.rank(i),1u,12u));
+        r.team=scenario.teams?uint8_t(std::min<unsigned>(unsigned(scenario.players[i].team),2)):2;
         // The item window's picture (CtrlRaceItemWindow): a spinning roulette's
         // icon, else the held item; a Triple Mushroom shows its count (19 = two).
         const auto& h=items.hud(i);
@@ -329,7 +330,9 @@ void RaceBottomScreen::draw(Renderer& renderer,const BottomView& view){
         auto drawRow=[&](unsigned i){
             const auto& r=view.racer[i];
             const float x=RowX+slide,y=RowTop+m.row[i]*RowPitch;
-            m.add(r.local?RaceMapRowPlayer:RaceMapRowOther,x,y,x+RaceMapRowPlayer.w,y+RowH);
+            // Team VS colours each row by its team.
+            const uint32_t tint=r.team==0?0xff9a9affu:r.team==1?0x9ab4ffffu:0xffffffffu;
+            m.add(r.local?RaceMapRowPlayer:RaceMapRowOther,x,y,x+RaceMapRowPlayer.w,y+RowH,tint);
             const auto& ord=RaceMapOrdinals[std::clamp<unsigned>(r.rank,1,12)-1];
             const float oy=y+std::floor((RowH-ord.h)*.5f);
             m.add(ord,x+OrdinalX,oy,x+OrdinalX+ord.w,oy+ord.h);

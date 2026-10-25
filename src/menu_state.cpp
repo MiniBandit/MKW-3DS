@@ -115,7 +115,7 @@ bool MenuState::supportsRace()const{
  // Browsing a retail menu does not silently change the chosen race rules or
  // substitute a different character/machine when that runtime is unavailable.
  const bool courseReady=selection.mode==UiMode::Battle?selection.battleStage<10:selection.course<32;
- return raceMode(selection.mode)&&(selection.mode!=UiMode::GrandPrix||raceEngineClass(selection.engineClass))&&!selection.teams&&raceDriver(selection.driver)&&raceVehicle(selection.vehicle)&&courseReady;
+ return raceMode(selection.mode)&&(selection.mode!=UiMode::GrandPrix||raceEngineClass(selection.engineClass))&&raceDriver(selection.driver)&&raceVehicle(selection.vehicle)&&courseReady;
 }
 
 bool MenuState::selectSlot(unsigned slot){
@@ -215,8 +215,7 @@ UiAction MenuState::input(UiInput key){
   if(!raceEngineClass(UiEngineClass(cursor))){unavailable=true;break;}
   selection.engineClass=UiEngineClass(cursor);enter(UiPage::Character);break;
  case UiPage::VSMode:
-  if(cursor==1){unavailable=true;break;} // Team VS has no race runtime.
-  selection.teams=false;enter(UiPage::Character);break;
+  selection.teams=cursor==1;enter(UiPage::Character);break;
  case UiPage::BattleMode:
   selection.coinRunners=cursor==1;enter(UiPage::Character);break;
  case UiPage::Character:
