@@ -117,6 +117,7 @@ void composeMenuBottom(const MenuState& state,MenuBottomLayout& layout,const Mii
             const unsigned first=std::min(state.cursor,1u)*5;
             for(unsigned i=0;i<5;++i)shadowed(160,146+i*12.f,UiBattleStageNames[first+i],1);
         }
+        if(state.page==UiPage::Pause)b.tile(222,206,92,28,state.ledOn?"LED ON":"LED OFF",int(UiLedToggleSlot),true,1.5f);
         if(moved->back.present){
             if(auto* t=b.tile(moved->back.x0,moved->back.y0,moved->back.x1-moved->back.x0,moved->back.y1-moved->back.y0,"",-1,true)){t->hidden=true;t->back=true;}
         }else if(state.page!=UiPage::Title&&state.page!=UiPage::Strap&&state.page!=UiPage::Intro&&state.page!=UiPage::Results)b.back();

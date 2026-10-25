@@ -117,6 +117,7 @@ AccessControlInfo:
    - gsp::Gpu
    - hid:USER
    - ir:rst
+   - mcu::HWC
    - ptm:u
    - ptm:sysm
 SystemControlInfo:

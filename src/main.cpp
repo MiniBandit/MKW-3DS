@@ -51,6 +51,7 @@
 #include <mkw/overlay.hpp>
 #include <mkw/menu_bottom_screen.hpp>
 #include <mkw/menu_bottom_ui.hpp>
+#include <mkw/notification_led.hpp>
 #include <mkw/mii_store.hpp>
 #include <mkw/balloon_battle.hpp>
 #include <mkw/bullet_bill.hpp>
@@ -813,6 +814,7 @@ int main()
         mkw::MenuMovieAudio::initialize();
         // Retail sound engine (docs/AUDIO_SOURCE.md); silent when the DSP is unavailable.
         const bool sound = mkw::SoundSystem::instance().start();
+        mkw::notificationLed().start();
         LOGF("sound: %s linear_free=%lu",
              sound                             ? "engine running"
              : mkw::MenuMovieAudio::dspReady() ? "archive unavailable, silent"
@@ -895,6 +897,7 @@ int main()
     // the next menu page starts with the scene fader's fade in.
     bool sectionFadeIn = false;
     auto runMenu = [&]() {
+        mkw::notificationLed().clear(); // pause and menus: the LED is off
         renderer.frameSync = true;
         renderer.setDeferred(false);
         renderer.waitForGpu();
@@ -1013,6 +1016,7 @@ int main()
                 releaseRace();
             if (startScreenShown)
                 openMenuBottom();
+            menu.ledOn = mkw::notificationLed().enabled();
             menuProfile->begin(unsigned(menu.page), transition.active());
             hidScanInput();
             unsigned down = hidKeysDown();
@@ -1040,6 +1044,8 @@ int main()
                     const auto &widget = bottomLayout.widgets[unsigned(hit)];
                     if (widget.back)
                         input.back = true;
+                    else if (widget.slot == int(mkw::UiLedToggleSlot))
+                        mkw::notificationLed().setEnabled(!mkw::notificationLed().enabled());
                     else if (menu.page == mkw::UiPage::Confirm && widget.slot >= 0)
                     {
                         // The lower screen shows the page before Confirm: a tap picks that cup, course
@@ -1597,6 +1603,7 @@ int main()
             menuIcons.reset(renderer);
             menuRenderer.release();
             mkw::SoundSystem::instance().stop();
+            mkw::notificationLed().stop();
             mkw::MenuMovieAudio::shutdown();
             renderer.shutdown();
             gfxExit();
@@ -3253,9 +3260,12 @@ int main()
                     trick = padTrick();
                     buttons = (buttons & ~10u) | (held & KEY_B ? 2u : 0u);
                 }
-                else if (!qaMode && (held & (KEY_X | KEY_Y)))
+                else if (!qaMode && (held & (KEY_Y | KEY_ZR)))
                     trick = padTrick();
             }
+            // X (or ZL on New 3DS) looks behind; Y (or ZR) tricks and wheelies. QA owns X/Y.
+            if (auto *rearCamera = K::Render::KartCamera::Instance(); rearCamera && fullRace && !qaMode)
+                rearCamera->requestLookBack(held & (KEY_X | KEY_ZL));
             // Mirror: the course is shown flipped, so the player's left and right are too
             // (steering, drift direction and side tricks); the simulation is unchanged.
             if (selectedMirror && trick == K::System::Trick::Left)
@@ -3298,7 +3308,9 @@ int main()
                     const bool afterGoal = raceGrid.finished();
                     raceGrid.driveLocal = afterGoal || (autoplay && autopilot->routeDrive());
                     std::array<mkw::ItemInput, 12> inputs{};
-                    inputs[0] = {bool(held & KEY_L), pad.dy < -40, pad.dy > 40};
+                    // Backwards needs the Circle Pad 80% down, so a slight pull while steering
+                    // does not drop an item behind.
+                    inputs[0] = {bool(held & KEY_L), pad.dy < -125, pad.dy > 40};
                     if (afterGoal)
                         inputs[0] = {};
                     else if (raceGrid.driveLocal)
@@ -3823,6 +3835,12 @@ int main()
                         raceGrid.rank(), K::System::RaceConfig::Instance()->raceScenario().playerCount);
                 signals.accelerating = kart->status().onBit(K::Kart::eStatus::Accelerate);
                 signals.braking = kart->status().onBit(K::Kart::eStatus::Brake);
+                if (fullRace)
+                    mkw::notificationLed().update(
+                        {menu.page == mkw::UiPage::Race && !intro.active() && !raceGrid.finished(),
+                         kart->status().onBit(K::Kart::eStatus::InAction, K::Kart::eStatus::Crushed),
+                         kart->status().onBit(K::Kart::eStatus::Shocked), kart->status().onBit(K::Kart::eStatus::Star),
+                         kart->status().onBit(K::Kart::eStatus::Boost)});
                 signals.countdown = unsigned(K::System::RaceManager::Instance()->stage()) <= 1;
                 if (fullRace)
                     mkw::driverItemSignals(signals, *raceItems, 0);
@@ -5170,6 +5188,7 @@ int main()
     menuIcons.reset(renderer);
     menuRenderer.release();
     mkw::SoundSystem::instance().stop();
+    mkw::notificationLed().stop();
     mkw::MenuMovieAudio::shutdown();
     renderer.shutdown();
     gfxExit();

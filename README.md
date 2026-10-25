@@ -120,11 +120,12 @@ to switch it off. Nothing is recorded without that file.
 
 | Button | Action |
 |---|---|
-| Circle Pad | Steer; up/down when using an item throws forward/back; up/down in the air tilts the kart |
+| Circle Pad | Steer; up / firmly down when using an item throws forward / back; up/down in the air tilts the kart |
 | A | Accelerate |
 | B | Brake / reverse |
 | R | Hop and drift; trick off a ramp |
-| X / Y | Trick (Circle Pad picks the direction) / bike wheelie |
+| X (or ZL) | Look behind |
+| Y (or ZR) | Trick (Circle Pad picks the direction); bike wheelie |
 | D-pad | Trick / wheelie (Wii Classic Controller style) |
 | L | Use item |
 | START | Pause |
