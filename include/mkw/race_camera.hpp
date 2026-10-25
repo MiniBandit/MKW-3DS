@@ -84,6 +84,7 @@ struct RaceCameraInput {
  unsigned stage=0;             // Kinoko RaceManager::Stage
  bool previewActive=false;     // KMP course preview owns the screen
  bool beforeRespawn=false,inRespawn=false,finished=false;
+ bool bullet=false,cannon=false;  // Bullet Bill, cannon flight (presentation smoothing)
  int respawnTimer=0;          // KartCollide countdown after its physics tick
  uint16_t oobRequest=0;        // KartCollide::oobCameraRequest
  // Camera AREA lookup (KMP::Manager::FindAREA, type 0): current id or -1.
@@ -148,6 +149,7 @@ private:
  Vec3 autoTarget(const RaceCameraInput& in)const;
  void relativeEye(const RaceCameraInput& in,Vec3 viewStart,Vec3 viewEnd,Vec3 offset);
  void viewMove();
+ void smoothChase(const RaceCameraInput& in);
  const RaceCameraCourse* course_=nullptr;
  RaceCameraView view_;
  Vec3 eye_,target_;           // RaceCamera +0xa0 / +0xac
@@ -161,5 +163,10 @@ private:
  float panTension_=.2f,panFov_=55;uint16_t panFlags_=0;unsigned panFrame_=0;bool panStarted_=false;
  CameraRail panRail_;
  Auto auto_;
+ // Presentation smoothing of the chase view (not in the original): its pitch
+ // eases toward the retail camera's, and switching into or out of the Bullet
+ // Bill or cannon camera glides from the previous eye.
+ float pitch_=0;bool pitchLive_=false,lastBullet_=false,lastCannon_=false;
+ Vec3 glide_{},lastEye_{};
 };
 }

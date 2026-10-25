@@ -319,6 +319,32 @@ void RaceCameraDirector::step(const RaceCameraInput& in){
  // Preview, start pan, rescue and goal cameras retain ownership of the view.
  if(in.lookBack&&in.stage>=2&&!in.finished&&!(flags_&(FlagHold|FlagAuto))&&!(panFlags_&2))
   view_={in.rearEye,in.rearPivot+Vec3{0,targetOffset_,0},in.cameraFov+in.boostFov};
+ smoothChase(in);
+}
+
+void RaceCameraDirector::smoothChase(const RaceCameraInput& in){
+ const bool chase=in.stage>=2&&!in.finished&&!in.lookBack&&!in.beforeRespawn&&!in.inRespawn&&
+                  !(flags_&(FlagHold|FlagAuto))&&!(panFlags_&2);
+ const Vec3 d=view_.target-view_.eye;
+ const float across=std::sqrt(d.x*d.x+d.z*d.z),distance=length(d);
+ const float pitch=std::atan2(d.y,across);
+ if(!chase||distance<1){pitchLive_=false;glide_={};lastBullet_=in.bullet;lastCannon_=in.cannon;return;}
+ // A camera switch: keep the previous eye and let the difference fade out.
+ if(pitchLive_&&(in.bullet!=lastBullet_||in.cannon!=lastCannon_))glide_=glide_+(lastEye_-view_.eye);
+ lastBullet_=in.bullet;lastCannon_=in.cannon;
+ if(!pitchLive_){pitch_=pitch;pitchLive_=true;}
+ // Pitch changes over crests and dips ease in over roughly 1/4 s.
+ pitch_+=(pitch-pitch_)*.18f;
+ if(std::fabs(pitch-pitch_)>.6f)pitch_=pitch; // never trail far behind
+ Vec3 eye=view_.eye;
+ if(across>.001f){
+  const Vec3 flat{d.x/across,0,d.z/across};
+  eye=view_.target-(flat*(std::cos(pitch_)*distance)+Vec3{0,std::sin(pitch_)*distance,0});
+ }
+ glide_=glide_*.9f;
+ if(length(glide_)<1)glide_={};
+ view_.eye=eye+glide_;
+ lastEye_=view_.eye;
 }
 
 // OpeningPan::Calc (PAL 0x805A7358).

@@ -2067,6 +2067,8 @@ int main()
         in.previewActive = intro.active();
         in.beforeRespawn = status.onBit(K::Kart::eStatus::BeforeRespawn);
         in.inRespawn = status.onBit(K::Kart::eStatus::InRespawn);
+        in.bullet = status.onBit(K::Kart::eStatus::Bullet);
+        in.cannon = status.onBit(K::Kart::eStatus::InCannon);
         in.respawnTimer = kart->collide()->respawnTimer();
         in.finished = raceGrid.finished();
         in.oobRequest = kart->collide()->oobCameraRequest();
