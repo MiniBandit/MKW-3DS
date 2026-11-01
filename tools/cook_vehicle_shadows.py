@@ -75,7 +75,7 @@ def main():
         target = output / 'models' / (name + '.gmdl')
         shutil.copyfile(output / 'models' / (parts[0]['name'] + '.gmdl'), target)
         result = {'prefix': row['prefix'], 'vehicle': row['vehicle'],
-                  'source': str(archive.relative_to(ROOT)), 'source_sha256': source_hash,
+                  'source': archive.relative_to(ROOT).as_posix(), 'source_sha256': source_hash,
                   'triangles': expected, 'bytes': target.stat().st_size,
                   'sha256': hashlib.sha256(target.read_bytes()).hexdigest()}
         print(row['prefix'], expected, 'original shadow triangles', flush=True)

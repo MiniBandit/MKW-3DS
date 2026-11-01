@@ -51,7 +51,7 @@ def main():
                 raise ValueError('Unsupported animal event flags/pitch')
             events.append((frame, ids[name], volume/128, pitch))
         clips.append((resource, clip, frames, first, count))
-        receipt.append({'path': str(path.relative_to(ROOT)), 'sha256': hashlib.sha256(data).hexdigest(), 'events': count})
+        receipt.append({'path': path.relative_to(ROOT).as_posix(), 'sha256': hashlib.sha256(data).hexdigest(), 'events': count})
     lines = ['#pragma once', 'namespace mkw {', 'struct ObjectSoundEvent {float frame;unsigned short sound;float volume,pitch;};',
              'inline constexpr ObjectSoundEvent ObjectSoundEvents[]={']
     lines += ['{%s.f,%s,%.8ff,%.8ff},' % (frame, sound, volume, pitch) for frame,sound,volume,pitch in events]

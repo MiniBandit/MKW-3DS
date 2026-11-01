@@ -11,6 +11,6 @@ def main():
  clips={c['name']:c for c in record['clips']}
  for name,duration in [('start',70),('attack',176),('attack_end',80)]:
   assert clips[name]['duration']==duration,(name,clips[name])
- (output/'receipt.json').write_text(json.dumps({'source':str(source.relative_to(ROOT)),'source_sha256':digest(source),'model':record},indent=2)+'\n')
+ (output/'receipt.json').write_text(json.dumps({'source':source.relative_to(ROOT).as_posix(),'source_sha256':digest(source),'model':record},indent=2)+'\n')
  print(json.dumps(record,indent=2))
 if __name__=='__main__':main()

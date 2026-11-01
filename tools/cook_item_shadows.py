@@ -39,8 +39,8 @@ def main():
             raise ValueError('Original shadow geometry changed: ' + archive)
         target = output / 'models' / (name + '.gmdl')
         shutil.copyfile(output / 'models' / (parts[0]['name'] + '.gmdl'), target)
-        entries.append({'source': str(source.relative_to(ROOT)), 'source_sha256': digest(source),
-                        'path': str(target.relative_to(output)), 'sha256': digest(target),
+        entries.append({'source': source.relative_to(ROOT).as_posix(), 'source_sha256': digest(source),
+                        'path': target.relative_to(output).as_posix(), 'sha256': digest(target),
                         'triangles': triangles, 'bytes': target.stat().st_size})
     receipt = {'version': 1, 'method': 'original closed item shadow volumes', 'models': entries}
     (output / 'models/item-shadows.json').write_text(json.dumps(receipt, indent=2) + '\n')

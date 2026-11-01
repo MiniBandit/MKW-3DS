@@ -35,7 +35,7 @@ def main():
             raise ValueError('Blast model no longer matches the bomb_core pose bank')
     result = subprocess.run(['node', str(ROOT / 'build/export_blast.mjs'), str(SOURCE), str(ROOT / 'include/mkw/bomb_blast.hpp')],
                             check=True, capture_output=True, text=True)
-    print(json.dumps({'model': str(model.relative_to(ROOT)), 'triangles': parts[0]['triangles'], 'tables': json.loads(result.stdout)}))
+    print(json.dumps({'model': model.relative_to(ROOT).as_posix(), 'triangles': parts[0]['triangles'], 'tables': json.loads(result.stdout)}))
 
 
 if __name__ == '__main__':

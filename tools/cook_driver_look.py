@@ -51,7 +51,7 @@ def cook():
         entries.append((character, vehicle, parameters.index(values), enabled))
         evidence.append({'character': character, 'vehicle': vehicle, 'values': values,
                          'vehicleResponseEnabled': enabled, 'responseEnableVector': vector,
-                         'fallback': str(fallback.relative_to(ROOT)) if fallback else None,
+                         'fallback': fallback.relative_to(ROOT).as_posix() if fallback else None,
                          'fallbackSha256': digest(fallback) if fallback else None})
     entries.sort()
     if len({e[:2] for e in entries}) != len(entries): raise ValueError('Duplicate garage pair')

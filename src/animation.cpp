@@ -8,6 +8,7 @@
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
+#include <malloc.h>
 #include <algorithm>
 #include <cmath>
 namespace mkw {
@@ -57,6 +58,16 @@ bool DriverAnimation::prepareUnlitSkinning(Model& model){
     skinNormals(false);
     return false;
 }
+namespace {
+// Ordinary heap still available: the unclaimed space up to the heap's end plus
+// the allocator's free blocks inside what it already claimed.
+extern "C" char *fake_heap_start, *fake_heap_end;
+size_t heapSpaceFree(){
+    const struct mallinfo m=mallinfo();
+    const size_t total=size_t(fake_heap_end-fake_heap_start);
+    return (total>size_t(m.arena)?total-size_t(m.arena):0)+size_t(m.fordblks);
+}
+}
 bool DriverAnimation::prepareLitSkinning(Model& model){
     skinNormals(true);
     if(!ready)return false;
@@ -69,12 +80,19 @@ int DriverAnimation::face(const char* name)const{if(name)for(unsigned i=0;i<face
 bool DriverAnimation::load(const char* path,const Model& model){
     reset();
     // These banks are read by the CPU, never directly by PICA or DSP. Leave
-    // LINEAR room for meshes/textures and the race sound cache.
-    // Prefer ordinary heap even when early loading has spare LINEAR.
+    // LINEAR room for meshes/textures and the race sound cache: prefer ordinary
+    // heap, but only while it keeps a reserve. On Old 3DS (about 29.6 MiB of heap,
+    // 16 MiB of it Kinoko's arena) eleven racers' banks (about 1 MiB each) filled
+    // the heap, and the next small allocation (a texture read) aborted the race.
+    constexpr size_t HeapReserve=4u<<20;
     auto allocateBank=[&](size_t bytes){
-        data_=static_cast<uint8_t*>(std::malloc(bytes));
-        if(data_){dataLinear_=false;return true;}
-        data_=static_cast<uint8_t*>(linearAlloc(bytes));dataLinear_=true;
+        if(heapSpaceFree()>=bytes+HeapReserve){
+            data_=static_cast<uint8_t*>(std::malloc(bytes));
+            if(data_){dataLinear_=false;return true;}
+        }
+        data_=static_cast<uint8_t*>(linearAlloc(bytes));
+        if(data_){dataLinear_=true;return true;}
+        data_=static_cast<uint8_t*>(std::malloc(bytes));dataLinear_=false;
         return data_!=nullptr;
     };
     // Menu banks come from the open menu.pak; other banks are loose files.

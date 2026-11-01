@@ -49,7 +49,7 @@ def select():
                     if index<0:continue
                     texture=textures[index];used.add(texture);course_textures.add(texture)
                     if frames>1:animated.add(texture)
-            models[relative]={'source':str(source.relative_to(ROOT)),'sha256':digest(data)}
+            models[relative]={'source':source.relative_to(ROOT).as_posix(),'sha256':digest(data)}
         per_course[course['key']]=course_textures
     return used-animated,animated,models,per_course
 

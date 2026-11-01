@@ -27,7 +27,7 @@ def main():
  artifacts=[out/'models/luma.gmdl',out/'models/luma.dskm']
  receipt={'source':str(source),'sourceSha256':before,'original':'TicoModel USA807cad0c: tico.brres / tico / wait',
           'inventory':inventory,'animationExport':json.loads(result.stdout),
-          'artifacts':{str(p.relative_to(out)):hashlib.sha256(p.read_bytes()).hexdigest() for p in artifacts},
+          'artifacts':{p.relative_to(out).as_posix():hashlib.sha256(p.read_bytes()).hexdigest() for p in artifacts},
           'boundary':'Asset candidate only; runtime Tico follower and local/CPU draw integration still required. No emulator validation.'}
  (out/'luma-receipt.json').write_text(json.dumps(receipt,indent=2)+'\n')
  print(json.dumps(receipt,indent=2))
