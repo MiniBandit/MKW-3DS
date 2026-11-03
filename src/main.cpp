@@ -265,6 +265,9 @@ static void recordPauseStage(const char* stage,bool begin=false){
 }
 // QA captures: a stereo frame also writes its right eye beside the left
 // (name.ppm -> name-right.ppm).
+// QA captures: reserved at start-up, so sampling a frame cannot be what runs out
+// of memory in a run measuring an Old 3DS's limits.
+static std::vector<uint8_t> qaTopPixels,qaBottomPixels;
 static void saveRightEye(mkw::Renderer& renderer,const char* path){
     if(!renderer.stereoShown())return;
     std::vector<uint8_t> pixels(400*240*3);std::string right(path);
@@ -431,6 +434,7 @@ int main() {
     using Profile=mkw::RuntimeProfile;
     auto autopilot=std::make_unique<mkw::MenuAutopilot>();
     const bool autoplay=kQa&&!qaMode&&autopilot->open("sdmc:/3ds/mkw-3ds/menu-autoplay.txt");
+    if(kQa){qaTopPixels.resize(400*240*3);qaBottomPixels.resize(320*240*3);}
     // race-capture.txt holds the sampling interval in simulation steps (default 20);
     // a second nonzero number also captures every presented frame from the
     // end-of-race menu's choice until the race is left (its fade to black).
@@ -445,7 +449,7 @@ int main() {
     uint64_t stageTick=0;unsigned stageOpens=0;unsigned long long stageOpenTicks=0;
     auto stage=[&](const char* name){
         const auto now=svcGetSystemTick();const unsigned opens=mkw::fileOpens.load();const auto openTicks=mkw::fileOpenTicks.load();
-        if(stageTick&&menuProfile->enabled()){char text[160];snprintf(text,sizeof text,"load %s %.1f ms, %u opens (%.1f ms opening)",name,double(now-stageTick)*1000.0/SYSCLOCK_ARM11,opens-stageOpens,double(openTicks-stageOpenTicks)*1000.0/SYSCLOCK_ARM11);menuProfile->event(text);report(text);}
+        if(stageTick&&menuProfile->enabled()){char text[200];snprintf(text,sizeof text,"load %s %.1f ms, %u opens (%.1f ms opening) heap_free=%lu linear_free=%lu",name,double(now-stageTick)*1000.0/SYSCLOCK_ARM11,opens-stageOpens,double(openTicks-stageOpenTicks)*1000.0/SYSCLOCK_ARM11,(unsigned long)mkw::heapSpaceFree(),(unsigned long)linearSpaceFree());menuProfile->event(text);report(text);}
         stageTick=now;stageOpens=opens;stageOpenTicks=openTicks;
     };
     auto finishAutoplay=[&](){
@@ -1103,10 +1107,10 @@ int main() {
             static const unsigned menuCaptureEvery=[]{unsigned n=0;if(kQa)if(FILE* f=fopen("sdmc:/3ds/mkw-3ds/menu-capture.txt","r")){if(fscanf(f,"%u",&n)!=1)n=0;fclose(f);}return n;}();
             static unsigned menuFrames=0;
             if(autoplay&&menuCaptureEvery&&++menuFrames%menuCaptureEvery==0){
-                std::vector<uint8_t> pixels(400*240*3);char path[64];snprintf(path,sizeof path,"sdmc:/3ds/mkw-3ds/menu-auto-%02u-%05u.ppm",unsigned(visual.page),menuFrames);
+                auto& pixels=qaTopPixels;char path[64];snprintf(path,sizeof path,"sdmc:/3ds/mkw-3ds/menu-auto-%02u-%05u.ppm",unsigned(visual.page),menuFrames);
                 if(renderer.captureTop(pixels.data()))if(FILE* f=fopen(path,"wb")){fprintf(f,"P6\n400 240\n255\n");fwrite(pixels.data(),1,pixels.size(),f);fclose(f);}
                 saveRightEye(renderer,path);
-                std::vector<uint8_t> lower(320*240*3);std::string lowerPath(path);lowerPath.insert(lowerPath.size()-4,"-bottom");
+                auto& lower=qaBottomPixels;std::string lowerPath(path);lowerPath.insert(lowerPath.size()-4,"-bottom");
                 if(renderer.captureBottom(lower.data()))if(FILE* f=fopen(lowerPath.c_str(),"wb")){fprintf(f,"P6\n320 240\n255\n");fwrite(lower.data(),1,lower.size(),f);fclose(f);}
             }
         }
@@ -3286,18 +3290,23 @@ int main() {
         if(menuProfile->enabled()){const auto now=svcGetSystemTick();menuProfile->raceFrame(lastRaceFrame?float(double(now-lastRaceFrame)*1000.0/SYSCLOCK_ARM11):0.f);lastRaceFrame=now;}
         if(frames==1)report("graphics first frame submitted");
         if(frames==2)report("graphics second frame submitted");
+        // QA: free ordinary heap and its largest block in the first frames.
+        if(kQa&&frames<=3){
+            size_t largest=0;for(size_t size=8u<<20;size>=16u<<10;size-=16u<<10){void* volatile block=std::malloc(size);if(block){std::free(block);largest=size;break;}}
+            LOGF("frame %u heap_free=%lu largest=%lu linear_free=%lu",frames,(unsigned long)mkw::heapSpaceFree(),(unsigned long)largest,(unsigned long)linearSpaceFree());
+        }
         if(garageTest&&frames%fixtureFrames==0){rollingChoices+=fixtureRolling;animationPass&=fixtureRolling;}
         // QA (menu autoplay): sample the course preview for review.
         if(autoplay&&intro.active()&&introTick/90!=introCaptured){introCaptured=introTick/90;
-            std::vector<uint8_t> pixels(400*240*3);char path[64];snprintf(path,sizeof path,"sdmc:/3ds/mkw-3ds/intro-%02u-%04u.ppm",unsigned(Courses[courseChoice].id),introTick);
+            auto& pixels=qaTopPixels;char path[64];snprintf(path,sizeof path,"sdmc:/3ds/mkw-3ds/intro-%02u-%04u.ppm",unsigned(Courses[courseChoice].id),introTick);
             if(renderer.captureTop(pixels.data()))if(FILE* f=fopen(path,"wb")){fprintf(f,"P6\n400 240\n255\n");fwrite(pixels.data(),1,pixels.size(),f);fclose(f);}
             saveRightEye(renderer,path);
-            std::vector<uint8_t> lower(320*240*3);std::string lowerPath(path);lowerPath.insert(lowerPath.size()-4,"-bottom");
+            auto& lower=qaBottomPixels;std::string lowerPath(path);lowerPath.insert(lowerPath.size()-4,"-bottom");
             if(renderer.captureBottom(lower.data()))if(FILE* f=fopen(lowerPath.c_str(),"wb")){fprintf(f,"P6\n320 240\n255\n");fwrite(lower.data(),1,lower.size(),f);fclose(f);}
         }
         // QA (autoplay + race-capture.txt): sample race frames for review.
         if(raceCapture&&menu.simulates()&&!intro.active()&&(physicsSteps/raceCaptureEvery!=raceCaptured||(raceCaptureLeave&&results.phase()>=mkw::RaceFlowPhase::Chosen))){raceCaptured=physicsSteps/raceCaptureEvery;
-            std::vector<uint8_t> pixels(400*240*3);char path[64];snprintf(path,sizeof path,"sdmc:/3ds/mkw-3ds/race-%05u.ppm",physicsSteps);
+            auto& pixels=qaTopPixels;char path[64];snprintf(path,sizeof path,"sdmc:/3ds/mkw-3ds/race-%05u.ppm",physicsSteps);
             if(renderer.captureTop(pixels.data()))if(FILE* f=fopen(path,"wb")){fprintf(f,"P6\n400 240\n255\n");fwrite(pixels.data(),1,pixels.size(),f);fclose(f);}
             saveRightEye(renderer,path);
             // The lower LCD's frame beside it (name-bottom.ppm, 320x240).
@@ -3308,7 +3317,7 @@ int main() {
             std::vector<uint8_t> pixels(400*240*3);if(renderer.captureTop(pixels.data()))if(FILE* f=fopen("sdmc:/3ds/mkw-3ds/capture-live-drift.ppm","wb")){fprintf(f,"P6\n400 240\n255\n");fwrite(pixels.data(),1,pixels.size(),f);fclose(f);}capturedBlue=true;
         }
         if(animationTest&&frames%fixtureFrames==fixtureFrames-1){
-            std::vector<uint8_t> pixels(400*240*3);char path[96];snprintf(path,sizeof path,"sdmc:/3ds/mkw-3ds/capture-choice-%u.ppm",driverChoice*mkw::VehiclesPerDriver+vehicleChoice);
+            auto& pixels=qaTopPixels;char path[96];snprintf(path,sizeof path,"sdmc:/3ds/mkw-3ds/capture-choice-%u.ppm",driverChoice*mkw::VehiclesPerDriver+vehicleChoice);
             if(renderer.captureTop(pixels.data()))if(FILE* f=fopen(path,"wb")){fprintf(f,"P6\n400 240\n255\n");fwrite(pixels.data(),1,pixels.size(),f);fclose(f);}
         }
         if(animationTest&&frames==fixtureFrames*fixtureChoices){

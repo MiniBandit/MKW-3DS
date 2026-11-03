@@ -9,6 +9,7 @@
 #include <mkw/driver_vehicle_response.hpp>
 #include <mkw/driver_controller.hpp>
 namespace mkw {
+std::size_t heapSpaceFree(); // ordinary heap still available (src/animation.cpp)
 // Cooked original driver animation: local vertices, matrix palettes, visibility
 // and facial texture tracks. Only the selected character is resident.
 class DriverAnimation {

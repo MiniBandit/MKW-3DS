@@ -69,7 +69,6 @@ bool DriverAnimation::prepareLitSkinning(Model& model){
 }
 int DriverAnimation::find(const char* name)const{if(name)for(unsigned i=0;i<count_;++i)if(!std::strcmp(name,clips_[i].name))return i;return -1;}
 int DriverAnimation::face(const char* name)const{if(name)for(unsigned i=0;i<faceCount_;++i)if(!std::strcmp(name,faces_[i].name))return i;return -1;}
-namespace {
 // Ordinary heap still available: the unclaimed space up to the heap's end plus
 // the allocator's free blocks inside what it already claimed.
 extern "C" char *fake_heap_start, *fake_heap_end;
@@ -77,7 +76,6 @@ size_t heapSpaceFree(){
     const struct mallinfo m=mallinfo();
     const size_t total=size_t(fake_heap_end-fake_heap_start);
     return (total>size_t(m.arena)?total-size_t(m.arena):0)+size_t(m.fordblks);
-}
 }
 bool DriverAnimation::load(const char* path,const Model& model){
     reset();
