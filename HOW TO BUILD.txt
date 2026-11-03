@@ -9,7 +9,7 @@ WHAT YOU NEED
 -------------
 - Your Mario Kart Wii disc, USA version (RMCE01), dumped as .iso or .wbfs.
   RVZ or NKit dumps: convert them to ISO in Dolphin first.
-- A Mac or Windows PC with about 30 GB free and an internet connection.
+- A Mac, Windows or Linux computer with about 30 GB free and an internet connection.
 - These free tools, installed once:
     Xcode command line tools   (Mac only) in Terminal: xcode-select --install
     Git                        https://git-scm.com (Windows: Git for Windows)
@@ -28,6 +28,7 @@ BUILD
 1. Mac: double-click "Build MKW CIA.command".
    If macOS blocks it: System Settings > Privacy & Security > Open Anyway.
    Windows: double-click "Build MKW CIA.bat".
+   Linux: run  bash "Build MKW CIA.command"  and use your package manager for the tools.
    If devkitPro is not in C:\devkitPro, set DEVKITPRO_WIN to its folder.
 2. Drag your disc image into the window and press Return.
 3. Wait a few hours. You get:

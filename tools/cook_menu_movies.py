@@ -39,6 +39,17 @@ def power_of_two(value):
     return max(8, 1 << (value-1).bit_length())
 
 
+def run_tex3ds(args):
+    # Antivirus can hold a just-written frame open for a moment, which fails
+    # the encoder at random on Windows (#46): try again, then show its error.
+    for attempt in range(5):
+        done = subprocess.run([str(TEX3DS), *args], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, errors='replace')
+        if done.returncode == 0:
+            return
+        time.sleep(attempt+1)
+    raise RuntimeError(f'tex3ds failed with code {done.returncode} on {args[-1]}: {done.stderr.strip()}')
+
+
 def strip_tex3ds_header(data, expected):
     # tex3ds --raw retains the documented uncompressed Nintendo header.
     if len(data) == expected+4 and data[0] == 0 and int.from_bytes(data[1:4], 'little') == expected:
@@ -158,7 +169,7 @@ def encode(spec, quality, force):
                     if w < atlas.width: atlas.paste(image.crop((w-1, 0, w, h)).resize((atlas.width-w, h)), (w, 0))
                     if h < atlas.height: atlas.paste(atlas.crop((0, h-1, atlas.width, h)).resize((atlas.width, atlas.height-h)), (0, h))
                     atlas.save(png, compress_level=1)
-                    subprocess.run([str(TEX3DS), '-f', 'etc1', '-q', quality, '-r', '-z', 'none', '-o', str(raw), str(png)], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+                    run_tex3ds(['-f', 'etc1', '-q', quality, '-r', '-z', 'none', '-o', str(raw), str(png)])
                     output.write(strip_tex3ds_header(raw.read_bytes(), spec['frameBytes']))
                     if (frame-first+1) % 240 == 0: print(f'{spec["name"]}: chunk {worker+1}/{workers}, {frame-first+1}/{last-first} source frames', flush=True)
             return encoded

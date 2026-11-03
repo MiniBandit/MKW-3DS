@@ -15,7 +15,7 @@ Stages, each skipped when its outputs already exist (rerun to resume):
 Only pinned public tools and sources are downloaded. The disc and everything
 made from it stay on this machine; nothing from it is in this repository.
 """
-import argparse, hashlib, json, os, re, shutil, subprocess, sys, time
+import argparse, hashlib, json, os, re, shutil, subprocess, sys, threading, time
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[2]
 HERE=Path(__file__).parent
@@ -184,7 +184,13 @@ def run(cmd,**kw):
     # PYTHONUTF8: text files are UTF-8 on every OS (Windows would default to cp1252).
     # tools/release/hooks: on macOS, directory listings skip '._' files (exFAT/FAT drives).
     env=dict(os.environ,PYTHONUTF8='1',PYTHONPATH=os.pathsep.join(p for p in (str(ROOT/'tools/release/hooks'),str(ROOT/'vendor/gclib'),os.environ.get('PYTHONPATH')) if p))
-    subprocess.run([str(c) for c in cmd],cwd=ROOT,check=True,env=env,**kw)
+    # Some steps print nothing for a long time: say the build is still running (#100).
+    started=time.monotonic();finished=threading.Event()
+    def heartbeat():
+        while not finished.wait(300):log(f'still running this step ({int((time.monotonic()-started)/60)} minutes so far)')
+    threading.Thread(target=heartbeat,daemon=True).start()
+    try:subprocess.run([str(c) for c in cmd],cwd=ROOT,check=True,env=env,**kw)
+    finally:finished.set()
 
 def shared_checkout():
     """Development trees link data/, assets/ and sd-card/ to a shared checkout."""
@@ -204,6 +210,18 @@ def missing_outputs(root, outputs):
             missing.append(output)
     return missing
 
+def keep_console_running():
+    # Clicking inside a Windows console window starts a text selection, which
+    # freezes the build until it is cleared. Turn that selection mode off (#100).
+    if os.name!='nt':return
+    import ctypes
+    kernel32=ctypes.WinDLL('kernel32',use_last_error=True)
+    kernel32.GetStdHandle.restype=ctypes.c_void_p
+    kernel32.GetConsoleMode.argtypes=[ctypes.c_void_p,ctypes.POINTER(ctypes.c_uint32)]
+    kernel32.SetConsoleMode.argtypes=[ctypes.c_void_p,ctypes.c_uint32]
+    console=kernel32.GetStdHandle(-10);mode=ctypes.c_uint32()
+    if kernel32.GetConsoleMode(console,ctypes.byref(mode)):kernel32.SetConsoleMode(console,(mode.value|0x80)&~0x40)
+
 def stage_tools():
     if not ((3,11) <= sys.version_info[:2] < (3,15)):
         raise SystemExit(f'Python 3.11 through 3.14 is required; running {sys.version.split()[0]} at {sys.executable}.')
@@ -216,6 +234,10 @@ def stage_tools():
     # The bundled Citro3D needs a current libctru (CTR_ALIGN, #62).
     if b'CTR_ALIGN' not in (dkp/'libctru/include/3ds/types.h').read_bytes():
         raise SystemExit('devkitPro is out of date: update it (devkitPro MSYS2 or a terminal: dkp-pacman -Syu), then run the builder again.')
+    # Some of the Windows build tools can't open a path with non-English letters (#89).
+    if os.name=='nt' and not str(ROOT).isascii():
+        raise SystemExit(f'The builder folder\'s path has letters the build tools can\'t read ({ROOT}). Move the '
+                         'MKW-3DS-Builder folder somewhere with plain English letters (for example C:\\MKW-3DS-Builder) and run it again.')
     # OneDrive and similar sync folders lock files while uploading them (#111).
     if any(part.lower().startswith(('onedrive','icloud','dropbox','google drive')) for part in ROOT.parts):
         raise SystemExit(f'The builder is inside a synced folder ({ROOT}). Move the MKW-3DS-Builder folder somewhere '
@@ -498,7 +520,7 @@ def main():
     p.add_argument('--check',action='store_true',help='verify tools, disc and cooked assets, then stop')
     p.add_argument('--cook-only',action='store_true',help='stop after cooking')
     a=p.parse_args()
-    stage_tools();stage_sources();stage_disc(a.disc);check_game_code(a.disc);stage_cook(a.disc,a.jobs,a.force_cook,a.check)
+    keep_console_running();stage_tools();stage_sources();stage_disc(a.disc);check_game_code(a.disc);stage_cook(a.disc,a.jobs,a.force_cook,a.check)
     if a.check:log('check passed: ready to compile and package');return
     if a.cook_only:log('cook complete');return
     if not a.skip_compile:stage_compile(a.jobs)

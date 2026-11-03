@@ -1180,7 +1180,10 @@ int main() {
         if(FILE* f=fopen("sdmc:/3ds/mkw-3ds/menu-result.json","w")){fprintf(f,"{\"pass\":%s,\"pages\":%u,\"transition_frames\":%u,\"top_only\":false}\n",ok&&captured==expected?"true":"false",unsigned(std::size(pages)),motionFrames);fclose(f);}else ok=false;
         report(ok?"MENU SCREENSHOT PASS":"MENU SCREENSHOT FAIL");renderer.waitForGpu();menuModels.reset(renderer);menuIcons.reset(renderer);menuRenderer.release();mkw::shutdownLoadingScreen();renderer.shutdown();gfxExit();return ok?0:4;
     }
-    auto applySelection=[&](){selectedRoster=menu.cpuRoster;battleMode=menu.selection.mode==mkw::UiMode::Battle;coinRunnersMode=battleMode&&menu.selection.coinRunners;timeTrial=menu.selection.mode==mkw::UiMode::TimeTrials;activeLicense=menu.selection.license;activeRecords=licenseSaves[activeLicense].records;if(timeTrial)loadBestTimes();courseChoice=battleMode?32+menu.selection.battleStage:menu.selection.course;driverChoice=menu.selection.driver;vehicleChoice=menu.selection.vehicle;automaticDrift=menu.selection.automatic;
+    auto applySelection=[&](){
+        // QA: race a given driver, vehicle choice and course, ignoring what is unlocked.
+        if(kQa)if(FILE* forced=std::fopen("sdmc:/3ds/mkw-3ds/qa-selection.txt","r")){unsigned driver=0,vehicle=0,course=0;const int fields=std::fscanf(forced,"%u %u %u",&driver,&vehicle,&course);if(fields>=2){menu.selection.driver=driver;menu.selection.vehicle=vehicle;}if(fields==3)menu.selection.course=course;std::fclose(forced);}
+        selectedRoster=menu.cpuRoster;battleMode=menu.selection.mode==mkw::UiMode::Battle;coinRunnersMode=battleMode&&menu.selection.coinRunners;timeTrial=menu.selection.mode==mkw::UiMode::TimeTrials;activeLicense=menu.selection.license;activeRecords=licenseSaves[activeLicense].records;if(timeTrial)loadBestTimes();courseChoice=battleMode?32+menu.selection.battleStage:menu.selection.course;driverChoice=menu.selection.driver;vehicleChoice=menu.selection.vehicle;automaticDrift=menu.selection.automatic;
         selectedRaceMode=timeTrial?2:menu.selection.mode==mkw::UiMode::GrandPrix?0:menu.selection.mode==mkw::UiMode::Battle?3:1;
         const bool vs=menu.selection.mode==mkw::UiMode::VS;
         selectedTeams=battleMode||(vs&&menu.selection.teams);selectedHumanTeam=menu.selection.humanTeam;

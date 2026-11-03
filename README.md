@@ -33,6 +33,7 @@ See [CHANGELOG.md](CHANGELOG.md) for the full list. Online play is not included 
 - A C++ compiler for your computer, for two small helper programs:
   - macOS: Xcode command line tools (`xcode-select --install`)
   - Windows: `winget install MartinStorsjo.LLVM-MinGW.UCRT`, then open a new window
+  - Linux: `g++` or `clang++` from your package manager
 
 ## Building
 
@@ -41,6 +42,12 @@ window and press Return.
 
 **Windows:** double-click `Build MKW CIA.bat`, drag your disc image into the
 window and press Enter.
+
+**Linux:** install the same tools with your package manager and devkitPro's
+[`dkp-pacman`](https://devkitpro.org/wiki/devkitPro_pacman), then run
+`bash "Build MKW CIA.command"` and type or paste the path to your disc image.
+No Mac or Windows PC? This is the way to go on any computer that can run a
+Linux environment, such as a Chromebook with Linux turned on.
 
 **This version needs a new build.** Its converted game files changed, so build
 it **in a new, empty folder** (not your old builder folder).
