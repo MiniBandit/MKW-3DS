@@ -34,12 +34,15 @@ def cook_effects(source, output):
                'award-effects.bin')
     if notes:
         raise ValueError('Incomplete ceremony effects: ' + '; '.join(notes))
-    # The podium karts' drift smoke (src/award_drive.cpp): the race's own emitter.
+    # The podium karts' drift smoke, bike scrapes and surface spray
+    # (src/award_drive.cpp): the race's own emitters.
     archive = ROOT / 'assets/common/Effect/RKRace.breff'
     data, pixels = archive.read_bytes(), archive.with_suffix('.breft').read_bytes()
     index = entries(data)
     drive_order, drive_records, drive_notes = [], {}, []
-    queue = ['rk_driftSmoke']
+    queue = ['rk_driftSmoke', 'rk_hangOnL', 'rk_hangOnR', 'rk_hangOnLTail', 'rk_hangOnRTail',
+             'rk_dirtSmokeA', 'rk_weed', 'rk_mud', 'rk_snowHDirt', 'rk_snowRoad0', 'rk_snowRoad1',
+             'rk_flower', 'rk_stone', 'rk_stoneTile', 'rk_stoneVolc']
     while queue:
         name = queue.pop(0)
         if name in drive_records:
@@ -50,8 +53,9 @@ def cook_effects(source, output):
     write_bank(drive_order, drive_records, {name: 'awdrive_' for name in drive_order},
                {'awdrive_': (pixels, entries(pixels))}, output / 'textures', drive_notes,
                'award-driving-effects.bin')
-    if drive_notes:
-        raise ValueError('Incomplete ceremony driving effects: ' + '; '.join(drive_notes))
+    # As the race banks (tools/cook_race_effects.py): the same emitters, noted not refused.
+    for note in drive_notes:
+        print('ceremony driving effects:', note)
     archive = source / 'unpacked/Award/Effect/rk_trophy.breff'
     data, pixels = archive.read_bytes(), archive.with_suffix('.breft').read_bytes()
     index = entries(data)
