@@ -756,12 +756,13 @@ int main() {
         auto chooseIdentity=[&](mkw::LicenseIdentity& identity,bool keepName=false,bool raceMii=false){
             // QA autoplay: emulators have no system applets to answer the Mii
             // Selector and keyboard. A fixed identity stands in (the Mii in
-            // qa-mii.bin when present, else blank appearance data).
+            // qa-mii.bin when present, else blank appearance data, version 3).
             if(kQa&&autoplay){
                 if(FILE* f=fopen("sdmc:/3ds/mkw-3ds/qa-mii.bin","rb")){
                     if(fread(identity.nativeMii.data(),1,identity.nativeMii.size(),f)!=identity.nativeMii.size())identity.nativeMii.fill(0);
                     fclose(f);
                 }
+                identity.nativeMii[0]=3; // the Mii data version the license screen requires
                 if(!raceMii&&!keepName){identity.name.fill(0);identity.name[0]='Q';identity.name[1]='A';}
                 return mkw::IdentitySelection::Accepted;
             }

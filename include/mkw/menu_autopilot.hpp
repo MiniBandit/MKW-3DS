@@ -89,6 +89,11 @@ public:
   if(*token=="end"){done_=true;return;}
   if(*token=="S"){down=KEY_START;++cursor_;return;}
   if(*token=="A"){if(++gap_>=8){gap_=0;down=KEY_A;++cursor_;}return;}
+  // The pause menu runs inside the race loop: its choices arrive here.
+  if(*token=="U"||*token=="D"||*token=="L"||*token=="R"||*token=="B"){
+   if(++gap_>=8){gap_=0;down=*token=="U"?KEY_DUP:*token=="D"?KEY_DDOWN:*token=="L"?KEY_DLEFT:*token=="R"?KEY_DRIGHT:KEY_B;++cursor_;}
+   return;
+  }
   if((*token)[0]=='w'){if(++wait_>=unsigned(std::atoi(token->c_str()+1))){wait_=0;++cursor_;}return;}
   if(*token=="next"||*token=="quit"){
    if(!endMenu){if(++raceWait_>12000)fail("end-of-race menu did not appear");return;}

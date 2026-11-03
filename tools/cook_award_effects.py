@@ -34,6 +34,24 @@ def cook_effects(source, output):
                'award-effects.bin')
     if notes:
         raise ValueError('Incomplete ceremony effects: ' + '; '.join(notes))
+    # The podium karts' drift smoke (src/award_drive.cpp): the race's own emitter.
+    archive = ROOT / 'assets/common/Effect/RKRace.breff'
+    data, pixels = archive.read_bytes(), archive.with_suffix('.breft').read_bytes()
+    index = entries(data)
+    drive_order, drive_records, drive_notes = [], {}, []
+    queue = ['rk_driftSmoke']
+    while queue:
+        name = queue.pop(0)
+        if name in drive_records:
+            continue
+        drive_records[name] = Emitter(data, index, name)
+        drive_order.append(name)
+        queue.extend(drive_records[name].references())
+    write_bank(drive_order, drive_records, {name: 'awdrive_' for name in drive_order},
+               {'awdrive_': (pixels, entries(pixels))}, output / 'textures', drive_notes,
+               'award-driving-effects.bin')
+    if drive_notes:
+        raise ValueError('Incomplete ceremony driving effects: ' + '; '.join(drive_notes))
     archive = source / 'unpacked/Award/Effect/rk_trophy.breff'
     data, pixels = archive.read_bytes(), archive.with_suffix('.breft').read_bytes()
     index = entries(data)

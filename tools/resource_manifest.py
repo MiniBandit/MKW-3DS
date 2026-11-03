@@ -223,7 +223,7 @@ for row in mii_info['models']:
   if not (mii_root/relative).is_file():raise ValueError('Missing menu Mii texture: '+name)
   files[mii_root/relative]=relative
 # Battle mode overlays are private staged outputs, never old SD fallbacks.
-for directory in ('battle-hud-assets','battle-hud-motion','battle-coin-assets','battle-menu-assets','battle-results-assets','battle-coin-hud-assets','battle-bottom-scores','battle-screen-assets','menu-record-assets','desert-impact-effects'):
+for directory in ('battle-hud-assets','battle-hud-motion','battle-coin-assets','battle-menu-assets','battle-results-assets','battle-coin-hud-assets','battle-bottom-scores','battle-screen-assets','menu-record-assets','menu-footer-hw57','desert-impact-effects'):
  staged=ROOT/'build'/directory
  if directory=='desert-impact-effects' and not (staged/'receipt.json').is_file():continue # fresh per-course banks already contain these roots
  receipt=json.loads((staged/'receipt.json').read_text())
@@ -233,6 +233,8 @@ for directory in ('battle-hud-assets','battle-hud-motion','battle-coin-assets','
   source=staged/relative
   if not source.is_file() or digest_file(source)!=row['sha256']:raise ValueError('Battle staged asset changed: '+str(source))
   files[source]=relative
+# The cup icons on the Time Trials records page (tools/cook_cup_record_icons.py).
+files[ROOT/'build/cup-record-icons/textures/ui_cup_record_icons.t3x']=Path('textures/ui_cup_record_icons.t3x')
 # Migrated Balloon Battle uses the original Common.szs balloon meshes.
 if digest_file(ROOT/'assets/common/balloon.brres')!=battle['sourceSha256']:raise ValueError('Original battle balloons changed')
 for row in battle['models']:

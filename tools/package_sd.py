@@ -9,16 +9,17 @@ list, then the low-detail racers (tools/pack_racer_lod.py) and the Mii racers
     package_sd.py            build/mkw-3ds-SD.zip
     package_sd.py --no-zip   staged in build/playable/3ds/mkw-3ds only
 """
-import hashlib,json,shutil,struct,subprocess,sys,zipfile
+import hashlib,json,re,shutil,struct,subprocess,sys,zipfile
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1];assets=ROOT/'sd-card/3ds/mkw-3ds';out=ROOT/'build/playable/3ds/mkw-3ds';out.mkdir(parents=True,exist_ok=True)
 paks=ROOT/'build/paks';paks.mkdir(parents=True,exist_ok=True)
 def tool(script,*args):subprocess.run([sys.executable,str(ROOT/'tools'/script),*map(str,args)],cwd=ROOT,check=True)
 mapping=json.loads(subprocess.check_output([sys.executable,str(ROOT/'tools/resource_manifest.py')],cwd=ROOT,text=True))
-# The overlays add their own models; the base archive must not hold them.
+# pack_racer_lod.py refuses a base that already holds its models (pack_mii_racers.py
+# replaces its own, so those stay listed).
 def overlay_model(rel):
  name=Path(rel).name
- return rel.startswith('models/') and (('_lod' in name and name.endswith('.gmdl')) or name.startswith('mii_') or name.startswith('award_unpacked_Award_'))
+ return rel.startswith('models/') and '_lod' in name and name.endswith('.gmdl')
 base={rel:src for rel,src in mapping.items() if not overlay_model(rel)}
 (paks/'runtime-files.json').write_text(json.dumps(base,indent=2)+'\n')
 tool('pack_race_assets.py',paks/'runtime-files.json',paks/'race-base.pak','--exclude-menu',assets/'menu.pak')
@@ -30,10 +31,11 @@ manifest={}
 for src,rel in files.items():
  dest=out/rel;dest.parent.mkdir(parents=True,exist_ok=True);shutil.copyfile(src,dest);manifest[rel.as_posix()]=hashlib.sha256(dest.read_bytes()).hexdigest()
 # FAT32 allows one folder 65,536 entries, and a long file name takes several:
-# the loose textures folder outgrew it. menu.pak and race.pak already hold every
-# texture and the game reads them first (src/renderer.cpp Texture::load), so a
-# texture inside a pak is not also copied loose. Each one is checked against
-# its pak entry, so a stale pak fails here instead of on the console.
+# the loose textures folder outgrew it. menu.pak and race.pak already hold the
+# textures and models and the game reads them first (pack::read, pack::size), so
+# what is inside a pak is not also copied loose. Each one is checked against its
+# pak entry, so a stale pak fails here instead of on the console; the overlays'
+# models differ on purpose (their texture tables are rewritten).
 def pak_entries(path):
  with path.open('rb') as f:
   magic,count,size=struct.unpack('<4sII',f.read(12))
@@ -43,8 +45,9 @@ def pak_entries(path):
    f.seek(offset);yield names[name_at:names.index(0,name_at)].decode(),f.read(length)
 for archive in ('menu.pak','race.pak'):
  for name,data in pak_entries(out/archive):
-  if name.endswith('.t3x') and name in manifest:
-   if hashlib.sha256(data).hexdigest()!=manifest[name]:raise ValueError(f'{archive} is older than {name}: rebuild the archives')
+  if name.endswith(('.t3x','.gmdl','.dskm','.dobj')) and name in manifest:
+   rewritten=Path(name).name.startswith(('mii_','ui_mii_','award_unpacked_Award_')) or '_lod' in Path(name).name
+   if not rewritten and hashlib.sha256(data).hexdigest()!=manifest[name]:raise ValueError(f'{archive} is older than {name}: rebuild the archives')
    (out/name).unlink();del manifest[name]
 controls='''Mario Kart Wii 3DS - built from your own Mario Kart Wii disc.
 Copy the 3ds folder to the SD card root.
@@ -55,6 +58,16 @@ Dynamic shadows and the notification LED are in License Settings.
 Original local game assets are packaged privately for this user's device.
 Do not replace only the executable; use the complete package.
 '''
+# Every asset path the game's sources name should have reached the package;
+# a gap here is a stalled menu or a failed race on the console.
+in_paks={name for archive in ('menu.pak','race.pak') for name,_ in pak_entries(out/archive)}
+referenced={}
+for source in [*(ROOT/'include/mkw').iterdir(),*(ROOT/'src').glob('*.cpp')]:
+ if source.is_file() and not source.name.startswith('._'):
+  for name in re.findall(r'"((?:textures|models|movies|mii)/[A-Za-z0-9_./-]+\.[a-z0-9]+)"',source.read_text(errors='ignore')):referenced.setdefault(name,source.name)
+absent=sorted(name for name in referenced if name not in in_paks and not (out/name).is_file())
+for name in absent[:40]:print(f'WARNING: {name} (named in {referenced[name]}) is not in the package',file=sys.stderr)
+if absent:print(f'WARNING: {len(absent)} of {len(referenced)} referenced assets are not in the package',file=sys.stderr)
 (out/'CONTROLS.txt').write_text(controls);manifest['CONTROLS.txt']=hashlib.sha256((out/'CONTROLS.txt').read_bytes()).hexdigest()
 (out/'manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
 # This directory is generated package staging. Keep it as strict as the ZIP,
