@@ -1,10 +1,11 @@
 #include <mkw/vehicle_visual_assets.hpp>
 #include <mkw/mii_garage.hpp>
+#include <mkw/vehicle_lod_layout.hpp>
 #include <cstdio>
 #include <cstring>
 
 namespace mkw {
-bool VehicleVisualAssets::load(unsigned character,unsigned vehicle,RaceTeam team,std::string* failure){
+bool VehicleVisualAssets::load(unsigned character,unsigned vehicle,RaceTeam team,std::string* failure,bool lowOnly){
  VehicleVisualAssets next;
  if(failure)*failure="vehicle selection";
  for(const auto& entry:GarageChoices)
@@ -26,6 +27,13 @@ bool VehicleVisualAssets::load(unsigned character,unsigned vehicle,RaceTeam team
   auto asset=std::make_unique<DriverAnimation>();if(!asset->load(name.c_str(),mesh))return false;
   asset->prepareLitSkinning(mesh);destination=std::move(asset);return true;
  };
+ constexpr const char* lowWheelNames[]={"tire_fl","tire_fr","tire_rl","tire_rr"};
+ if(lowOnly){
+  if(!model("shadow",next.shadow))return false;
+  if(VehicleLodLayout[next.choice->vehicle].wheels)
+   for(unsigned i=0;i<(next.choice->bike?2u:4u);++i)if(!model(lowWheelNames[i],next.wheels[i]))return false;
+  *this=std::move(next);if(failure)failure->clear();return true;
+ }
  if(!model("body",next.body)||!model("driver",next.driver)||!model("shadow",next.shadow)||
     !bank("driver",*next.driver,next.animation))return false;
  constexpr const char* wheelNames[]={"tire_fl","tire_fr","tire_rl","tire_rr"};

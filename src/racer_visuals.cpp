@@ -32,6 +32,7 @@ struct RacerVisuals::Impl {
     struct Racer : VehicleVisualAssets {
         std::unique_ptr<LumaVisual> luma;
         std::unique_ptr<Model> driverLod,bodyLod,bodyLodRear,handleLod,handleLodRear;RacerLod lod;
+        bool lowOnly=false; // no full models or animation banks: always a low-detail stage
         DriverController controller;
         DriverPose pose;
         VehicleAnimation vehicle;
@@ -65,12 +66,18 @@ RacerVisuals::RacerVisuals():impl_(std::make_unique<Impl>()){}
 RacerVisuals::~RacerVisuals()=default;
 void RacerVisuals::reset(){for(auto& r:impl_->racers)r.reset();impl_->count=0;}
 unsigned RacerVisuals::count() const{return impl_->count;}
+unsigned RacerVisuals::lowOnlyCount() const{unsigned n=0;for(const auto& r:impl_->racers)n+=r&&r->lowOnly;return n;}
 bool RacerVisuals::load(){
     reset();const auto& config=K::System::RaceConfig::Instance()->raceScenario();
     for(unsigned i=1;i<config.playerCount&&i<=11;++i){
         auto r=std::make_unique<Impl::Racer>();const auto& player=config.players[i];
         std::string failure;
-        if(!r->load(unsigned(player.character),unsigned(player.vehicle),config.teams?RaceTeam(player.team):RaceTeam::None,&failure)){
+        // Old 3DS: an animated racer costs about 1.9 MiB (its bank, meshes and
+        // textures), eleven do not fit. Keep room for the race sound loaded next;
+        // past that a racer is its low-detail models, about 0.1 MiB, not animated.
+        constexpr u32 LowOnlyBelow=6u<<20;
+        r->lowOnly=renderQuality().reduced&&linearSpaceFree()<LowOnlyBelow;
+        if(!r->load(unsigned(player.character),unsigned(player.vehicle),config.teams?RaceTeam(player.team):RaceTeam::None,&failure,r->lowOnly)){
             if(auto* log=std::fopen("sdmc:/3ds/mkw-3ds/opponent-load-error.txt","w")){
                 std::fprintf(log,"slot=%u character=%u vehicle=%u team=%u\nasset=%s\nlinear=%lu\n",i,unsigned(player.character),unsigned(player.vehicle),unsigned(player.team),failure.c_str(),static_cast<unsigned long>(linearSpaceFree()));
                 std::fclose(log);
@@ -90,6 +97,7 @@ bool RacerVisuals::load(){
         auto loadLow=[&](const char* part){char name[160];std::snprintf(name,sizeof name,"models/%s%s%s.gmdl",r->choice->prefix,teamVehicleSuffix(unsigned(player.vehicle),config.teams?RaceTeam(player.team):RaceTeam::None),part);auto model=std::make_unique<Model>();if(!model->load(name))return std::unique_ptr<Model>{};model->freezeLighting();model->enableStaticCulling();return model;};
         r->bodyLod=loadLow("body_lod");r->bodyLodRear=loadLow("body_lod_rear");
         if(VehicleLodLayout[r->choice->vehicle].handle){r->handleLod=loadLow("handle_lod");r->handleLodRear=loadLow("handle_lod_rear");}
+        if(r->lowOnly&&(!r->driverLod||!r->bodyLod||!r->bodyLodRear)){reset();return false;}
         freeze(r->driver,r->animation);freeze(r->body,r->bodyAnimation);
         for(unsigned n=0;n<r->extras.size();++n)freeze(r->extras[n],r->extraAnimation[n]);
         for(auto& wheel:r->wheels)if(wheel){wheel->freezeLighting();wheel->enableStaticCulling();}
@@ -159,7 +167,7 @@ void RacerVisuals::step(unsigned tick,const RaceItems& items){
 void RacerVisuals::Impl::prepareRacer(unsigned i){
     auto& out=prepared[i];out=Prepared{};
     auto* r=racers[i].get();if(!r)return;
-    if(!r->body||!r->driver||!r->animation)return;
+    if(!r->lowOnly&&(!r->body||!r->driver||!r->animation))return;
     const auto& items=*frame.items;const unsigned tick=frame.tick;const auto& view=frame.view;
     if(items.hud(i+1).bullet)return;
     // A racer whose generous envelope (1,000 units, scaled) is
@@ -173,6 +181,7 @@ void RacerVisuals::Impl::prepareRacer(unsigned i){
     const auto& quality=renderQuality();const Vec3 camera=frame.camera;
     const float lodScale=std::max(.01f,r->vehicle.maxScale());
     out.lod=r->lod.update(dot(position-camera,position-camera)/(lodScale*lodScale),frame.fov,frame.fullDetail||!r->driverLod||!r->bodyLod||!r->bodyLodRear||(VehicleLodLayout[r->choice->vehicle].handle&&(!r->handleLod||!r->handleLodRear)));
+    if(r->lowOnly)out.lod=std::max(out.lod,2u);
     // Reduced detail: parts too small to see are neither posed nor drawn.
     auto tiny=[&](const Model& model,const C3D_Mtx& matrix){return quality.tooSmall({model.minimum,model.maximum},matrix,camera);};
     auto animate=[&](DriverAnimation* bank,Model& model,Racer::Clock& clock,bool handle,const C3D_Mtx& matrix){
@@ -187,9 +196,12 @@ void RacerVisuals::Impl::prepareRacer(unsigned i){
     };
     const char* name=r->pose.clipName;float frame=r->pose.frame;
     name=driverVehicleClipName(name,r->choice->bike);
+    int expression=-1;float faceFrame=frame;
+    if(r->animation){
     if(!std::strcmp(name,"jump")&&r->animation->find(name)<0){name="jump_st";int c=r->animation->find(name);frame=c>=0?r->animation->duration(c)-1:0;}
-    int expression=r->animation->face(name);float faceFrame=frame;
+    expression=r->animation->face(name);faceFrame=frame;
     if(expression<0){expression=r->animation->face(r->pose.faceName);faceFrame=r->pose.faceFrame;}
+    }
     C3D_Mtx seated=transform;Mtx_Translate(&seated,0,r->choice->seatY,r->choice->seatZ,true);
     auto frustum=view.model(seated);
     out.draw=K::Kart::KartObjectManager::Instance()->object(i+1)->move()->battleVisible();out.body=transform;out.seated=seated;
@@ -234,7 +246,7 @@ void RacerVisuals::prepare(const Renderer& renderer,const RaceItems& items,Vec3 
     for(unsigned i=0;i<11;++i){
         d.queued[i]=false;auto* r=d.racers[i].get();if(!r)continue;
         // CPU-skinned banks share one scratch buffer: those racers stay on this thread.
-        bool gpu=r->animation&&r->animation->gpuSkinned()&&(!r->bodyAnimation||r->bodyAnimation->gpuSkinned());
+        bool gpu=r->lowOnly||(r->animation&&r->animation->gpuSkinned()&&(!r->bodyAnimation||r->bodyAnimation->gpuSkinned()));
         for(const auto& a:r->extraAnimation)gpu&=!a||a->gpuSkinned();
         if(!gpu||!worker.running())continue;
         d.jobContext[i]={&d,i};

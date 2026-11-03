@@ -12,6 +12,7 @@ public:
     RacerVisuals();
     ~RacerVisuals();
     bool load();
+    unsigned lowOnlyCount() const; // racers without full models (Old 3DS memory)
     void reset();
     void resetAnimation();
     void step(unsigned tick,const RaceItems& items);

@@ -1668,7 +1668,7 @@ int main() {
         if(timeTrial){raceItems->reset({},raceGrid.count());raceItems->give(0,mkw::ItemKind::TripleMushroom);}
         if(reload){if(!opponents.load()){trackLoadFailed=true;report("FAIL opponent graphics load");}}
         else opponents.resetAnimation();
-        LOGF("race_grid count=%u opponents=%u route=%d item_boxes=%u",raceGrid.count(),opponents.count(),raceGrid.routeReady(),unsigned(raceItems->boxes().size()));
+        LOGF("race_grid count=%u opponents=%u low_only=%u route=%d item_boxes=%u linear_free=%lu",raceGrid.count(),opponents.count(),opponents.lowOnlyCount(),raceGrid.routeReady(),unsigned(raceItems->boxes().size()),(unsigned long)linearSpaceFree());
     };
     // The race bottom screen (docs/BOTTOM_SCREEN.md). Bloom's VRAM targets come
     // first, so the course's first bloom request (below) still finds its room.
