@@ -1,5 +1,10 @@
 #include <mkw/gp_rank.hpp>
 #include <mkw/cpu_ai.hpp>
+#include <mkw/battle_cpu_speed.hpp>
+#include <mkw/battle_attack_table.hpp>
+#include <mkw/race_items.hpp>
+#include <mkw/coin_battle_runtime.hpp>
+#include <game/system/RaceConfig.hh>
 #include <mkw/race_grid.hpp>
 #include <game/kart/KartObjectManager.hh>
 #include <game/kart/KartMove.hh>
@@ -68,8 +73,14 @@ bool readCpuActionParam(const void* data,size_t size,unsigned cpuMode,std::array
     return true;
 }
 
-uint32_t CpuAi::rand(uint32_t limit){rng_=rng_*1664525u+1013904223u;return limit?(rng_>>8)%limit:0;}
-float CpuAi::randF(float limit){rng_=rng_*1664525u+1013904223u;return float(rng_>>8)*(limit/16777216.f);}
+uint32_t CpuAi::rand(uint32_t limit){
+    if(setup_.battle){battleRng_=battleRng_*0x690379b2b2e3d431ULL+0x508ebdULL;return uint32_t((uint64_t(uint32_t(battleRng_>>32))*limit)>>32);}
+    rng_=rng_*1664525u+1013904223u;return limit?(rng_>>8)%limit:0;
+}
+float CpuAi::randF(float limit){
+    if(setup_.battle){battleRng_=battleRng_*0x690379b2b2e3d431ULL+0x508ebdULL;return limit*(float(uint32_t(battleRng_>>32))/4294967296.f);}
+    rng_=rng_*1664525u+1013904223u;return float(rng_>>8)*(limit/16777216.f);
+}
 const CpuActionParam& CpuAi::action(const Racer& r) const{
     return setup_.actions[std::clamp(r.rank.position,1,12)-1];
 }
@@ -80,7 +91,32 @@ unsigned CpuAi::chooseBranch(unsigned racer,unsigned from){
     // AIPathPoint::chooseNext (fn_1_22D000): mushroom-only routes (successor
     // setting1 1) when holding a mushroom, otherwise a uniform ordinary route.
     const auto& p=route_->point(from);
-    std::array<int,6> kinds{};unsigned mushrooms=0,normal=0;
+    if(setup_.battle){
+        const unsigned mode=racers_[racer].battleSearchMode;
+        const auto& scenario=System::RaceConfig::Instance()->raceScenario();
+        const unsigned team=scenario.players[racer].team;
+        const BattleSearchField* field=nullptr;bool highest=true;
+        if(mode==3||mode==4){field=&battleBoxes_;highest=mode==3;}
+        else if(team<2&&mode==5)field=&battleTeams_[team];
+        else if(team<2&&(mode==6||mode==7)){field=&battleTeams_[team^1];highest=mode==6;}
+        else if(mode==8)field=&battleCoins_;
+        const auto& path=racers_[racer].path;
+        const bool excludePrevious=racers_[racer].battleNavigation.excludePrevious()&&path.cur!=from;
+        if((mode==9||mode==10)&&racers_[racer].battleTargetRacer>=0){
+            const Vec3 target=native(Kart::KartObjectManager::Instance()->object(unsigned(racers_[racer].battleTargetRacer))->pos());
+            return battleAttackBranch(*route_,from,path.cur,target,mode==9,excludePrevious);
+        }
+        if(field&&field->ready())return field->choose(from,path.cur,highest,excludePrevious);
+        // AIPathPointBattle's Random selector (80747454): uniform eligible
+        // links, excluding the point just visited. The target-field modes
+        // of BattleSearcher are separate from this selector.
+        unsigned count=0;
+        for(unsigned k=0;k<p.nextCount;++k)if(!excludePrevious||p.next[k]!=path.cur)++count;
+        const unsigned pick=rand(count);
+        for(unsigned k=0,n=0;k<p.nextCount;++k)if(!excludePrevious||p.next[k]!=path.cur){if(n++==pick)return k;}
+        return 0;
+    }
+    std::array<int,12> kinds{};unsigned mushrooms=0,normal=0;
     for(unsigned k=0;k<p.nextCount;++k){if(route_->point(p.next[k]).setting1==1){kinds[k]=1;++mushrooms;}else ++normal;}
     const bool mushroom=mushrooms&&racers_[racer].mushroomRoute;
     const uint32_t pick=rand(mushroom?mushrooms:normal);const int want=mushroom?1:0;
@@ -127,10 +163,10 @@ void CpuAi::jitterOffset(unsigned racer,bool spacing){
 void CpuAi::setPoint(unsigned racer,float offset){
     // AIPathPoint::setPoint (fn_1_22C290).
     Path& p=racers_[racer].path;p.offset=offset;
+    p.cur=p.prev=p.log2=p.log3=p.start;
     const auto& start=route_->point(p.start);
     p.branch=start.nextCount>1?int(chooseBranch(racer,p.start)):0;
     p.next=uint16_t(start.next[std::min<unsigned>(unsigned(p.branch),start.nextCount-1)]);
-    p.cur=p.prev=p.log2=p.log3=p.start;
     jitterOffset(racer,false);
     p.curvature=0;
     recalcTarget(p,0);
@@ -188,9 +224,10 @@ bool CpuAi::endDriftHere(const Path& p) const{
 }
 
 void CpuAi::reset(const Setup& setup){
+    clearBattleSearch();
     setup_=setup;setup_.count=std::min(setup.count,Capacity);route_=setup.route&&setup.route->size()>=2?setup.route:nullptr;
     gpRankBonus_={};
-    racers_={};groups_={};rng_=setup.seed?setup.seed:1;raceStarted_=false;
+    racers_={};groups_={};rng_=setup.seed?setup.seed:1;battleRng_=rng_;raceStarted_=false;
     rmState=0;rmFrame=0;rmDuration=0;rmPhase=0;rmInterval=-1;advantageEnabled=false;advantageState=0;advantageValue=0;
     topType=2;cpuCount=humanCount=0;
     if(!route_)return;
@@ -206,6 +243,7 @@ void CpuAi::reset(const Setup& setup){
     for(unsigned i=0;i<count;++i){
         auto& r=racers_[i];r.active=true;r.human=(setup.humanMask>>i)&1;
         auto* kart=objects->object(i);
+        kart->move()->setCpuRecovery(false);
         r.canMiniturbo=true;
         r.speed.openingBonus=OpeningBonus[engine*3+mode];r.speed.catchup=10.f;
         r.rank.position=int(startRank[i]);
@@ -219,7 +257,7 @@ void CpuAi::reset(const Setup& setup){
         setPoint(i,setup.demo?0.f:float(lane)*.5f*widthOffset(p.start));
         p.nextParam={int(route_->point(p.cur).setting1),int(route_->point(p.cur).driftSetting),route_->point(p.cur).flags,p.curvature};
     }
-    if(setup.demo)return; // Demo has no rank groups, catch-up or race items.
+    if(setup.demo||setup.battle)return; // Battle/Demo have no race rank groups or catch-up.
     // AIRankManager::init (fn_1_2311B4 / fn_1_23165C): groups filled by grid order.
     for(unsigned r=0;r<count;++r){const unsigned i=order[r];if(!racers_[i].human)sortedCpus[cpuCount++]=int(i);else sortedHumans[humanCount++]=int(i);}
     const auto& sizes=GroupSizes[std::min(cpuCount,12)];int filled=0;
@@ -234,6 +272,109 @@ void CpuAi::reset(const Setup& setup){
     }
     for(unsigned g=1;g<3;++g)for(int k=0;k<groups_[g].count;++k)racers_[groups_[g].members[k]].rank.target=groups_[g].start+k;
     advantageEnabled=int(rand(100))<AdvantageChance[mode];
+}
+
+void CpuAi::clearBattleSearch(){
+    for(auto& field:battleTeams_)field.clear();battleBoxes_.clear();battleCoins_.clear();battleGraph_.clear();
+    for(auto& members:battleMembers_)members=std::vector<unsigned>{};battleCoinSource_=nullptr;battleItemSource_=nullptr;
+    for(auto& r:racers_){r.battleBoxTarget.reset();r.battleCoinTarget.reset();r.battleItemPolicy.reset();r.battleItem.reset();
+        r.battleDriveTargetReady=false;r.battleTargetRacer=r.battleCandidateRacer=-1;}
+    battleDirectorTimer_=battleDirectorPhase_=0;battleRolesReady_=false;
+}
+bool CpuAi::setBattleSources(const RaceItems& items,const CoinBattleRuntime* coins){
+    clearBattleSearch();if(!setup_.battle||!route_||!battleGraph_.build(*route_))return false;
+    const auto& scenario=System::RaceConfig::Instance()->raceScenario();const float radius=battleSearchRadius(unsigned(scenario.course));
+    if(radius<=0){clearBattleSearch();return false;}
+    for(unsigned i=0;i<setup_.count;++i)if(scenario.players[i].team<2)battleMembers_[scenario.players[i].team].push_back(i);
+    if(battleMembers_[0].size()>6||battleMembers_[1].size()>6){clearBattleSearch();return false;}
+    unsigned humans[2]={};for(unsigned team=0;team<2;++team)for(unsigned i:battleMembers_[team])humans[team]+=racers_[i].human;
+    for(unsigned team=0;team<2;++team)for(unsigned i:battleMembers_[team])racers_[i].battleHumanMajority=humans[team]>humans[team^1];
+    for(unsigned team=0;team<2;++team)if(!battleMembers_[team].empty())
+        battleTeams_[team].reset(battleGraph_,radius,unsigned(battleMembers_[team].size()),unsigned(battleMembers_[team].size()));
+    if(!items.boxes().empty()){
+        battleBoxes_.reset(battleGraph_,radius,unsigned(items.boxes().size()),10);
+        // Original8073ede8 registers authored item-box positions at init;
+        // active/respawning boxes remain potential route destinations.
+        for(unsigned i=0;i<items.boxes().size();++i)battleBoxes_.update(i,items.boxes()[i].position,1000);
+    }
+    battleItemSource_=&items;battleCoinSource_=coins;
+    if(coins&&coins->targetCount())battleCoins_.reset(battleGraph_,radius,coins->targetCount(),10);
+    return true;
+}
+void CpuAi::assignBattleRoles(bool alternate){
+    const float fraction=battleAttackerFraction(setup_.cpuMode,alternate);
+    for(const auto& members:battleMembers_){const unsigned count=unsigned(members.size());if(!count)continue;
+        const auto permutation=battlePermutation(count,rand(battlePermutationCount(count)));
+        const unsigned attackers=unsigned(float(count)*fraction);
+        for(unsigned i=0;i<count;++i)racers_[members[permutation[i]]].battleRole=i<attackers?1:2;
+    }
+}
+Vec3 CpuAi::battleCloseTarget(unsigned racer,Vec3 position,bool inAction,bool wall){
+    auto& r=racers_[racer];const auto& p=r.path;Vec3 target=recoveryTarget(r);
+    const auto state=r.battleNavigation.state();
+    if(state==BattleNavigation::State::ItemSearch){
+        const bool box=r.battleBoxTarget.step(battleGraph_,battleBoxes_,p.prev,p.cur,p.switching,position,inAction,wall,
+            battleItemSource_!=nullptr,false,[&](unsigned id){return id<battleItemSource_->boxes().size()&&battleItemSource_->boxes()[id].active;});
+        const bool coin=r.battleCoinTarget.step(battleGraph_,battleCoins_,p.prev,p.cur,p.switching,position,inAction,wall,
+            battleCoinSource_&&r.battleRole!=0,true,[&](unsigned id){Vec3 ignored;return battleCoinSource_->targetPosition(id,ignored);});
+        // Original compares remaining travel budgets, not current Euclidean
+        // distances. Equal budgets choose the coin (80724a18..a44).
+        if(box&&(!coin||r.battleBoxTarget.travelRemaining()<r.battleCoinTarget.travelRemaining()))target=r.battleBoxTarget.position();
+        else if(coin)target=r.battleCoinTarget.position();
+    }else if(state==BattleNavigation::State::CoinSearch||state==BattleNavigation::State::Attack||
+             state==BattleNavigation::State::Approach||state==BattleNavigation::State::Retreat){
+        if(r.battleCoinTarget.step(battleGraph_,battleCoins_,p.prev,p.cur,p.switching,position,inAction,wall,
+            battleCoinSource_&&r.battleRole!=0,true,[&](unsigned id){Vec3 ignored;return battleCoinSource_->targetPosition(id,ignored);}))target=r.battleCoinTarget.position();
+    }
+    return target;
+}
+void CpuAi::battleItemIntent(unsigned racer,Vec3 position){
+    auto& r=racers_[racer];
+    const auto& scenario=System::RaceConfig::Instance()->raceScenario();
+    const unsigned team=scenario.players[racer].team;r.battleCandidateRacer=-1;if(team>1)return;
+    auto* karts=Kart::KartObjectManager::Instance();
+    const Vec3 direction=native(karts->object(racer)->move()->vel1Dir());bool front=false,back=false;
+    int opponent=-1;
+    for(unsigned other:battleMembers_[team^1]){
+        const unsigned classification=battleOpponentClass(native(karts->object(other)->pos())-position,direction);
+        front|=classification==3;back|=classification==4;
+        if(classification==1&&opponent<0)opponent=int(other);
+    }
+    const unsigned kind=r.itemView.held?r.itemView.heldKind:r.itemView.item;
+    const auto intent=r.battleItemPolicy.step(setup_.cpuMode,kind,!r.recovering,front,back,[&](unsigned limit){return rand(limit);});
+    if(intent.use){r.item.useItem=true;r.item.dir=int(intent.direction);}
+    r.battleCandidateRacer=opponent;
+}
+void CpuAi::updateBattleSearch(unsigned tick){
+    if(battleGraph_.edges.empty())return;
+    auto* karts=Kart::KartObjectManager::Instance();
+    if(battleCoinSource_&&System::RaceManager::Instance()->stage()==System::RaceManager::Stage::Race){
+        if(!battleRolesReady_){assignBattleRoles(false);battleRolesReady_=true;}
+        else{
+            const bool pulse=++battleDirectorTimer_==1800;if(pulse)battleDirectorTimer_=0;
+            switch(battleDirectorPhase_){
+            case 0:if(pulse)battleDirectorPhase_=1;break;
+            case 1:if(setup_.cpuMode)assignBattleRoles(true);battleDirectorPhase_=2;break;
+            case 2:if(pulse)battleDirectorPhase_=3;break;
+            case 3:if(setup_.cpuMode)assignBattleRoles(false);battleDirectorPhase_=0;break;
+            }
+        }
+    }
+    // Original8073ed1c updates one member of each team per simulation tick.
+    for(unsigned team=0;team<2;++team){const auto& members=battleMembers_[team];if(members.empty())continue;
+        const unsigned slot=tick%unsigned(members.size()),racer=members[slot];
+        const int importance=racers_[racer].human?1000:setup_.cpuMode==2?3000:setup_.cpuMode==1?2000:1000;
+        battleTeams_[team].update(slot,native(karts->object(racer)->pos()),importance);
+    }
+    // Coin identity is its pool index, never a compacted visible-position
+    // index: collection must remove the exact source cached by the graph.
+    if(battleCoinSource_&&battleCoins_.size()){
+        const unsigned slot=tick%battleCoins_.size();Vec3 position;
+        if(battleCoinSource_->targetPosition(slot,position)){
+            if(!battleCoins_.update(slot,position,1000))battleCoinSource_->failedRegistration(slot);
+        }
+        else battleCoins_.remove(slot);
+    }
 }
 
 void CpuAi::bump(unsigned racer,Vec3 direction){
@@ -271,7 +412,9 @@ void CpuAi::assignGroupTargets(){
         for(int k=0;k<cpuCount;++k){auto& rank=racers_[sortedCpus[k]].rank;if(rank.group==int(g))rank.target=next++;}}
 }
 void CpuAi::chase(float t){
-    // fn_1_23311C: the leading CPUs match the best human's speed plus a bonus.
+    // USA80733604: use the best human's vehicle stat speed (+0x14),
+    // via 8058a88c. Actual driving speed (+0x20) would make CPUs brake
+    // whenever the player brakes, stops or takes damage.
     if(!humanCount||!cpuCount)return;
     const auto& human=racers_[sortedHumans[0]];auto& lead=racers_[sortedCpus[0]];
     if(human.rank.position>ChaseMaxRank)return;
@@ -282,7 +425,7 @@ void CpuAi::chase(float t){
     if(human.rank.position==1){const float k=std::clamp((gap-ChaseGapMin)/(ChaseGapMax-ChaseGapMin),0.f,1.f);
         bonus=ChaseLow[engine]+k*(ChaseHigh[engine]-ChaseLow[engine]);second=.5f*bonus;third=.2f*bonus;}
     else bonus=ChaseRankBonus[std::clamp(human.rank.position,0,4)];
-    const float humanSpeed=Kart::KartObjectManager::Instance()->object(unsigned(sortedHumans[0]))->move()->speed();
+    const float humanSpeed=Kart::KartObjectManager::Instance()->object(unsigned(sortedHumans[0]))->move()->statBaseSpeed();
     lead.speed.frameBonus+=((humanSpeed+bonus)-lead.speed.result)*t;
     if(cpuCount>1&&second>0){auto& c=racers_[sortedCpus[1]];c.speed.frameBonus+=((humanSpeed+second)-c.speed.result)*t;}
     if(cpuCount>2&&third>0){auto& c=racers_[sortedCpus[2]];c.speed.frameBonus+=((humanSpeed+third)-c.speed.result)*t;}
@@ -368,6 +511,14 @@ void CpuAi::updateRanks(const std::array<unsigned,Capacity>& ranks,const std::ar
     ++rmFrame;
 }
 void CpuAi::updateSpeed(unsigned racer,unsigned lap){
+    if(setup_.battle){
+        auto& r=racers_[racer];
+        auto* kart=Kart::KartObjectManager::Instance()->object(racer);
+        r.speed.result=battleCpuSpeed(kart->move()->statBaseSpeed(),r.path.nextParam.setting1,r.itemView.inked,
+                                     (r.battleDriveTargetReady?r.battleDriveTarget:recoveryTarget(r))-native(kart->pos()),native(kart->bodyUp()),native(kart->bodyFront()));
+        kart->move()->setCpuBaseSpeed(r.speed.result);
+        return;
+    }
     // AISpeedRace::update (fn_1_233A40).
     auto& r=racers_[racer];auto& s=r.speed;const auto& param=setup_.speed;
     s.slowdown=std::min(1.f,s.slowdown+SlowdownStep);
@@ -391,23 +542,46 @@ void CpuAi::drive(unsigned racer,bool demo){
     auto* kart=Kart::KartObjectManager::Instance()->object(racer);
     const auto& status=kart->status();
     const Vec3 pos=native(kart->pos());
+    if(setup_.battle){
+        if(!r.human)battleItemIntent(racer,pos);
+        const bool hasItem=r.battleItem.active();
+        const auto previous=r.battleNavigation.state();
+        const bool releasing=r.battleItem.releasing();
+        r.battleNavigation.step(r.battleRole,hasItem,p.switching,setup_.cpuMode,r.battleHumanMajority,
+            [&](unsigned limit){return rand(limit);},releasing);
+        if(previous!=r.battleNavigation.state()){
+            const auto state=r.battleNavigation.state();
+            if(state==BattleNavigation::State::ItemSearch)r.battleBoxTarget.reset();
+            if(state==BattleNavigation::State::ItemSearch||state==BattleNavigation::State::CoinSearch||
+               state==BattleNavigation::State::Attack)r.battleCoinTarget.reset();
+            if(state==BattleNavigation::State::Attack)r.battleTargetRacer=-1;
+        }
+        if(r.battleNavigation.state()==BattleNavigation::State::Attack&&r.battleCandidateRacer>=0&&(hasItem||releasing)){
+            r.battleTargetRacer=r.battleCandidateRacer;
+            const auto& own=r.itemView;const auto& other=racers_[unsigned(r.battleTargetRacer)].itemView;
+            const auto choice=battleAttackChoice(own.held?own.heldKind:own.item,other.held?other.heldKind:other.item);
+            r.battleNavigation.requestAttack(choice==2?2:1);
+        }
+        r.battleSearchMode=r.battleNavigation.mode();
+    }
     // AITrickHandler(Bike)::calc (AIEngine runs it first, on last tick's path
     // state): a trick roll on take-off, then the bike wheelie points.
-    uint8_t trick=0;
+    uint8_t trick=setup_.battle?r.battleTrick:0;
     const bool bike=kart->isBike();
-    if(!demo&&status.onBit(Kart::eStatus::AirStart)&&status.offBit(Kart::eStatus::JumpPad,Kart::eStatus::InAction)&&
-       int(rand(100))<int(action(r).trick))
-        trick=uint8_t(1+rand(bike?4u:2u));
-    if(!demo&&bike&&p.switching){
+    if(!demo&&!setup_.battle&&status.onBit(Kart::eStatus::AirStart)&&status.offBit(Kart::eStatus::JumpPad,Kart::eStatus::InAction)&&
+       int(rand(100))<int(action(r).trick))trick=uint8_t(1+rand(bike?4u:2u));
+    if(!demo&&!setup_.battle&&bike&&p.switching){
         if(p.currParam.setting1==3&&int(rand(100))<int(action(r).wheelie)&&rmState!=3)r.wheelie=true;
         if(p.currParam.setting1==4){r.wheelie=false;trick=2;}
         if(r.wheelie)trick=1;
     }
     // AIControlBase::setBasicDriveInfo_ (80723178), using last tick's path state
     // (the stuck handler's recovery target while it slides back along the route).
-    const Vec3 target=recoveryTarget(r);
+    const Vec3 target=setup_.battle?battleCloseTarget(racer,pos,status.onBit(Kart::eStatus::InAction),
+        status.onBit(Kart::eStatus::Wall3Collision,Kart::eStatus::WallCollision)):recoveryTarget(r);
+    if(setup_.battle){r.battleDriveTarget=target;r.battleDriveTargetReady=true;}
     bool startDrift=false,endDrift=false,releaseMiniturbo=false;float driftDir=0;
-    if(d.state!=1&&driftHere(p)){
+    if(!setup_.battle&&d.state!=1&&driftHere(p)){
         // fn_1_6E6E0: speed above 0.55 of the stat base speed (KartMove +0x14).
         const bool fastEnough=kart->move()->speed()>kart->move()->statBaseSpeed()*.55f;
         if(fastEnough&&p.distance<DriftStartDistance){
@@ -416,15 +590,16 @@ void CpuAi::drive(unsigned racer,bool demo){
         }
     }else r.driftRolled=false;
     const bool switched=p.switching;
-    if(switched){
+    if(switched&&!setup_.battle){
         d.feedForward=FeedForward*p.currParam.curvature;
         if(endDriftHere(p)){endDrift=true;
             if(!p.currParam.forbidDrift()&&r.canMiniturbo&&(demo||int(rand(100))<int(action(r).miniturbo)))releaseMiniturbo=true;}
     }
-    d.feedForward+=FeedForwardDecay*(0.f-d.feedForward);
+    if(setup_.battle)d.feedForward=battleSteering(target-pos,native(kart->bodyForward()),native(kart->bodyFront()));
+    else d.feedForward+=FeedForwardDecay*(0.f-d.feedForward);
     // AIControlRace::doUpdate (fn_1_2204D4): block line, then doUpdate_: route,
     // obstacle avoider, stuck handler and the kart controller (fn_1_220824).
-    if(!demo&&!bike&&!r.human)blockUpdate(racer);
+    if(!demo&&!setup_.battle&&!bike&&!r.human)blockUpdate(racer);
     updatePath(racer,pos);
     avoid(racer);
     // AIControlBase::doUpdate_ calls its stuck sequencer for every driven
@@ -482,7 +657,11 @@ void CpuAi::drive(unsigned racer,bool demo){
         const Vec3 toTarget=target-pos;
         Vec3 planar=toTarget-up*dot(toTarget,up);
         if(dot(planar,planar)>Epsilon){planar=normalized(planar);
-            Vec3 desired=dir+(planar-dir)*(drifting?DriftGain:DriveGain*r.block.gainScale*r.stuck.gainScale);
+            // AIControlBattle::setBasicDriveInfo_ writes .06 into both
+            // steering gains (80724460/68), instead of Race's .04/.05.
+            const float gain=setup_.battle?.06f*r.stuck.gainScale:
+                (drifting?DriftGain:DriveGain*r.block.gainScale*r.stuck.gainScale);
+            Vec3 desired=dir+(planar-dir)*gain;
             if(dot(desired,desired)>Epsilon){desired=normalized(desired);
                 EGG::Quatf q;q.makeVectorRotation(egg(dir),egg(desired));
                 EGG::Quatf next=q*rot;next.normalise();kart->dynamics()->setMainRot(next);}
@@ -512,7 +691,8 @@ void CpuAi::step(uint32_t driveMask,const std::array<unsigned,Capacity>& ranks,c
     if(!route_||setup_.demo)return;
     auto* manager=System::RaceManager::Instance();
     ++frame_;obstaclesValid_=false;
-    updateRanks(ranks,laps,finished,finalLap);
+    if(setup_.battle)updateBattleSearch(manager->timer());
+    if(!setup_.battle)updateRanks(ranks,laps,finished,finalLap);
     const bool racing=manager->isStageReached(System::RaceManager::Stage::Race);
     for(unsigned i=0;i<setup_.count;++i){
         auto& r=racers_[i];if(!r.active)continue;
@@ -520,13 +700,21 @@ void CpuAi::step(uint32_t driveMask,const std::array<unsigned,Capacity>& ranks,c
         const auto& status=kart->status();
         // Respawned racers resume from the route point under their drop position.
         const bool dropping=status.onBit(Kart::eStatus::BeforeRespawn,Kart::eStatus::InRespawn);
-        if(r.dropping&&!dropping){
+        // The adapted human path can lag behind a line/shortcut it never
+        // followed. Reacquire once when handing the finished human to AI;
+        // otherwise only rescue would clear that stale target. Do not reset
+        // ordinary CPUs or reselect branches every post-race tick.
+        const bool goalHandover=r.human&&finished[i]&&((driveMask>>i)&1)&&!r.postRaceDriving;
+        if(goalHandover)r.postRaceDriving=true;
+        if((r.dropping&&!dropping)||goalHandover){
             r.path.start=uint16_t(route_->nearest(native(kart->pos()),native(kart->bodyFront()),i));
             if(r.path.start>=route_->size())r.path.start=0;
             setPoint(i,0);r.drive={};
             // AIControlRace::onOutOfBounds (fn_1_2203A4) re-inits the stuck
             // handler and avoider and returns block line to Search.
+            kart->move()->setCpuRecovery(false);
             r.stuck={};r.avoid={};r.block.next=1;
+            if(setup_.battle){r.battleBoxTarget.reset();r.battleCoinTarget.reset();r.battleDriveTargetReady=false;}
         }
         r.dropping=dropping;
         if(!((driveMask>>i)&1)){
@@ -534,15 +722,24 @@ void CpuAi::step(uint32_t driveMask,const std::array<unsigned,Capacity>& ranks,c
             updatePath(i,native(kart->pos()));r.command={};continue;
         }
         if(!racing&&!r.human&&!r.startDecided&&manager->stage()==System::RaceManager::Stage::Countdown){
-            // AIControlBase::setStartDashTypeToKart (8072310c) with
-            // AIProbabilityRace::getStartBoost (fn_1_22EAD8).
+            // AIControlBase8072310c calls Probability vt10, then vt18.
+            // Battle ctor80723a50..70 uses808c55b4: vt10 is a no-op and
+            // vt18 returns the initialized+8=0. No Race percentage/boost draw.
             r.startDecided=true;
-            const auto& a=action(r);const int roll=int(rand(100));const unsigned mode=std::min(setup_.cpuMode,2u);
-            if(roll<int(a.startBoost))r.startBoost=int(rand(3))+int(mode)+1;
-            else if(roll<int(a.startBoost)+int(a.startFail))r.startBoost=-1;
-            else r.startBoost=0;
+            if(setup_.battle)r.startBoost=0;
+            else{
+                const auto& a=action(r);const int roll=int(rand(100));const unsigned mode=std::min(setup_.cpuMode,2u);
+                if(roll<int(a.startBoost))r.startBoost=int(rand(3))+int(mode)+1;
+                else if(roll<int(a.startBoost)+int(a.startFail))r.startBoost=-1;
+                else r.startBoost=0;
+            }
             kart->state()->setStartBoostIdx(r.startBoost);
         }
+        // Engine80728968..9c calculates Trick, then Speed, then Control.
+        // Decide Battle's command before speed/navigation/item-policy RNG.
+        if(setup_.battle)r.battleTrick=racing?battleTrickDirection(kart->isBike(),
+            status.onBit(Kart::eStatus::AirStart),status.onBit(Kart::eStatus::JumpPad),
+            status.onBit(Kart::eStatus::InAction),[&](unsigned n){return rand(n);}):0;
         // After its goal a CPU drives on AIEngine PostRaceDriving (USA
         // 0x80728C28): AISpeedRace vt_0x14 (0x80733F54) holds 0.8 x the
         // kart's base speed (0x808C600C) instead of the race speed manager.
@@ -652,11 +849,11 @@ void CpuAi::stuckUpdate(unsigned i){
     if(!s.primed){s.primed=true;s.last=s.sample=pos;}
     s.gainScale=1;
     if(s.next>=0){
-        if(s.state==1){p.goNext=p.goNextDefault;s.rate=0;} // fn_1_2352A4
+        if(s.state==1){p.goNext=p.goNextDefault;s.rate=0;kart->move()->setCpuRecovery(false);} // fn_1_2352A4
         s.state=s.next;s.next=-1;
         switch(s.state){
         case 0:s.counter=0;s.timer=0;s.phase=0;break;                       // fn_1_234BC4
-        case 1:p.goNext=RecoverGoNext;s.rate=0;s.timer=0;s.phase=0;break;  // fn_1_234DB0
+        case 1:p.goNext=RecoverGoNext;s.rate=0;s.timer=0;s.phase=0;kart->move()->setCpuRecovery(true);break;  // fn_1_234DB0
         case 2:kart->collide()->activateOob(false,nullptr,true,false);s.next=0;break; // fn_1_23530C
         }
     }
@@ -860,6 +1057,10 @@ void CpuAi::stepItems(unsigned i){
     // AIItemRace::update (fn_1_2242C0): sequencer calc, then clear useItem.
     Racer& r=racers_[i];ItemAi& a=r.item;
     r.itemCommand={};
+    if(setup_.battle){
+        const auto out=r.battleItem.step(r.itemView,a.useItem,unsigned(a.dir),a.goal);
+        r.itemCommand={out.use,out.forwards,out.backwards};a.useItem=false;return;
+    }
     if(a.next!=ItemState::None){
         if(a.state==ItemState::Mushroom)r.mushroomRoute=false; // Kinoko exit (fn_1_224D1C)
         a.state=a.next;a.next=ItemState::None;enterItemState(i);

@@ -193,11 +193,12 @@ struct StartInfo {
  int playerId = -1;           // -1: archive value
  u32 startOffsetMs = 0;
  u32 startOffsetSamples = 0;  // streams: START_OFFSET_TYPE_SAMPLE (0: the archive's start position)
+ int channelPriority = -1;    // -1: archive value; bounded3DS voice-pressure override
 };
 
 // 3D actor parameters (MKW Audio::Engine3D inputs) are applied by the
 // caller through ambient overrides on each sound.
-struct Ambient { f32 volume = 1, pitch = 1, pan = 0, surroundPan = 0, fxSend = 0, lpf = 0; int priority = 0; };
+struct Ambient { f32 volume = 1, pitch = 1, pan = 0, surroundPan = 0, fxSend = 0, lpf = 0; int priority = 0; int distancePriority = -1; };
 
 struct EngineStats { u32 voicesActive = 0, voicesDropped = 0, soundsActive = 0, startsFailed = 0, missingData = 0, streamUnderruns = 0;
  u32 lastMissingSound = InvalidId, lastMissingFile = InvalidId, lastMissingWave = InvalidId; };  // QA
@@ -228,6 +229,10 @@ public:
  void startPrepared(Handle h);
  bool attached(Handle h) const;
  u32 soundId(Handle h) const;
+ // Audio-thread read: accepted notes of the original two warning sequences.
+ u32 warningNoteSerial() const;
+ void markLedCue(Handle h,u32 cue);
+ u32 takeLedCues();
  void detach(Handle& h);
  void stop(Handle h, int fadeFrames);
  void pause(Handle h, bool paused, int fadeFrames);
@@ -267,6 +272,8 @@ public:
  // Maintenance frames during a stalled game advance fades but cannot
  // expire HoldSound: the game has not had a chance to renew its handles.
  void updateGameFrame(bool advanceHold = true);
+ // Input-owned HoldSound expiry; independent from the audio-owned 60 Hz clock.
+ void updateHoldFrame();
  // Sound frame (3 ms): sequencer ticks, channel envelopes, voice params.
  void updateSoundFrame();
  const EngineStats& stats() const;

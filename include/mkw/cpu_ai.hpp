@@ -1,6 +1,11 @@
 #pragma once
 #include <mkw/math.hpp>
 #include <mkw/cpu_speed.hpp>
+#include <mkw/battle_search.hpp>
+#include <mkw/battle_navigation.hpp>
+#include <mkw/battle_close_target.hpp>
+#include <mkw/battle_item_policy.hpp>
+#include <mkw/battle_item_ai.hpp>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -8,6 +13,8 @@
 
 namespace mkw {
 class EnemyRoute;
+class RaceItems;
+class CoinBattleRuntime;
 // Retail Enemy::AI race behaviour for CPU racers: AIPathHandler/AIPathPoint
 // route following, AIControlRace drive info and kart controller (body
 // rotation steering, drift and mini-turbo control), AIProbabilityRace,
@@ -17,7 +24,7 @@ class EnemyRoute;
 struct CpuCommand { uint16_t buttons=0; float stick=0; uint8_t trick=0; };
 // Item holder view for AIItemRace (ItemKind values, 20 = none) and its output:
 // the item button for this frame plus the stick-up/down throw direction.
-struct CpuItemView { uint8_t item=20,heldCount=0; bool roulette=false,held=false,heldRed=false,inked=false; };
+struct CpuItemView { uint8_t item=20,heldCount=0; bool roulette=false,held=false,heldRed=false,inked=false;uint8_t heldKind=20; };
 struct CpuItemCommand { bool use=false,forwards=false,backwards=false; };
 // kartAIActionParam.bin: per race position, percentages.
 struct CpuActionParam { uint8_t startBoost=0,startFail=0,drift=0,miniturbo=0,trick=0,wheelie=0,unused=0,blockLine=0; };
@@ -31,7 +38,7 @@ public:
         unsigned count=1,engineClass=2,cpuMode=1;
         bool mirror=false;
         // AIControlDemo: authored speed and guaranteed drift, no race rank AI.
-        bool demo=false;
+        bool demo=false,battle=false;
         CpuSpeedParam speed{};bool speedReady=false;
         std::array<CpuActionParam,12> actions{};bool actionsReady=false;
         float courseLength=6000;
@@ -40,6 +47,8 @@ public:
     };
     // After the race scene is built (karts at their grid slots).
     void reset(const Setup& setup);
+    bool setBattleSources(const RaceItems&,const CoinBattleRuntime*);
+    void clearBattleSearch();
     // Once per 60 Hz tick before physics. driveMask: racers this AI controls
     // (CPUs, plus player zero for QA route driving). ranks: 1-based positions.
     void step(uint32_t driveMask,const std::array<unsigned,Capacity>& ranks,const std::array<unsigned,Capacity>& laps,
@@ -69,7 +78,7 @@ public:
     // QA: stuck handler / avoider / item AI states.
     int stuckState(unsigned racer) const { return racer<Capacity?racers_[racer].stuck.state:0; }
     int avoidState(unsigned racer) const { return racer<Capacity?racers_[racer].avoid.state:0; }
-    int itemState(unsigned racer) const { return racer<Capacity?int(racers_[racer].item.state):0; }
+    int itemState(unsigned racer) const { return racer<Capacity?(setup_.battle?int(racers_[racer].battleItem.state()):int(racers_[racer].item.state)):0; }
     int targetRank(unsigned racer) const { return racer<Capacity?racers_[racer].rank.target:0; }
     unsigned gpRankBonus(unsigned racer) const { return racer<Capacity?gpRankBonus_[racer]:0; }
     bool ready() const { return route_!=nullptr; }
@@ -140,8 +149,16 @@ private:
     struct Racer {
         Path path;Drive drive;Speed speed;Rank rank;CpuCommand command;
         ItemAi item;CpuItemView itemView;CpuItemCommand itemCommand;Avoid avoid;Stuck stuck;Block block;
-        bool active=false,human=false,mushroomRoute=false,dropping=false,recovering=false,wheelie=false;
-        int startBoost=0;bool startDecided=false;
+        bool active=false,human=false,mushroomRoute=false,dropping=false,recovering=false,wheelie=false,postRaceDriving=false;
+        int startBoost=0;bool startDecided=false;uint8_t battleTrick=0;
+        unsigned battleSearchMode=2;
+        unsigned battleRole=0;bool battleHumanMajority=false;
+        BattleNavigation battleNavigation;
+        BattleCloseTarget battleBoxTarget,battleCoinTarget;
+        BattleItemPolicy battleItemPolicy;
+        BattleItemAi battleItem;
+        int battleTargetRacer=-1,battleCandidateRacer=-1;
+        Vec3 battleDriveTarget{};bool battleDriveTargetReady=false;
         bool driftRolled=false,canMiniturbo=true;
     };
     struct Group { int start=1;std::array<int,6> members{};int count=0;int phase=0,timer=0; };
@@ -162,6 +179,10 @@ private:
     bool shouldGoNext(Path& p,Vec3 kartPos) const;
     void goNext(unsigned racer,Vec3 kartPos);
     void updatePath(unsigned racer,Vec3 kartPos);
+    void updateBattleSearch(unsigned tick);
+    void assignBattleRoles(bool alternate);
+    Vec3 battleCloseTarget(unsigned racer,Vec3 position,bool inAction,bool wall);
+    void battleItemIntent(unsigned racer,Vec3 position);
     bool driftHere(const Path& p) const;
     bool endDriftHere(const Path& p) const;
     // AIControlRace / kart controller.
@@ -206,9 +227,17 @@ private:
     std::array<int,Capacity> sortedCpus{};int cpuCount=0;
     std::array<int,Capacity> sortedHumans{};int humanCount=0;
     uint32_t rng_=1;
+    uint64_t battleRng_=1;
     uint32_t frame_=0;
     std::array<Vec3,MaxHazards> hazards_{};std::array<float,MaxHazards> hazardRadii_{};unsigned hazardCount_=0;
     bool raceStarted_=false;
+    BattleSearchGraph battleGraph_;
+    std::array<BattleSearchField,2> battleTeams_;
+    BattleSearchField battleBoxes_,battleCoins_;
+    std::array<std::vector<unsigned>,2> battleMembers_;
+    const CoinBattleRuntime* battleCoinSource_=nullptr;
+    const RaceItems* battleItemSource_=nullptr;
+    unsigned battleDirectorTimer_=0,battleDirectorPhase_=0;bool battleRolesReady_=false;
     // Course objects' positions and probe reach for this step's findObstacle
     // calls (objects only move in the Kinoko step that follows).
     struct ObstacleProbe {const void* object;Vec3 position;float reach;};

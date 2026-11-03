@@ -1,5 +1,6 @@
 // Retail race audio. Addresses are USA StaticR (docs/AUDIO_SOURCE.md "Race").
 #include <mkw/race_sound.hpp>
+#include <mkw/battle_round_result.hpp>
 #include <mkw/race_damage_residency.hpp>
 #include <mkw/race_voice_tables.hpp>
 #include <mkw/sound_ids.hpp>
@@ -161,7 +162,7 @@ void RaceSound::begin(const Setup& s) {
  setup_ = s;
  budget_ = {};
  if (!sys.available()) return;
- active_ = true; paused_ = false; state_ = 0; countdown_ = 0; tick_ = 0; maxLap_ = 1; finished_ = false; rank_ = 1;
+ active_ = true; paused_ = false; state_ = 0; countdown_ = 0; tick_ = 0; maxLap_ = 1; finished_ = false; rank_ = 1; battleResult_=3;
  goalVoice_[0] = goalVoice_[1] = goalVoice_[2] = 0;
  alteration_ = 3; wasMega_ = wasStar_ = false; wobble_ = 0;
  alterVolume_ = fanfareVolume_ = bgmVolume_ = bgmPitch_ = 1; postedBgmVolume_ = postedBgmPitch_ = -1; postedSlot_ = -1;
@@ -207,6 +208,12 @@ void RaceSound::planScene() {
  for (unsigned i = 0; i < s.racers && i < s.racer.size(); ++i) {
   const auto& r = s.racer[i];
   if (r.vehicle < 36) vehicles[r.vehicle] = true;
+  if(r.character>=24&&r.character<42){
+   const unsigned base=392+4*r.miiVoice;voiceGroups.push_back(base+(r.local?0:1));
+   if(cannonCourse(course))voiceGroups.push_back(base+2+(r.local?0:1));
+   if(r.local)for(unsigned k=0;k<3;++k)goalVoice_[k]=4021+3*k+118*r.miiVoice+goalVariant(0,k);
+   continue;
+  }
   if (r.character >= 24 || VoiceGroup[r.character] < 0) continue;
   const std::uint32_t base = std::uint32_t(VoiceGroup[r.character]);
   const bool single = singleVoiceGroup(r.character);
@@ -245,9 +252,12 @@ void RaceSound::planScene() {
  for (unsigned v = 0; v < 36; ++v) if (vehicles[v]) must.push_back(HornBase + v);
  for (std::uint32_t id = id::SE_UI_TITLE_OUT; id <= id::SE_UI_CTRL_REJECT; ++id) must.push_back(id);   // race UI bank
  appendRaceDamageEffects(must);
+ must.push_back(id::SE_ITM_HANE_BOMB_ECHO); // both blast kinds: keep the original echo ready with damage waves
  must.push_back(id::SE_RC_GOAL);
  must.push_back(id::SE_VCL_FALL_WATER);
- if(battleCourse(course))must.push_back(id::SE_RC_BTL_FINISH);
+ if(battleCourse(course)){must.push_back(id::SE_RC_BTL_FINISH);for(unsigned sound=231;sound<=234;++sound)must.push_back(sound);}
+ if(s.mode==3&&!s.coinBattle)for(unsigned sound:{0x1f5u,0x1f6u,0x1f7u})must.push_back(sound);
+ if(s.coinBattle){must.push_back(0x1f1);must.push_back(0x1f2);} // SE_CC_COIN_GET, reachable only in Coin Runners
  for(auto goal:goalVoice_)if(goal)must.push_back(goal);
  // Rainbow's collision bank belongs to its course group, not GRP_RACE.
  if(course==0x0d)must.push_back(id::SE_VCL_COL_RAINBOW);
@@ -260,7 +270,7 @@ void RaceSound::planScene() {
  scene.keepMs = 400;
  resident = {id::group::GRP_CMN, id::group::GRP_RACE};
  if (course < 0x2a) resident.push_back(course + 0xf);
- for (unsigned i = 0; i < s.racers; ++i) if (s.racer[i].local && s.racer[i].character < 24) resident.push_back(std::uint32_t(VoiceGroup[s.racer[i].character]));
+ for (unsigned i = 0; i < s.racers; ++i) if (s.racer[i].local) resident.push_back(s.racer[i].character<24?std::uint32_t(VoiceGroup[s.racer[i].character]):392+4*s.racer[i].miiVoice);
  // The course stream and the next one (prepared) play from block rings.
  const std::uint32_t stream = course < 0x2a ? std::max(sys.streamBytes(CourseStream[course]), sys.streamBytes(CourseStream[course] + 1)) : 0;
  const std::uint32_t streams = std::max<std::uint32_t>(stream, 64u * 1024) * 2;
@@ -350,7 +360,7 @@ void RaceSound::setRaceState(int n) {
  case 7:
   SoundSystem::instance().stopSlot(FanfareSlot, 0);
   fanfareVolume_ = 1;
-  bgm_.play(goalMusic(setup_.mode, rank_, setup_.racers), 0x1e);
+  bgm_.play(setup_.mode==3?battleGoalMusic(battleResult_):goalMusic(setup_.mode, rank_, setup_.racers), 0x1e);
   break;
  default: break;
  }
@@ -474,9 +484,11 @@ void RaceSound::postVolumes(bool force) {
 void RaceSound::step(const Frame& f, RaceAudioFrame* actors) {
  if (!active_ || paused_) return;
  auto& sys = SoundSystem::instance();
+ for(unsigned i=0;i<4;++i)if(f.battlePointCues&(1u<<i))sys.play(231+i);
  if(f.resultPointsChanged)sys.hold(id::SE_RSLT_POINT_UP,ResultPointSlot);
  if(f.resultSlideSound>=0)sys.play(unsigned(f.resultSlideSound));
  ++tick_;
+#ifndef MKW_RELEASE
  // Bounded release diagnostics for silent race actors; no per-frame file I/O.
  if (tick_ == 300 || tick_ == 900 || tick_ == 1800) {
   const auto st = sys.stats();
@@ -490,6 +502,7 @@ void RaceSound::step(const Frame& f, RaceAudioFrame* actors) {
    std::fclose(log);
   }
  }
+#endif
  if (planPending_) {
   // LINEAR settled (45 unchanged ticks) or 150 ticks into the race: plan now.
   const std::uint32_t free = std::uint32_t(linearSpaceFree());
@@ -512,7 +525,7 @@ void RaceSound::step(const Frame& f, RaceAudioFrame* actors) {
  // SE_RC_GOAL once. Keep feeding the actor layer: CharacterActor::Update
  // owns the delayed result voice and still runs during the finish camera.
  if (f.finished && !finished_) {
-  finished_ = true; rank_ = f.rank;
+  finished_ = true; rank_ = f.rank; battleResult_=f.battleResultKind;
   sys.stopSlot(AlterationSlot, 0);
   // Normal races deliver the cue with the persistent actor frame.
   if(!actors)sys.play(battleCourse(setup_.course) ? id::SE_RC_BTL_FINISH : id::SE_RC_GOAL, GoalSlot);
@@ -582,7 +595,7 @@ void RaceSound::step(const Frame& f, RaceAudioFrame* actors) {
   if (!introLoaded_) a.objectSounds = 0;
   a.raceState = std::uint8_t(state_); a.alteration = std::uint8_t(alteration_); a.engineClass = std::uint8_t(std::min(setup_.engineClass, 2u));
   // A frame dropped by a full ring keeps its cues for the next one.
-  if (layer_.push(a)) { for (auto& k : a.kart) { k.cues = 0; k.bumpedBy = 0; } a.itemSounds = 0; a.ambienceOps = 0; a.objectSounds = 0; }
+  if (layer_.push(a)) { for (auto& k : a.kart) { k.cues = 0; k.bumpedBy = 0; k.powerObjectContact = 0; k.coinArrival = false; } a.itemSounds = 0; a.ambienceOps = 0; a.objectSounds = 0; a.balloonSounds = 0; }
  }
  SoundCommand c; c.type = SoundCommand::Layer; sys.post(c);
 }

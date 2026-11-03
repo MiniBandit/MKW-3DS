@@ -2,6 +2,7 @@
 // comments are the doldecomp/ogws originals; retail DOL differences checked
 // with Ghidra are noted inline and in docs/AUDIO_SOURCE.md.
 #include <mkw/snd_engine.hpp>
+#include <mkw/explosion_audio.hpp>
 #include <mkw/snd_tables.hpp>
 #include <algorithm>
 #include <climits>
@@ -334,13 +335,23 @@ namespace {
 struct Channel;
 struct Voice;
 
+// BOX_BRK's 3DS priority override must not truncate the independent crowd
+// actor. Retail limited-actor replacement is separate from global AX voice
+// pressure; preserve that separation for this pair on NDSP's smaller pool.
+// No priority escalation, extra voices, sample changes, or hold restarts.
+bool pickupCrowdProtected(u32 requester,u32 playing){
+ auto crowd=[](u32 id){return id==548||id==549||id==697||id==698||
+     (id>=780&&id<=782)||id==874||id==875;};
+ return (requester==0xf4&&crowd(playing))||(playing==0xf4&&crowd(requester));
+}
+
 // --------------------------------------------------------------- Voice
 // detail::Voice with one voice-out (single listener). Owns 1-2 hardware voices.
 struct Voice {
  enum Callback { FinishWave, Cancel, DropVoice, DropDsp };
  bool active = false, starting = false, started = false, paused = false;
  int channels = 0; int hw[ChannelMax] = {-1, -1};
- int priority = 0; u32 order = 0;
+ int priority = 0; u32 order = 0; u32 soundId = InvalidId;
  f32 volume = 1, veInit = 0, veTarget = 1, lpf = 1, pan = 0, surroundPan = 0, mainOutVolume = 1, mainSend = 1, pitch = 1;
  f32 fxSend[3]{};
  u8 panMode = PanDual, panCurve = CurveSqrt;
@@ -424,6 +435,7 @@ struct Engine::Impl {
  const Archive* archive = nullptr;
  Hardware* hw = nullptr;
  EngineStats stats;
+ u32 warningNotes = 0, ledCues = 0;
  f32 masterVolume = 1;
  std::vector<LoadedFile*> files; // indexed by file id
  std::unique_ptr<StreamFeed> (*openStream)(void*, const char*, u32) = nullptr;
@@ -442,9 +454,9 @@ struct Engine::Impl {
 
  // VoiceManager list order: ascending priority, oldest first among equals.
  bool voiceLess(const Voice& a, const Voice& b) const { return a.priority != b.priority ? a.priority < b.priority : a.order < b.order; }
- Voice* lowestVoice(Voice* except = nullptr) {
+ Voice* lowestVoice(Voice* except = nullptr,u32 incoming = InvalidId) {
   Voice* best = nullptr;
-  for (auto& v : voices) if (v.active && &v != except && (!best || voiceLess(v, *best))) best = &v;
+  for (auto& v : voices) if (v.active && &v != except && !pickupCrowdProtected(incoming,v.soundId) && (!best || voiceLess(v, *best))) best = &v;
   return best;
  }
  int freeHw() const { for (int i = 0; i < hwVoices; ++i) if (hwOwner[i] == -1) return i; return -1; }
@@ -464,13 +476,13 @@ struct Engine::Impl {
  LoadedFile* fileData(u32 id) const;
 
  // AxVoiceManager-style steal of one hardware voice for `priority`.
- int stealHw(int priority, Voice* requester) {
+ int stealHw(int priority, Voice* requester,u32 incoming) {
   // AX first drops voices already in release (AX priority MAX/2), then the
   // lowest NW4R priority, oldest first. Streams (255) are never taken.
   Voice* victim = nullptr;
-  for (auto& v : voices) if (v.active && &v != requester && v.priority == VoicePriorityRelease && v.channels > 0 && (!victim || v.order < victim->order)) victim = &v;
+  for (auto& v : voices) if (v.active && &v != requester && !pickupCrowdProtected(incoming,v.soundId) && v.priority == VoicePriorityRelease && v.channels > 0 && (!victim || v.order < victim->order)) victim = &v;
   if (!victim) {
-   for (auto& v : voices) if (v.active && &v != requester && v.channels > 0 && v.priority < VoicePriorityMax && v.priority <= priority && (!victim || voiceLess(v, *victim))) victim = &v;
+   for (auto& v : voices) if (v.active && &v != requester && !pickupCrowdProtected(incoming,v.soundId) && v.channels > 0 && v.priority < VoicePriorityMax && v.priority <= priority && (!victim || voiceLess(v, *victim))) victim = &v;
   }
   if (!victim) return -1;
   ++stats.voicesDropped;
@@ -481,13 +493,13 @@ struct Engine::Impl {
  }
 
  // VoiceManager::AllocVoice + Voice::Acquire.
- Voice* allocVoice(int channelCount, int priority, Channel* owner) {
+ Voice* allocVoice(int channelCount, int priority, Channel* owner,u32 incoming = InvalidId) {
   channelCount = clamp(channelCount, 1, ChannelMax);
   Voice* slot = nullptr;
   for (auto& v : voices) if (!v.active) { slot = &v; break; }
   if (!slot) {
    // DropLowestPriorityVoice
-   Voice* low = lowestVoice();
+   Voice* low = lowestVoice(nullptr,incoming);
    if (!low || low->priority > priority) return nullptr;
    ++stats.voicesDropped;
    voiceStopHw(*low); voiceFreeHw(*low); low->active = false;
@@ -500,19 +512,19 @@ struct Engine::Impl {
    if (h < 0) {
     int rest = channelCount - i;
     // Enough lower-or-equal priority voices to take from?
-    std::vector<Voice*> order;
-    for (auto& v : voices) if (v.active && v.channels > 0) order.push_back(&v);
-    std::sort(order.begin(), order.end(), [&](Voice* a, Voice* b) { return voiceLess(*a, *b); });
-    for (Voice* v : order) { if (priority < v->priority) break; rest -= v->channels; if (rest <= 0) break; }
+    std::array<Voice*,VoiceMax> order;unsigned count=0;
+    for (auto& v : voices) if (v.active && v.channels > 0 && !pickupCrowdProtected(incoming,v.soundId)) order[count++]=&v;
+    std::sort(order.begin(), order.begin()+count, [&](Voice* a, Voice* b) { return voiceLess(*a, *b); });
+    for (unsigned j=0;j<count;++j) { Voice* v=order[j];if (priority < v->priority) break; rest -= v->channels; if (rest <= 0) break; }
     if (rest > 0) { for (int j = 0; j < i; ++j) hwOwner[got[j]] = -1; return nullptr; }
-    h = stealHw(priority, slot);
+    h = stealHw(priority, slot,incoming);
     if (h < 0) { for (int j = 0; j < i; ++j) hwOwner[got[j]] = -1; return nullptr; }
    }
    got[i] = h; hwOwner[h] = int(slot - voices);
   }
   Voice& v = *slot;
   v = Voice{};
-  v.active = true; v.channels = channelCount; v.priority = priority & VoicePriorityMax; v.order = ++voiceOrder; v.owner = owner;
+  v.active = true; v.channels = channelCount; v.priority = priority & VoicePriorityMax; v.order = ++voiceOrder; v.owner = owner; v.soundId=incoming;
   for (int i = 0; i < channelCount; ++i) { v.hw[i] = got[i]; hwOwner[got[i]] = int(slot - voices); }
   ++stats.voicesActive;
   return &v;
@@ -566,12 +578,12 @@ struct Engine::Impl {
  }
 
  // -------------- channels (ChannelManager)
- Channel* allocChannel(int channelCount, int priority, void (*cb)(Channel*, int, void*), void* arg) {
+ Channel* allocChannel(int channelCount, int priority, void (*cb)(Channel*, int, void*), void* arg,u32 incoming) {
   Channel* ch = nullptr;
   for (auto& c : channels) if (!c.used) { ch = &c; break; }
   if (!ch) return nullptr;
   ch->used = true;
-  Voice* v = allocVoice(channelCount, priority, ch);
+  Voice* v = allocVoice(channelCount, priority, ch,incoming);
   if (!v) { ch->used = false; return nullptr; }
   channelInit(*ch, cb, arg);
   ch->voice = v;
@@ -670,17 +682,17 @@ constexpr int SoundSlots = 96;
 struct SeqPlayer {
  PlayerParams p; bool active = false, started = false, paused = false, releaseFix = false;
  f32 tempoRatio = 1, tickFraction = 0; u32 skipTicks = 0; f32 skipMs = 0; u32 tickCounter = 0;
- int tempo = 120, timebase = 48, volume = 127, priority = 64; int channelPriority = 64;
+ int tempo = 120, timebase = 48, volume = 127, priority = 64; int channelPriority = 64; int distancePriority = -1;
  s16 local[16];
  SeqTrack* tracks[TrackMax]{};
  const std::vector<u8>* data = nullptr; // RSEQ file
- u32 bankFile = InvalidId; u32 soundId = InvalidId;
+ u32 bankFile = InvalidId; u32 soundId = InvalidId; u32 ledCue = 0; bool noteStarted = false;
  f32 baseTempo() const { return tempoRatio * (timebase * tempo) / 60000.0f; }
 };
 struct WsdPlayerState {
  PlayerParams p; bool active = false, started = false, paused = false, releaseFix = false, wavePlay = false;
  int channelPriority = 64; u32 fileId = InvalidId; int index = 0; u32 startOffsetMs = 0;
- WsdSoundInfo info; LfoParam lfo; Channel* channel = nullptr;
+ WsdSoundInfo info; LfoParam lfo; Channel* channel = nullptr; u32 ledCue = 0;
 };
 struct StrmPlayerState {
  // detail::StrmPlayer: one Voice per BRSTM track (retail 800a6d40), track
@@ -705,7 +717,7 @@ struct SoundBase {
  // Wave residency: reach waves pinned, how many are still loading, frames waited.
  bool pinned = false; u16 wavesPending = 0, waitFrames = 0;
  SeqPlayer seq; WsdPlayerState wsd; StrmPlayerState strm;
- int calcPriority() const { return clamp(priority + ambient.priority, 0, PriorityMax); }
+ int calcPriority() const { return ambient.distancePriority >= 0 ? ambient.distancePriority : clamp(priority + ambient.priority, 0, PriorityMax); }
  PlayerParams& params() { return type == TypeSeq ? seq.p : type == TypeWave ? wsd.p : strm.p; }
  bool playerActive() const { return type == TypeSeq ? seq.active : type == TypeWave ? wsd.active : strm.active; }
  bool playerStarted() const { return type == TypeSeq ? seq.started : type == TypeWave ? wsd.started : strm.started; }
@@ -732,9 +744,9 @@ struct Engine::Impl::Sounds {
  int countType(u8 type) const { int n = 0; for (const auto& s : sound) n += s.used && s.type == type; return n; }
  int countPlayer(u32 player) const { int n = 0; for (const auto& s : sound) n += s.used && s.playerId == player; return n; }
  // Lowest current priority, oldest first (priority lists insert after equals).
- SoundBase* lowest(bool (*pred)(const SoundBase&, u32), u32 arg) {
+ SoundBase* lowest(bool (*pred)(const SoundBase&, u32), u32 arg,u32 incoming=InvalidId) {
   SoundBase* best = nullptr;
-  for (auto& s : sound) if (s.used && pred(s, arg) && (!best || s.calcPriority() < best->calcPriority() || (s.calcPriority() == best->calcPriority() && s.order < best->order))) best = &s;
+  for (auto& s : sound) if (s.used && pred(s, arg) && !pickupCrowdProtected(incoming,s.id) && (!best || s.calcPriority() < best->calcPriority() || (s.calcPriority() == best->calcPriority() && s.order < best->order))) best = &s;
   return best;
  }
 
@@ -774,20 +786,20 @@ struct Engine::Impl::Sounds {
 
  // ------------------------------------------------ allocation
  // SoundPlayer::CheckPlayableSoundCount + SoundInstanceManager::Alloc
- SoundBase* alloc(u8 type, u32 playerId, int priority, int startPriority) {
+ SoundBase* alloc(u8 type, u32 playerId, int priority, int startPriority,u32 incoming,bool distanceRanked=false) {
   startPriority = clamp(startPriority, 0, PriorityMax);
   if (playerId >= players.size()) return nullptr;
   const int playable = players[playerId].playable;
   if (playable == 0) return nullptr;
   while (countPlayer(playerId) >= playable) {
-   SoundBase* drop = lowest([](const SoundBase& s, u32 p) { return s.playerId == p; }, playerId);
-   if (!drop || startPriority < drop->calcPriority()) return nullptr;
+   SoundBase* drop = lowest([](const SoundBase& s, u32 p) { return s.playerId == p; }, playerId,incoming);
+   if (!drop || startPriority < drop->calcPriority() || (distanceRanked && drop->ambient.distancePriority >= 0 && startPriority < drop->calcPriority() + 2)) return nullptr;
    shutdown(*drop);
   }
   const int limit = type == TypeSeq ? seqLimit : type == TypeStrm ? strmLimit : waveLimit;
   while (countType(type) >= limit) {
-   SoundBase* drop = lowest([](const SoundBase& s, u32 t) { return s.type == t; }, type);
-   if (!drop || startPriority < drop->calcPriority()) return nullptr;
+   SoundBase* drop = lowest([](const SoundBase& s, u32 t) { return s.type == t; }, type,incoming);
+   if (!drop || startPriority < drop->calcPriority() || (distanceRanked && drop->ambient.distancePriority >= 0 && startPriority < drop->calcPriority() + 2)) return nullptr;
    stop(*drop, 0);
   }
   SoundBase* slot = nullptr;
@@ -892,8 +904,8 @@ struct Engine::Impl::Sounds {
    if (!bankInstInfo(bank->main, t.prg, key, velocity, inst)) return nullptr;
    WaveData wave;
    if (!waveFromFile(bank, inst.waveIndex, wave)) { ++e.stats.missingData; e.stats.lastMissingSound = pl.soundId; e.stats.lastMissingFile = pl.bankFile; e.stats.lastMissingWave = u32(inst.waveIndex); return nullptr; }
-   const int priority = pl.priority + t.priority;
-   ch = e.allocChannel(std::min<int>(wave.channels, ChannelMax), priority, &trackChannelCallback, &t);
+   const int priority = pl.distancePriority >= 0 ? 64 + pl.distancePriority : pl.priority + t.priority;
+   ch = e.allocChannel(std::min<int>(wave.channels, ChannelMax), priority, &trackChannelCallback, &t,pl.soundId);
    if (!ch) return nullptr;
    ch->key = key; ch->originalKey = inst.originalKey;
    f32 iv = velocity / 127.0f; iv *= iv; iv *= inst.volume / 127.0f;
@@ -923,6 +935,10 @@ struct Engine::Impl::Sounds {
   t.portaKey = key;
   ch->silence.setTarget(t.silence ? 0.0f : 255.0f, 0);
   ch->releaseFix = pl.releaseFix; ch->panMode = pl.p.panMode; ch->panCurve = pl.p.panCurve;
+  if(!tie&&velocity>0){
+   if(pl.soundId==0x118||pl.soundId==0x119)++e.warningNotes;
+   pl.noteStarted=true;e.ledCues|=pl.ledCue;pl.ledCue=0;
+  }
   return ch;
  }
  // SeqTrack::UpdateChannelLength
@@ -1204,12 +1220,13 @@ struct Engine::Impl::Sounds {
   if (!waveFromFile(f, note.waveIndex, wave)) { ++e.stats.missingData; e.stats.lastMissingSound = s.id; e.stats.lastMissingFile = w.fileId; e.stats.lastMissingWave = u32(note.waveIndex); return false; }
   const u32 start = u32((u64(w.startOffsetMs) * wave.rate) / 1000);
   if (start > wave.loopEnd) return false;
-  Channel* ch = e.allocChannel(std::min<int>(wave.channels, ChannelMax), w.channelPriority + 64, &wsdChannelCallback, &s);
+  Channel* ch = e.allocChannel(std::min<int>(wave.channels, ChannelMax), (s.ambient.distancePriority >= 0 ? s.ambient.distancePriority : w.channelPriority) + 64, &wsdChannelCallback, &s,s.id);
   if (!ch) return false;
   ch->envelope.setAttack(note.attack); ch->envelope.setHold(note.hold); ch->envelope.setDecay(note.decay); ch->envelope.setSustain(note.sustain); ch->envelope.setRelease(note.release);
   ch->releaseFix = w.releaseFix;
   e.channelStart(*ch, wave, -1, start);
   w.channel = ch; w.wavePlay = true;
+  e.ledCues|=w.ledCue;w.ledCue=0;
   return true;
  }
  using u64 = unsigned long long;
@@ -1321,6 +1338,21 @@ struct Engine::Impl::Sounds {
  }
  void basicUpdate(SoundBase& s, bool advanceHold) {
   if (!refreshWaves(s)) return;
+  // Refresh live voices as the listener/actor moves; never re-age a voice
+  // or override its release priority merely because distance changed.
+  if (s.ambient.distancePriority >= 0) {
+   const int rank = s.ambient.distancePriority;
+   auto update = [&](Channel* c) {
+    if (c && c->voice && c->envelope.status != Envelope::Release)
+     c->voice->priority = 64 + rank;
+   };
+   if (s.type == TypeSeq) {
+    s.seq.distancePriority = rank;
+    for (auto* t : s.seq.tracks) if (t)
+     for (auto* c = t->channels; c; c = c->nextTrackChannel) update(c);
+   } else if (s.type == TypeWave) update(s.wsd.channel);
+  }
+
   if (advanceHold && s.autoStop && s.playerActive()) { if (s.autoStopCounter == 0) { stop(s, 0); return; } --s.autoStopCounter; }
   bool startPlayer = false;
   if (!s.startedFlag) {
@@ -1333,6 +1365,7 @@ struct Engine::Impl::Sounds {
   if (s.playerPaused()) return;
   if (s.pauseFade) s.pauseFadeVolume.update(); else { s.fadeVolume.update(); s.extMoveVolume.update(); if (s.type == TypeStrm) strmGameFrame(s); }
   f32 volume = s.initVolume * players[s.playerId].volume * s.extMoveVolume.value() * s.fadeVolume.value() * s.pauseFadeVolume.value() * s.ambient.volume;
+  if(explosionSound(s.id)) volume*=ExplosionGain;
   // 3DS output calibration: preserve authored automation/attenuation, but
   // reserve summing headroom for simultaneous karts, UI and music on NDSP.
   // BRSAR player 0 is PL_BGM; SE_RC_LAP (218) is a full-volume two-track
@@ -1362,8 +1395,8 @@ struct Engine::Impl::Sounds {
   if (!info || info->type == TypeInvalid) { ++e.stats.startsFailed; return false; }
   u32 playerId = info->playerId; int playerPriority = info->playerPriority;
   if (si) { if (si->playerId >= 0) playerId = u32(si->playerId); if (si->playerPriority >= 0) playerPriority = si->playerPriority; }
-  const int startPriority = (hold ? playerPriority - 1 : playerPriority) + (amb ? amb->priority : 0);
-  SoundBase* s = alloc(info->type, playerId, playerPriority, startPriority);
+  const int startPriority = amb && amb->distancePriority >= 0 ? amb->distancePriority : (hold ? playerPriority - 1 : playerPriority) + (amb ? amb->priority : 0);
+  SoundBase* s = alloc(info->type, playerId, playerPriority, startPriority,id,amb && amb->distancePriority >= 0);
   if (!s) { ++e.stats.startsFailed; return false; }
   s->id = id;
   if (amb) { s->ambient = *amb; s->hasAmbient = true; }
@@ -1374,14 +1407,14 @@ struct Engine::Impl::Sounds {
    pl = SeqPlayer{};
    for (auto& v : pl.local) v = -1;
    pl.p.panMode = info->panMode; pl.p.panCurve = info->panCurve; pl.p.id = id;
-   pl.channelPriority = info->channelPriority; pl.priority = info->channelPriority; pl.releaseFix = info->releasePriorityFix;
+   pl.channelPriority = si && si->channelPriority>=0 ? clamp(si->channelPriority,0,PriorityMax) : info->channelPriority; pl.priority = pl.channelPriority; pl.releaseFix = info->releasePriorityFix;
    pl.bankFile = e.archive->bankFile(info->bankId); pl.soundId = id;
    if (f && f->main.size() > 0x20 && !std::memcmp(f->main.data(), "RSEQ", 4)) {
     pl.data = &f->main;
     // SeqPlayer::Setup: allocate the flagged tracks.
     int needed = 0; for (u32 m = info->allocTrack; m; m >>= 1) needed += m & 1;
     while (int(freeTracks.size()) < needed) {
-     SoundBase* drop = lowest([](const SoundBase& x, u32) { return x.type == TypeSeq; }, 0);
+     SoundBase* drop = lowest([](const SoundBase& x, u32) { return x.type == TypeSeq; }, 0,id);
      if (!drop || drop == s) break;
      stop(*drop, 0);
     }
@@ -1400,7 +1433,7 @@ struct Engine::Impl::Sounds {
   } else if (info->type == TypeWave) {
    WsdPlayerState& w = s->wsd; w = WsdPlayerState{};
    w.p.panMode = info->panMode; w.p.panCurve = info->panCurve; w.p.id = id;
-   w.fileId = info->fileId; w.index = int(info->data); w.channelPriority = info->channelPriority; w.releaseFix = info->releasePriorityFix;
+   w.fileId = info->fileId; w.index = int(info->data); w.channelPriority = si && si->channelPriority>=0 ? clamp(si->channelPriority,0,PriorityMax) : info->channelPriority; w.releaseFix = info->releasePriorityFix;
    w.startOffsetMs = si ? si->startOffsetMs : 0;
    ok = e.fileData(info->fileId) != nullptr; if (!ok) ++e.stats.missingData;
    w.active = ok;
@@ -1610,6 +1643,13 @@ void Engine::pausePlayer(u32 player, bool p, int frames) { if (impl_->sounds) fo
 int Engine::playingCount(u32 player) const { return impl_->sounds ? impl_->sounds->countPlayer(player) : 0; }
 void Engine::setMasterVolume(f32 v) { impl_->masterVolume = clamp(v, 0.0f, 1.0f); }
 void Engine::updateGameFrame(bool advanceHold) { impl_->gameFrame(advanceHold); }
+void Engine::updateHoldFrame() {
+ if (!impl_->sounds) return;
+ for (auto& s : impl_->sounds->sound) if (s.used && s.autoStop && s.playerActive()) {
+  if (s.autoStopCounter == 0) impl_->sounds->stop(s, 0);
+  else --s.autoStopCounter;
+ }
+}
 void Engine::updateSoundFrame() { impl_->soundFrame(); }
 void setObserver(Engine& engine, EngineObserver* observer) { engine.impl_->observer = observer; }
 u32 soundFrameCount(const Engine& engine) { return engine.impl_->soundFrames; }
@@ -1668,6 +1708,14 @@ bool parseBrstm(const u8* file, u32 size, BrstmInfo& o) {
  return o.channels && o.blocks && o.blockSize && o.blockSamples && o.format <= 2;
 }
 
+u32 Engine::warningNoteSerial() const {return impl_->warningNotes;}
+void Engine::markLedCue(Handle h,u32 cue){
+ if(auto* s=impl_->sounds?impl_->sounds->get(h):nullptr){
+  if(s->type==TypeSeq){if(s->seq.noteStarted)impl_->ledCues|=cue;else s->seq.ledCue|=cue;}
+  else if(s->type==TypeWave)s->wsd.ledCue|=cue;
+ }
+}
+u32 Engine::takeLedCues(){const u32 flags=impl_->ledCues;impl_->ledCues=0;return flags;}
 const EngineStats& Engine::stats() const {
  auto& e = *impl_;
  e.stats.soundsActive = 0; if (e.sounds) for (auto& s : e.sounds->sound) e.stats.soundsActive += s.used;

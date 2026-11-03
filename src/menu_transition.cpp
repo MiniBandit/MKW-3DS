@@ -1,4 +1,6 @@
 #include <mkw/menu_transition.hpp>
+#include <mkw/menu_model_motion.hpp>
+#include <mkw/menu_voice_assets.hpp>
 #include <mkw/color_fader.hpp>
 #include <mkw/menu_animations.hpp>
 #include <mkw/menu_index.hpp>
@@ -35,26 +37,35 @@ const char* uiSelectedMenuControl(const MenuState& state,bool back){
  if(back)return "Back";
  switch(state.page){
  case UiPage::Title:return "PressStart";
- case UiPage::License:return state.cursor<2?"LicenseSelectT":"LicenseSelectB";
- case UiPage::MainMenu:return state.cursor==0?"TopMenuSingle":state.cursor<4?"TopMenuMulti":state.cursor<6?"TopMenuWifi":"TopMenuChannel";
+ case UiPage::License:if(state.cursor==4)return "LicenseSelectS";return state.cursor<2?"LicenseSelectT":"LicenseSelectB";
+ case UiPage::MainMenu:if(state.cursor==7)return "FileAdmin";return state.cursor==0?"TopMenuSingle":state.cursor<4?"TopMenuMulti":state.cursor<6?"TopMenuWifi":"TopMenuChannel";
+ case UiPage::Settings:return "OptionTopButton";
+ case UiPage::LicenseSettings:return "LicenseManagementButton";
+ case UiPage::RecordsGeneral:case UiPage::RecordsFavorites:case UiPage::RecordsOther:return "NextRecordButton";
  case UiPage::Mode:return "SingleTop";
  case UiPage::EngineClass:return "ClassSelect2";
- case UiPage::VSMode:return "VSSelect";
- case UiPage::BattleMode:return "BattleSelect";
+ case UiPage::VSMode:return state.cursor==2?"RuleSetting":"VSSelect";
+ case UiPage::TeamConfirm:return "TeamConfirmOK";
+ case UiPage::VSRules:return state.cursor==6?"VSSetting":state.cursor==5?"VSSettingUpDownBase":"VSSettingRadioBase";
+ case UiPage::BattleMode:return state.cursor==2?"RuleSetting":"BattleSelect";
+ case UiPage::BattleRules:return state.cursor==5?"BattleSetting":state.cursor==4?"BattleSettingUpDownBase":"BattleSettingRadioBase";
  case UiPage::Character:{
   static const char* controls[]={"CharacterSelect4_0","CharacterSelect4_1","CharacterSelect4_2","CharacterSelect4_3"};
   return controls[std::min(state.cursor/8,3u)];
  }
  case UiPage::Vehicle:return state.columns()==2?"MachineSelect2_6":"MachineSelect1_6";
- case UiPage::Drift:return "PadEasy";
+ case UiPage::Drift:return state.cursor==2?"DriftHelp":"PadEasy";
  case UiPage::Cup:return "CupSelectCup";
  case UiPage::Course:return "CourseSelectCourse";
  case UiPage::BattleCup:return "BattleCupSelectCup";
  case UiPage::BattleStage:return "BattleStageSelectStage";
  case UiPage::Ghost:return "TimeAttackGhostList";
+ case UiPage::DriftHelp:return "OKKey";
  case UiPage::Confirm:return "MenuEndConfirm";
- case UiPage::Pause:return uiPauseMenuControl(state);
- case UiPage::QuitConfirm:return "YesNoButton";
+ case UiPage::Pause:return "OptionTopButton";
+ case UiPage::QuitConfirm:return "OptionTopButton";
+ case UiPage::EraseLicense:return "YesNoButton";
+ case UiPage::Unlock:return "NextButton";
  case UiPage::Error:return "ConfirmOK";
  default:return "";
  }
@@ -64,9 +75,15 @@ float uiMenuMaxDelay(const MenuState& state){
  switch(state.page){
  case UiPage::License:return std::max(maximum("LicenseSelectT"),maximum("LicenseSelectB"));
  case UiPage::MainMenu:return std::max(maximum("FileAdmin"),std::max(maximum("TopMenuWifiWaku"),maximum("TopMenuChannelWaku")));
+ case UiPage::Settings:return maximum("OptionTopButton");
+ case UiPage::LicenseSettings:return maximum("LicenseManagementButton");
+ case UiPage::RecordsGeneral:case UiPage::RecordsFavorites:case UiPage::RecordsOther:return maximum("Record");
  case UiPage::Mode:return delay("SingleTop","ButtonBT"); // Mission control is absent.
  case UiPage::EngineClass:return maximum("ClassSelect2");
  case UiPage::VSMode:return maximum("VSSelect");
+ case UiPage::TeamConfirm:return maximum("TeamConfirmOK");
+ case UiPage::VSRules:return maximum("VSSetting");
+ case UiPage::BattleRules:return maximum("BattleSetting");
  case UiPage::BattleMode:return maximum("BattleSelect");
  case UiPage::Character:return delay("CharacterSelect4_3","Button1");
  case UiPage::Vehicle:return std::max(maximum("MachineSelectNULL6"),maximum("MachineAbility"));
@@ -78,7 +95,8 @@ float uiMenuMaxDelay(const MenuState& state){
  case UiPage::Ghost:return maximum("TimeAttackGhostList");
  case UiPage::Confirm:return maximum("MenuEndConfirm");
  case UiPage::Pause:return maximum(uiPauseMenuControl(state));
- case UiPage::QuitConfirm:return maximum("YesNoButton");
+ case UiPage::QuitConfirm:return maximum("OptionTopButton");
+ case UiPage::EraseLicense:return maximum("YesNoButton");
  case UiPage::Error:return delay("ConfirmOK","OK");
  default:return 0;
  }
@@ -88,6 +106,12 @@ float uiMenuExitHold(const MenuState& state,bool back){
  // Physical B invokes the original page BackPress path with delay zero.
  // A pointer-clicked Back button would instead play its own OK animation.
  if(back)return 0.f;
+ // The original CharacterSelect click holds for the longer of its button
+ // animation and the selected driver's authored celebration (80823694).
+ if(state.page==UiPage::Character){
+  const unsigned driver=state.characterDriver(state.cursor);
+  return std::max(uiButtonConfirmFrames(uiSelectedMenuControl(state)),driver<24?float(MenuSelectAnimationFrames[driver]):0.f);
+ }
  if(state.page==UiPage::Title){
   const auto* clip=uiFindAnimationClip("PressStart","eAFPressStart","PressStart");
   return clip&&clip->rate>0?clip->duration/clip->rate:0.f;
@@ -97,35 +121,39 @@ float uiMenuExitHold(const MenuState& state,bool back){
 
 bool uiMenuChangesSection(UiPage from,UiPage to,UiAction action){
  if(action!=UiAction::None)return action!=UiAction::ResumeRace;
+ // Exiting a paused race changes sections just as the normal race exit does.
+ // Both LCDs must retain their pictures until ColorFader reaches black.
+ if((from==UiPage::Pause||from==UiPage::QuitConfirm)&&
+    to!=UiPage::Pause&&to!=UiPage::QuitConfirm&&to!=UiPage::Race)return true;
  return (from==UiPage::MainMenu&&to==UiPage::Mode)||(from==UiPage::Mode&&to==UiPage::MainMenu)
+     ||(from==UiPage::MainMenu&&to==UiPage::LicenseSettings)||(from==UiPage::LicenseSettings&&to==UiPage::MainMenu)
      ||from==UiPage::Intro||to==UiPage::Intro||from==UiPage::Race||to==UiPage::Race;
 }
 
 void MenuTransition::reset(){
+ fromBackground_=toBackground_=-1;
  phase_=Phase::Idle;elapsed_=-1;exitHold_=outDelay_=inDelay_=0;
  pending_=ready_=UiAction::None;selectedControl_="";section_=back_=skipEnter_=skipExit_=false;
  hasUnderlay_=openingModal_=closingModal_=holding_=false;underlayHoldFrame_=-1;underlaySelectedControl_="";
 }
 
 bool MenuTransition::begin(const MenuState& before,const MenuState& after,bool back,UiAction action){
- if(active()||(before.page==after.page&&action==UiAction::None))return false;
- openingModal_=after.page==UiPage::Confirm&&before.page!=UiPage::Confirm;
- closingModal_=hasUnderlay_&&before.page==UiPage::Confirm&&after.page==underlay_.page&&action==UiAction::None;
+ // Consecutive rewards share a page class, but are separate original notices.
+ const bool nextReward=before.page==UiPage::Unlock&&after.page==UiPage::Unlock&&
+     (before.unlockCondition!=after.unlockCondition||before.unlockBit!=after.unlockBit);
+ if(active()||(before.page==after.page&&action==UiAction::None&&!nextReward))return false;
+ openingModal_=(after.page==UiPage::Confirm||after.page==UiPage::DriftHelp)&&before.page!=after.page;
+ closingModal_=hasUnderlay_&&(before.page==UiPage::Confirm||before.page==UiPage::DriftHelp)&&after.page==underlay_.page&&action==UiAction::None;
  if(openingModal_){underlay_=before;hasUnderlay_=true;}
  outgoing_=before;incoming_=after.page;back_=back;
+ fromBackground_=uiBackdropModelIndex(before);toBackground_=uiBackdropModelIndex(after);
  exitHold_=uiMenuExitHold(before,back);outDelay_=uiMenuMaxDelay(before);inDelay_=uiMenuMaxDelay(after);
  selectedControl_=back?"":uiSelectedMenuControl(before);
  section_=uiMenuChangesSection(before.page,after.page,action);
- // Cup and Course pages share their cup controls and never slide between
- // each other (retail USA REL):
- //  CupSelect_BeforeExit 8082761c: forward to page 0x6f ends the exit state
- //   (805ddbc4) - after the OK hold the cup page leaves without sliding.
- //  CourseSelect_BeforeEntranceAnimations 80825b60: forward from page 0x6e
- //   calls Page_EndState - the course page appears already in place.
- //  CupSelect_BeforeEntrance 808275c0: back from page 0x6f calls
- //   Page_EndState. CourseSelect has no exit override, so its exit animates.
- skipExit_=!back&&before.page==UiPage::Cup&&after.page==UiPage::Course;
- skipEnter_=skipExit_||(back&&before.page==UiPage::Course&&after.page==UiPage::Cup);
+ // Retail shares Cup/Course controls and skips forward exit/entrance
+ // (USA 8082761c, 80825b60, 808275c0). The two-LCD reflow separates
+ // these controls; animate both directions using the ordinary page clock.
+ skipExit_=skipEnter_=false;
  pending_=action;ready_=UiAction::None;elapsed_=-1;phase_=Phase::Exit;
  // Menu::ChangeSectionWithDelay checks whether the destination needs a
  // confirmation. Its virtual +0x24 dispatch adds StartRace immediately and
@@ -137,26 +165,38 @@ bool MenuTransition::begin(const MenuState& before,const MenuState& after,bool b
  return true;
 }
 
+void MenuTransition::holdConfirmation(float frames){
+ if(phase_==Phase::Exit&&elapsed_<0)exitHold_=std::max(exitHold_,frames);
+}
 void MenuTransition::enterSection(const MenuState& incoming){
  // A section the race left for (the end-of-race menu's Next Race / Quit Game):
  // the race already faded to black, so the page starts with the scene fader's
  // fade in and its entrance animation, as after any other section change.
  reset();
  outgoing_=incoming;incoming_=incoming.page;section_=true;
+ toBackground_=uiBackdropModelIndex(incoming);
  inDelay_=uiMenuMaxDelay(incoming);
  phase_=Phase::Enter;elapsed_=-1;
 }
 
 void MenuTransition::enterPage(const MenuState& incoming){
  reset();outgoing_=incoming;incoming_=incoming.page;
+ toBackground_=uiBackdropModelIndex(incoming);
  inDelay_=uiMenuMaxDelay(incoming);phase_=Phase::Enter;elapsed_=-1;
 }
 
 UiAction MenuTransition::input(MenuState& logical,UiInput key){
  if(active())return UiAction::None;
  if(ready_!=UiAction::None)return takeAction();
- const MenuState before=logical;
+ MenuState before=logical;
  const UiAction action=logical.input(key);
+ if(before.page==UiPage::MainMenu&&key.accept&&!key.back){
+  // Keep the same press clock on an outgoing snapshot and on unavailable
+  // destinations which stay on this page. Moving focus alone never starts it.
+  const unsigned slot=logical.page==before.page?logical.cursor:before.cursor;
+  uiFocusMainConfirm(before,slot);
+  if(logical.page==before.page)uiFocusMainConfirm(logical,slot);
+ }
  return begin(before,logical,key.back,action)?UiAction::None:action;
 }
 
@@ -198,6 +238,7 @@ const MenuState& MenuTransition::visual(const MenuState& logical)const{
 UiTransitionView MenuTransition::view()const{
  UiTransitionView result;
  result.from=outgoing_.page;result.to=incoming_;
+ result.fromBackground=fromBackground_;result.toBackground=toBackground_;
  result.modal=hasUnderlay_;result.underlay=hasUnderlay_?&underlay_:nullptr;
  if(hasUnderlay_){result.underlayHoldFrame=underlayHoldFrame_;result.underlaySelectedControl=underlaySelectedControl_;}
  result.active=active();if(!result.active)return result;

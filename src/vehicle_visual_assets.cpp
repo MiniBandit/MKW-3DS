@@ -1,4 +1,5 @@
 #include <mkw/vehicle_visual_assets.hpp>
+#include <mkw/mii_garage.hpp>
 #include <cstdio>
 #include <cstring>
 
@@ -8,6 +9,7 @@ bool VehicleVisualAssets::load(unsigned character,unsigned vehicle,RaceTeam team
  if(failure)*failure="vehicle selection";
  for(const auto& entry:GarageChoices)
   if(entry.character==character&&entry.vehicle==vehicle){next.choice=&entry;break;}
+ if(!next.choice)for(const auto& entry:MiiGarageChoices)if(entry.character==character&&entry.vehicle==vehicle){next.choice=&entry;break;}
  if(!next.choice)return false;
  auto path=[&](const char* part,const char* extension){
   const char* suffix=!std::strcmp(part,"driver")||!std::strcmp(part,"shadow")?"":teamVehicleSuffix(vehicle,team);

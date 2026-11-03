@@ -10,6 +10,9 @@
 #include <game/field/ObjectDrivableDirector.hh>
 #include <game/field/obj/ObjectTwistedWay.hh>
 #include <game/field/obj/ObjectAurora.hh>
+#include <game/field/obj/ObjectSandcone.hh>
+#include <game/field/obj/ObjectQuicksand.hh>
+#include <game/field/obj/ObjectCasinoRoulette.hh>
 #include <game/field/obj/ObjectItemboxPress.hh>
 #include <game/field/RailInterpolator.hh>
 #include <game/field/RailManager.hh>
@@ -35,13 +38,18 @@ namespace K=Kinoko;
 Vec3 nativeVec(const K::EGG::Vector3f& v){return {v.x,v.y,v.z};}
 K::EGG::Vector3f sourceVec(Vec3 v){return {v.x,v.y,v.z};}
 K::Kart::KartObject* kart(unsigned player){return K::Kart::KartObjectManager::Instance()->object(player);}
-ItemSurface nativeSurface(Vec3 previous,Vec3 position,float radius){
+ItemSurface nativeSurfaceAt(Vec3 previous,Vec3 position,float radius,unsigned timeOffset){
     K::Field::CollisionInfo info{};info.reset();K::Field::KCLTypeMask mask=0;
     // Includes item-only walls/floors and moving course collision.
     const auto flags=K::Field::KCLTypeMask(KCL_TYPE_64EBDFFF);
-    if(!K::Field::CollisionDirector::Instance()->checkSphereFull(radius,sourceVec(position),sourceVec(previous),flags,&info,&mask,0))return {};
-    return {nativeVec(info.tangentOff),nativeVec(info.floorNrm),nativeVec(info.wallNrm),bool(mask&(KCL_TYPE_BIT(COL_TYPE_FALL_BOUNDARY)|KCL_TYPE_BIT(COL_TYPE_SOLID_OOB))),bool(mask&KCL_TYPE_BIT(COL_TYPE_CANNON_TRIGGER)),uint32_t(mask)};
+    if(!K::Field::CollisionDirector::Instance()->checkSphereFull(radius,sourceVec(position),sourceVec(previous),flags,&info,&mask,timeOffset))return {};
+    float supportY=0;
+    if(info.floorObject&&info.floorObject->id()==K::Field::ObjectId::Sandcone)
+        supportY=static_cast<K::Field::ObjectSandcone*>(info.floorObject)->getUpdatedMatrix(timeOffset).base(3).y;
+    const Vec3 carry=info.floorObject&&unsigned(info.floorObject->id())==0x206?nativeVec(info.roadVelocity):Vec3{};
+    return {nativeVec(info.tangentOff),nativeVec(info.floorNrm),nativeVec(info.wallNrm),bool(mask&(KCL_TYPE_BIT(COL_TYPE_FALL_BOUNDARY)|KCL_TYPE_BIT(COL_TYPE_SOLID_OOB))),bool(mask&KCL_TYPE_BIT(COL_TYPE_CANNON_TRIGGER)),uint32_t(mask),true,info.floorObject,supportY,carry};
 }
+ItemSurface nativeSurface(Vec3 previous,Vec3 position,float radius){return nativeSurfaceAt(previous,position,radius,0);}
 // The patched Kinoko KartAction/KartMove carry the retail gates; this only forwards.
 class NativeKarts final:public ItemKarts{
 public:
@@ -146,7 +154,8 @@ ItemRacer snapshot(unsigned i){
     r.damageAction=int8_t(k->action()->currentAction());r.zipperStick=status.onBit(S::ZipperStick);
     // KartAction::start's respawn family, read for item eligibility; the kart applies the
     // gates itself when an item asks.
-    r.damageProtected=status.onBit(S::BeforeRespawn,S::TriggerRespawn,S::InRespawn,S::AfterRespawn,S::InCannon);
+    r.damageProtected=status.onBit(S::BeforeRespawn,S::TriggerRespawn,S::InRespawn,S::AfterRespawn,S::InCannon,
+        S::BattleDamageProtection,S::BattleVanish,S::BattleHidden);
     r.bike=k->param()->isBike();r.velocity=nativeVec(k->velocity());r.haveVelocity=true;
     r.star=status.onBit(S::Star)?uint16_t(std::max<int>(1,k->move()->starTimer())):0;
     r.mega=status.onBit(S::Mega)?uint16_t(std::max<int>(1,k->move()->megaTimer())):0;
@@ -155,6 +164,8 @@ ItemRacer snapshot(unsigned i){
     return r;
 }
 }
+ItemSurface queryCourseItemSurface(Vec3 previous,Vec3 position,float radius){return nativeSurface(previous,position,radius);}
+ItemSurface queryCourseItemSurfaceAt(Vec3 previous,Vec3 position,float radius,unsigned timeOffset){return nativeSurfaceAt(previous,position,radius,timeOffset);}
 void RaceItems::nativeKartPass(void* context,size_t player){
     auto* items=static_cast<RaceItems*>(context);
     if(!items->active_||player>=items->count_)return;
@@ -206,6 +217,9 @@ void RaceItems::stepMovers(){
         if(unsigned(binding.road->id())==0x1fe){
             const auto sc=K::EGG::Mathf::SinCosFIdx(roadBoxAngle(*binding.road,local.z)*40.74366543f);
             local=followTwistedItem(local,sc.first,sc.second);
+        }else if(unsigned(binding.road->id())==0x20c){
+            const auto& sand=*static_cast<const K::Field::ObjectQuicksand*>(binding.road);
+            local.y=sand.surfaceOffset(std::sqrt(local.x*local.x+local.z*local.z),K::System::RaceManager::Instance()->timer());
         }else{
             const float time=float(K::System::RaceManager::Instance()->timer());
             const float mins=(time/60.f-30.f)/60.f;
@@ -292,7 +306,10 @@ void RaceItems::resetFromCourse(unsigned count,uint32_t seed){
                 const unsigned rid=unsigned(road->id());Vec3 local=at-nativeVec(road->pos());
                 const bool twisted=rid==0x1fe&&std::abs(local.z)<=7500.f&&std::abs(local.x)<=2000.f;
                 const bool aurora=rid==0x204&&local.z>=0&&local.z<=15000.f&&std::abs(local.x)<=2000.f;
-                if(!twisted&&!aurora)continue;
+                // Original S_Itembox ObjInfo binding follows the quicksand's
+                // analytic material point, preserving X/Z and authored lift.
+                const bool sand=rid==0x20c&&local.x*local.x+local.z*local.z<=9500.f*9500.f;
+                if(!twisted&&!aurora&&!sand)continue;
                 if(twisted){const auto sc=K::EGG::Mathf::SinCosFIdx(roadBoxAngle(*road,local.z)*40.74366543f);local=bindTwistedItem(local,sc.first,sc.second);}
                 roadBoxes.push_back({road,local,uint16_t(boxes.size()-1),ItemBoxHeight+int16_t(obj->setting(6))});break;
             }
@@ -350,7 +367,8 @@ void RaceItems::resetFromCourse(unsigned count,uint32_t seed){
     loadShellRoute(kmp,kmpSize,unsigned(K::System::RaceConfig::Instance()->raceScenario().course));
     size_t oddsSize=0;const auto* odds=K::System::ResourceManager::Instance()->getFile("ItemSlot.bin",&oddsSize,K::System::ArchiveId::Core);
     const unsigned itemMode=K::System::RaceConfig::Instance()->raceScenario().itemMode;
-    loadOdds(odds,oddsSize,itemMode);
+    const auto& scenario=K::System::RaceConfig::Instance()->raceScenario();
+    loadOdds(odds,oddsSize,itemMode,scenario.gameMode==K::System::RaceConfig::Scenario::GameMode::Battle,scenario.battleType==1);
     if(itemMode==3){boxes_.clear();movers_.clear();lines_.clear();presses_.clear();}
     for(unsigned i=0;i<count_;++i){K::Item::ItemDirector::Instance()->kartItem(i).clear();(void)K::Item::ItemDirector::Instance()->kartItem(i).takeLossRequests();}
     K::Kart::KartCollide::SetItemCollisionHook(&RaceItems::nativeKartPass,this);
@@ -380,7 +398,10 @@ void RaceItems::beforeStepNative(const ItemInput* inputs,unsigned count,bool act
 void RaceItems::afterStepNative(unsigned count){
     // Retail Item globals read RaceManager +0x20, not the active-item clock.
     reclaimPhase_=K::System::RaceManager::Instance()->timer()&7;nativeReclaimPhase_=true;
-    std::array<ItemRacer,MaxRacers> states;snapshotNative(count,states);afterStep(states.data(),count,nativeSurface);
+    std::array<ItemRacer,MaxRacers> states;snapshotNative(count,states);
+    for(unsigned i=0;i<std::min(count,MaxRacers);++i)
+        states[i].inkCleaningBoost=kart(i)->move()->takeFloorInkClear()||states[i].inkCleaningBoost;
+    afterStep(states.data(),count,nativeSurface);
 }
 #else
 void RaceItems::stepMovers(){}

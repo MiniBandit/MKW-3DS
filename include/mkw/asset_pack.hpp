@@ -9,7 +9,7 @@ namespace mkw {
 // open and close. Paths not in the archive report false; callers then use the
 // loose file. Thread-safe: the asset loader and main thread may both read.
 namespace pack {
-// Opens (once) "menu.pak" relative to the current asset directory.
+// Opens menu.pak/race.pak once per session.
 void open();
 void close();
 bool contains(const char* path);

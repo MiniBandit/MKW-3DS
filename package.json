@@ -1,1 +1,1 @@
-{"private":true,"type":"module","dependencies":{"esbuild":"0.25.10","gl-matrix":"3.4.3"}}
+{"private":true,"type":"module","dependencies":{"esbuild":"0.25.10","gl-matrix":"3.4.3","playwright-core":"1.56.0"}}

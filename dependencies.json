@@ -17,10 +17,9 @@
     "license": "CC0-1.0",
     "files": [
       "src/nw4r/ef/ef_emitterform.cpp",
-      "src/nw4r/ef/emform/ef_disc.cpp",
-      "src/nw4r/ef/emform/ef_cylinder.cpp"
+      "src/nw4r/ef/emform/ef_disc.cpp"
     ],
-    "usage": "Reference for disc/cylinder emission and velocity cone mathematics; original game BREFF supplies effect parameters."
+    "usage": "Reference for disc emission and velocity cone mathematics; original game BREFF supplies effect parameters."
   },
   "citro3d": {
     "url": "https://github.com/devkitPro/citro3d.git",
@@ -35,5 +34,27 @@
     "files": [
       "src/enemy/AITrickHandler.cpp"
     ]
+  },
+  "cfl_mii": {
+    "url": "https://github.com/jamesrhg/cfl-mii",
+    "commit": "b85be4d66e9c89d203840cbe7fa0f638a44cdde2",
+    "path": "vendor/cfl-mii",
+    "provided": "locally patched source",
+    "license_status": "No explicit license found in bundled source or upstream root during 2026-10-25 review; permission must be clarified."
+  },
+  "cfl_tool": {
+    "url": "https://github.com/jamesrhg/cfl-tool",
+    "commit": "be72a29be54b04201372516aa64bab129e3ead7a",
+    "path": "vendor/cfl-tool",
+    "provided": false,
+    "usage": "Acquire separately for data/IconBody.iqm used by generate_native_icon.py.",
+    "license_status": "No explicit license identified in upstream repository metadata during 2026-10-25 review."
+  },
+  "pycgfx": {
+    "url": "https://github.com/skyfloogle/pycgfx.git",
+    "commit": "1f78850086f3a77c41e07162e842f97a5bf3c18a",
+    "provided": false,
+    "usage": "Animated HOME banner conversion only; acquire separately.",
+    "license_status": "No explicit license file found in the locally inspected pinned checkout."
   }
 }

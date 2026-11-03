@@ -20,6 +20,7 @@ const objectMaterials=process.env.MKW_OBJECT_MATERIALS==='1';
 const actorDiffuseOnly=objectMaterials&&/^(wanwan|poihana)$/i.test(path.parse(process.argv[2]).name);
 const archive=parse(new ArrayBufferSlice(data.buffer,data.byteOffset,data.byteLength));
 const menuMaterials=process.env.MKW_MENU_MATERIALS==='1';
+const backdropLighting=menuMaterials&&/BackModel[/\\]/.test(process.argv[2]);
 const menuLighting=menuMaterials&&/(?:Driver|Kart)[/\\]/.test(process.argv[2]);
 // Racers use the same source GX channels/reflections as menu previews; the
 // runtime now retains normals separately from GPU bone indices.
@@ -27,7 +28,7 @@ const raceMaterials=process.env.MKW_RACE_MATERIALS==='1';
 const racerLighting=menuLighting||raceMaterials;
 const firstSampler=process.env.MKW_FIRST_SAMPLER==='1';
 // Retail course lighting (tools/retail_lighting.ts) replaces any static light bake.
-const retailEnabled=process.env.MKW_RETAIL_LIGHTING==='1'||racerLighting;
+const retailEnabled=process.env.MKW_RETAIL_LIGHTING==='1'||racerLighting||backdropLighting;
 const retailLimitations=new Set<string>();
 const poseMetadata=readPoseMetadata(data);
 const out=process.argv[3];fs.mkdirSync(out,{recursive:true});
@@ -127,7 +128,7 @@ function lighting(material:any){
  let mode=0,secondaryMap=-1,secondaryCoord=0,primaryCoord=stages[0]?.texCoordId??0,primaryMap=stages[0]?.texMap??0;
  let vertexColor:number[]|undefined,vertexTint:number[]|undefined,colorLerp=false,environmentMetal=false,constantLerp=false,primaryTextureName:string|undefined;
  let constantRegister=-1,vertexColorRegister=-1,additiveRegister=-1,additiveFactor=[0,0,0],unlit=false;
- let reflection:any=null,textureAlphaAdd=false,skyScreenBlend=false,skyRasterAdd=false;
+ let reflection:any=null,textureAlphaAdd=false,skyScreenBlend=false,skyRasterAdd=false,dotMatrixScreen=false;
  // Raster remap applied after the course light bake (colour*scale+offset), and
  // whether that bake applies: equations that never read the raster colour skip it.
  let raster:{scale:number[],offset:number[]}|undefined,bake=true;
@@ -148,6 +149,24 @@ function lighting(material:any){
  // deviation the modes force is recorded as an approximated material.
  const courseRule=()=>{
   if(!stages.length)return false;
+  // GCN Mario water: K + (C0-K)*wave + wave, alpha K.a.
+  if(stages.length===1&&args(stages[0]).join(',')==='14,2,8,8'&&
+     stages[0].colorOp===0&&stages[0].colorBias===0&&stages[0].colorScale===0&&stages[0].colorClamp&&
+     [stages[0].alphaInA,stages[0].alphaInB,stages[0].alphaInC,stages[0].alphaInD].join(',')==='7,7,7,6'){
+   const t=stages[0],k=konst(t.konstColorSel),c=material.colorRegisters[1];
+   primaryMap=t.texMap;primaryCoord=t.texCoordId;secondaryMap=-1;
+   constant=c;constantRegister=1;vertexColor=[c.r,c.g,c.b];unlit=true;bake=false;
+   reflection={mode:24,constant:([k.r,k.g,k.b,k.a].reduce((n,v,i)=>n|(Math.round(v*255)<<(8*i)),0))>>>0,add:0,uv:[1,0,0,0,1,0]};return true;
+  }
+  // Daisy fountain: fixed C0 RGB, T0.a*clamp(T1.a*raster.a+C0.a).
+  if(stages.length===2&&args(stages[0]).join(',')==='15,15,15,15'&&args(stages[1]).join(',')==='15,15,15,2'&&
+     stages.every((t:any)=>t.colorOp===0&&t.colorBias===0&&t.colorScale===0&&t.colorClamp&&t.alphaOp===0&&t.alphaBias===0&&t.alphaScale===0&&t.alphaClamp)&&
+     [stages[0].alphaInA,stages[0].alphaInB,stages[0].alphaInC,stages[0].alphaInD].join(',')==='7,4,5,1'&&
+     [stages[1].alphaInA,stages[1].alphaInB,stages[1].alphaInC,stages[1].alphaInD].join(',')==='7,4,0,7'){
+   primaryMap=stages[1].texMap;primaryCoord=stages[1].texCoordId;secondaryMap=stages[0].texMap;secondaryCoord=stages[0].texCoordId;
+   constant=material.colorRegisters[1];constantRegister=1;vertexColor=[1,1,1];unlit=true;bake=false;
+   reflection={mode:25,constant:0,add:0,uv:[1,0,0,0,1,0]};return true;
+  }
   const plain=(s:any)=>s.colorOp===0&&s.colorBias===0&&s.colorRegId===0&&(s.colorClamp||(s.colorInD===15&&s.colorScale===0));
   const cs=stages.filter((s:any,i:number)=>i===0||!(plain(s)&&s.colorScale===0&&['0,15,15,15','15,15,15,0'].includes(args(s).join())));
   const [s0,s1]=cs,a0=args(s0),a1=s1?args(s1):[],sc0=s0.colorScale,sc1=s1?.colorScale;
@@ -228,6 +247,16 @@ function lighting(material:any){
      constantTextures.set(material.name,{[p.texMap]:glow[3]});
      approximate('projected glow averaged over its window, indirect warp omitted'+(grey(z)?'':', layer colour averaged to grey'));return true;
     }
+   }
+  }
+  // Funky Stadium's four overhead displays are course geometry, not the
+  // live fks_screen_wii objects. GX: P=Tlogo*K+C2.a; out=2*(P+P*Tdots).
+  if(cs.length===2&&scaled(s0,[15,8,14,7],0)&&scaled(s1,[15,0,8,0],1)&&
+     material.gxMaterial.ropInfo.blendMode===0&&!material.gxMaterial.ropInfo.alphaUpdate){
+   const weight=k(s0,14),floor=k(s0,7);
+   if(weight&&floor&&grey(weight)&&grey(floor)){
+    use(s0,true);use(s1,false);constant={r:weight.r,g:weight.g,b:weight.b,a:floor.r};
+    dotMatrixScreen=true;vertexColor=[1,1,1];unlit=true;bake=false;return true;
    }
   }
   if(cs.length>2||!cs.every(plain))return false;
@@ -375,6 +404,17 @@ function lighting(material:any){
   mode=2;constant=material.colorRegisters[1];constantRegister=1;secondaryMap=stages[1].texMap;secondaryCoord=stages[1].texCoordId;
  }else if(stages.length===2&&eq(stages[0],[15,14,8,15])&&eq(stages[1],[8,15,15,0])&&stages[0].konstColorSel<=7){
   mode=3;const k=(8-stages[0].konstColorSel)/8;constant={r:k,g:k,b:k,a:1};secondaryMap=stages[0].texMap;secondaryCoord=stages[0].texCoordId;primaryMap=stages[1].texMap;primaryCoord=stages[1].texCoordId;
+ }else if(material.name==='tico_tx'&&stages.length===2&&scaled(stages[0],[15,8,10,15],0)&&
+          stages[1].colorInA===6&&stages[1].colorInB===14&&stages[1].colorInC===8&&stages[1].colorInD===0&&
+          stages[1].colorOp===0&&stages[1].colorBias===2&&stages[1].colorScale===1&&stages[1].konstColorSel===30){
+  // Award Tico: clamp(2*(T0*raster + lerp(C2,K2.a,metal_3) - .5)).
+  // Preserve both texture coordinates and the authored yellow C2 endpoint.
+  const c=material.colorRegisters[3],k=material.colorConstants[2].a;
+  const packed=([c.r,c.g,c.b,k].reduce((v,x,i)=>v|(Math.round(Math.max(0,Math.min(1,x))*255)<<(8*i)),0))>>>0;
+  primaryMap=stages[0].texMap;primaryCoord=stages[0].texCoordId;
+  secondaryMap=stages[1].texMap;secondaryCoord=stages[1].texCoordId;
+  const m=material.texSrts[secondaryCoord].srtMtx;
+  reflection={mode:27,constant:packed,add:0,uv:[m[0],m[4],m[12],m[1],m[5],m[13]]};scale=0;bake=false;
  }else if(stages.length===1&&(eq(stages[0],[15,2,8,15])||eq(stages[0],[15,3,8,15]))){
   const c=material.colorRegisters[1];vertexColor=stages[0].colorInB===3?[c.a,c.a,c.a]:[c.r,c.g,c.b];scale=stages[0].colorScale;vertexColorRegister=stages[0].colorInB===3?-1:1;
  }else if(objectMaterials&&stages.length===2&&scaled(stages[1],[15,6,8,0],0)&&
@@ -679,6 +719,25 @@ function lighting(material:any){
    unsupported.delete(material.name);
   }
  }
+ // Thunder Cloud bolt: lit albedo plus the authored yellow/white environment ramp.
+ if(material.name==='thunder_m'&&stages.length===2&&eq(stages[0],[15,10,8,15])&&
+    eq(stages[1],[14,4,8,0])&&material.samplers[1]?.name==='kumo'){
+  const low=material.colorConstants[1],high=material.colorRegisters[2],m=material.texSrts[1].srtMtx;
+  const pack=(c:any)=>(Math.round(c.r*255)|(Math.round(c.g*255)<<8)|(Math.round(c.b*255)<<16))>>>0;
+  reflection={mode:26,constant:pack(low),add:pack(high),uv:[m[0],m[4],m[12],m[1],m[5],m[13]]};
+  primaryMap=0;primaryCoord=0;secondaryMap=1;secondaryCoord=1;
+  mode=0;scale=0;firstScale=0;colorLerp=false;constantLerp=false;vertexTint=undefined;
+  unsupported.delete(material.name);
+ }
+ // Thunder Cloud eyes: lit eye albedo plus the original white EnvCamera highlight.
+ if(material.name==='kumo_eye_m'&&stages.length===2&&eq(stages[0],[15,10,8,15])&&
+    eq(stages[1],[15,12,8,0])&&material.samplers[1]?.name==='kumo'&&material.texSrts[1]?.mapMode===1){
+  const m=material.texSrts[1].srtMtx;
+  reflection={mode:2,constant:0x00ffffff,add:0,uv:[m[0],m[4],m[12],m[1],m[5],m[13]]};
+  primaryMap=0;primaryCoord=0;secondaryMap=1;secondaryCoord=1;
+  mode=0;scale=0;firstScale=0;colorLerp=false;constantLerp=false;vertexTint=undefined;
+  unsupported.delete(material.name);
+ }
  // Original background metal: clamp(albedo*C0 + normal-reflection - 0.5)
  // followed by the raster colour. The second map uses GX EnvCamera mapping.
  if(menuMaterials&&stages.length===3&&eq(stages[0],[15,8,2,15])&&
@@ -707,10 +766,24 @@ function lighting(material:any){
    for(const entry of approximated)if(entry.startsWith(material.name+' ('))approximated.delete(entry);
   }
  }
+ // Thwomp Desert: two independently scrolling sand maps. Retail saves
+ // T1*rasC in C2, then doubles lerp(T0*rasC,C2,T0.a*rasA).
+ if(objectMaterials&&material.name==='quickSand_m'&&stages.length===3){
+  const [a,b,c]=stages;
+  if(scaled(a,[15,8,10,15],0)&&args(b).join()==='15,10,8,15'&&b.colorRegId===3&&b.colorScale===0&&
+     scaled(c,[0,6,1,15],1)&&a.alphaInB===1&&a.alphaInC===5){
+   primaryMap=a.texMap;primaryCoord=a.texCoordId;secondaryMap=b.texMap;secondaryCoord=b.texCoordId;
+   reflection={mode:23,constant:0,add:0,uv:[1,0,0,0,1,0]};
+   mode=0;scale=0;firstScale=0;constant={r:1,g:1,b:1,a:1};
+   raster=undefined;vertexColor=undefined;vertexTint=undefined;colorLerp=false;constantLerp=false;
+   unsupported.delete(material.name);
+   for(const entry of approximated)if(entry.startsWith(material.name+' ('))approximated.delete(entry);
+  }
+ }
  // Ceremony trophies share a three-stage metal equation, with per-material
  // reflection weight and optional C2 lift. Preserve the intermediate clamp:
  // clamp(base*C0 + environment*w - bias), then raster and the final lift.
- if(process.env.MKW_AWARD_MATERIALS==='1'&&stages.length===3){
+ if((process.env.MKW_AWARD_MATERIALS==='1'||backdropLighting)&&stages.length===3){
   const [a,b,c]=stages,k=material.colorConstants[3].a;
   const weighted=b.colorInA===8&&b.colorInC===14&&b.konstColorSel===31&&
    (b.colorInB===15||k===0);
@@ -733,12 +806,54 @@ function lighting(material:any){
    unsupported.delete(material.name);
   }
  }
+ // Four menu backgrounds: preserve their authored GX equations, not the
+ // generic surface fallback. The backdrop light set contains diffuse lights
+ // only; channel 1's specular mask and its zero ambient produce zero RGB.
+ if(backdropLighting){
+  const pack=(v:number[])=>v.reduce((n,c,i)=>n|(Math.round(Math.max(0,Math.min(1,c))*255)<<(8*i)),0)>>>0;
+  const reset=()=>{mode=0;environmentMetal=false;constantLerp=false;colorLerp=false;scale=0;firstScale=0;vertexColor=undefined;vertexTint=undefined;};
+  const env=(coord:number)=>{const m=material.texSrts[coord].srtMtx;return [m[0],m[4],m[12],m[1],m[5],m[13]];};
+  const [a,b,c]=stages;
+  const normalMap=(stage:any)=>material.gxMaterial.texGens[stage.texCoordId]?.source===GX.TexGenSrc.NRM&&material.texSrts[stage.texCoordId]?.mapMode===1;
+  if(stages.length===1&&eq(a,[10,15,15,15])){
+   reset();primaryMap=255;secondaryMap=-1;unsupported.delete(material.name);
+  }else if(stages.length===2&&eq(a,[15,8,2,15])&&eq(b,[15,10,0,15])){
+   reset();primaryMap=a.texMap;primaryCoord=a.texCoordId;secondaryMap=-1;
+   const k=material.colorRegisters[1];vertexTint=[k.r,k.g,k.b];unsupported.delete(material.name);
+  }else if(stages.length===2&&(eq(a,[15,7,10,8])||eq(a,[15,7,10,10]))&&eq(b,[15,8,1,0])&&normalMap(a)&&
+           a.colorOp===0&&a.colorBias===0&&a.colorScale<=1&&b.colorScale===0&&
+           [a.alphaInA,a.alphaInB,a.alphaInC,a.alphaInD].join()==='7,4,6,7'){
+   reset();primaryMap=a.texMap;primaryCoord=a.texCoordId;secondaryMap=a.texMap;secondaryCoord=a.texCoordId;
+   const gain=material.colorRegisters[3].a,k=konst(a.konstAlphaSel).a;
+   reflection={mode:28,constant:pack([gain,gain,gain,k]),add:(a.colorInD===10?1:0)|(a.colorScale<<1),uv:env(a.texCoordId)};
+   unsupported.delete(material.name);
+  }else if(stages.length===2&&eq(a,[10,4,8,15])&&eq(b,[10,15,15,0])&&normalMap(a)){
+   // Pole: lerp(raster0,C1,metal)+raster1. C1 and channel1 ambient
+   // are zero; no specular light is enabled in MenuSingle's light set.
+   const k=material.colorRegisters[2],amb=material.colorAmbRegs[1];
+   if(k.r||k.g||k.b||amb.r||amb.g||amb.b)throw new Error('Unexpected backdrop pole second channel');
+   reset();primaryMap=a.texMap;primaryCoord=a.texCoordId;secondaryMap=a.texMap;secondaryCoord=a.texCoordId;
+   reflection={mode:31,constant:0,add:0,uv:env(a.texCoordId)};unsupported.delete(material.name);
+  }else if(stages.length===3&&eq(a,[15,2,10,15])&&eq(b,[15,8,4,0])&&eq(c,[15,10,0,6])&&normalMap(b)){
+   reset();primaryMap=b.texMap;primaryCoord=b.texCoordId;secondaryMap=b.texMap;secondaryCoord=b.texCoordId;
+   const base=material.colorRegisters[1],weight=material.colorRegisters[2],lift=material.colorRegisters[3];
+   constant=base;constantRegister=1;
+   reflection={mode:29,constant:pack([weight.r,weight.g,weight.b,0]),add:pack([lift.r,lift.g,lift.b,0]),uv:env(b.texCoordId)};
+   unsupported.delete(material.name);
+  }else if(stages.length===3&&eq(a,[15,8,14,15])&&eq(b,[8,15,14,0])&&[c.colorInA,c.colorInB,c.colorInC,c.colorInD].join()==='15,0,10,6'&&
+           a.colorScale===0&&b.colorScale===0&&b.colorBias===0&&c.colorBias===2&&c.colorScale===1&&normalMap(b)){
+   reset();primaryMap=a.texMap;primaryCoord=a.texCoordId;secondaryMap=b.texMap;secondaryCoord=b.texCoordId;
+   const k=konst(a.konstColorSel).r,lift=material.colorRegisters[3];constant={r:k,g:k,b:k,a:1};
+   reflection={mode:30,constant:pack([1-k,1-k,1-k,0]),add:pack([lift.r,lift.g,lift.b,0]),uv:env(b.texCoordId)};
+   unsupported.delete(material.name);
+  }
+ }
  // Race items (tools/cook_race_items.py) keep the first exporter's base
  // texture: the material's first sampler on its first coordinate. The
  // equation matching above would pick e.g. a shell's specular map.
  if(firstSampler){primaryMap=0;primaryCoord=0;primaryTextureName=undefined;}
  const packed=([constant.r,constant.g,constant.b,constant.a].reduce((v,c,i)=>v|(Math.round(Math.max(0,Math.min(1,c))*255)<<(8*i)),0))>>>0;
- return {mode,secondaryMap,secondaryCoord,primaryMap,primaryCoord,primaryTextureName,constant:packed,scale,firstScale,vertexColor,vertexTint,colorLerp,environmentMetal,constantLerp,constantRegister,vertexColorRegister,additiveRegister,additiveFactor,unlit,raster,bake,reflection,textureAlphaAdd,skyScreenBlend,skyRasterAdd};
+ return {mode,secondaryMap,secondaryCoord,primaryMap,primaryCoord,primaryTextureName,constant:packed,scale,firstScale,vertexColor,vertexTint,colorLerp,environmentMetal,constantLerp,constantRegister,vertexColorRegister,additiveRegister,additiveFactor,unlit,raster,bake,reflection,textureAlphaAdd,skyScreenBlend,skyRasterAdd,dotMatrixScreen};
 }
 const bankShapes:BankShape[]=[];
 for(const model of archive.mdl0){
@@ -776,8 +891,8 @@ for(const model of archive.mdl0){
   const view=new DataView(loaded.vertexBuffers[0]),stride=layout.vertexBufferStrides[0];
   const indices=new Uint16Array(loaded.indexData);
   const light=lighting(material);
-  const retail=retailEnabled?retailLighting(material,!!light.vertexColor,!menuLighting&&process.env.MKW_RETAIL_SKY!=='1'):null;
-  if(retail&&racerLighting){
+  const retail=retailEnabled?retailLighting(material,!!light.vertexColor,!menuLighting&&!backdropLighting&&process.env.MKW_RETAIL_SKY!=='1'):null;
+  if(retail&&(racerLighting||backdropLighting)){
    retail.word|=1<<21;
    if(!retail.limitation&&material.samplers.some((s:any)=>s.name==='lm_0'||s.name==='lm_1'))unsupported.delete(material.name);
   }
@@ -897,11 +1012,7 @@ for(const model of archive.mdl0){
    if(!Number.isInteger(exponent))throw new Error('Invalid water indirect exponent');
    const coefficients=[0,1,2,4,5,6].map(i=>Math.round(matrix[i]/matrix[3]));
    const sourceTexture=archive.tex0.find(t=>t.name===sampler.name)!;
-   // The 3DS path keeps flat water and its authored scrolling textures.
-   // Preserve the indirect source data without requiring trilinear filtering:
-   // Dry Dry Ruins also uses a valid non-trilinear GX sampler here.
-   if(sampler.minFilter<0||sampler.minFilter>5||sampler.magFilter<0||sampler.magFilter>1)
-    throw new Error('Invalid water texture filter');
+   if(![1,5].includes(sampler.minFilter)||sampler.magFilter!==1)throw new Error('Unsupported water texture filter');
    const file=`water_indirect_${op.matId}.bin`,levels=sourceTexture.mipCount,samples:Buffer[]=[];
    for(let l=0;l<levels;++l){
     const mip=decodeLevel0(sampler.name,l)!;const bytes=Buffer.alloc(mip.w*mip.h*3);
@@ -951,13 +1062,16 @@ for(const model of archive.mdl0){
    if(light.raster)for(let c=0;c<3;c++)color[c]=Math.round(Math.max(0,Math.min(255,color[c]*light.raster.scale[c]+light.raster.offset[c]*255)));
    vertices.push([...p,...n,...sampleUV(light.primaryCoord,0),...sampleUV(light.secondaryCoord,1),...color]);
   }
-  shapes.push({name:shape.name,material:material.name,sourceMaterial:material,constantTextures:constantTextures.get(material.name),primaryMap:light.primaryMap,secondaryMap:light.secondaryMap,texture,secondary,constant:light.constant,lightingMode:light.mode,uvVelocity,animationFrames,uvSamples,uvLoop:animClip?.loopMode===1,flags,vertices,tevStages:material.gxMaterial.tevStages.length,reflection:light.reflection,waterIndirect,textureAlphaAdd:light.textureAlphaAdd,skyScreenBlend:light.skyScreenBlend,skyRasterAdd:light.skyRasterAdd,retail:retail?{word:retail.word,ambient:retail.ambient,add:retail.add}:null});
+  shapes.push({name:shape.name,material:material.name,sourceMaterial:material,constantTextures:constantTextures.get(material.name),primaryMap:light.primaryMap,secondaryMap:light.secondaryMap,texture,secondary,constant:light.constant,lightingMode:light.mode,uvVelocity,animationFrames,uvSamples,uvLoop:animClip?.loopMode===1,flags,vertices,tevStages:material.gxMaterial.tevStages.length,reflection:light.reflection,waterIndirect,textureAlphaAdd:light.textureAlphaAdd,skyScreenBlend:light.skyScreenBlend,skyRasterAdd:light.skyRasterAdd,dotMatrixScreen:light.dotMatrixScreen,retail:retail?{word:retail.word,ambient:retail.ambient,add:retail.add}:null});
   if(objectBank&&sampleFrame===sampleFrames[0]){
    const alphaStage=material.gxMaterial.tevStages.find((s:any)=>[s.alphaInA,s.alphaInB,s.alphaInC,s.alphaInD].some((v:number)=>v>=1&&v<=3));
    const alphaRegister=alphaStage?[alphaStage.alphaInA,alphaStage.alphaInB,alphaStage.alphaInC,alphaStage.alphaInD].find((v:number)=>v>=1&&v<=3):-1;
    bankShapes.push({matId:op.matId,primaryMap:light.primaryMap,secondaryMap:light.secondaryMap,primaryCoord:light.primaryCoord,secondaryCoord:light.secondaryCoord,
     constantRegister:light.constantRegister,vertexColorRegister:light.vertexColorRegister,alphaRegister,
-    additiveRegister:light.additiveRegister,additiveFactor:light.additiveFactor,baseline:animClip??null});
+    // ObjKumo CLR0 animates C1, added by stage1 before the fixed
+    // environment highlight. Keep that additive register in the baked port.
+    additiveRegister:material.name==='kumo_body_m'&&model.name==='kumo'?2:light.additiveRegister,
+    additiveFactor:material.name==='kumo_body_m'&&model.name==='kumo'?[1,1,1]:light.additiveFactor,baseline:animClip??null});
   }
  }
  models.push({name:model.name,shapes,sampleFrame,duration:clip?.duration??0});

@@ -82,7 +82,7 @@ bool RaceItems::startRoulette(unsigned player){
         const auto use=ItemObjects[unsigned(choice)];
         if(itemObjectCapacity(use.type)<objectCount(use.type)+use.count)choice=ItemKind::Mushroom;
     }
-    rouletteChoice_[player]=choice;rouletteRank_[player]=uint8_t(rank(player));
+    rouletteChoice_[player]=choice;rouletteRank_[player]=uint8_t(oddsRank(player));
     roulettes_[player]={};h.roulette=1;h.rouletteIcon=nextRouletteIcon(player,ItemKind::None);return true;
 }
 unsigned RaceItems::objectCount(unsigned type) const{
@@ -135,7 +135,7 @@ ItemKind RaceItems::choose(unsigned player){
     // Original offline VS tables, with separate human and CPU distributions
     // (RMCU ItemSlotData_decideItem 0x807ac9cc).
     if(!odds_.ready())return ItemKind::None;
-    auto weights=odds_.weights(player!=0,rank(player));
+    auto weights=odds_.weights(player!=0,oddsRank(player));
     // Spawn timers (Lightning, Blue, Blooper, POW).
     constexpr ItemKind delayed[]={ItemKind::Lightning,ItemKind::BlueShell,ItemKind::Blooper,ItemKind::Pow};
     for(unsigned i=0;i<4;++i)if(itemSpawnTimers_[i])weights[unsigned(delayed[i])]=0;
@@ -196,7 +196,7 @@ int RaceItems::targetAhead(unsigned player,bool leader) const{
 
 // ---- Effects on karts -----------------------------------------------------------------
 
-bool RaceItems::strike(unsigned player,int action,unsigned owner,Vec3 direction,bool force){
+bool RaceItems::strike(unsigned player,int action,unsigned owner,Vec3 direction,bool force,ItemKind item){
     if(player>=count_||action<0)return false;
     const int started=karts_->startAction(player,action,force,owner,direction);
     // RMCU: the start function reports item loss to the holder at once.
@@ -207,7 +207,7 @@ bool RaceItems::strike(unsigned player,int action,unsigned owner,Vec3 direction,
         action==KartAction::Launch||action==KartAction::LaunchSpin?ItemEffect::Launch:
         action==KartAction::StarHit||action==KartAction::Knockback||action==KartAction::BulletHit?ItemEffect::Knockback:
         action==KartAction::MegaCrush?ItemEffect::Crush:action==KartAction::Pow?ItemEffect::Pow:ItemEffect::Spin;
-    events_.push_back({effect,uint8_t(player),0,direction,int8_t(action),1.f,uint8_t(owner<MaxRacers?owner:0xff)});
+    events_.push_back({effect,uint8_t(player),0,direction,int8_t(action),1.f,uint8_t(owner<MaxRacers?owner:0xff),item});
     if(owner<count_&&owner!=player){++successfulHits_[owner];sound(ItemSoundCue::HitSuccess,owner);}
     return true;
 }
@@ -217,6 +217,7 @@ bool RaceItems::shrink(unsigned player,uint16_t frames,bool spinShrink,bool clou
     const bool struck=karts_->lightning(player,frames,spinShrink,cloud);
     applyLoss(player,karts_->takeLoss(player));
     if(!struck)return false;
+    events_.push_back({ItemEffect::ElectricHit,uint8_t(player)});
     if(!mega)events_.push_back({ItemEffect::Shrink,uint8_t(player),frames,{},int8_t(spinShrink?KartAction::SpinShrink:cloud?KartAction::CloudStrike:KartAction::Lightning)});
     return true;
 }
@@ -464,6 +465,10 @@ void RaceItems::use(unsigned player,bool backwards){
         //30-frame pause, using their rank then. It admits one attack at a time.
         if(frame_>=blooperBusyUntil_){
             sound(ItemSoundCue::BlooperUse,player);
+            // Early LED warning only: the original manager still selects the
+            // actual ink targets 100 frames later using their rank then.
+            if(player==0||(rank(0)<rank(player)&&!sameRaceTeam(racers_[player].team,racers_[0].team)&&!invincible(0)&&!racers_[0].unavailable&&!racers_[0].finished))
+                events_.push_back({ItemEffect::BlooperLaunch,0});
             blooperAttack_={};blooperEnd_={};blooperEndPose_={};
             blooperCaster_=player;blooperStartFrame_=frame_;
             blooperSelectionFrame_=frame_+BlooperSelectionDelay;
@@ -712,6 +717,9 @@ void RaceItems::afterStep(const ItemRacer* racers,unsigned count,ItemWorldQuery 
         racers_[i].star=fresh.star;racers_[i].mega=fresh.mega;racers_[i].shocked=fresh.shocked;
         syncKart(i);
     }
+    // Requested colour fade: 15 ticks in, 29 ticks out, including early cures.
+    for(unsigned i=0;i<count_;++i){auto& h=hud_[i];
+        h.inkShade=uint8_t(h.ink&&!h.inkDelay?std::min(255,int(h.inkShade)+17):std::max(0,int(h.inkShade)-9));}
     stepSounds_=sounds_.size();
 }
 }

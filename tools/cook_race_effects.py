@@ -50,6 +50,8 @@ ROOTS += ['rk_hangOnL','rk_hangOnR','rk_hangOnLTail','rk_hangOnRTail']
 # sustained blue sparks and the one-shot charge trio, not drift input.
 ROOTS += ['rk_driftSpark1'+side+tail for side in ('L','R')
           for tail in ('_Spark00','_Spark01','1T_Chip00','1T_Spark00','1T_Spark01')]
+BALLOON_ROOTS = ['rk_baloonR', 'rk_baloonB']
+COIN_ROOTS = ['rk_coinAppear', 'rk_coinAdd', 'rk_coinShine', 'rk_coinGetPre', 'rk_coinGetCoinTail', 'rk_coinGet']
 INK_ROOTS = ['rk_gessoA_1P', 'rk_gessoB_1P', 'rk_gessoA0_1P', 'rk_gessoB0_1P', 'rk_gessoC0_1P']
 SPIN_ROOTS = ['rk_spinHalfL', 'rk_spinHalfLS', 'rk_spinL', 'rk_spinLS',
               'rk_spinHalfR', 'rk_spinHalfRS', 'rk_spinR', 'rk_spinRS']
@@ -581,13 +583,14 @@ def cannon_attachment(root):
         ','.join(format(x, '.9f')+'f' for x in matrix) + '};\n}\n')
 
 
-def cook(root, output, course_only=False):
+def cook(root, output, course_only=False, balloon_only=False, coin_only=False, course_id=None):
+    if balloon_only and coin_only: raise ValueError("Choose one battle mode bank")
     breff = root / 'assets/common/Effect/RKRace.breff'
     br, reft = breff.read_bytes(), breff.with_suffix('.breft').read_bytes()
     idx, tindex = entries(br), entries(reft)
     order, notes, records = [], [], {}
     namespaces = {}
-    for roots in (ROOTS, POWERUP_ROOTS, SLIPSTREAM_ROOTS, SMOKE_ROOTS, SPIN_ROOTS, WATER_ROOTS, INK_ROOTS, OPPONENT_DRIVING_ROOTS, SURFACE_ROOTS):
+    for roots in (ROOTS, POWERUP_ROOTS, SLIPSTREAM_ROOTS, SMOKE_ROOTS, SPIN_ROOTS, WATER_ROOTS, INK_ROOTS, OPPONENT_DRIVING_ROOTS, SURFACE_ROOTS, BALLOON_ROOTS):
         if roots is SURFACE_ROOTS: always_common=set(order)
         queue = list(roots)
         while queue:
@@ -618,12 +621,22 @@ def cook(root, output, course_only=False):
     # explicit rather than treating every non-empty namespace as pocha.
     texture_archives = {'': (reft, tindex), 'pocha_': (pt, pti)}
     creature_sources = []
-    course_roots = {'pocha': ['rk_pochaWater', 'rk_pochaWaterS']}
+    # GC's original dkCannon BREFF/BREFT are byte-identical to Wii's bank.
+    # It fires the shared smoke root, without the Wii-only snow attachment.
+    course_roots = {'pocha': ['rk_pochaWater', 'rk_pochaWaterS'],
+                    'DonkyCannonGC': ['rk_dkCannon'],
+                    'tree_cannon': ['rk_dkCannon']}
     for course, archive, roots in [('old_sherbet_64', 'penguin_s', ['rk_pgnSpin_s', 'rk_pgnSlider_s']),
                            ('old_sherbet_64', 'penguin_m', ['rk_pgnSpin_m_l']),
                            ('old_heyho_gba', 'crab', ['rk_crabHide', 'rk_crabPocha', 'rk_crab']),
                            ('boardcross_course', 'DonkyCannon_wii', ['rk_dkCannon', 'rk_dkCannonSnw']),
                            ('koopa_course', 'koopaBall', ['rk_koopaBallS']),
+                           ('koopa_course', 'FlamePole', ['rk_flamePole', 'rk_flamePoleFoot']),
+                           ('volcano_course', 'FlamePole_v', ['rk_flamePole', 'rk_flamePoleFoot']),
+                           ('old_koopa_64', 'FlamePole_v_big', ['rk_flamePoleL']),
+                           ('old_koopa_64', 'KoopaFigure64', ['rk_koopaFire', 'rk_koopaFireL']),
+                           ('koopa_course', 'dossun', ['rk_dossun']),
+                           ('sand_battle', 'quicksand', ['rk_qsandDossun']),
                            ('desert_course', 'sanbo', ['rk_sanbo']),
                            ('rainbow_course', 'StarRing', ['rk_StarRing']),
                            ('rainbow_course', 'entry', ['rk_entry']),
@@ -645,7 +658,7 @@ def cook(root, output, course_only=False):
         # original descriptors/curves differ. Keep the battle archive distinct.
         alias = (lambda name: 'W_' + name) if archive == 'truckChimSmkW' else (lambda name: name)
         course_roots[archive] = [alias(name) for name in roots]
-        effect_name = {'DonkyCannon_wii':'dkCannon', 'hanachan':'hana', 'Steam':'steam', 'Alarm':'alarm', 'choropu':'choropuMoko', 'Epropeller':'epropeller', 'VolcanoBall1':'volc', 'Block':'block'}.get(archive, archive)
+        effect_name = {'DonkyCannon_wii':'dkCannon', 'hanachan':'hana', 'Steam':'steam', 'Alarm':'alarm', 'choropu':'choropuMoko', 'Epropeller':'epropeller', 'VolcanoBall1':'volc', 'FlamePole':'flamePole', 'FlamePole_v':'flamePole', 'FlamePole_v_big':'flamePoleL', 'KoopaFigure64':'koopaFire', 'Block':'block', 'quicksand':'qsandDossun'}.get(archive, archive)
         path = root / f'assets/courses/{course}/effect/{archive}/rk_{effect_name}.breff'
         source, pixels = path.read_bytes(), path.with_suffix('.breft').read_bytes()
         index, pixel_index = entries(source), entries(pixels)
@@ -669,43 +682,75 @@ def cook(root, output, course_only=False):
             namespaces[key] = namespace
             order.append(key)
             queue.extend(emitter.references())
+    coin_sources = []
+    if coin_only or course_id is not None:
+        from course_catalog import courses
+        reference = None
+        for course in courses():
+            if not 32 <= course['id'] <= 41: continue
+            path = root / 'assets/courses' / course['key'] / 'effect/coin/rk_coin.breff'
+            source, pixels = path.read_bytes(), path.with_suffix('.breft').read_bytes()
+            hashes = (hashlib.sha256(source).hexdigest(), hashlib.sha256(pixels).hexdigest())
+            if reference is None:
+                reference = hashes
+                index, pixel_index = entries(source), entries(pixels)
+                texture_archives['coin_'] = (pixels, pixel_index)
+                queue = list(COIN_ROOTS)
+                while queue:
+                    name = queue.pop(0)
+                    if name in records: raise ValueError('Coin archive name collision: ' + name)
+                    if name not in index: raise ValueError('Missing original coin emitter: ' + name)
+                    records[name] = Emitter(source, index, name)
+                    namespaces[name] = 'coin_'
+                    order.append(name)
+                    queue.extend(n for n in records[name].references() if n not in records and n not in queue)
+            elif hashes != reference:
+                raise ValueError('Battle coin archives differ: ' + course['key'])
+            coin_sources.append({'path': str(path.relative_to(root)), 'sha256': hashes[0], 'breft_sha256': hashes[1]})
+        if len(coin_sources) != 10: raise ValueError('Expected all ten original coin archives')
     texture_cache = {}
     # Course-only reentry must not expand the legacy aggregate resident bank.
     # The race actually loads its course bank; package_sd reads every bank's
     # texture dependencies, including these entry textures.
     aggregate = [name for name in order if namespaces[name] != 'entry_']
-    files, blob_size = ([],0) if course_only else write_bank(aggregate, records, namespaces, texture_archives, output, notes, texture_cache=texture_cache)
+    files, blob_size = ([],0) if course_only or balloon_only or coin_only else write_bank(aggregate, records, namespaces, texture_archives, output, notes, texture_cache=texture_cache)
     from course_catalog import courses
     profiles = []
     header = ['#pragma once', 'namespace mkw {', 'template<class Effects> bool courseEffectRootsPresent(const Effects& effects,unsigned course){', 'switch(course){']
     common = [name for name in order if name in always_common]
     for course in courses():
+        if course_id is not None and course["id"] != course_id: continue
+        if (balloon_only or coin_only) and not 32 <= course['id'] <= 41: continue
         folder = root / 'assets/courses' / course['key'] / 'effect'
         roots = [name for archive, names_ in course_roots.items() if (folder/archive).is_dir() for name in names_]
         roots += surface_roots(root,course)
-        selected = set(common); queue = list(roots)
-        while queue:
-            name = queue.pop()
-            if name in selected: continue
-            if name not in records: raise ValueError('Missing course effect dependency: '+name)
-            selected.add(name); queue.extend(records[name].references())
-        names_ = [name for name in order if name in selected]
-        bank = f"race-effects-{course['id']:02d}.bin"
-        textures_, size_ = write_bank(names_, records, namespaces, texture_archives, output, [], bank, texture_cache)
-        if len(textures_) > 128: raise ValueError('Course effects exceed texture budget: '+course['key'])
-        profiles.append({'id':course['id'],'course':course['key'],'bank':bank,'roots':roots,'emitters':len(names_),'textures':len(textures_),'payload_bytes':size_})
+        variants = ['shared','balloon','coin'] if course_id is not None else ['coin'] if coin_only else ['balloon'] if balloon_only else ['shared','balloon'] if 32<=course['id']<=41 else ['shared']
+        for mode in variants:
+            mode_roots = roots + (COIN_ROOTS if mode == 'coin' else BALLOON_ROOTS if mode == 'balloon' else [])
+            selected = set(common); queue = list(mode_roots)
+            while queue:
+                name = queue.pop()
+                if name in selected: continue
+                if name not in records: raise ValueError('Missing course effect dependency: '+name)
+                selected.add(name); queue.extend(records[name].references())
+            names_ = [name for name in order if name in selected]
+            bank = f"race-effects-{course['id']:02d}{'-' + mode if mode != 'shared' else ''}.bin"
+            textures_, size_ = write_bank(names_, records, namespaces, texture_archives, output, [], bank, texture_cache)
+            if len(textures_) > 128: raise ValueError('Course effects exceed texture budget: '+course['key'])
+            profiles.append({'id':course['id'],'course':course['key'],'mode':mode,'bank':bank,'roots':mode_roots,'emitters':len(names_),'textures':len(textures_),'payload_bytes':size_})
         checks = '&&'.join('effects.find("'+name+'")>=0' for name in roots) or 'true'
         header.append(f"case {course['id']}: return {checks};")
     header += ['default:return false;', '}', '}', '}']
-    (root/'include/mkw/course_effect_roots.hpp').write_text('\n'.join(header)+'\n')
-    (output/'course-effects.json').write_text(json.dumps(profiles,indent=2)+'\n')
-    (output / 'race-effects.json').write_text(json.dumps({
+    if not (balloon_only or coin_only) and course_id is None: (root/'include/mkw/course_effect_roots.hpp').write_text('\n'.join(header)+'\n')
+    (output/('coin-effects.json' if coin_only else 'balloon-effects.json' if balloon_only else 'course-effects.json')).write_text(json.dumps(profiles,indent=2)+'\n')
+    (output / ('coin-effect-sources.json' if coin_only else 'balloon-effect-sources.json' if balloon_only else 'race-effects.json')).write_text(json.dumps({
         'source_sha256': hashlib.sha256(br).hexdigest(), 'emitters': aggregate, 'all_course_emitters': order,
         'pocha_source_sha256': hashlib.sha256(pb).hexdigest(),
-        'creature_sources': creature_sources,
+        'creature_sources': creature_sources, 'coin_sources': coin_sources,
         'textures': [[f[0], f[1], f[2], f[3], f[4], f[5]] for f in files], 'notes': notes}, indent=1) + '\n')
-    exhausts(root)
-    cannon_attachment(root)
+    if not (balloon_only or coin_only) and course_id is None:
+        exhausts(root)
+        cannon_attachment(root)
     print(f'Cooked {len(order)} emitters, {len(files)} textures, {blob_size} bytes of descriptors and curves')
     for n in notes:
         print('  note:', n)
@@ -716,7 +761,10 @@ if __name__ == '__main__':
     p = argparse.ArgumentParser()
     p.add_argument('--root', type=Path, default=Path(__file__).resolve().parents[1])
     p.add_argument('--output', type=Path)
+    p.add_argument('--course-id',type=int,help='Stage just this course in shared/Balloon/Coin variants, retaining the complete generated header')
     p.add_argument('--course-only', action='store_true', help='Build only the bounded banks loaded by races, without a globally resident aggregate')
+    p.add_argument('--balloon-only', action='store_true', help='Stage the ten Balloon Battle banks without touching shared banks or generated headers')
+    p.add_argument('--coin-only', action='store_true', help='Stage ten Coin Runners banks and their original coin archive dependencies')
     a = p.parse_args()
     # Build-local output; tools/package_sd.py overlays it onto the SD assets.
-    cook(a.root, a.output or a.root / 'build/vfx/textures', a.course_only)
+    cook(a.root, a.output or a.root / 'build/vfx/textures', a.course_only, a.balloon_only, a.coin_only, a.course_id)

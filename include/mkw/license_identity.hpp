@@ -15,4 +15,11 @@ struct LicenseIdentity {
 LicenseMiiId licenseMiiId(const NativeMii&);
 bool loadNativeMii(const char* directory,const LicenseMiiId&,NativeMii&);
 bool writeNativeMii(const char* directory,const NativeMii&);
+enum class IdentitySelection {Accepted,Cancelled,Failed};
+// Call between frames, after draining renderer/asset work. The output is
+// changed only after both applets confirm; this function never writes a save.
+IdentitySelection selectLicenseMii(NativeMii&);
+// Race selection is transient; it does not replace the license identity.
+IdentitySelection selectRaceMii(NativeMii&);
+IdentitySelection selectLicenseIdentity(LicenseIdentity&);
 }

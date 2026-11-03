@@ -87,7 +87,9 @@ bool ObjectBank::load(const char* path){
     for(unsigned i=0;i<srtCount;++i){
         const uint8_t* p=take(48);if(!p){reset();return false;}
         Srt c{};std::memcpy(c.name,p,32);c.name[31]=0;c.frames=u32(p+32);c.loop=u32(p+36);c.step=u32(p+40);c.count=u32(p+44);
-        if(!c.frames||c.frames>20000||!c.step||c.step>64||c.count>shapes_){reset();return false;}
+        // Native BRRES SRT0 duration is u16; Delfino uses24000 frames.
+        // The existing8MiB bank bound and payload checks still limit memory.
+        if(!c.frames||c.frames>65535||!c.step||c.step>64||c.count>shapes_){reset();return false;}
         c.shapes=reinterpret_cast<const uint32_t*>(take(size_t(c.count)*4));
         c.data=reinterpret_cast<const float*>(take(size_t(samples(c.frames,c.step))*c.count*48));
         if(!c.shapes||!c.data){reset();return false;}

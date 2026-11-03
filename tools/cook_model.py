@@ -7,30 +7,45 @@ sys.path.insert(0,str(ROOT/'vendor/gclib'))
 from gclib.texture_utils import decode_image
 from gclib.gx_enums import ImageFormat,PaletteFormat
 from PIL import Image
+import award_face_textures
 from gx_material import material_state,retail_lighting,GMDL_SUBMESH
 from devkitpro import tool
 from coplanar_layers import course_layers
+from course_layer_policy import triangle_layers
 from world_uv import local_triangle
-from gx_samplers import shape_samplers,block as sampler_block
-from world_sampler_policy import world_samplers
+from gx_samplers import shape_samplers,course_sampler_policy,course_triangle_sampler_policy,block as sampler_block
 WATER_WORDS={'water','sea','river','fountain','lake'}
 # Lower-case words of a source name, split at underscores, digits and case
 # changes: 'TR_houseALL' -> tr, house, all; 'water0_HIG' -> water, hig.
 def name_words(name):return {w.lower() for w in re.findall(r'[A-Z]+(?![a-z])|[A-Z]?[a-z]+',name)}
+
+def spectator_raster_alpha(prefix,shape,flags,alpha_factor):
+ # Opaque GX spectators can use raster alpha in their RGB lighting equation
+ # while writing a separate, constant final alpha (Noki: 0; castle crowd: 1/3).
+ # Flattening that final alpha into the vertices destroys their light mask.
+ word=(shape.get('retail') or {}).get('word',0)
+ rop=((shape.get('sourceMaterial') or {}).get('gxMaterial') or {}).get('ropInfo',{})
+ return bool(re.match(r'^obj\d+_(?:group_|monte_|mare_)',prefix)
+             and (word>>2)&3==2 and (flags>>20)&7==4 and not flags&3
+             and alpha_factor<1 and rop.get('blendMode')==0
+             and rop.get('alphaUpdate') is False)
 
 def cook(source,out,prefix,max_texture=256,preserve_vertices=False,reuse_textures=False,texture_prefix=None,encoded_textures=None,course_geometry=False,texture_overrides=None):
  # Models of one archive may share texture_prefix; encoded_textures names the
  # textures this run already wrote, so each is encoded once.
  data=json.loads((source/'model.json').read_text());(out/'textures').mkdir(parents=True,exist_ok=True);(out/'models').mkdir(parents=True,exist_ok=True)
  depth_layers=course_layers(data['models']) if course_geometry or (prefix.startswith('course_') and '_sky' not in prefix) else {}
+ triangle_depth_layers=triangle_layers(data['models'],prefix)
  unknown=set(texture_overrides or {})-{t['name'] for t in data['textures']}
  if unknown:raise ValueError('Unknown replacement textures: '+str(sorted(unknown)))
  names=[];audits=[]
  for t in data['textures']:
   raw=(source/(t['file']+'.bin')).read_bytes();palpath=source/(t['file']+'.pal');pal=palpath.read_bytes() if palpath.exists() else b''
   replacement=(texture_overrides or {}).get(t['name'])
+  exact_award_face=award_face_textures.selected(prefix,t['name']) and t['format']==14 and award_face_textures.needs_exact(raw,t['width'],t['height'])
   if replacement is not None:
    with Image.open(replacement) as prepared:im=prepared.convert('RGBA')
+  elif exact_award_face:im=award_face_textures.decode(raw,t['width'],t['height'])
   else:
    im=decode_image(io.BytesIO(raw),io.BytesIO(pal),ImageFormat(t['format']),PaletteFormat(t['paletteFormat'] or 0),len(pal)//2,t['width'],t['height']).convert('RGBA')
   im.thumbnail((max_texture,max_texture),Image.Resampling.LANCZOS);size=tuple(max(8,1<<(n-1).bit_length()) for n in im.size)
@@ -43,9 +58,10 @@ def cook(source,out,prefix,max_texture=256,preserve_vertices=False,reuse_texture
   if reuse_textures:
    if not png.is_file() or Image.open(png).convert('RGBA').tobytes()!=im.tobytes():raise ValueError('Reusable texture content changed: '+str(png))
   else:im.save(png)
-  alpha=im.getchannel('A').getextrema()[0]<255;fmt='etc1a4' if alpha else 'etc1'
+  alpha=im.getchannel('A').getextrema()[0]<255;fmt='rgba8' if exact_award_face else 'etc1a4' if alpha else 'etc1'
   if not reuse_textures:
    subprocess.run([str(tool('tex3ds')),'-f',fmt,'-q','high','-z','none','-o',str(png.with_suffix('.t3x')),str(png)],check=True,stdout=subprocess.DEVNULL)
+   if exact_award_face:award_face_textures.preserve_rgba(png.with_suffix('.t3x'),im)
   elif not png.with_suffix('.t3x').is_file():raise ValueError('Missing reusable texture: '+str(png))
   audits.append({'source':t['name'],'name':name,'size':size,'alpha':alpha,**replacement_audit})
  # Materials tools/export_brres.ts could not translate (its receipt's fallbacks).
@@ -94,6 +110,7 @@ def cook(source,out,prefix,max_texture=256,preserve_vertices=False,reuse_texture
    shapes.append({k:v for k,v in shape.items() if k!='vertices'})
    flags,alpha_factor,vertex_alpha,alpha_limit,alpha_mix,extended=material_state(shape)
    fixed_menu_alpha=bool((shape.get('retail') or {}).get('word',0)&(1<<21) and (flags>>20)&7==4)
+   preserve_raster_alpha=fixed_menu_alpha or spectator_raster_alpha(prefix,shape,flags,alpha_factor)
    # Bit 29 is an unused alpha-reference selector whenever alpha test is off.
    # Reuse it for a restrained aqua grade on water whose TEV equation has no
    # translation (the fallback samples its indirect wave mask as colour); the
@@ -105,15 +122,16 @@ def cook(source,out,prefix,max_texture=256,preserve_vertices=False,reuse_texture
     flags |= 1<<29
    if alpha_limit:data['limitations'].append(alpha_limit+': '+shape['material'])
    stream=shape['vertices'];assert len(stream)%3==0
-   samplers=world_samplers(prefix,shape,shape_samplers(shape))
+   base_samplers=course_sampler_policy(prefix,shape['material'],shape_samplers(shape))
    for start in range(0,len(stream),3):
     tri=[]
     points=stream[start:start+3]
+    samplers=course_triangle_sampler_policy(prefix,shape['material'],points,base_samplers)
     if prefix.startswith('course_') and '_sky' not in prefix and not shape.get('waterIndirect'):
      points=local_triangle(points,flags,shape['animationFrames']>0)
     for v in points:
      if not all(math.isfinite(x) for x in v):raise ValueError('non-finite vertex')
-     rgba=v.copy();rgba[-1]=v[-1] if fixed_menu_alpha else round((v[-1] if vertex_alpha else 255)*alpha_factor)
+     rgba=v.copy();rgba[-1]=v[-1] if preserve_raster_alpha else round((v[-1] if vertex_alpha else 255)*alpha_factor)
      tri.append(struct.pack('<10f4B',*rgba))
     if len(vertices)+3>60000:flush()
     tex=shape['texture']
@@ -138,12 +156,21 @@ def cook(source,out,prefix,max_texture=256,preserve_vertices=False,reuse_texture
      if flags&1 or shape.get('textureAlphaAdd') or shape.get('skyScreenBlend'):
       raise ValueError('Sky raster add conflicts with another material equation')
      extended |= 3<<16
+    if shape.get('dotMatrixScreen'):
+     if flags&1 or ((extended>>16)&255) not in (0,4):
+      raise ValueError('Dot-matrix screen conflicts with colour/alpha equation')
+     extended |= 4<<16
+     # Opaque panels repurpose constant alpha as the RGB offset.
+     constant=shape['constant']
     material=[tex,flags,shape['secondary'],constant,*shape['uvVelocity'],shape['animationFrames']|extended]
     if version>=4:
      state=retail_lighting(shape)
-     if depth_layers.get(id(shape)):
+     if depth_layers.get(id(shape)) or start//3 in triangle_depth_layers.get(id(shape),()):
       state[0]|=1<<23
       shape['coplanarLayer']=True
+      if (prefix=='course_02' and shape['material'] in ('union_01','taiya') or
+          prefix=='course_29' and shape['material'] in ('c_michi','c_tire')):
+       state[0]|=1<<25
      material+=state
     if version==5:
      reflection=shape.get('reflection')

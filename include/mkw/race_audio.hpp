@@ -23,6 +23,7 @@ namespace cue { enum : std::uint32_t {
  // Presentation cues added on the main thread (not Kinoko's):
  JumpAction = 1u << 27,   // the local driver model starts its trick (fn_1_18BE08: SE_VCL_JUMP_ACTION)
  ZipperTrick = 1u << 28,  // a half-pipe trick starts (fn_1_64AAC 0x805AF9E8: voice 0xb, stadium cheers)
+ CoinGet = 1u << 31, // CoinUnit pickup: SE_CC_COIN_GET.
  LavaSplash = 1u << 30, // Original lava impact (USA 806a7a5c), separate from driver voice.
  WaterSplash = 1u << 29, // Effects::Player::CreatePochaEffect (806a7870)
 }; }
@@ -43,6 +44,8 @@ struct RaceAudioKart {
  // racers whose contact cued Bumped. Accumulated until a frame is delivered.
  std::uint32_t cues = 0;
  std::uint16_t bumpedBy = 0;
+ std::uint8_t powerObjectContact = 0; // normal1/wall2 native object callback, even with zero damage.
+ bool coinArrival = false; // CoinUnit state6 frame45, retained until push succeeds.
  float bump = 0;                // cue::Bump: the bump's signed magnitude
  std::uint8_t fallVoice = 0;    // cue::Fall: the voice type (0x16-0x19)
  std::uint8_t soundZone = 0;    // cue::SoundTrigger: the course sound zone (0-7)
@@ -51,7 +54,7 @@ struct RaceAudioKart {
  std::uint32_t actionCount = 0; // KartAction starts so far, and the last one started
  std::int8_t action = -1;
  bool finished = false; std::uint8_t rank = 0;   // RaceManager: finished, finishing position
- std::uint8_t vehicle = 0, character = 0;
+ std::uint8_t vehicle = 0, character = 0, miiVoice = 0;
  bool local = false, present = false;
 };
 // An item object (RaceItems actor) as Audio::ItemActor sees it.
@@ -73,6 +76,8 @@ struct RaceAudioObjectSound {
  std::uint16_t slot = 0, sound = 0; std::uint8_t call = Start; float value = 0;
  float animationPitch = 1;
 };
+// BalloonUnit has an ObjectActor of its own, outside the course registry.
+struct RaceAudioBalloonSound {std::uint8_t unit=0;std::uint16_t sound=0;};
 class RaceItems;
 struct RaceAudioFrame {
  std::uint32_t tick = 0;
@@ -92,6 +97,8 @@ struct RaceAudioFrame {
  std::uint8_t items = 0, itemSounds = 0;
  std::array<RaceAudioItem, 96> item{};
  std::array<RaceAudioItemSound, 32> itemSound{};
+ // Last presented chase icon: original screen-space pan and playback rate.
+ bool chaseWarning=false;float chasePan=0,chaseRate=0;
  std::uint16_t roulette = 0;
  std::uint8_t orbit[12]{};
  std::uint16_t cloud[12]{};      // frames left on each racer's Thunder Cloud (0: none)
@@ -108,6 +115,10 @@ struct RaceAudioFrame {
  std::uint8_t objects = 0, objectSounds = 0;
  std::array<RaceAudioObject, 128> object{};
  std::array<RaceAudioObjectSound, 48> objectSound{};
+ std::uint8_t balloons=0;std::uint16_t balloonSounds=0;
+ std::array<snd::Vec3f,120> balloon{};
+ // Kept across a full audio ring just like course object calls.
+ std::array<RaceAudioBalloonSound,360> balloonSound{};
 };
 
 // Main thread (src/race_audio_frame.cpp): Kinoko's karts and the camera view.

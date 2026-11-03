@@ -1,9 +1,13 @@
+#include <mkw/bounded_stable_sort.hpp>
+#include <mkw/mii_voice.hpp>
+#include <mkw/led_audio_cues.hpp>
 // Race actors' sounds on the audio thread. Addresses are USA StaticR
 // (docs/AUDIO_SOURCE.md "Karts"); the per-kart state mirrors Audio::KartActor,
 // Audio::EngineMgr and the sound side of Effects::Player field by field.
 #include <mkw/race_audio.hpp>
 #include <mkw/kart_wall_contact.hpp>
 #include <new>
+#include <memory>
 #include <mkw/race_voice_tables.hpp>
 #include <algorithm>
 #include <cmath>
@@ -222,6 +226,7 @@ struct KartAudio {
  bool onGround = false, ssmtRoad = false, bullet = false, killerOffPending = false;   // +0xe8, +0xb4, +0xd8, +0xd9
  u8 driftState = 0;                   // +0xe9
  s16 plankDistance = 0; u8 plankAlt = 0;   // +0xd6, +0xd5
+ s8 objectFrames = 0; // KartActor+0xd2, original >30 frame collision sound gate.
  s8 bumpFrames = 0; u8 hornCount = 0;      // +0xd3 (capped 126), +0xd4
  u16 jumpPadTimer = 0, jumpPadCount = 0;   // +0xcc, +0xce
  bool goalPlayed = false;           // local finish cue, acknowledged by the audio thread
@@ -290,7 +295,7 @@ struct PitchTrack {
 };
 struct VoiceAudio {
  bool enabled = false, local = false;   // +0x6ff, +0x6fa
- u8 character = 0;                      // +0x9c
+ u8 character = 0, miiVoice = 0;                      // +0x9c
  Actor3D actor; bool placed = false;
  Picker picker[29];                     // +0x150
  Slot main, echo;                       // +0xf8, +0x104
@@ -341,6 +346,7 @@ struct ObjActorAudio { Actor3D actor; bool placed = false; Slot limited[4]; };
 // course object (ObjFlow sound mode 1 / 3): four limited slots, and for the
 // animated actors RaceAnimActor's StartSound handle (+0xf8).
 struct ObjAudio {
+ bool localFeedback=false; // only the local pickup receives the NDSP feedback boost
  Actor3D actor; bool placed = false, live = false;
  bool muted = false;    // LinkedRaceActor +0x1d (+0xb1): toggled off
  bool freeze = false;   // +0xb0: the position is not followed
@@ -437,9 +443,13 @@ struct RaceAudioLayer::Impl {
  std::array<AmbienceAudio, 3> ambiences{};   // RaceAmbienceMgr +0x1c
  Slot oneShot;                               // RaceAmbienceMgr +0x178 (fn_1_1ED62C)
  ObjActorAudio lakitu;                       // Lakitu::Player +0x214
+ std::unique_ptr<std::array<ObjAudio,120>> balloons; // only Balloon Battle owns these actors
  std::array<ObjAudio, 128> objects{};        // course objects by registry slot
- std::array<ObjAudio, 4> boxActors{};        // item boxes just broken
- u8 nextBoxActor = 0;
+ // A real box owns its actor; a fifth pickup must not cut the first box's
+ // unfinished break sound. Allocate transient actors only while needed,
+ // bounded by the hardware voice budget, and reuse detached actors first.
+ std::vector<ObjAudio> boxActors;
+ std::vector<ObjAudio> coinActors; // CoinUnit owns its ObjectActor, not the collecting KartActor.
  std::array<CloudAudio, 12> clouds{};
  std::array<GessoAudio, 12> gesso{};
  bool itemToggleOdd = false;
@@ -514,6 +524,16 @@ struct RaceAudioLayer::Impl {
   for (int i = 0; i < n; ++i) if (!e.attached(slots[i].h)) return &slots[i];
   return replaceable(e, slots, n, id);
  }
+ static u32 localLedCue(u32 id){
+  using namespace sid;
+  switch(id){
+  case Dash:case DashJ:case LDashJ:case GondolaDashJ:case KinokoJump:return ledAudio::Boost;
+  case StarState:return ledAudio::Star;
+  case BigKinokoUse:case MegaState:return ledAudio::Mega;
+  case KillerOn:case KillerFly:return ledAudio::Bullet;
+  default:return 0;
+  }
+ }
  Slot* freeLimited(Engine& e, KartAudio& k, u32 id) { return freeIn(e, k.limited, 4, id); }
  // KartActor::HoldSoundLimited (8070169c) over the four shared slots.
  Slot* holdLimited(Engine& e, KartAudio& k, u32 id) {
@@ -523,7 +543,7 @@ struct RaceAudioLayer::Impl {
   if (!slot) return nullptr;
   slot->history = {};
   Ambient a = ambientFor(e, id, k.actor, &slot->history);
-  if (e.holdSound(slot->h, id, nullptr, &a)) note(id);
+  if (e.holdSound(slot->h, id, nullptr, &a)) {note(id);if(k.local)e.markLedCue(slot->h,localLedCue(id));}
   return slot;
  }
  // KartActor::StartSoundLimited (80701934).
@@ -551,6 +571,7 @@ struct RaceAudioLayer::Impl {
   slot->history = {};
   Ambient a = ambientFor(e, id, k.actor, &slot->history);
   if (!e.startSound(slot->h, id, nullptr, &a)) return nullptr;
+  if(k.local)e.markLedCue(slot->h,localLedCue(id));
   note(id);
   if (id == RbwStarRing) e.setSeqVariable(slot->h, 0, s16(int(2.0f * param)));
   else if (id == MiniJump && bit(frame.kart[&k - karts.data()].status, Shocked)) { e.setPitch(slot->h, 2.0f); e.setVolume(slot->h, 0.8f); }
@@ -655,7 +676,7 @@ struct RaceAudioLayer::Impl {
  // the dash only once it has played 48 sequence ticks.
  void playDash(Engine& e, KartAudio& k, u32 id) {
   if (Slot* s = limitedWith(e, k, id)) {
-   if (e.seqTick(s->h) <= 0x30) return;
+   if (e.seqTick(s->h) <= 0x30) {if(k.local)e.markLedCue(s->h,ledAudio::Boost);return;}
    e.stop(s->h, 0);
   }
   startLimited(e, k, id);
@@ -703,6 +724,8 @@ struct RaceAudioLayer::Impl {
   // KartActor, separately from the driver's delayed fall/respawn voice.
   if (c & cue::WaterSplash) { startLimited(e, k, 0x1a1); voices[index].fellInWater = true; }
   if (c & cue::LavaSplash) startLimited(e, k, 0x1a2);
+  if ((c & cue::CoinGet) && !k.muted) coinSound(e, in.position, 0x1f1, in.local);
+  if (in.coinArrival && in.local) coinSound(e, in.position, 0x1f2, true);
   if (c & cue::Boost) playDash(e, k, sid::Dash);
   if (c & cue::BoostRamp) playDash(e, k, sid::DashJ);
   if (c & (cue::JumpPad | cue::JumpPadMushroom)) playJumpPad(e, k, c & cue::JumpPadMushroom);
@@ -718,6 +741,14 @@ struct RaceAudioLayer::Impl {
   if (c & cue::BushWall) startLimited(e, k, sid::ColShigemi);
   if (c & cue::Horn) playHorn(e, k, in);
   if (c & cue::StartFail) { startLimited(e, k, 0x1a8); startLimited(e, k, 0x1a9); }   // fn_1_78EB8: SPIN, START_FAIL
+  // USA80703164/80703300: powered course-object contacts use the same
+  // original STAR_HIT cue, but their own31-frame gate (not racer damage).
+  k.objectFrames = s8(std::min(int(k.objectFrames) + 1, 100));
+  if (in.powerObjectContact && k.objectFrames > 30 &&
+      ((in.powerObjectContact & 1) || length(in.velocity) > 30.f)) {
+   startLimited(e, k, 0x110);
+   k.objectFrames = 0;
+  }
   if (c & cue::StarHit) startNewLimited(e, k, 0x110);   // CheckKartCollision 8056b0b8: SE_ITM_STAR_HIT
   // The driver model starts its trick animation (fn_1_18BE08 0x80697D34, local kart).
   if (c & cue::JumpAction) startLimited(e, k, sid::JumpAction);
@@ -857,7 +888,11 @@ struct RaceAudioLayer::Impl {
   k.eachSlot([&](Slot& s) {
    if (!e.attached(s.h)) return;
    e.setVolume(s.h, 0.8f * s.lastAmbientVolume);
-   e.setPlayerPriority(s.h, std::max(0, int(0.8 * double(e.playerPriority(s.h) + s.lastAmbientPriority))));
+   // 8070550c reads SoundArchive::ReadSoundInfo on every update. Starting
+   // from the previously reduced priority compounds .8 each tick and makes
+   // ongoing CPU sounds disposable within a few frames in a crowded arena.
+   const auto* info=e.archive()?e.archive()->sound(e.soundId(s.h)):nullptr;
+   if(info)e.setPlayerPriority(s.h,std::max(0,int(0.8*double(info->playerPriority+s.lastAmbientPriority))));
   });
   if (frame.raceState != 4 && frame.raceState != 6) return;
   const u32* w = in.status;
@@ -878,7 +913,7 @@ struct RaceAudioLayer::Impl {
    const auto& p = frame.kart[i].position;
    order[n++] = {std::fabs(listener.position.z - p.z) + std::fabs(listener.position.x - p.x) + std::fabs(listener.position.y - p.y), i};
   }
-  std::stable_sort(order.begin(), order.begin() + n, [](const Near& a, const Near& b) { return a.d < b.d; });
+  mkw::boundedStableSort(order, n, [](const Near& a, const Near& b) { return a.d < b.d; });
   for (int j = 0; j < n; ++j) {
    KartAudio& k = karts[order[j].i];
    const bool muted = j >= KartsActive;
@@ -894,13 +929,13 @@ struct RaceAudioLayer::Impl {
   VoiceAudio& v = voices[i];
   const RaceAudioKart& in = frame.kart[i];
   v = VoiceAudio{};
-  v.character = in.character; v.local = in.local;
-  v.enabled = in.character < 24;              // Mii voices are not used by this port
+  v.character = in.character; v.local = in.local;v.miiVoice=in.miiVoice;
+  v.enabled = in.character < 42;
   v.finishDone = !v.local;
   v.actor.userParam = 0x11u | (v.local ? 0x200u : 0u);
   v.rng.x ^= 0x85ebca6bu * u32(i + 1);
   if (v.enabled)
-   for (int t = 0; t < 29; ++t) { const auto& r = voice::Range[v.character][v.local ? 0 : 1][t]; v.picker[t].set(r[0], r[1]); }
+   for (int t = 0; t < 29; ++t) { v.picker[t].set(raceVoiceRange(v.character,v.local,t,0,v.miiVoice),raceVoiceRange(v.character,v.local,t,1,v.miiVoice)); }
   v.actionCount = in.actionCount;
  }
  bool voicePlaying(Engine& e, const VoiceAudio& v) const { return e.attached(v.main.h); }
@@ -984,6 +1019,10 @@ struct RaceAudioLayer::Impl {
  // fn_1_355318 (8086129c): a voice started; volume by character.
  void voiceStarted(Engine& e, int i, s32 id, int type, Slot& s, bool echo, bool result, bool twoD) {
   VoiceAudio& v = voices[i];
+  if(v.local&&!echo&&type==2){
+   if(bit(frame.kart[i].status,Star))e.markLedCue(s.h,ledAudio::Star);
+   if(bit(frame.kart[i].status,Mega))e.markLedCue(s.h,ledAudio::Mega);
+  }
   voicePitch(e, v, s);
   if (type != 0x1c) v.slipFrames = 0;
   v.curFrames = 0; v.pendingType = -1; v.pendingDelay = 0;
@@ -992,7 +1031,7 @@ struct RaceAudioLayer::Impl {
   if (!echo) { v.curType = type; voiceEcho(e, v, id, type, twoD); }
   else if (v.echoVolume <= 0.0f) volume = v.state == 2 ? 0.5f : v.state == 3 ? 0.6f : 1.0f;
   else volume = v.echoVolume;
-  volume *= result ? voice::Volume2D[v.character] : voice::Volume3D[v.character];
+  volume *= v.character>=24?(result?.9f:.82f):(result ? voice::Volume2D[v.character] : voice::Volume3D[v.character]);
   if (v.curType == 0x10) volume *= 0.75f; else if (v.curType == 0x1c) volume *= 0.85f;
   volume = std::min(volume, 1.0f);
   if (e.attached(s.h)) e.setVolume(s.h, volume);
@@ -1038,7 +1077,7 @@ struct RaceAudioLayer::Impl {
    if (!v.local) return false;
    t = v.character == 1 ? 0x12 : v.character == 4 ? 0x13 : 7;
   } else if (type == 0x1b && v.curType == 0x18) { type = 0x1a; t = 0x1a; }
-  t = voice::Remap[v.character][v.local ? 1 : 0][t & 31];
+  t = raceVoiceRemap(v.character,v.local,t & 31);
   if (t < 0 || t >= 29) { v.echoNext = false; return false; }
   if (mode == 3) stopVoice(e, v, 2);
   Picker& pk = v.picker[t];
@@ -1172,7 +1211,7 @@ struct RaceAudioLayer::Impl {
   if (c & cue::Fall) voiceRequest(e, i, in.fallVoice);             // Kart::Collision::ActivateOOB
   if (in.actionCount != v.actionCount) {                            // Kart::Damage::SetDamage
    v.actionCount = in.actionCount;
-   if (in.action >= 0) voicePlay(e, i, damageVoice(in.action));
+   if (in.action >= 0 && voicePlay(e, i, damageVoice(in.action)) && v.local) e.markLedCue(v.main.h,ledAudio::Hit);
   }
   if (c & cue::PowerHit) voiceRequest(e, i, 5);                    // CheckKartCollision power-up contact
   if (c & cue::Bump) voicePlay(e, i, std::fabs(in.bump) > 24.0f ? 0x12 : 5);   // fn_1_355180 from fn_1_609F4
@@ -1325,7 +1364,7 @@ struct RaceAudioLayer::Impl {
   if (!slot) return;
   slot->history = {}; slot->flat = false;
   Ambient a = ambientFor(e, id, o.actor, &slot->history);
-  if (e.holdSound(slot->h, id, nullptr, &a)) noteItem(RaceAudioLayer::QaLoop);
+  if (e.holdSound(slot->h, id, nullptr, &a)) {noteItem(RaceAudioLayer::QaLoop);if(id==0x103)e.markLedCue(slot->h,ledAudio::BlueLaunch);}
  }
  void itemAmbient(Engine& e, ItemObjAudio& o) {
   for (auto& s : o.limited) {
@@ -1375,7 +1414,9 @@ struct RaceAudioLayer::Impl {
    case ItemHit: if (o) itemStart(e, *o, ItemObjSound[object][1]); break;
    case ItemExplode:
     if (o) itemStart(e, *o, c.kind == KindBlue ? 0x105 : c.kind == KindBobomb ? 0x109 : 0);
-    if (c.kind == KindBlue) globalSound(e, 0x106);   // 807a363c: SE_ITM_HANE_BOMB_ECHO, global
+    // Bob-omb 8079b6c8..d0 and Blue 807a363c both request the global
+    // explosion echo in addition to their distance-controlled blast.
+    if (c.kind == KindBlue || c.kind == KindBobomb) globalSound(e, 0x106);
     break;
    case ItemEquip:
     if (c.player < 12 && karts[c.player].present && karts[c.player].local) startLimited(e, karts[c.player], 0xf6);
@@ -1459,10 +1500,17 @@ struct RaceAudioLayer::Impl {
    break;
   case ItemBoxBreak: {    // ObjItemBox kart collision (808151a4): Object::StartSoundLimited on the box
    // The box's ObjectActor (id 0x65, always audible) at the box, below its 180-unit hover.
-   ObjAudio& b = boxActors[nextBoxActor++ % boxActors.size()];
-   for (Slot* s : {&b.limited[0], &b.limited[1], &b.limited[2], &b.limited[3]}) if (e.attached(s->h)) e.stop(s->h, 0);
+   auto free=std::find_if(boxActors.begin(),boxActors.end(),[&](const ObjAudio& b){
+    for(const auto& s:b.limited)if(e.attached(s.h))return false;
+    return !e.attached(b.voice.h);
+   });
+   if(free==boxActors.end()){
+    if(boxActors.size()>=VoiceMax)break;
+    boxActors.emplace_back();free=boxActors.end()-1;
+   }
+   ObjAudio& b = *free;
    b = ObjAudio{};
-   b.live = true; b.id = 0x65; b.mode = 1;
+   b.live = true; b.id = 0x65; b.mode = 1;b.localFeedback=p>=0&&frame.kart[p].local;
    b.actor.userParam = objectUserParam(0x65, 1, 1.0f, frame.course);
    place(b.actor, b.placed, {c.position.x, c.position.y - 180.0f, c.position.z});
    objectStart(e, b, 0xf4, 0.0f);   // SE_ITM_BOX_BRK
@@ -1500,7 +1548,11 @@ struct RaceAudioLayer::Impl {
  // listener volume averaged over the local players.
  void globalSound(Engine& e, u32 id) {
   global.flat = true;
-  if (!e.startSound(global.h, id)) return;
+  // Keep the original global handle/lifetime. Only lightning gets higher
+  // instance and hardware-note priority on the bounded 3DS audio backend.
+  StartInfo lightning;lightning.playerPriority=100;lightning.channelPriority=96;
+  if (!e.startSound(global.h, id, id==sid::ThndrUse?&lightning:nullptr)) return;
+  if(id>=sid::Pow1&&id<=sid::Pow1+2)e.markLedCue(global.h,ledAudio::Pow);
   e.setVolume(global.h, listener.volume);
   noteItem(RaceAudioLayer::QaGlobal);
  }
@@ -1513,7 +1565,7 @@ struct RaceAudioLayer::Impl {
   if (!slot) return;
   slot->history = {}; slot->flat = false;
   Ambient a = ambientFor(e, id, g.actor, &slot->history);
-  if (e.startSound(slot->h, id, nullptr, &a)) noteItem(RaceAudioLayer::QaScreen);
+  if (e.startSound(slot->h, id, nullptr, &a)) {noteItem(RaceAudioLayer::QaScreen);e.markLedCue(slot->h,ledAudio::Blooper);}
  }
  // ---- RaceAmbienceMgr (RaceSound's SoundTriggers ask; race_ambience.hpp) ----
  void ambienceOp(Engine& e, const AmbienceOp& op) {
@@ -1573,6 +1625,25 @@ struct RaceAudioLayer::Impl {
    e.setAmbient(s.h, ambientFor(e, e.soundId(s.h), o.actor, &s.history));
   }
  }
+ // CoinUnit 8086bb08 / 8086c79c calls its own ObjectActor. Routing these
+ // through KartActor's four slots also applies SetNonLocalVolumeAndPriority
+ // to a CPU's coins every tick, progressively making an unfinished pickup
+ // the first victim of unrelated item/object sounds. Keep independent actors
+ // until playback ends; the archive/NDSP budgets still bound concurrency.
+ void coinSound(Engine& e, Vec3f position, u32 sound, bool local) {
+  auto free=std::find_if(coinActors.begin(),coinActors.end(),[&](const ObjAudio& o){
+   for(const auto& s:o.limited)if(e.attached(s.h))return false;
+   return true;
+  });
+  if(free==coinActors.end()){
+   if(coinActors.size()>=VoiceMax)return;
+   coinActors.emplace_back();free=coinActors.end()-1;
+  }
+  auto& o=*free;o=ObjAudio{};o.live=true;o.id=0x73;o.mode=1;o.localFeedback=local;
+  o.actor.userParam=objectUserParam(o.id,o.mode,1.f,frame.course);
+  place(o.actor,o.placed,position);
+  objectStart(e,o,sound,0.f);
+ }
  // ---- Course objects ----
  bool playing(Engine& e, const ObjAudio& o, u32 sound) const {
   for (const auto& s : o.limited) if (e.attached(s.h) && e.soundId(s.h) == sound) return true;
@@ -1606,7 +1677,10 @@ struct RaceAudioLayer::Impl {
   if (!slot) return nullptr;
   slot->history = {}; slot->flat = false;
   Ambient a = ambientFor(e, sound, o.actor, &slot->history);
-  const bool ok = hold ? e.holdSound(slot->h, sound, nullptr, &a) : e.startSound(slot->h, sound, nullptr, &a);
+  // Local pickups remain feedback; other object slots are distance-ranked.
+  if (o.localFeedback) a.distancePriority = 96;
+  const StartInfo* info = nullptr;
+  const bool ok = hold ? e.holdSound(slot->h, sound, info, &a) : e.startSound(slot->h, sound, info, &a);
   if (!ok) return nullptr;
   noteItem(RaceAudioLayer::QaObject);
   traceObject(e, o, *slot, true);
@@ -1722,12 +1796,30 @@ struct RaceAudioLayer::Impl {
  void objectAmbient(Engine& e, ObjAudio& o) {
   for (Slot* s : {&o.limited[0], &o.limited[1], &o.limited[2], &o.limited[3], &o.voice}) {
    if (!e.attached(s->h)) { s->history = {}; continue; }
-   e.setAmbient(s->h, ambientFor(e, e.soundId(s->h), o.actor, &s->history));
+   Ambient a = ambientFor(e, e.soundId(s->h), o.actor, &s->history);
+   if (o.localFeedback) a.distancePriority = 96;
+   e.setAmbient(s->h, a);
    traceObject(e, o, *s, false);
   }
  }
  // One game frame of course objects: ObjectActor::Update positions, the
  // ambient update, this tick's calls, then the object toggle.
+ void stopBalloons(Engine& e){
+  if(!balloons)return;
+  for(auto& o:*balloons)for(auto& slot:o.limited)if(e.attached(slot.h))e.stop(slot.h,0);
+  balloons.reset();
+ }
+ void balloonFrame(Engine& e){
+  if(!frame.balloons){stopBalloons(e);return;}
+  if(!balloons)balloons=std::make_unique<std::array<ObjAudio,120>>();
+  for(unsigned i=0;i<frame.balloons&&i<balloons->size();++i){auto& o=(*balloons)[i];
+   if(!o.live){o.live=true;o.id=0x219a;o.mode=1;o.index=i;o.actor.userParam=objectUserParam(o.id,o.mode,1.f,frame.course);}
+   place(o.actor,o.placed,frame.balloon[i]);objectAmbient(e,o);
+  }
+  for(unsigned i=0;i<frame.balloonSounds&&i<frame.balloonSound.size();++i){const auto& c=frame.balloonSound[i];
+   if(c.unit<frame.balloons&&c.unit<balloons->size())objectStart(e,(*balloons)[c.unit],c.sound,0.f);
+  }
+ }
  void objectFrame(Engine& e) {
   for (int n = 0; n < frame.objects && n < int(objects.size()); ++n) {
    const RaceAudioObject& in = frame.object[n];
@@ -1771,19 +1863,23 @@ struct RaceAudioLayer::Impl {
    }
   }
   for (auto& b : boxActors) if (b.live) objectAmbient(e, b);
+  for (auto& c : coinActors) if (c.live) objectAmbient(e, c);
   // SortAndToggleActors runs the objects on the frames the racers skip.
   if (toggleOdd) return;
   struct Near { f32 d; int i; };
-  std::array<Near, 128> order{}; int count = 0;
+  std::array<Near, 248> order{}; int count = 0;
   for (int n = 0; n < frame.objects && n < int(objects.size()); ++n) {
    ObjAudio& o = objects[n];
    if (objectAlwaysAudible(o.id)) { o.muted = false; continue; }
    const Vec3f& p = o.actor.position;
    order[count++] = {std::fabs(listener.position.z - p.z) + std::fabs(listener.position.x - p.x) + std::fabs(listener.position.y - p.y), n};
   }
-  std::stable_sort(order.begin(), order.begin() + count, [](const Near& a, const Near& b) { return a.d < b.d; });
+  if(balloons)for(unsigned i=0;i<frame.balloons&&i<balloons->size();++i){const auto& p=(*balloons)[i].actor.position;
+   order[count++]={std::fabs(listener.position.z-p.z)+std::fabs(listener.position.x-p.x)+std::fabs(listener.position.y-p.y),int(objects.size()+i)};}
+  mkw::boundedStableSort(order, count, [](const Near& a, const Near& b) { return a.d < b.d; });
   for (int j = 0; j < count; ++j) {
-   ObjAudio& o = objects[order[j].i];
+   const auto index=unsigned(order[j].i);
+   ObjAudio& o = index<objects.size()?objects[index]:(*balloons)[index-objects.size()];
    const bool muted = j >= ObjectsAudible;
    if (!muted && o.muted) o.actor.velocity = {};
    o.muted = muted;
@@ -1815,7 +1911,20 @@ struct RaceAudioLayer::Impl {
     if (d > 6000.0f || d < 0.0f) continue;
     any = true; dist = d;
    }
-  if (!any) return;
+  if (!any) {
+   // CtrlRaceChase -> ItemWarningMgr::PlayUntargetedWarning (80713d08).
+   // Share the original handle: a targeted 0x118 warning has precedence.
+   // raceState is the AUDIO section state (4/6 while racing),
+   // not RaceManager's stage enum. itemFrame already gates intro.
+   if(!frame.chaseWarning)return;
+   if(e.attached(alarm.h)&&e.soundId(alarm.h)==0x118)return;
+   alarm.flat=true;e.holdSound(alarm.h,0x119);
+   const float rate=std::clamp(frame.chaseRate,0.f,1.6f);
+   e.setPan(alarm.h,frame.chasePan);
+   e.setVolume(alarm.h,.2f+.5f*rate);
+   e.setTempoRatio(alarm.h,1.f+.625f*rate);
+   return;
+  }
   alarm.flat = true;
   e.holdSound(alarm.h, 0x118);
   const f32 t = (6000.0f - dist) / 6000.0f;
@@ -1836,7 +1945,7 @@ struct RaceAudioLayer::Impl {
    const auto& p = it.position;
    order[n++] = {std::fabs(listener.position.z - p.z) + std::fabs(listener.position.x - p.x) + std::fabs(listener.position.y - p.y), it.index};
   }
-  std::stable_sort(order.begin(), order.begin() + n, [](const Near& a, const Near& b) { return a.d < b.d; });
+  mkw::boundedStableSort(order, n, [](const Near& a, const Near& b) { return a.d < b.d; });
   for (int j = 0; j < n; ++j) {
    ItemObjAudio& o = items[order[j].i % items.size()];
    const bool muted = j >= 2;
@@ -1845,6 +1954,7 @@ struct RaceAudioLayer::Impl {
   }
  }
  void stopAll(Engine& e) {
+  stopBalloons(e);
   for (auto& k : karts) k.eachSlot([&](Slot& s) { if (e.attached(s.h)) e.stop(s.h, 0); s = Slot{}; });
   for (auto& v : voices) {
    for (Slot* s : {&v.main, &v.echo, &v.limited[0], &v.limited[1], &v.limited[2], &v.limited[3]}) { if (e.attached(s->h)) e.stop(s->h, 0); *s = Slot{}; }
@@ -1858,6 +1968,7 @@ struct RaceAudioLayer::Impl {
   for (auto& s : lakitu.limited) { if (e.attached(s.h)) e.stop(s.h, 0); s = Slot{}; }
   for (auto& o : objects) for (Slot* s : {&o.limited[0], &o.limited[1], &o.limited[2], &o.limited[3], &o.voice}) { if (e.attached(s->h)) e.stop(s->h, 0); *s = Slot{}; }
   for (auto& o : boxActors) for (Slot* s : {&o.limited[0], &o.limited[1], &o.limited[2], &o.limited[3]}) { if (e.attached(s->h)) e.stop(s->h, 0); *s = Slot{}; }
+  for (auto& o : coinActors) for (auto& s : o.limited) { if (e.attached(s.h)) e.stop(s.h, 0); s = Slot{}; }
   for (Slot* s : {&roulette, &alarm, &global, &oneShot}) { if (e.attached(s->h)) e.stop(s->h, 0); *s = Slot{}; }
  }
 };
@@ -1944,6 +2055,7 @@ void RaceAudioLayer::gameFrame(Engine& e) {
  m.toggle();
  m.voicePitchTracks(e);
  if (m.frame.raceState != 0 && m.frame.raceState != 2) m.itemFrame(e);
+ m.balloonFrame(e);
  m.objectFrame(e);
  if (m.starRingCooldown) --m.starRingCooldown;
  else m.starRingCombo = 0;

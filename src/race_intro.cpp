@@ -61,7 +61,7 @@ unsigned RaceIntro::frames()const{
 }
 
 void RaceIntro::start(){
- stop();
+ stop();frame_=0;
  if(opening_<0)return;
  active_=true;shots_=0;begin(opening_);
  // Nothing is shown before the first tick positions the camera; start from
@@ -69,6 +69,14 @@ void RaceIntro::start(){
  const auto& c=cameras_[current_];
  eye_=rail_?Vec3{rail_->curPos().x,rail_->curPos().y,rail_->curPos().z}:c.position;
  target_=c.viewStart;appliedFov_=c.fovStart;
+}
+
+std::vector<IntroPathFrame> RaceIntro::previewFrames()const{
+ RaceIntro probe;probe.cameras_=cameras_;probe.opening_=opening_;probe.start();
+ std::vector<IntroPathFrame> result;if(!probe.active())return result;
+ result.push_back({probe.eye(),probe.target(),probe.fov(),probe.shot()});
+ while(probe.active()&&result.size()<4096){const int shot=probe.shot();probe.step();result.push_back({probe.eye(),probe.target(),probe.fov(),shot});}
+ return result;
 }
 
 void RaceIntro::stop(){rail_.reset();active_=false;current_=-1;}
@@ -95,6 +103,7 @@ void RaceIntro::begin(int index){
 
 void RaceIntro::step(){
  if(!active_)return;
+ ++frame_;
  const auto& c=cameras_[current_];
  // Shot position. Type 5 (0x805ADCB0): velocity is the route points' first
  // setting, lerped by segment progress, then the rail advances. Type 4

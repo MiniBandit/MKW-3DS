@@ -33,7 +33,7 @@ def select():
             # Match package_sd's final precedence: validate and classify the
             # model that will ship, including later material/animation fixes.
             source=ASSETS/relative
-            for overlay in ('course-materials',):
+            for overlay in ('course-materials','course-water-feedback','rainbow-final'):
                 candidate=ROOT/'build'/overlay/relative
                 if candidate.is_file():source=candidate
             data=source.read_bytes();magic,version,nv,ni,ns,nt=struct.unpack_from('<4s5I',data)

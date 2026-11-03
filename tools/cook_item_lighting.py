@@ -26,13 +26,13 @@ def main():
             {'name':s['material'],'retail':s['retail'],'reflection':s.get('reflection')}
             for m in exported['models'] for s in m['shapes']]}
     (out/'models/race-items.json').write_text(json.dumps(manifest,indent=2)+'\n')
-    for folder,suffixes in [('models',('.gmdl','.dskm','.json')),('textures',('.t3x',))]:
+    for folder,suffixes in [('models',('.gmdl','.dskm','.dobj','.json')),('textures',('.t3x',))]:
         for p in sorted((out/folder).iterdir()):
             if p.name.startswith('._') or p.suffix not in suffixes or p.stem.endswith('_000'):continue
             if p.suffix=='.json' and p.name!='race-items.json':continue
             rel=p.relative_to(out).as_posix()
-            if not (shared/rel).is_file():raise ValueError('Unexpected new item path: '+rel)
-            receipt['files'][rel]={'sha256':digest(p),'originalSha256':digest(shared/rel)}
+            if not (shared/rel).is_file() and rel!='models/item_14.dobj':raise ValueError('Unexpected new item path: '+rel)
+            receipt['files'][rel]={'sha256':digest(p),'originalSha256':digest(shared/rel) if (shared/rel).is_file() else None}
     (out/'receipt.json').write_text(json.dumps(receipt,indent=2)+'\n')
     print('Verified lighting for',len(receipt['items']),'world items;',len(receipt['files']),'overlay files')
 

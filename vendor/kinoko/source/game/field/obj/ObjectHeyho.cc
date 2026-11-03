@@ -1,0 +1,302 @@
+#include "ObjectHeyho.hh"
+
+#include "game/field/CollisionDirector.hh"
+#include "game/field/RailManager.hh"
+
+namespace Kinoko::Field {
+
+/// @addr{0x806CE828}
+ObjectHeyho::ObjectHeyho(const System::MapdataGeoObj &params)
+    : ObjectCollidable(params), StateManager(this, STATE_ENTRIES), m_color(params.setting(1)) {
+    const auto *rail = RailManager::Instance()->rail(params.pathId());
+    ASSERT(rail);
+    const auto &railPts = rail->points();
+
+    // The two endpoints are candidates for the highest Y coordinate in the route
+    // The midpoint's Y coordinate should be the lowest in the route
+    m_apex = std::max(railPts.front().pos.y, railPts.back().pos.y);
+    m_midpoint = railPts[railPts.size() / 2].pos;
+
+    // The object should speed up as we approach the low point and slow down as we leave it
+    // We form an acceleration constant so multiplying with (pos - center) gives v^2
+    // This way, we can inversely correlate height difference with speed
+    ASSERT(m_apex - m_midpoint.y > std::numeric_limits<f32>::epsilon());
+    f32 maxVel = static_cast<f32>(static_cast<s16>(params.setting(0)));
+    m_maxVelSq = maxVel * maxVel;
+    m_accel = m_maxVelSq / (m_apex - m_midpoint.y);
+}
+
+/// @addr{0x806CEB24}
+ObjectHeyho::~ObjectHeyho() = default;
+
+/// @addr{0x806CEB90}
+void ObjectHeyho::init() {
+    ASSERT(m_railInterpolator);
+    m_railInterpolator->init(0.0f, m_railInterpolator->pointCount() / 2);
+    setPos(m_railInterpolator->curPos());
+    m_currentVel = EGG::Mathf::sqrt(
+            m_maxVelSq - m_accel * (m_railInterpolator->curPos().y - m_midpoint.y));
+
+    m_transformOffset = m_railInterpolator->curTangentDir() * m_currentVel;
+    m_floorCollision = false;
+    m_up = EGG::Vector3f::ey;
+    m_forward = EGG::Vector3f::ez;
+    m_freeFall = false;
+    m_spinFrame = 0;
+    m_hit = false;
+    m_hitFrame = 0;
+
+    changeAnimation(Animation::Move);
+}
+
+/// @addr{0x806CEDF8}
+void ObjectHeyho::calc() {
+    calcStateTransition();
+    calcMotion();
+    StateManager::calc();
+    if (m_hit) {
+        calcHit();
+    }
+    calcInterp();
+}
+
+// Retail USA806c2a98/806c2c0c: ordinary collision leaves the reaction intact;
+// hit reactions start a separate overlay, without interrupting the rail state.
+void ObjectHeyho::beginHit() {
+    if (m_hit) return;
+    m_hit = true;
+    m_hitFrame = 0;
+}
+
+Kart::Reaction ObjectHeyho::onCollision(Kart::KartObject *, Kart::Reaction kartReaction,
+        Kart::Reaction objectReaction, EGG::Vector3f &) {
+    if (static_cast<s16>(objectReaction) == 3 || static_cast<s16>(objectReaction) == 5)
+        beginHit();
+    return kartReaction;
+}
+
+s16 ObjectHeyho::onItemCollision(const EGG::Vector3f &, const EGG::Vector3f &,
+        s16 itemReaction, s16 objectReaction, EGG::Vector3f &) {
+    onGlobalItemCollision(itemReaction, objectReaction);
+    return itemReaction;
+}
+
+void ObjectHeyho::onGlobalItemCollision(s16, s16 objectReaction) {
+    if (objectReaction >= 3 && objectReaction <= 6) beginHit();
+}
+
+// USA806c35ac: spin about the current up vector after normal movement/jump
+// processing. First 120 frames decelerate; then turn 4 degrees/frame until
+// facing the unmodified route heading again. Airborne jump keeps its heading.
+void ObjectHeyho::calcHit() {
+    constexpr f32 initialRate = 40.0f;
+    constexpr u16 decelFrames = 120;
+    const EGG::Vector3f heading = m_forward;
+    f32 angle;
+    if (m_hitFrame < decelFrames) {
+        const f32 t = static_cast<f32>(m_hitFrame);
+        const f32 accel = 0.8f * initialRate / decelFrames;
+        angle = initialRate * t - t * (0.5f * accel * t);
+        m_hitLastAngle = angle;
+    } else {
+        angle = m_hitLastAngle + 0.1f * initialRate * (m_hitFrame - decelFrames);
+    }
+    EGG::Matrix34f rotation;
+    rotation.setAxisRotation(-angle * DEG2RAD, m_up);
+    rotation.setBase(3, EGG::Vector3f::zero);
+    m_forward = rotation.ps_multVector(heading);
+    if (m_hitFrame >= decelFrames) {
+        if (m_floorCollision || m_currentStateId != 1) {
+            if (heading.x * m_forward.x + heading.z * m_forward.z > 0.97f)
+                m_hit = false;
+        } else {
+            m_forward = heading;
+        }
+    }
+    cueSound(0x2b8, SoundCall::Hold);
+    ++m_hitFrame;
+}
+
+/// @addr{0x806D013C}
+void ObjectHeyho::loadAnims() {
+    std::array<const char *, 4> names = {{
+            "body_color",
+            "move",
+            "jump",
+            "jump_ed",
+    }};
+
+    std::array<Render::AnmType, 4> types = {{
+            Render::AnmType::Pat,
+            Render::AnmType::Chr,
+            Render::AnmType::Chr,
+            Render::AnmType::Chr,
+    }};
+
+    linkAnims(names, types);
+}
+
+/// @addr{0x806D01D4}
+void ObjectHeyho::calcCollisionTransform() {
+    auto *objCol = collision();
+    if (!objCol) {
+        return;
+    }
+
+    EGG::Matrix34f tm;
+    tm.makeT(EGG::Vector3f(0.0f, 100.0f, 0.0f));
+    calcTransform();
+    EGG::Matrix34f m = transform().multiplyTo(tm);
+    objCol->transform(m, scale(), m_transformOffset);
+}
+
+/// @addr{0x806CF4D0}
+void ObjectHeyho::calcMove() {
+    m_forward = m_railInterpolator->nextPoint().pos - m_railInterpolator->curPoint().pos;
+    m_floorCollision = false;
+
+    CollisionInfo info;
+
+    if (CollisionDirector::Instance()->checkSphereFull(COLLISION_RADIUS, pos() + COLLISION_OFFSET,
+                EGG::Vector3f::inf, KCL_TYPE_FLOOR, &info, nullptr, 0)) {
+        m_floorCollision = true;
+        if (info.floorDist > -std::numeric_limits<f32>::min()) {
+            m_floorNrm = info.floorNrm;
+        }
+
+        setPos(pos() + info.tangentOff - m_floorNrm * 60.0f);
+
+        if (m_currentAnim == Animation::Jumped) {
+            const auto *anim = m_drawMdl->anmMgr()->activeAnim(Render::AnmType::Chr);
+            if (anim->frame() >= anim->frameCount()) {
+                changeAnimation(Animation::Move);
+            }
+        }
+
+        cueSound(0x2b5, SoundCall::Hold); // SE_CN_BDX_HEYHO_MV
+    }
+}
+
+/// @addr{0x806CF72C}
+void ObjectHeyho::calcJump() {
+    constexpr s16 SPIN_DELAY_FRAMES = 5;
+    constexpr s16 SPIN_RATE = 12; // degrees per frame
+    constexpr s16 SPIN_DEGREES = 720;
+
+    m_floorCollision = false;
+
+    CollisionInfo info;
+    Field::KCLTypeMask flags = KCL_NONE;
+
+    if (CollisionDirector::Instance()->checkSphereFull(COLLISION_RADIUS, pos() + COLLISION_OFFSET,
+                EGG::Vector3f::inf, KCL_TYPE_VEHICLE_COLLIDEABLE, &info, &flags, 0)) {
+        m_floorCollision = true;
+        if (info.floorDist > -std::numeric_limits<f32>::min()) {
+            m_floorNrm = info.floorNrm;
+        }
+
+        // Not m_pos += info.tangentOff - m_floorNrm * 60.0f
+        // The former requires m_pos to be the last addition to occur
+        // TODO: 100.0f - 10.0f - 30.0f? Why is this the case?
+        f32 xPos = pos().x + info.tangentOff.x - m_floorNrm.x * 60.0f;
+        f32 zPos = pos().z + info.tangentOff.z - m_floorNrm.z * 60.0f;
+        setPos(EGG::Vector3f(xPos, pos().y, zPos));
+
+        if (!(flags & KCL_TYPE_BIT(COL_TYPE_INVISIBLE_WALL)) && m_currentAnim != Animation::Move) {
+            m_forward = m_railInterpolator->nextPoint().pos - m_railInterpolator->curPoint().pos;
+            if (m_currentAnim == Animation::Jump) {
+                m_currentAnim = Animation::Jumped;
+            }
+        } else {
+            m_floorCollision = false;
+            const auto &curPos = m_railInterpolator->curPoint().pos;
+            const auto &nextPos = m_railInterpolator->nextPoint().pos;
+
+            m_forward = (nextPos.y > curPos.y ? nextPos : curPos) - m_midpoint;
+
+            // Red shy guys do a spin. Yes, this is based on color, and no, it's not an animation
+            // We couldn't possibly use even one of the six unused settings for this
+            if (m_color == 0) {
+                s16 frame = m_spinFrame - SPIN_DELAY_FRAMES;
+                if (frame >= 0 && frame <= SPIN_DEGREES / SPIN_RATE) {
+                    EGG::Matrix34f m;
+                    m.setAxisRotation(static_cast<f32>(frame) *
+                                    (static_cast<f32>(-SPIN_RATE) * DEG2RAD),
+                            m_up);
+                    m.setBase(3, EGG::Vector3f::zero);
+                    m_forward = m.ps_multVector(m_forward);
+                }
+            }
+
+            ++m_spinFrame;
+        }
+    }
+
+    if (m_railInterpolator->segmentT() > 0.6f && m_currentAnim == Animation::Move) {
+        changeAnimation(Animation::Jump);
+    }
+}
+
+/// @addr{0x806CFD48}
+void ObjectHeyho::calcStateTransition() {
+    if (m_railInterpolator->curPoint().setting[1] == 0 ||
+            m_railInterpolator->nextPoint().setting[1] == 0) {
+        if (m_currentStateId != 0) {
+            m_currentStateId = 0;
+        }
+    } else {
+        if (m_currentStateId != 1) {
+            m_currentStateId = 1;
+        }
+    }
+}
+
+/// @addr{0x806CFDB0}
+void ObjectHeyho::calcMotion() {
+    if (!m_freeFall) {
+        f32 sqVel = m_maxVelSq - m_accel * (pos().y - m_midpoint.y);
+        if (sqVel <= 0.0f) {
+            sqVel = 0.001f;
+        }
+        m_currentVel = EGG::Mathf::sqrt(sqVel);
+        m_railInterpolator->setCurrVel(m_currentVel);
+
+        if (m_railInterpolator->calc() == RailInterpolator::Status::ChangingDirection) {
+            // We have an edgecase where the endpoint heights aren't the same
+            // While the current velocity reaches 0 at the apex, it's higher on the other side
+            // To counter this, the object goes off the rail and into free fall until we land
+            m_launchVel = m_currentVel;
+            if (m_currentVel > 1.0f) {
+                m_freeFall = true;
+            }
+        }
+
+        if (m_currentStateId == 0 && !m_floorCollision) {
+            const auto &curPos = m_railInterpolator->curPos();
+            setPos(EGG::Vector3f(curPos.x, pos().y, curPos.z));
+        } else {
+            setPos(m_railInterpolator->curPos());
+        }
+    } else {
+        m_currentVel -= 1.0f;
+        setPos(EGG::Vector3f(pos().x, m_currentVel + pos().y, pos().z));
+    }
+
+    // m_currentVel < 0.0f => either we're in free fall or we just snapped to the rail
+    // If we would land back on the rail on the next frame, just let it snap to the rail instead
+    if (m_currentVel < 0.0f &&
+            EGG::Mathf::abs(pos().y - m_railInterpolator->curPos().y) <= -m_currentVel) {
+        m_currentVel = m_launchVel;
+        m_freeFall = false;
+    }
+}
+
+/// @addr{0x806CFFB0}
+void ObjectHeyho::calcInterp() {
+    m_up = Interpolate(0.2f, m_up, m_floorNrm);
+    m_up.normalise2();
+    m_forward.normalise2();
+    setMatrixTangentTo(m_up, m_forward);
+}
+
+} // namespace Kinoko::Field

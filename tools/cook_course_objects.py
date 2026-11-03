@@ -134,7 +134,7 @@ def main():
     p.add_argument('--jobs', type=int, default=4)
     p.add_argument('--force', action='store_true')
     p.add_argument('--mii-heads', type=Path, help='Offline Mii billboard texture manifest; no runtime head assembly')
-    p.add_argument('--ids', type=int, nargs='*')
+    p.add_argument('--ids', type=int, nargs='+', required=True)
     a = p.parse_args()
     catalog = courses()
     if a.ids is not None:
@@ -145,7 +145,7 @@ def main():
     # Keep the ordinary default race-only batch; arenas use the same pipeline.
     selected = [c for c in catalog if
                 (c['kind'] == 'race' if a.ids is None else c['id'] in a.ids)]
-    subprocess.run(['node', 'tools/bundle_cooker.mjs'], cwd=ROOT, check=True)
+    if not (ROOT/'build/export_brres.mjs').is_file():raise FileNotFoundError('Prepare the individual BRRES exporter manually; see docs/MANUAL-BUILD.md')
 
     def run(course):
         report = cook_course(course, a.force, a.mii_heads)

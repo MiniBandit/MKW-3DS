@@ -1,4 +1,3 @@
-#include <initializer_list>
 #include <mkw/inseki_motion.hpp>
 #include <cassert>
 #include <cmath>

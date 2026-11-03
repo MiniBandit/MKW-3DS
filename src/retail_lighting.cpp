@@ -11,6 +11,38 @@ constexpr int TextureSize=32;
 uint8_t channel(uint32_t rgba,unsigned i){return uint8_t(rgba>>(24-8*i));}
 }
 
+bool normalEnvironment(uint32_t word,uint32_t mode,uint32_t constant){
+    if(word&retail::PrimaryEnvironment)return true;
+    if(((word&retail::ChannelMask)>>retail::ChannelShift)==2)return true;
+    switch(mode){
+    case 0:case 3:case 4:case 7:case 11:case 12:case 13:case 14:case 15:case 19:case 21:case 22:case 23:case 24:case 25:return false;
+    case 10:case 20:return !(constant&512);
+    default:return true;
+    }
+}
+std::array<float,4> viewLightFactor(const CourseLighting* course,uint32_t word,uint32_t material,Vec3 n,const float view[3][3]){
+    std::array<float,4> out{1,1,1,1};
+    if(!course||!(word&retail::Retail)||!(word&retail::ChannelMask))return out;
+    const auto& l=course->lights[(word&retail::LightSetMask)>>retail::LightSetShift];
+    const Vec3 toward=-retailLightViewDirection(l,view);
+    const unsigned fn=(word&retail::DiffuseMask)>>retail::DiffuseShift;
+    const float d=dot(normalized(n),toward);
+    const float diffuse=fn==0?1.f:fn==1?std::max(d,-2.f):std::max(d,0.f);
+    const bool on=(l.flags&0x41)==0x41,alpha=word&retail::AlphaLit;
+    for(unsigned c=0;c<4;++c){
+        if(c==3&&!alpha)continue;
+        const float ambient=float(unsigned(.5f+float(channel(course->ambient[0],c))*channel(material,c)/255.f))/255.f;
+        const float light=on&&(l.flags&(c==3?0x400:0x200))?channel(l.color,c)/255.f:0.f;
+        out[c]=std::clamp(ambient+light*diffuse,0.f,1.f);
+    }
+    return out;
+}
+
+std::array<float,4> staticLightFactor(const CourseLighting* course,uint32_t word,uint32_t material,Vec3 n){
+    const float identity[3][3]={{1,0,0},{0,1,0},{0,0,1}};
+    return viewLightFactor(course,word,material,n,identity);
+}
+
 uint8_t lightGradientTexel(unsigned index,unsigned texel){
     // CpuTexture gradient (0x80217A3C) from black to white over [start,end],
     // then fillGradient's half-width rotation (0x802184CC).

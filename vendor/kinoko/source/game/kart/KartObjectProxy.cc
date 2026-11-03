@@ -1,0 +1,477 @@
+#include "KartObjectProxy.hh"
+
+#include "game/kart/CollisionGroup.hh"
+#include "game/kart/KartObject.hh"
+#include "game/kart/KartObjectManager.hh"
+#include "game/kart/KartState.hh"
+#include "game/kart/KartSub.hh"
+#include "game/kart/KartSuspension.hh"
+#include "game/kart/KartTire.hh"
+
+#include "game/system/CourseMap.hh"
+#include "game/system/RaceManager.hh"
+#include "game/system/map/MapdataCannonPoint.hh"
+
+#include <egg/math/Math.hh>
+
+#include <algorithm>
+
+namespace Kinoko::Kart {
+
+/// @addr{0x8059018C}
+KartObjectProxy::KartObjectProxy() : m_accessor(nullptr) {
+    s_proxyList.push_back(this);
+}
+
+KartObjectProxy::~KartObjectProxy() = default;
+
+/// @addr{0x80590238}
+void KartObjectProxy::setPos(const EGG::Vector3f &pos) {
+    dynamics()->setPos(pos);
+}
+
+/// @addr{0x80590288}
+void KartObjectProxy::setRot(const EGG::Quatf &q) {
+    dynamics()->setFullRot(q);
+    dynamics()->setMainRot(q);
+}
+
+/// @addr{0x80591664}
+void KartObjectProxy::setInertiaScale(const EGG::Vector3f &scale) {
+    const EGG::Vector3f *cuboids = bsp().cuboids;
+    dynamics()->setInertia(cuboids[0] * scale, cuboids[1] * scale);
+}
+
+/// @addr{0x80590D20}
+KartAction *KartObjectProxy::action() {
+    return m_accessor->action;
+}
+
+/// @addr{0x80590D20}
+const KartAction *KartObjectProxy::action() const {
+    return m_accessor->action;
+}
+
+/// @addr{0x8059069C}
+KartBody *KartObjectProxy::body() {
+    return m_accessor->body;
+}
+
+/// @addr{0x8059069C}
+const KartBody *KartObjectProxy::body() const {
+    return m_accessor->body;
+}
+
+/// @addr{0x8059084C}
+KartCollide *KartObjectProxy::collide() {
+    return m_accessor->collide;
+}
+
+/// @addr{0x8059084C}
+const KartCollide *KartObjectProxy::collide() const {
+    return m_accessor->collide;
+}
+
+/// @addr{0x805907D8}
+CollisionGroup *KartObjectProxy::collisionGroup() {
+    return m_accessor->body->physics()->hitboxGroup();
+}
+
+/// @addr{0x805907D8}
+const CollisionGroup *KartObjectProxy::collisionGroup() const {
+    return m_accessor->body->physics()->hitboxGroup();
+}
+
+/// @addr{0x8059077C}
+KartMove *KartObjectProxy::move() {
+    return m_accessor->move;
+}
+
+/// @addr{0x8059077C}
+const KartMove *KartObjectProxy::move() const {
+    return m_accessor->move;
+}
+
+KartHalfPipe *KartObjectProxy::halfPipe() {
+    return m_accessor->move->halfPipe();
+}
+
+const KartHalfPipe *KartObjectProxy::halfPipe() const {
+    return m_accessor->move->halfPipe();
+}
+
+KartScale *KartObjectProxy::kartScale() {
+    return m_accessor->move->kartScale();
+}
+
+const KartScale *KartObjectProxy::kartScale() const {
+    return m_accessor->move->kartScale();
+}
+
+/// @addr{0x80591914}
+KartJump *KartObjectProxy::jump() {
+    return m_accessor->move->jump();
+}
+
+/// @addr{0x80591914}
+const KartJump *KartObjectProxy::jump() const {
+    return m_accessor->move->jump();
+}
+
+/// @addr{0x80590864}
+KartParam *KartObjectProxy::param() {
+    return m_accessor->param;
+}
+
+/// @addr{0x80590864}
+const KartParam *KartObjectProxy::param() const {
+    return m_accessor->param;
+}
+
+/// @addr{0x80590888}
+const BSP &KartObjectProxy::bsp() const {
+    return param()->bsp();
+}
+
+/// @addr{0x805903AC}
+KartPhysics *KartObjectProxy::physics() {
+    return body()->physics();
+}
+
+/// @addr{0x805903AC}
+const KartPhysics *KartObjectProxy::physics() const {
+    return body()->physics();
+}
+
+/// @addr{0x805903E0}
+KartDynamics *KartObjectProxy::dynamics() {
+    return physics()->dynamics();
+}
+
+/// @addr{0x805903E0}
+const KartDynamics *KartObjectProxy::dynamics() const {
+    return physics()->dynamics();
+}
+
+KartState *KartObjectProxy::state() {
+    return m_accessor->state;
+}
+
+const KartState *KartObjectProxy::state() const {
+    return m_accessor->state;
+}
+
+/// @addr{0x80590764}
+KartSub *KartObjectProxy::sub() {
+    return m_accessor->sub;
+}
+
+/// @addr{0x80590764}
+const KartSub *KartObjectProxy::sub() const {
+    return m_accessor->sub;
+}
+
+/// @addr{0x805906B4}
+KartSuspension *KartObjectProxy::suspension(u16 suspIdx) {
+    return m_accessor->suspensions[suspIdx];
+}
+
+/// @addr{0x805906B4}
+const KartSuspension *KartObjectProxy::suspension(u16 suspIdx) const {
+    return m_accessor->suspensions[suspIdx];
+}
+
+/// @addr{0x80590704}
+KartSuspensionPhysics *KartObjectProxy::suspensionPhysics(u16 suspIdx) {
+    return m_accessor->suspensions[suspIdx]->suspPhysics();
+}
+
+/// @addr{0x80590704}
+const KartSuspensionPhysics *KartObjectProxy::suspensionPhysics(u16 suspIdx) const {
+    return m_accessor->suspensions[suspIdx]->suspPhysics();
+}
+
+/// @addr{0x805906DC}
+KartTire *KartObjectProxy::tire(u16 tireIdx) {
+    return m_accessor->tires[tireIdx];
+}
+
+/// @addr{0x805906DC}
+const KartTire *KartObjectProxy::tire(u16 tireIdx) const {
+    return m_accessor->tires[tireIdx];
+}
+
+/// @addr{0x80590734}
+WheelPhysics *KartObjectProxy::tirePhysics(u16 tireIdx) {
+    return tire(tireIdx)->wheelPhysics();
+}
+
+/// @addr{0x80590734}
+const WheelPhysics *KartObjectProxy::tirePhysics(u16 tireIdx) const {
+    return m_accessor->tires[tireIdx]->wheelPhysics();
+}
+
+/// @addr{0x8059081C}
+CollisionData &KartObjectProxy::collisionData() {
+    return physics()->hitboxGroup()->collisionData();
+}
+
+/// @addr{0x8059081C}
+const CollisionData &KartObjectProxy::collisionData() const {
+    return m_accessor->body->physics()->hitboxGroup()->collisionData();
+}
+
+/// @addr{0x805903F4}
+const System::KPad *KartObjectProxy::inputs() const {
+    return System::RaceManager::Instance()->player(param()->playerIdx()).inputs();
+}
+
+/// @addr{0x80590A40}
+Render::KartModel *KartObjectProxy::model() {
+    return m_accessor->model;
+}
+
+/// @addr{0x80590A40}
+const Render::KartModel *KartObjectProxy::model() const {
+    return m_accessor->model;
+}
+
+/// @addr{0x805907C0}
+Field::ObjectCollisionKart *KartObjectProxy::objectCollisionKart() {
+    return m_accessor->objectCollisionKart;
+}
+
+/// @addr{0x805907C0}
+const Field::ObjectCollisionKart *KartObjectProxy::objectCollisionKart() const {
+    return m_accessor->objectCollisionKart;
+}
+
+/// @addr{0x80591520}
+Field::BoxColUnit *KartObjectProxy::boxColUnit() {
+    return m_accessor->boxColUnit;
+}
+
+/// @addr{0x80591520}
+const Field::BoxColUnit *KartObjectProxy::boxColUnit() const {
+    return m_accessor->boxColUnit;
+}
+
+/// @addr{0x80590834}
+CollisionData &KartObjectProxy::collisionData(u16 tireIdx) {
+    return tirePhysics(tireIdx)->hitboxGroup()->collisionData();
+}
+
+/// @addr{0x80590834}
+const CollisionData &KartObjectProxy::collisionData(u16 tireIdx) const {
+    return m_accessor->tires[tireIdx]->wheelPhysics()->hitboxGroup()->collisionData();
+}
+
+/// @addr{0x805914BC}
+const EGG::Vector3f &KartObjectProxy::scale() const {
+    return move()->scale();
+}
+
+/// @addr{0x80590264}
+const EGG::Matrix34f &KartObjectProxy::pose() const {
+    return physics()->pose();
+}
+
+/// @brief Returns the third column of the rotation matrix, which is the facing vector.
+/// @addr{0x80590C94}
+EGG::Vector3f KartObjectProxy::bodyFront() const {
+    const EGG::Matrix34f &mtx = pose();
+    return EGG::Vector3f(mtx[0, 2], mtx[1, 2], mtx[2, 2]);
+}
+
+/// @brief Returns the first column of the rotation matrix, which is the "right" direction.
+/// @addr{0x80590C44}
+EGG::Vector3f KartObjectProxy::bodyForward() const {
+    const EGG::Matrix34f &mtx = pose();
+    return EGG::Vector3f(mtx[0, 0], mtx[1, 0], mtx[2, 0]);
+}
+
+/// @addr{0x80590C6C}
+/// @brief Returns the second column of the rotation matrix, which is the "up" direction.
+EGG::Vector3f KartObjectProxy::bodyUp() const {
+    const EGG::Matrix34f &mtx = pose();
+    return EGG::Vector3f(mtx[0, 1], mtx[1, 1], mtx[2, 1]);
+}
+
+/// @addr{0x80590CBC}
+const EGG::Vector3f &KartObjectProxy::componentXAxis() const {
+    return physics()->xAxis();
+}
+
+/// @addr{0x80590CD0}
+const EGG::Vector3f &KartObjectProxy::componentYAxis() const {
+    return physics()->yAxis();
+}
+
+/// @addr{0x80590CE4}
+const EGG::Vector3f &KartObjectProxy::componentZAxis() const {
+    return physics()->zAxis();
+}
+
+/// @addr{0x8059020C}
+const EGG::Vector3f &KartObjectProxy::pos() const {
+    return dynamics()->pos();
+}
+
+/// @addr{0x80590224}
+const EGG::Vector3f &KartObjectProxy::prevPos() const {
+    return physics()->pos();
+}
+
+const EGG::Quatf &KartObjectProxy::fullRot() const {
+    return dynamics()->fullRot();
+}
+
+const EGG::Vector3f &KartObjectProxy::extVel() const {
+    return dynamics()->extVel();
+}
+
+const EGG::Vector3f &KartObjectProxy::intVel() const {
+    return dynamics()->intVel();
+}
+
+const EGG::Vector3f &KartObjectProxy::velocity() const {
+    return dynamics()->velocity();
+}
+
+/// @addr{0x80590CF8}
+f32 KartObjectProxy::speed() const {
+    return move()->speed();
+}
+
+f32 KartObjectProxy::acceleration() const {
+    return move()->acceleration();
+}
+
+f32 KartObjectProxy::softSpeedLimit() const {
+    return move()->softSpeedLimit();
+}
+
+const EGG::Quatf &KartObjectProxy::mainRot() const {
+    return dynamics()->mainRot();
+}
+
+const EGG::Vector3f &KartObjectProxy::angVel2() const {
+    return dynamics()->angVel2();
+}
+
+/// @addr{0x80590A6C}
+bool KartObjectProxy::isBike() const {
+    return param()->isBike();
+}
+
+/// @addr{0x805902DC}
+u16 KartObjectProxy::suspCount() const {
+    return param()->suspCount();
+}
+
+/// @addr{0x805902EC}
+u16 KartObjectProxy::tireCount() const {
+    return param()->tireCount();
+}
+
+/// @addr{0x80590338}
+bool KartObjectProxy::hasFloorCollision(const WheelPhysics *wheelPhysics) const {
+    return wheelPhysics->hitboxGroup()->collisionData().bFloor;
+}
+
+/// @addr{0x8058539C}
+std::pair<EGG::Vector3f, EGG::Vector3f> KartObjectProxy::getCannonPosRot() {
+    auto *cannon = System::CourseMap::Instance()->getCannonPoint(state()->cannonPointId());
+    const EGG::Vector3f &cannonPos = cannon->pos();
+    EGG::Vector3f cannonRot = cannon->rot();
+    EGG::Vector3f radRot = cannon->rot() * DEG2RAD;
+    EGG::Matrix34f rotMat;
+    rotMat.makeR(radRot);
+    cannonRot = rotMat.multVector33(EGG::Vector3f::ez);
+    EGG::Vector3f distance_to_cannon = this->pos() - cannonPos;
+    distance_to_cannon.y = 0.0f;
+    EGG::Vector3f local60 = EGG::Vector3f::ey.cross(cannonRot);
+    f32 temp0 = local60.dot(distance_to_cannon);
+    return std::pair(cannonPos + local60 * temp0, cannonRot);
+}
+
+/// @addr{0x80590DD0}
+f32 KartObjectProxy::speedRatio() const {
+    return move()->speedRatio();
+}
+
+/// @addr{0x80590DC0}
+f32 KartObjectProxy::speedRatioCapped() const {
+    return move()->speedRatioCapped();
+}
+
+/// @addr{0x805914F4}
+bool KartObjectProxy::isInRespawn() const {
+    return move()->respawnTimer() > 0 || move()->respawnPostLandTimer() > 0;
+}
+
+/// @addr{0x805911A8}
+Field::KCLTypeMask KartObjectProxy::wallKclType() const {
+    return collisionData().closestWallFlags;
+}
+
+/// @addr{0x805911C0}
+u32 KartObjectProxy::wallKclVariant() const {
+    return collisionData().closestWallSettings;
+}
+
+Status &KartObjectProxy::status() {
+    return state()->status();
+}
+
+const Status &KartObjectProxy::status() const {
+    return state()->status();
+}
+
+/// @addr{0x8059031C}
+const EGG::Vector3f &KartObjectProxy::wheelPos(u16 idx) const {
+    return tirePhysics(idx)->pos();
+}
+
+/// @addr{0x80590390}
+const EGG::Vector3f &KartObjectProxy::wheelEdgePos(u16 idx) const {
+    return tirePhysics(idx)->wheelEdgePos();
+}
+
+/// @addr{0x805909C8}
+f32 KartObjectProxy::cameraDistY() const {
+    if (isBike()) {
+        return param()->bikeDisp().m_cameraDistY;
+    } else {
+        return param()->kartDisp().m_cameraDistY;
+    }
+}
+
+/// @addr{0x805909F4}
+s32 KartObjectProxy::hopStickX() const {
+    return move()->hopStickX();
+}
+
+/// @addr{0x80590A10}
+KartParam::Stats::DriftType KartObjectProxy::vehicleType() const {
+    return param()->stats().driftType;
+}
+
+/// @addr{0x805901D0}
+void KartObjectProxy::apply(size_t idx) {
+    m_accessor = KartObjectManager::Instance()->object(idx)->accessor();
+}
+
+/// @addr{0x80590138}
+/// @brief For all proxies in the static list, synchronizes all pointers to the KartAccessor.
+/// @param pointers The pointer to synchronize all other proxies to.
+void KartObjectProxy::ApplyAll(const KartAccessor *pointers) {
+    for (auto iter = s_proxyList.begin(); iter != s_proxyList.end(); ++iter) {
+        (*iter)->m_accessor = pointers;
+    }
+}
+
+std::list<KartObjectProxy *, EGG::Allocator<KartObjectProxy *>>
+        KartObjectProxy::s_proxyList; ///< @addr{0x809C1900}
+
+} // namespace Kinoko::Kart

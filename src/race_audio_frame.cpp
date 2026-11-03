@@ -108,6 +108,7 @@ void fillRaceAudioFrame(RaceAudioFrame& f, snd::Vec3f eye, snd::Vec3f target) {
   const auto taken = move->takeSoundCues();
   k.cues |= taken.cues;
   k.bumpedBy |= taken.bumpedBy;
+  k.powerObjectContact |= taken.powerObjectContact;
   if (taken.cues & cue::Bump) k.bump = taken.bump;
   if (taken.cues & cue::Fall) k.fallVoice = taken.fallVoice;
   if (taken.cues & cue::SoundTrigger) k.soundZone = taken.soundZone;

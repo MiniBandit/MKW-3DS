@@ -21,6 +21,7 @@ public:
  void close();
  // Selects the frame for this 60 Hz clock. Never blocks.
  void request(std::uint64_t elapsed60HzTicks);
+ void setPaused(bool paused);
  // Image rows [first,end) (top origin, texels) that visible quads sample.
  // Other rows keep their previous contents. Never blocks.
  void setRows(unsigned first,unsigned end);

@@ -16,7 +16,7 @@ struct Archive {
   return it!=entries.end()&&!std::strcmp(names.data()+it->name,key)?&*it:nullptr;
  }
 };
-// Menu assets first, then race assets. Both stay open for the session.
+// Menu and race assets use the original two archives.
 struct Archives {
  LightLock lock;bool tried=false;
  std::array<Archive,2> list{{{"menu.pak"},{"race.pak"}}};
@@ -30,7 +30,7 @@ bool load(Archive& a){
  unsigned char header[12];
  if(std::fread(header,1,12,f)!=12||std::memcmp(header,"MPK1",4)){std::fclose(f);return false;}
  const std::uint32_t count=u32(header+4),namesBytes=u32(header+8);
- if(!count||count>200000||namesBytes>(16u<<20)){std::fclose(f);return false;}
+ if(!count||count>200000||!namesBytes||namesBytes>(16u<<20)){std::fclose(f);return false;}
  std::vector<unsigned char> table(size_t(count)*12);
  a.names.resize(namesBytes);a.entries.resize(count);
  if(std::fread(table.data(),1,table.size(),f)!=table.size()||std::fread(a.names.data(),1,namesBytes,f)!=namesBytes||a.names.back()!=0){std::fclose(f);a.entries.clear();return false;}

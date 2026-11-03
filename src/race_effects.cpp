@@ -140,7 +140,10 @@ int RaceEffects::find(const char* name) const {
     for(size_t i=0;i<res.size();++i)if(!std::strcmp(res[i].name,name))return int(i);
     return -1;
 }
-void RaceEffects::reset(){system_->reset();slots_={};serial_=0;++generation_;diagnosticMask_=0;}
+void RaceEffects::reset(){pendingBlue_.clear();system_->reset();std::vector<Slot>(SlotCount).swap(slots_);serial_=0;++generation_;diagnosticMask_=0;}
+unsigned RaceEffects::allocateObjectSlots(unsigned count){
+    const unsigned first=unsigned(slots_.size());slots_.resize(size_t(first)+count);return first;
+}
 unsigned RaceEffects::liveParticles() const {return system_->liveParticles;}
 void RaceEffects::setCamera(const float view[3][4]){std::memcpy(system_->cameraMtx.m,view,sizeof(float)*12);}
 void RaceEffects::setCamera(Vec3 eye,Vec3 target,Vec3 up){
@@ -153,6 +156,7 @@ void RaceEffects::setCamera(Vec3 eye,Vec3 target,Vec3 up){
 ef::Effect* RaceEffects::start(int spec,const EffectFrame& frame,uint8_t group){
     if(!ready||spec<0||size_t(spec)>=system_->resources.size())return nullptr;
     ef::Effect* e=system_->createEffect(system_->resources[size_t(spec)],0,group);
+#ifndef MKW_RELEASE
     // Bounded transition diagnostics for the reported missing item/hit/boost
     // effects. One line per local/shared root per race; no per-frame I/O.
     if(group==0||group==2){
@@ -166,6 +170,7 @@ ef::Effect* RaceEffects::start(int spec,const EffectFrame& frame,uint8_t group){
             }
         }
     }
+#endif
     if(!e)return nullptr;
     e->serial=++serial_;
     system_->setRootMtx(*e,frameMtx(frame));
@@ -174,10 +179,10 @@ ef::Effect* RaceEffects::start(int spec,const EffectFrame& frame,uint8_t group){
 void RaceEffects::burst(int spec,const EffectFrame& frame){start(spec,frame);}
 void RaceEffects::burst(int spec,const EffectFrame& frame,float velocity){if(auto* e=start(spec,frame))system_->setSpecificVelocity(*e,velocity);}
 bool RaceEffects::alive(unsigned slot) const {
-    return slot<SlotCount&&system_->alive(slots_[slot].effect,slots_[slot].serial);
+    return slot<slots_.size()&&system_->alive(slots_[slot].effect,slots_[slot].serial);
 }
 void RaceEffects::create(unsigned slot,int spec,const EffectFrame& frame,uint8_t group){
-    if(slot>=SlotCount||alive(slot))return;
+    if(slot>=slots_.size()||alive(slot))return;
     Slot& s=slots_[slot];
     s.effect=start(spec,frame,group);s.serial=s.effect?s.effect->serial:0;s.spec=spec;s.fading=false;
 }
@@ -190,7 +195,7 @@ void RaceEffects::followFade(unsigned slot){
 }
 void RaceEffects::fade(unsigned slot){
     if(alive(slot))system_->retireEmitters(*slots_[slot].effect);
-    if(slot<SlotCount)slots_[slot]={};
+    if(slot<slots_.size())slots_[slot]={};
 }
 void RaceEffects::setColor(unsigned slot,const uint8_t rgba[4]){
     if(alive(slot))system_->setColor(*slots_[slot].effect,rgba);
@@ -222,10 +227,10 @@ void RaceEffects::setDisabled(unsigned slot,bool calc,bool draw){
 }
 void RaceEffects::kill(unsigned slot){
     if(alive(slot))system_->retireEffect(*slots_[slot].effect);
-    if(slot<SlotCount)slots_[slot]={};
+    if(slot<slots_.size())slots_[slot]={};
 }
 void RaceEffects::attach(unsigned slot,int spec,const EffectFrame& frame,bool active){
-    if(slot>=SlotCount)return;
+    if(slot>=slots_.size())return;
     if(spec<0){kill(slot);return;}
     Slot& s=slots_[slot];
     if(active){
@@ -239,5 +244,41 @@ void RaceEffects::restart(unsigned slot,int spec,const EffectFrame& frame){
     kill(slot);create(slot,spec,frame);
 }
 void RaceEffects::setGroups(uint32_t calc,uint32_t draw){system_->calcGroups=calc;system_->drawGroups=draw;}
-void RaceEffects::step(){if(ready)system_->calc();}
+void RaceEffects::burstBlueSmoke(int spec,const EffectFrame& frame){
+    if(ready&&spec>=0)pendingBlue_.push_back({spec,frame});
+}
+bool RaceEffects::roomForBlueSmoke(){
+    auto enough=[&](){return system_->effects.freeCount>=1&&system_->emitters.freeCount>=8&&
+        system_->managers.freeCount>=8&&system_->particles.freeCount>=32;};
+    if(enough())return true;
+    // Reuse the bounded pool: only expendable driving trails/smoke are
+    // preempted. Do not kill hits, boxes, course effects or another explosion.
+    for(auto* e=system_->active.head;e&&!enough();){
+        auto* next=e->next;bool decorative=e->emitters.head!=nullptr;
+        for(auto* em=e->emitters.head;em;em=em->next){
+            const char* n=em->res->name;
+            decorative&=!std::strncmp(n,"rk_drift",8)||!std::strncmp(n,"rk_kouraTail",12)||
+                !std::strncmp(n,"rk_dirtSmoke",12)||!std::strncmp(n,"rk_start",8)||
+                !std::strcmp(n,"rk_wheelie")||!std::strncmp(n,"rk_miniTurbo",12);
+        }
+        if(decorative){system_->retireEffect(*e);system_->garbageCollection();}
+        e=next;
+    }
+    return enough();
+}
+void RaceEffects::step(){
+    if(!ready)return;
+    // Process after all ordinary starts, immediately before calc. The parent
+    // and its authored child creation run first, with room for all three layers.
+    for(size_t i=0;i<pendingBlue_.size();){
+        if(!roomForBlueSmoke())break; // Retain the event; never silently discard it.
+        const auto pending=pendingBlue_[i];auto* e=start(pending.spec,pending.frame);
+        if(!e)break;
+        system_->active.remove(e);system_->active.insertBefore(system_->active.head,e);
+        pendingBlue_.erase(pendingBlue_.begin()+i);
+        // One burst per calc protects its budget against simultaneous blue hits.
+        break;
+    }
+    system_->calc();
+}
 }

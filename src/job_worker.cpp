@@ -17,8 +17,11 @@ bool JobWorker::start(){
     // already require a limit (sound_system.cpp). Higher-priority system and
     // audio threads still preempt this one.
     if(!n3ds){u32 limit=0;APT_GetAppCpuTimeLimit(&limit);if(limit<80)APT_SetAppCpuTimeLimit(80);}
+    // New 3DS: prepare on the main core while it waits for jobs/render slots.
+    // Keep the render core free of higher-priority animation jobs. finish()
+    // still executes unclaimed work immediately; physics preempts this worker.
     s32 priority=0x30;svcGetThreadPriority(&priority,CUR_THREAD_HANDLE);
-    thread_=threadCreate(entry,this,32*1024,std::clamp<s32>(priority+(n3ds?0:1),0x1a,0x3f),n3ds?2:1,false);
+    thread_=threadCreate(entry,this,32*1024,std::clamp<s32>(priority+1,0x1a,0x3f),n3ds?0:1,false);
     return thread_!=nullptr;
 }
 void JobWorker::stop(){
@@ -48,6 +51,8 @@ void JobWorker::finishAll(){
     }
     count_.store(0,std::memory_order_relaxed);next_.store(0,std::memory_order_relaxed);
     if(auto* worker=static_cast<RenderMetrics*>(metrics_)){
+        renderMetrics.animationHolds+=worker->animationHolds;renderMetrics.scenePoseSamples+=worker->scenePoseSamples;
+        renderMetrics.scenePoseReuses+=worker->scenePoseReuses;renderMetrics.fireReads+=worker->fireReads;
         renderMetrics.flushCalls+=worker->flushCalls;renderMetrics.flushBytes+=worker->flushBytes;
         renderMetrics.poseEvaluations+=worker->poseEvaluations;renderMetrics.poseReuses+=worker->poseReuses;
         renderMetrics.skinnedVertices+=worker->skinnedVertices;renderMetrics.workerMs+=worker->workerMs;*worker={};

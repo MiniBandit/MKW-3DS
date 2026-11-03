@@ -1,7 +1,13 @@
 #include "mkw/env_animation.hpp"
+#include "mkw/road_sampler_policy.hpp"
+#include "mkw/course_phase_ranges.hpp"
+#include "mkw/rainbow_shadow.hpp"
 #include "mkw/renderer.hpp"
+#include <mkw/normal_matrix.hpp>
+#include "mkw/castle_regions.hpp"
 #include "mkw/stadium_screen.hpp"
 #include "mkw/render_quality.hpp"
+#include "mkw/coin_hud_camera.hpp"
 #include "mkw/bloom_math.hpp"
 #include "mkw/race_effects.hpp"
 #include "mkw/nw4r_ef_draw.hpp"
@@ -20,6 +26,8 @@
 #include <cstdlib>
 #include <cstddef>
 namespace mkw {
+static_assert((retail::FixedEnvironment&rainbowShadow::Flag)==0);
+static_assert((retail::StaticLighting&rainbowShadow::Flag)==0);
 namespace {
 GPU_CULLMODE cameraCull(GPU_CULLMODE mode,const C3D_Mtx& v){
     const float determinant=v.r[0].x*(v.r[1].y*v.r[2].z-v.r[1].z*v.r[2].y)
@@ -34,11 +42,11 @@ GPU_CULLMODE cameraCull(GPU_CULLMODE mode,const C3D_Mtx& v){
 void uploadProjection(int location,const C3D_Mtx& p){
     C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER,location,&p);
 }
-void sceneDepthMap(const C3D_Mtx&,bool layer=false){
+void sceneDepthMap(const C3D_Mtx&,uint32_t layer=0){
     // HW08 factorization did not fix the physical-console symptom. Keep
     // GX's finite perspective/near/far clipping, not that failed workaround.
-    constexpr float layerStep=32.f/16777215.f;
-    C3D_DepthMap(true,-1.f,layer?layerStep:0.f);
+    const float steps=layer&retail::RaisedRoadLayer?512.f:layer&retail::CoplanarLayer?32.f:0.f;
+    C3D_DepthMap(true,-1.f,steps/16777215.f);
 }
 }
 // Translated combiner programs and texture sizes for the loaded RaceEffects table.
@@ -157,10 +165,69 @@ bool Texture::initMovieEtc1(std::uint16_t width, std::uint16_t height) {
     ready = true;
     return true;
 }
-
-void Model::enableStaticCulling(){
+bool Texture::initRgba8(unsigned width,unsigned height,const std::uint8_t* pixels,std::size_t bytes) {
+    if(ready||!pixels||width<8||height<8||width>1024||height>1024||(width&(width-1))||(height&(height-1))||bytes!=std::size_t(width)*height*4)return false;
+    if(!C3D_TexInit(&gpu,width,height,GPU_RGBA8))return false;
+    auto* out=static_cast<std::uint8_t*>(gpu.data);
+    for(unsigned y=0;y<height;++y)for(unsigned x=0;x<width;++x){
+        // Match tex3ds RGBA8 tile rows. Screen/model UV conversion already
+        // handles the texture V convention; flipping rows here inverts Mii icons.
+        const unsigned ty=y;unsigned morton=0;
+        for(unsigned b=0;b<3;++b)morton|=((x>>b)&1u)<<(2*b)|((ty>>b)&1u)<<(2*b+1);
+        auto* q=out+4*(((ty>>3)*(width>>3)+(x>>3))*64+morton);
+        const auto* p=pixels+4*(y*width+x);
+        q[0]=p[3];q[1]=p[2];q[2]=p[1];q[3]=p[0];
+    }
+    C3D_TexFlush(&gpu);C3D_TexSetFilter(&gpu,GPU_LINEAR,GPU_LINEAR);
+    C3D_TexSetWrap(&gpu,GPU_CLAMP_TO_EDGE,GPU_CLAMP_TO_EDGE);ready=true;return true;
+}
+void Model::enableStaticCulling(bool contact){
     visibility.clear();visibility.reserve(submeshes.size());
     for(const auto& s:submeshes)visibility.push_back(buildVisibility(vertices,indices,s.first,s.count));
+    contactVisibility.clear();contactCoarseVisibility.clear();
+    if(contactIndices){linearFree(contactIndices);contactIndices=nullptr;}
+    if(contact&&indexCount){
+        contactIndices=static_cast<uint16_t*>(linearAlloc(indexCount*sizeof(uint16_t)));
+        // Optional acceleration: allocation failure keeps the old safe path.
+        if(contactIndices){
+            std::memcpy(contactIndices,indices,indexCount*sizeof(uint16_t));
+            contactVisibility.reserve(submeshes.size());contactCoarseVisibility.reserve(submeshes.size());
+            for(const auto& s:submeshes){
+                spatialShadowIndices(vertices,indices,contactIndices,s.first,s.count);
+                contactVisibility.push_back(buildVisibility(vertices,contactIndices,s.first,s.count,16));
+                contactCoarseVisibility.push_back(buildVisibility(vertices,contactIndices,s.first,s.count));
+            }
+            flushGpuData(contactIndices,indexCount*sizeof(uint16_t));
+        }
+    }
+}
+bool Model::enableCastleRegions(){
+    if(vertexCount!=38077||indexCount!=71049||submeshes.size()!=24)return false;
+    auto hash=[](const void* p,unsigned bytes){const auto* b=static_cast<const uint8_t*>(p);uint32_t h=2166136261u;for(unsigned i=0;i<bytes;++i)h=(h^b[i])*16777619u;return h;};
+    // Any resource mismatch keeps the full original mesh, never a wrong mask.
+    if((staticLightingBaked?sourceVertexHash:hash(vertices,vertexCount*sizeof(Vertex)))!=castleRegion::VertexHash||hash(indices,indexCount*sizeof(uint16_t))!=castleRegion::IndexHash)return false;
+    if(regionIndices[0]&&regionIndices[1])return true;
+    for(unsigned z=0;z<2;++z){
+        std::vector<uint16_t> packed;packed.reserve(indexCount);
+        regionVisibility[z].clear();regionVisibility[z].reserve(submeshes.size());
+        unsigned run=0;
+        for(const auto& sub:submeshes){
+            const unsigned first=packed.size();
+            for(unsigned at=sub.first;at<sub.first+sub.count;at+=3){
+                while(at/3>=castleRegion::Runs[run].end)++run;
+                if(castleRegion::Runs[run].mask&(1u<<z))packed.insert(packed.end(),indices+at,indices+at+3);
+            }
+            regionVisibility[z].push_back(buildVisibility(vertices,packed.data(),first,packed.size()-first));
+        }
+        regionIndices[z]=static_cast<uint16_t*>(linearAlloc(packed.size()*sizeof(uint16_t)));
+        if(!regionIndices[z]){
+            for(auto*& p:regionIndices){if(p)linearFree(p);p=nullptr;}
+            for(auto& v:regionVisibility)v.clear();return false;
+        }
+        std::memcpy(regionIndices[z],packed.data(),packed.size()*sizeof(uint16_t));
+        flushGpuData(regionIndices[z],packed.size()*sizeof(uint16_t));
+    }
+    return true;
 }
 void Model::enableSkinCulling(unsigned bones){
     skinVisibility.clear();skinVisibility.resize(submeshes.size());
@@ -178,8 +245,62 @@ void Model::enableSkinCulling(unsigned bones){
         }
     }
 }
+namespace {thread_local const CourseLighting* lightingCourse=nullptr;}
+void Model::setLightingCourse(const CourseLighting* course){lightingCourse=course;}
+void Model::bakeStaticLighting(){bakeStaticLighting(lightingCourse);}
+void Model::bakeStaticLighting(const CourseLighting* course){
+    if(staticLightingBaked)return;
+    std::vector<uint8_t> done(vertexCount,0);
+    bool third=false;for(const auto& sub:submeshes)third|=sub.menuReflection==8;
+    if(third){
+        staticEnvironment2=static_cast<float*>(linearAlloc(size_t(vertexCount)*2*sizeof(float)));
+        if(!staticEnvironment2)return;
+        for(unsigned i=0;i<vertexCount;++i){staticEnvironment2[i*2]=vertices[i].uv1[0];staticEnvironment2[i*2+1]=vertices[i].uv1[1];}
+    }
+    for(auto& sub:submeshes){
+        const bool env=normalEnvironment(sub.lighting,sub.menuReflection,sub.reflectionConstant)||((sub.flags&(1u<<25))&&((sub.flags>>12)&3)==3);
+        for(unsigned j=sub.first;j<sub.first+sub.count;++j){const unsigned i=indices[j];if(done[i])continue;done[i]=1;
+            auto& v=vertices[i];const Vec3 n=normalized(v.normal);
+            const auto light=staticLightFactor(course,sub.lighting,sub.ambient,n);
+            for(unsigned c=0;c<4;++c)v.color[c]=uint8_t(std::clamp(std::lround(v.color[c]*light[c]),0l,255l));
+            if(env){const float u=.5f-.5f*n.x,w=.5f+.5f*(.948683298f*n.y+.316227766f*n.z);
+                if(sub.menuReflection==8){const auto* t=sub.reflectionUv;staticEnvironment2[2*i]=t[0]*u-t[1]*w+t[1]+t[2];staticEnvironment2[2*i+1]=-t[3]*u+t[4]*w+1.f-t[4]-t[5];}
+                else if(sub.lighting&retail::PrimaryEnvironment){const auto* t=sub.reflectionUv;v.uv[0]=t[0]*u-t[1]*w+t[1]+t[2];v.uv[1]=-t[3]*u+t[4]*w+1.f-t[4]-t[5];}
+                else {v.uv1[0]=u;v.uv1[1]=w;}
+            }
+        }
+        sub.lighting|=retail::StaticLighting;
+        if(env)sub.lighting|=retail::FixedEnvironment;
+    }
+    if(skinBoneIndices)for(unsigned i=0;i<vertexCount;++i)vertices[i].normal={skinBoneIndices[i],0,0};
+    staticLightingBaked=true;
+    flushGpuData(vertices,vertexCount*sizeof(Vertex));
+    if(staticEnvironment2)flushGpuData(staticEnvironment2,size_t(vertexCount)*2*sizeof(float));
+}
+void Model::bakeEnvironment(const float* palette,unsigned stride,Vec3 referenceUp){
+    referenceUp=normalized(referenceUp,{0,1,0});
+    if(staticLightingBaked)return;
+    // Stable rear-follow reference in model coordinates. Course lm_0/lm_1
+    // are already generated once on load; retain their authored TEV colours.
+    // UV1 is independent of face UV0/visibility and of animated wheel spin.
+    std::vector<uint8_t> done(vertexCount,0);
+    for(auto& sub:submeshes){
+        if(((sub.lighting&retail::ChannelMask)>>retail::ChannelShift)!=2&&sub.menuReflection!=1&&sub.menuReflection!=2)continue;
+        sub.lighting|=retail::FixedEnvironment;
+        for(unsigned j=sub.first;j<sub.first+sub.count;++j){
+            const unsigned i=indices[j];if(done[i])continue;done[i]=1;
+            auto& v=vertices[i];Vec3 n=v.normal;
+            if(palette&&skinBoneIndices){const auto* m=palette+unsigned(skinBoneIndices[i]/3)*stride;
+                n={m[12]*n.x+m[13]*n.y+m[14]*n.z,m[15]*n.x+m[16]*n.y+m[17]*n.z,m[18]*n.x+m[19]*n.y+m[20]*n.z};}
+            n=normalized(n,{0,1,0});
+            v.uv1[0]=.5f-.5f*n.x;
+            v.uv1[1]=.5f+.5f*dot(referenceUp,n);
+        }
+    }
+    flushGpuData(vertices,vertexCount*sizeof(Vertex));
+}
 void Model::freezeLighting(const float* palette,unsigned stride){
-    if(fixedLighting)return;
+    if(fixedLighting||staticLightingBaked)return;
     fixedLighting=true;
     for(unsigned i=0;i<vertexCount;++i){auto& v=vertices[i];Vec3 n=v.normal;
         if(palette&&skinBoneIndices){const auto* m=palette+unsigned(skinBoneIndices[i]/3)*stride;
@@ -194,8 +315,8 @@ void Model::freezeLighting(const float* palette,unsigned stride){
     }
     flushGpuData(vertices,vertexCount*sizeof(Vertex));
 }
-Model::~Model() { if(vertices)linearFree(vertices);if(indices)linearFree(indices);if(skinBoneIndices)linearFree(skinBoneIndices); }
-bool Model::load(const char* path) {
+Model::~Model() { if(staticEnvironment2)linearFree(staticEnvironment2); for(auto* p:regionIndices)if(p)linearFree(p);if(contactIndices)linearFree(contactIndices);if(vertices)linearFree(vertices);if(indices)linearFree(indices);if(skinBoneIndices)linearFree(skinBoneIndices); }
+bool Model::load(const char* path,bool dynamicLighting) {
     // Menu models come from the open menu.pak (one seek+read). Others stream
     // large payloads straight into LINEAR memory; a 32 KiB stdio buffer
     // coalesces the header/submesh/name reads into few FS requests.
@@ -233,8 +354,8 @@ return false;}
     for(auto& s:submeshes)if(!f.read(&s,record))return false;
     for(const auto& s:submeshes) if(s.first>indexCount||s.count>indexCount-s.first||s.count%3||s.texture< -1||s.texture>=static_cast<int32_t>(h[5])||s.secondary< -1||s.secondary>=static_cast<int32_t>(h[5]))return false;
     for(const auto& s:submeshes){
-        if(s.menuReflection>22||s.menuReflection==5||(s.menuReflection&&s.menuReflection<7&&!(s.lighting&retail::Menu)))return false;
-        if(s.menuReflection&&s.menuReflection!=3&&s.menuReflection!=7&&s.menuReflection!=16&&s.menuReflection!=21&&s.menuReflection!=22&&s.secondary<0)return false;
+        if(s.menuReflection>31||s.menuReflection==5||(s.menuReflection&&s.menuReflection<7&&!(s.lighting&retail::Menu)))return false;
+        if(s.menuReflection&&s.menuReflection!=3&&s.menuReflection!=7&&s.menuReflection!=16&&s.menuReflection!=21&&s.menuReflection!=22&&s.menuReflection!=24&&s.menuReflection!=25&&s.secondary<0)return false;
         if(s.menuReflection==8&&(!(s.reflectionConstant&0xffff)||(s.reflectionConstant&0xffff)>h[5]||(s.reflectionConstant>>20)))return false;
         for(float x:s.reflectionUv)if(!std::isfinite(x))return false;
         if((s.lighting&retail::PrimaryEnvironment)&&(h[1]!=5||(s.menuReflection&&s.menuReflection!=16&&s.menuReflection!=18)||s.texture<0))return false;
@@ -306,6 +427,46 @@ return false;}
     for(uint32_t i=0;i<vertexCount;++i){auto p=vertices[i].position;if(!std::isfinite(p.x)||!std::isfinite(p.y)||!std::isfinite(p.z))return false;
         minimum={std::min(minimum.x,p.x),std::min(minimum.y,p.y),std::min(minimum.z,p.z)};
         maximum={std::max(maximum.x,p.x),std::max(maximum.y,p.y),std::max(maximum.z,p.z)};}
+    sourceVertexHash=2166136261u;
+    for(size_t i=0;i<size_t(vertexCount)*sizeof(Vertex);++i)sourceVertexHash=(sourceVertexHash^reinterpret_cast<const uint8_t*>(vertices)[i])*16777619u;
+    coursePhase::apply(*this,path);
+    rainbowShadow::apply(*this,path);
+    roadSamplerPolicy=roadSampling::apply(*this,path);
+    // Pokey's 128px face/body atlas has a retail +2 mip bias. On the
+    // smaller 3DS viewport this merges the dark eye rim into the pale face
+    // too early. Keep original texture/wrap/trilinear filtering, but sample
+    // this actor's atlas without that extra two-level blur (head parts too).
+    if(std::strstr(path,"_sanbo__"))for(auto& row:samplers)
+        for(auto& sampler:row)if(sampler.valid&&sampler.lodBias>0.f)sampler.lodBias=0.f;
+    // Original kumo/thunder_m: T0*raster + lerp(K1,C1,EnvCamera(kumo)).
+    // Older item exports kept only T0*raster. Restore the authored second
+    // stage before the remote model bakes its fixed environment coordinates.
+    if(std::strstr(path,"models/item_14.gmdl")&&submeshes.size()==4&&textures.size()==6){
+        auto& bolt=submeshes[3];bolt.secondary=0;bolt.menuReflection=26;
+        bolt.reflectionConstant=0x0000636c;bolt.reflectionAdd=0x00e5f9fd;
+        constexpr float boltSrt[6]={-.359517634f,.175348461f,.412084579f,-.416452587f,-.853854358f,.875153482f};
+        std::copy(std::begin(boltSrt),std::end(boltSrt),bolt.reflectionUv);
+    }
+    if(!dynamicLighting){
+        // Bake both FlagB LODs with the authored near material's diffuse
+        // response. The far unlit material would otherwise pop brighter.
+        if(std::strstr(path,"obj07_flagb1__"))for(auto& sub:submeshes){
+            sub.lighting=519;sub.ambient=0xa3a3a3ff;
+        }
+        bakeStaticLighting(lightingCourse);if(!staticLightingBaked)return false;
+        // bombCore has a custom third-texture binder, so no generic reflection
+        // mode allocates its UV2. Static shaders still require that attribute.
+        // Original glowWhite3s uses an identity SRT at all 56 frames.
+        if(std::strstr(path,"models/bomb_blast.gmdl")){
+            staticEnvironment2=static_cast<float*>(linearAlloc(size_t(vertexCount)*2*sizeof(float)));
+            if(!staticEnvironment2)return false;
+            for(unsigned i=0;i<vertexCount;++i){const auto n=normalized(vertices[i].normal);
+                staticEnvironment2[2*i]=.5f-.5f*n.x;
+                staticEnvironment2[2*i+1]=.5f+.5f*(.948683298f*n.y+.316227766f*n.z);
+            }
+            flushGpuData(staticEnvironment2,size_t(vertexCount)*2*sizeof(float));
+        }
+    }
     flushGpuData(vertices,vertexCount*sizeof(Vertex));flushGpuData(indices,indexCount*sizeof(uint16_t));
     return true;
 }
@@ -352,8 +513,14 @@ bool Renderer::init(){
     envRowLoc_[1]=shaderInstanceGetUniformLocation(program_.vertexShader,"envRow1");
     envRowLoc_[2]=shaderInstanceGetUniformLocation(program_.vertexShader,"envRow2");
     envParamLoc_=shaderInstanceGetUniformLocation(program_.vertexShader,"envParam");
+    staticLightingLoc_=shaderInstanceGetUniformLocation(program_.vertexShader,"staticLighting");
     projectedWaterLoc_=shaderInstanceGetUniformLocation(program_.vertexShader,"projectedWater");
-    if(projectedWaterLoc_<0)return fail();
+    playerShadowProjectLoc_=shaderInstanceGetUniformLocation(program_.vertexShader,"playerShadowProject");
+    shadowCaptureLoc_=shaderInstanceGetUniformLocation(program_.vertexShader,"shadowCapture");
+    shadowReceiverFadeLoc_=shaderInstanceGetUniformLocation(program_.vertexShader,"shadowReceiverFade");
+    shadowDepthLoc_=shaderInstanceGetUniformLocation(program_.vertexShader,"shadowDepth");
+    shadowFloorLoc_=shaderInstanceGetUniformLocation(program_.vertexShader,"shadowFloor");
+    if(staticLightingLoc_<0||projectedWaterLoc_<0||playerShadowProjectLoc_<0||shadowCaptureLoc_<0||shadowDepthLoc_<0||shadowFloorLoc_<0||shadowReceiverFadeLoc_<0)return fail();
     static const char* uvRows[]={"uvRow0","uvRow1","uvRow2","uvRow3"};
     for(int i=0;i<4;++i)uvRowLoc_[i]=shaderInstanceGetUniformLocation(program_.vertexShader,uvRows[i]);
     tintLoc_=shaderInstanceGetUniformLocation(program_.vertexShader,"tint");
@@ -375,7 +542,16 @@ bool Renderer::init(){
     text_=static_cast<Vertex*>(linearAlloc(kTextVertices*sizeof(Vertex)));if(!text_)return fail();
     particles_=static_cast<Vertex*>(linearAlloc(DriftEffects::Capacity*12*sizeof(Vertex)));if(!particles_)return fail();
     effectVertices_=linearAlloc(kEffectVertices*sizeof(ef::DrawVertex));if(!effectVertices_)return fail();
-    if(shader_->numDVLE<2)return fail();
+    if(shader_->numDVLE<3)return fail();
+    shaderProgramInit(&miiProgram_);miiProgramReady_=true;
+    if(R_FAILED(shaderProgramSetVsh(&miiProgram_,&shader_->DVLE[2])))return fail();
+    // The variant deliberately retains all scene uniform declarations/slots.
+    // Reject incompatible layouts instead of drawing with misbound matrices.
+    for(unsigned i=0;i<shader_->DVLE[0].uniformTableSize;++i){
+        const auto& u=shader_->DVLE[0].uniformTableData[i];
+        const char* name=shader_->DVLE[0].symbolTableData+u.symbolOffset;
+        if(shaderInstanceGetUniformLocation(program_.vertexShader,name)!=shaderInstanceGetUniformLocation(miiProgram_.vertexShader,name))return fail();
+    }
     shaderProgramInit(&effectProgram_);effectProgramReady_=true;
     if(R_FAILED(shaderProgramSetVsh(&effectProgram_,&shader_->DVLE[1])))return fail();
     effectProjectionLoc_=shaderInstanceGetUniformLocation(effectProgram_.vertexShader,"projection");
@@ -392,11 +568,16 @@ bool Renderer::enableBottom(){
     if(bottomTarget_)return true;
     if(!deviceReady_)return false;
     // citro3d's linked-target table is read by FrameEnd on the render thread.
-    drain();
-    // 2D only: no depth buffer (a depth-less target is never cleared or tested
-    // for depth, as the bloom targets). Display transfer as the top screen's.
-    bottomTarget_=C3D_RenderTargetCreate(240,320,GPU_RB_RGBA8,C3D_DEPTHTYPE(-1));
+    waitForGpu();
+    // Shared by the map, menu vehicle icons and the continuous intro view.
+    // Depth/stencil adds 320*240*4 bytes; it is cleared once at frame begin.
+    bottomTarget_=C3D_RenderTargetCreate(240,320,GPU_RB_RGBA8,GPU_RB_DEPTH24_STENCIL8);
     if(!bottomTarget_)return false;
+    // A text console changes the LCD to RGB565/single buffering. SetOutput
+    // only links the target: its RGB8 transfer does not restore the LCD format.
+    gfxSetScreenFormat(GFX_BOTTOM,GSP_BGR8_OES);
+    gfxSetDoubleBuffering(GFX_BOTTOM,true);
+    presentedBottom_=nullptr;
     C3D_RenderTargetSetOutput(bottomTarget_,GFX_BOTTOM,GFX_LEFT,TopTransfer);
     return true;
 }
@@ -405,8 +586,9 @@ void Renderer::releaseBottom(){
     // No queued frame or transfer still reads the target (or the framebuffers).
     waitForGpu();
     C3D_RenderTargetDelete(bottomTarget_);bottomTarget_=nullptr;
+    presentedBottom_=nullptr;
     // The lower LCD shows its last transferred frame until something replaces
-    // it: menus never draw there, so blank both of its buffers (BGR8).
+    // it: blank both BGR8 buffers when releasing lower-screen rendering.
     for(unsigned i=0;i<2;++i){
         u16 w=0,h=0;u8* framebuffer=gfxGetFramebuffer(GFX_BOTTOM,GFX_LEFT,&w,&h);
         if(framebuffer){std::memset(framebuffer,0,size_t(w)*h*3);GSPGPU_FlushDataCache(framebuffer,u32(w)*h*3);}
@@ -508,6 +690,8 @@ void Renderer::shutdown(){
     linearFree(effectVertices_);effectVertices_=nullptr;
     if(effectLookup_.data)C3D_TexDelete(&effectLookup_);
     effectLookup_={};delete effectDraw_;effectDraw_=nullptr;
+    if(miiProgramReady_)shaderProgramFree(&miiProgram_);
+    miiProgramReady_=false;miiProgram_={};
     if(effectProgramReady_)shaderProgramFree(&effectProgram_);
     effectProgramReady_=false;effectProgram_={};
     linearFree(sprites_);sprites_=nullptr;linearFree(overlay_);overlay_=nullptr;
@@ -519,6 +703,10 @@ void Renderer::shutdown(){
     programReady_=false;program_={};
     if(shader_)DVLB_Free(shader_);
     shader_=nullptr;
+    if(playerShadowTarget_)C3D_RenderTargetDelete(playerShadowTarget_);
+    playerShadowTarget_=nullptr;if(playerShadowTex_.data)C3D_TexDelete(&playerShadowTex_);playerShadowTex_={};
+    if(playerShadowClipTex_.data)C3D_TexDelete(&playerShadowClipTex_);playerShadowClipTex_={};
+    playerContactTex_.reset();
     if(bottomTarget_)C3D_RenderTargetDelete(bottomTarget_);
     bottomTarget_=nullptr;
     freeBloom();freeStadiumScreen();
@@ -549,7 +737,7 @@ void Renderer::beginNow(const C3D_Mtx& view,const C3D_Mtx& projection,bool sync,
     // of simulation ticks, eye replays and the lower-screen intro pass.
     stadiumCaptureFrame_=stadiumRequested_&&((stadiumRenderFrames_++&1u)==0);
     stadiumVisible_=true;
-    if(stadiumRequested_&&!stadiumScreens_.empty()&&true){
+    if(stadiumRequested_&&!stadiumScreens_.empty()&&!execDualScreenIntro_){
         stadiumVisible_=false;C3D_Mtx identity;Mtx_Identity(&identity);
         for(unsigned eye=0;eye<(execStereo_.active()?2u:1u)&&!stadiumVisible_;++eye){
             eye_=eye;
@@ -567,11 +755,26 @@ void Renderer::beginEyeNow(const C3D_Mtx& view,const C3D_Mtx& projection){
     view_=view;projection_=eyeProjection(projection);
     beginFrame();
 }
-
+void Renderer::beginBottomWorldNow(const C3D_Mtx& view,const C3D_Mtx& projection){
+    // Camera axes stay identical, so models, sparks and EF view-space vertices
+    // can be read again without writes while the top draws are queued.
+    view_=view;projection_=eyeProjection(projection);
+    beginFrame();
+}
 C3D_Mtx Renderer::eyeProjection(const C3D_Mtx& center) const{
-    if(!execStereo_.active())return center;
+    C3D_Mtx cropped=center;
+    if(execDualScreenIntro_){
+        // Top keeps the authored framing, including the camera's subject.
+        // Lower starts at virtual Y320: the 80px hinge is never rendered.
+        const float offset=bottomWorldPass_?display::IntroBottomClipOffset*verticalSign_:0.f;
+        for(unsigned c=0;c<4;++c){
+            cropped.r[0].c[c]+=offset*center.r[3].c[c];
+            if(bottomWorldPass_)cropped.r[1].c[c]*=400.f/320.f;
+        }
+    }
+    if(!execStereo_.active()||bottomWorldPass_)return cropped;
     float m[4][4];
-    for(unsigned r=0;r<4;++r)for(unsigned c=0;c<4;++c)m[r][c]=center.r[r].c[3-c];
+    for(unsigned r=0;r<4;++r)for(unsigned c=0;c<4;++c)m[r][c]=cropped.r[r].c[3-c];
     stereo::perspectiveEye(m,1,horizontalSign_,eye_?1.f:-1.f,execStereo_);
     C3D_Mtx out;
     for(unsigned r=0;r<4;++r)for(unsigned c=0;c<4;++c)out.r[r].c[3-c]=m[r][c];
@@ -594,25 +797,34 @@ void Renderer::screenDepthNow(float parallax){
     screenParallax_=parallax;
 }
 void Renderer::beginFrame(){
+    execSceneRegion_=3;
     // The right eye repeats the left eye's buffer offsets: its sprites, text,
     // overlays, sparks and effect vertices reuse the data the left eye wrote.
-    screenWidth_=400.f;screenParallax_=0;
-    spriteBase_=sprites_;
-    spriteCapacity_=kSpriteCapacity;
-    topSpriteCount_=0;bottomPass_=false;
+    screenWidth_=bottomWorldPass_?320.f:400.f;screenParallax_=0;
+    spriteBase_=bottomWorldPass_?text_+kTextVertexLimit:sprites_;
+    spriteCapacity_=bottomWorldPass_?kBottomSpriteCapacity:kSpriteCapacity;
+    topSpriteCount_=0;bottomPass_=bottomWorldPass_;
     spriteCount_=0;spriteRunFirst_=0;spriteRunTexture_=nullptr;spriteStateReady_=false;
     menuIconDrawCount_=0;
-    if(true)textCount_=0;
+    if(!bottomWorldPass_)textCount_=0;
     overlayCount_=0;
     // The local SDK permits unbinding all units, including inherited samplers.
     for(int unit=0;unit<3;++unit)C3D_TexBind(unit,nullptr);
-    if(!eye_&&true){
+    if(!eye_&&!bottomWorldPass_){
         C3D_RenderTargetClear(target_,C3D_CLEAR_ALL,0x071326FF,0);
         if(execStereo_.active())C3D_RenderTargetClear(targetRight_,C3D_CLEAR_ALL,0x071326FF,0);
         if(bottomTarget_)C3D_RenderTargetClear(bottomTarget_,C3D_CLEAR_ALL,0x071326FF,0);
     }
-    stadiumFrame_=true&&stadiumRequested_&&stadiumCaptureFrame_&&stadiumVisible_&&stadiumTex_[0].data;stadiumRequested_=false;
-    bloomFrame_=true&&bloomRequested_&&initBloom();bloomRequested_=false;bloomCount_=0;
+    // Only the left eye captures. The right eye must render directly to its
+    // LCD target unless its own bloom pass needs the shared scene scratch.
+    // captureStadiumScreenNow intentionally ignores the right eye, so sending
+    // it to scratch here would leave that LCD blank on capture frames.
+    stadiumFrame_=!eye_&&!bottomWorldPass_&&stadiumRequested_&&stadiumCaptureFrame_&&stadiumVisible_&&stadiumTex_[0].data;stadiumRequested_=false;
+    bloomFrame_=!bottomWorldPass_&&bloomRequested_&&initBloom();bloomRequested_=false;
+    // FrameEnd submits both eyes together. Keep all post-process vertices
+    // immutable until then: the capture quad exists only in the left eye,
+    // so the two eyes do not necessarily use matching quad slots.
+    if(!eye_&&!bottomWorldPass_)bloomCount_=0;
     if(stadiumFrame_&&!initBloom())stadiumFrame_=false;
     if(bloomFrame_||stadiumFrame_){
         if(!eye_){
@@ -628,7 +840,7 @@ void Renderer::beginFrame(){
             C3D_RenderTargetClear(sceneTarget_,C3D_CLEAR_ALL,0x071326FF,0);
         }
         C3D_FrameDrawOn(sceneTarget_);C3D_SetViewport(0,0,240,400);
-    }else C3D_FrameDrawOn(topTarget());
+    }else C3D_FrameDrawOn(bottomWorldPass_?bottomTarget_:topTarget());
     C3D_BindProgram(&program_);
     sceneDepthMap(projection_);
     uploadProjection(projectionLoc_,projection_);
@@ -637,6 +849,7 @@ void Renderer::beginFrame(){
     C3D_FVUnifSet(GPU_VERTEX_SHADER,envRowLoc_[2],0,0,1,0);C3D_FVUnifSet(GPU_VERTEX_SHADER,envParamLoc_,1,0,0,0);
     uvDirty_=tintDirty_=true;resetMaterialUniforms();
     C3D_FVUnifSet(GPU_VERTEX_SHADER,uv1RowLoc_[0],1,0,0,0);C3D_FVUnifSet(GPU_VERTEX_SHADER,uv1RowLoc_[1],0,1,0,0);
+    C3D_BoolUnifSet(GPU_VERTEX_SHADER,shadowCaptureLoc_,false);
     retailBeginFrame();
     Vec3 sun=normalized(Vec3{0.3f,0.8f,0.5f});
     light_={view_.r[0].x*sun.x+view_.r[0].y*sun.y+view_.r[0].z*sun.z,
@@ -647,7 +860,7 @@ void Renderer::beginFrame(){
     for(int i=0;i<6;++i)C3D_TexEnvInit(C3D_GetTexEnv(i));
     auto* env=C3D_GetTexEnv(0);C3D_TexEnvSrc(env,C3D_Both,GPU_TEXTURE0,GPU_PRIMARY_COLOR);C3D_TexEnvFunc(env,C3D_Both,GPU_MODULATE);
     C3D_DepthTest(true,GPU_GEQUAL,GPU_WRITE_ALL);C3D_AlphaBlend(GPU_BLEND_ADD,GPU_BLEND_ADD,GPU_SRC_ALPHA,GPU_ONE_MINUS_SRC_ALPHA,GPU_ONE,GPU_ONE_MINUS_SRC_ALPHA);
-    if(!eye_&&true)stats_.triangles=stats_.drawCalls=stats_.culledTriangles=stats_.culledSubmeshes=0;
+    if(!eye_&&!bottomWorldPass_)stats_.triangles=stats_.drawCalls=stats_.culledTriangles=stats_.culledSubmeshes=0;
 }
 C3D_Mtx ViewFrustum::cameraFacing(Vec3 position,float scale) const {
     C3D_Mtx transform;Mtx_Identity(&transform);
@@ -678,24 +891,70 @@ ClipFrustum Renderer::modelFrustum(const C3D_Mtx& transform) const {return objec
 bool Renderer::visible(const Model& model,const C3D_Mtx& transform) const {
     return modelFrustum(transform).intersects({model.minimum,model.maximum});
 }
-void Renderer::drawAtScreenNow(const Model& model,const Vertex* vertices,const C3D_Mtx& transform,float x,float y,float brightness,float scaleX,float scaleY){
+void Renderer::drawAtScreenNow(const Model& model,const Vertex* vertices,const C3D_Mtx& transform,float x,float y,float brightness,float scaleX,float scaleY,MaterialBinder material,void* context){
     flushSprites();
     const C3D_Mtx original=projection_;
     C3D_Mtx tilt;Mtx_PerspTilt(&tilt,C3D_AngleFromDegrees(90.f),1.f,1.f,2.f,false);
     const float vertical=(tilt.r[0].y<0?-1.f:1.f)*(120.f-y)/120.f;
-    const float horizontal=(tilt.r[1].x<0?-1.f:1.f)*(x-200.f)/200.f;
+    const float horizontal=(tilt.r[1].x<0?-1.f:1.f)*(x-screenWidth_*.5f)/(screenWidth_*.5f);
     for(unsigned col=0;col<4;++col){
         projection_.r[0].c[col]=scaleY*original.r[0].c[col]+vertical*original.r[3].c[col];
         projection_.r[1].c[col]=scaleX*original.r[1].c[col]+horizontal*original.r[3].c[col];
     }
     const float originalBrightness=modelBrightness_;modelBrightness_=brightness;
-    drawNow(model,vertices,transform,false,nullptr,nullptr,nullptr);
+    drawNow(model,vertices,transform,false,material,context,nullptr);
     modelBrightness_=originalBrightness;
     projection_=original;
 }
-
+void Renderer::drawMenuModelLayerNow(const Model& model,const Vertex* vertices,const C3D_Mtx& transform){
+    flushSprites();
+    const auto oldProjection=projection_,oldView=view_;
+    const bool oldLighting=courseLighting_;
+    // Use the port's full-frame menu camera (MenuModels::begin), not the
+    // close-range camera used for captured vehicle icons. The original trophy
+    // mesh straddles Z=0, so the icon eye at Z=15 would clip through it.
+    // Framing remains a target-visual comparison item.
+    Mtx_PerspTilt(&projection_,C3D_AngleFromDegrees(45.f),5.f/3.f,10.f,100000.f,false);
+    Mtx_LookAt(&view_,FVec3_New(0,0,1000),FVec3_New(0,0,0),FVec3_New(0,1,0),false);
+    // Background models must remain behind every captured vehicle pane
+    // (0.90 and above), while keeping their own internal depth ordering.
+    // Map the layer after interpolation. Baking the interval into clip Z
+    // discards fine surface separation in PICA's float24 vertex arithmetic.
+    const float oldDepthBase=menuDepthBase_,oldDepthSpan=menuDepthSpan_;
+    menuDepthBase_=.8f;menuDepthSpan_=.1f;
+    // This is the same full-frame UI image in both eyes, independent of the
+    // outdoor camera's convergence. Skin/material commands stay active.
+    courseLighting_=false;
+    drawNow(model,vertices,transform,false,nullptr,nullptr,nullptr);
+    menuDepthBase_=oldDepthBase;menuDepthSpan_=oldDepthSpan;
+    projection_=oldProjection;view_=oldView;courseLighting_=oldLighting;
+}
+void Renderer::drawCoinHudModelNow(const Model& model,const Vertex* vertices,const C3D_Mtx& transform,bool firstColumn){
+    flushSprites();
+    // Native805a97c0 removes world groups0/1 and draws2 in its own depth
+    // range. PICA world draws use the entire depth buffer: reset depth only
+    // at the final world->HUD boundary, keeping the colour image and depth
+    // comparisons within/between all columns. No world draw follows this
+    // layer. A quad avoids a GPU queue split or another render target.
+    if(firstColumn)screenFadeNow(0,false,true);
+    const auto oldProjection=projection_,oldView=view_;
+    const bool oldLighting=courseLighting_;
+    const float oldDepthBase=menuDepthBase_,oldDepthSpan=menuDepthSpan_;
+    coinHudCamera(projection_,view_);
+    // Repeat Wii's single image in both eyes at the adjacent HUD's depth.
+    if(!bottomPass_&&execStereo_.active()&&screenParallax_!=0){
+        float m[4][4];for(unsigned r=0;r<4;++r)for(unsigned c=0;c<4;++c)m[r][c]=projection_.r[r].c[3-c];
+        stereo::screenEye(m,1,horizontalSign_,eye_?1.f:-1.f,screenParallax_);
+        for(unsigned r=0;r<4;++r)for(unsigned c=0;c<4;++c)projection_.r[r].c[3-c]=m[r][c];
+    }
+    courseLighting_=false;menuDepthBase_=-1;
+    drawNow(model,vertices,transform,false,nullptr,nullptr,nullptr);
+    menuDepthBase_=oldDepthBase;menuDepthSpan_=oldDepthSpan;
+    projection_=oldProjection;view_=oldView;courseLighting_=oldLighting;
+    sceneDepthMap(projection_);
+}
 void Renderer::drawMenuIconNow(const Model& model,const Vertex* vertices,const C3D_Mtx& transform,const UiQuad& q){
-    if(q.bottom||q.alpha<=0||q.w<=0||q.h<=0||q.u1<=q.u0||q.v1<=q.v0)return;
+    if(q.alpha<=0||q.w<=0||q.h<=0||q.u1<=q.u0||q.v1<=q.v0)return;
     flushSprites();
     const float width=q.w/(q.u1-q.u0),height=q.h/(q.v1-q.v0);
     const float centerX=q.x+(.5f-q.u0)*width,centerY=q.y+(.5f-q.v0)*height;
@@ -707,27 +966,33 @@ void Renderer::drawMenuIconNow(const Model& model,const Vertex* vertices,const C
     Mtx_PerspTilt(&projection_,C3D_AngleFromDegrees(45.f),608.f/480.f,10.f,100000.f,false);
     Mtx_LookAt(&view_,FVec3_New(0,0,15),FVec3_New(0,0,0),FVec3_New(0,1,0),false);
     const float layer=.9f+.0005f*float(std::min(menuIconDrawCount_++,128u));
+    const float oldDepthBase=menuDepthBase_,oldDepthSpan=menuDepthSpan_;
+    // Source icon poses sit about 1000 units from the eye. A .0004
+    // interval left only a few D24 values across a car, merging front/back.
+    // .05 preserves internal separation; actual pose depths remain below the
+    // next .0005 image layer, retaining shadow/colour/confirmation order.
+    menuDepthBase_=layer;menuDepthSpan_=.05f;
     for(unsigned col=0;col<4;++col){
         projection_.r[0].c[col]*=(480.f/44.f)*(height/240.f);
-        projection_.r[1].c[col]*=(608.f/192.f)*(width/400.f);
+        projection_.r[1].c[col]*=(608.f/192.f)*(width/screenWidth_);
         // Captured-image panes composite in draw order, including the offset
         // shadow and OK glow of the same vehicle. Give each its own near-depth
         // interval while preserving all relative depth inside this machine.
-        projection_.r[2].c[col]=.01f*projection_.r[2].c[col]-layer*projection_.r[3].c[col];
+        // The depth interval is applied by C3D_DepthMap after interpolation.
     }
     // A captured image in its pane: the pane's (screen layer) disparity, not the model's depth.
-    if(execStereo_.active()&&screenParallax_!=0){
+    if(!bottomPass_&&execStereo_.active()&&screenParallax_!=0){
         float m[4][4];
         for(unsigned r=0;r<4;++r)for(unsigned c=0;c<4;++c)m[r][c]=projection_.r[r].c[3-c];
         stereo::screenEye(m,1,horizontalSign_,eye_?1.f:-1.f,screenParallax_);
         for(unsigned r=0;r<4;++r)for(unsigned c=0;c<4;++c)projection_.r[r].c[3-c]=m[r][c];
     }
     // The pane's crop moves with the eye's image of the pane.
-    const float x=q.x+(execStereo_.active()?(eye_?.5f:-.5f)*screenParallax_:0.f);
+    const float x=q.x+(!bottomPass_&&execStereo_.active()?(eye_?.5f:-.5f)*screenParallax_:0.f);
     const unsigned l=unsigned(std::clamp(std::floor(240.f-q.y-q.h),0.f,240.f));
     const unsigned r=unsigned(std::clamp(std::ceil(240.f-q.y),0.f,240.f));
-    const unsigned t=unsigned(std::clamp(std::floor(400.f-x-q.w),0.f,400.f));
-    const unsigned b=unsigned(std::clamp(std::ceil(400.f-x),0.f,400.f));
+    const unsigned t=unsigned(std::clamp(std::floor(screenWidth_-x-q.w),0.f,screenWidth_));
+    const unsigned b=unsigned(std::clamp(std::ceil(screenWidth_-x),0.f,screenWidth_));
     if(l<r&&t<b){
         C3D_SetScissor(GPU_SCISSOR_NORMAL,l,t,r,b);
         courseLighting_=false;menuIconLayer_=true;menuIconAlpha_=q.alpha;
@@ -736,6 +1001,7 @@ void Renderer::drawMenuIconNow(const Model& model,const Vertex* vertices,const C
         menuIconLayer_=false;menuIconAlpha_=1;menuIconAdditive_=false;
         C3D_SetScissor(GPU_SCISSOR_DISABLE,0,0,0,0);
     }
+    menuDepthBase_=oldDepthBase;menuDepthSpan_=oldDepthSpan;
     projection_=oldProjection;view_=oldView;courseLighting_=oldLighting;
 }
 // Every input of drawNow's per-submesh material setup that varies by submesh
@@ -755,23 +1021,35 @@ void Renderer::resetMaterialUniforms(){
     if(tintDirty_){C3D_FVUnifSet(GPU_VERTEX_SHADER,tintLoc_,1,1,1,1);tintDirty_=false;}
 }
 void Renderer::drawNow(const Model& model,const Vertex* vertices,const C3D_Mtx& transform,bool backdrop,MaterialBinder material,void* context,ShapeVisible visible){
+    C3D_Mtx mv;Mtx_Multiply(&mv,&view_,&transform);
+    drawSampledLighting_=model.dynamicLightTextures;
+    ClipFrustum staticFrustum;
     // Reject immutable world models before uploading matrices or lighting.
     // Player meshes never opt into static visibility.
     if(!backdrop&&!model.visibility.empty()){
-        C3D_Mtx mv,clip;Mtx_Multiply(&mv,&view_,&transform);Mtx_Multiply(&clip,&projection_,&mv);float rows[16];
+        C3D_Mtx clip;Mtx_Multiply(&clip,&projection_,&mv);float rows[16];
         for(unsigned r=0;r<4;++r)for(unsigned c=0;c<4;++c)rows[r*4+c]=clip.r[r].c[3-c];
-        if(!ClipFrustum(rows).intersects({model.minimum,model.maximum})){stats_.culledTriangles+=model.indexCount/3;return;}
+        staticFrustum=ClipFrustum(rows);
+        if(!staticFrustum.intersects({model.minimum,model.maximum})){stats_.culledTriangles+=model.indexCount/3;return;}
     }
     flushSprites();
+    if(model.nativeMiiLighting)C3D_BindProgram(&miiProgram_);
     const uint32_t animationFrame=execFrame_,additiveColor=execAdditive_&0xffffff00u;
-    const bool inkBlack=(execAdditive_&InkBlack)!=0;
+    const unsigned inkBlack=execAdditive_&InkBlack;
     uploadProjection(projectionLoc_,projection_);
-    C3D_Mtx mv;Mtx_Multiply(&mv,&view_,&transform);C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER,modelViewLoc_,&mv);
-    if(!model.fixedLighting)normalMatrixNow(mv);
+    C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER,modelViewLoc_,&mv);
+    C3D_BoolUnifSet(GPU_VERTEX_SHADER,staticLightingLoc_,model.staticLightingBaked);
+    if(!model.fixedLighting&&!model.staticLightingBaked)normalMatrixNow(mv);
     auto* attr=C3D_GetAttrInfo();AttrInfo_Init(attr);
     AttrInfo_AddLoader(attr,0,GPU_FLOAT,3);AttrInfo_AddLoader(attr,1,GPU_FLOAT,3);AttrInfo_AddLoader(attr,2,GPU_FLOAT,4);AttrInfo_AddLoader(attr,3,GPU_UNSIGNED_BYTE,4);
     auto* buf=C3D_GetBufInfo();BufInfo_Init(buf);BufInfo_Add(buf,vertices,sizeof(Vertex),4,0x3210);
-    const bool litSkin=skinPalette_&&model.skinBoneIndices&&!model.fixedLighting;
+    if(model.staticEnvironment2){
+        // Buffer permutations address loader slots, not shader registers.
+        // This is loader slot 4 mapped to v5 (instaticuv); retain baked UVs.
+        const int slot=AttrInfo_AddLoader(attr,5,GPU_FLOAT,2);
+        BufInfo_Add(buf,model.staticEnvironment2,2*sizeof(float),1,unsigned(slot));
+    }
+    const bool litSkin=skinPalette_&&model.skinBoneIndices&&!model.fixedLighting&&!model.staticLightingBaked;
     if(litSkin){AttrInfo_AddLoader(attr,4,GPU_FLOAT,1);BufInfo_Add(buf,model.skinBoneIndices,sizeof(float),1,4);}
     C3D_BoolUnifSet(GPU_VERTEX_SHADER,skinnedNormalsLoc_,litSkin);
     if(skinPalette_){
@@ -779,6 +1057,9 @@ void Renderer::drawNow(const Model& model,const Vertex* vertices,const C3D_Mtx& 
             for(unsigned r=0;r<3;++r)C3D_FVUnifSet(GPU_VERTEX_SHADER,bonesLoc_+int(b*3+r),m[r*4],m[r*4+1],m[r*4+2],m[r*4+3]);}
         C3D_BoolUnifSet(GPU_VERTEX_SHADER,skinnedLoc_,true);
     }
+    const int region=execSceneRegion_==1?0:execSceneRegion_==2?1:-1;
+    const bool regionCull=region>=0&&model.regionIndices[region]&&model.regionVisibility[region].size()==model.submeshes.size();
+    const auto* drawIndices=regionCull?model.regionIndices[region]:model.indices;
     // One set of object-space planes per static model, shared by all ranges.
     const bool cull=!backdrop&&!model.visibility.empty()&&model.visibility.size()==model.submeshes.size();
     // Rigid parts (one bone each: a stand of Mii spectators spread over the
@@ -790,9 +1071,12 @@ void Renderer::drawNow(const Model& model,const Vertex* vertices,const C3D_Mtx& 
     // (model space). Menu models keep every part.
     float partTiny=0;Vec3 eye{};
     if(cull||partCull||skinCull){
-        C3D_Mtx clip;Mtx_Multiply(&clip,&projection_,&mv);float rows[16];
-        for(unsigned r=0;r<4;++r)for(unsigned c=0;c<4;++c)rows[r*4+c]=clip.r[r].c[3-c];
-        frustum=ClipFrustum(rows);
+        if(!backdrop&&!model.visibility.empty())frustum=staticFrustum;
+        else{
+            C3D_Mtx clip;Mtx_Multiply(&clip,&projection_,&mv);float rows[16];
+            for(unsigned r=0;r<4;++r)for(unsigned c=0;c<4;++c)rows[r*4+c]=clip.r[r].c[3-c];
+            frustum=ClipFrustum(rows);
+        }
         if(partCull&&courseLighting_&&(partTiny=renderQuality().minScreenRatio)>0){
             C3D_Mtx inverse=mv;
             if(Mtx_Inverse(&inverse)!=0.f)eye={inverse.r[0].w,inverse.r[1].w,inverse.r[2].w};else partTiny=0;
@@ -827,7 +1111,7 @@ void Renderer::drawNow(const Model& model,const Vertex* vertices,const C3D_Mtx& 
             stats_.culledTriangles+=(s.count-submitted)/3;
             if(!ranges.count){++stats_.culledSubmeshes;continue;}
         }else if(cull){
-            ranges=selectVisible(model.visibility[i],frustum);unsigned submitted=0;
+            ranges=selectVisible(regionCull?model.regionVisibility[region][i]:model.visibility[i],frustum);unsigned submitted=0;
             for(unsigned n=0;n<ranges.count;++n)submitted+=ranges.ranges[n].count;
             stats_.culledTriangles+=(s.count-submitted)/3;
             if(!ranges.count){++stats_.culledSubmeshes;continue;}
@@ -854,9 +1138,19 @@ void Renderer::drawNow(const Model& model,const Vertex* vertices,const C3D_Mtx& 
         if(hasTint){C3D_FVUnifSet(GPU_VERTEX_SHADER,tintLoc_,o->tint[0],o->tint[1],o->tint[2],o->tint[3]);tintDirty_=true;}
         // The previous drawn submesh's material and textures, without overrides
         // or a binder: its whole state is still bound, only UVs and draws differ.
-        const bool repeat=last&&!o&&!material&&sameMaterial(*last,s)&&
-            (model.samplers.empty()||!std::memcmp(model.samplers[i].data(),
-                model.samplers[std::size_t(last-model.submeshes.data())].data(),sizeof(model.samplers[i])));
+        const bool sameState=last&&!o&&!material&&sameMaterial(*last,s);
+        const auto lastSampler=sameState&&!model.samplers.empty()?std::size_t(last-model.submeshes.data()):0;
+        const bool roadLodOnly=sameState&&model.roadSamplerPolicy&&s.texture>=0&&s.menuReflection==0&&
+            !(s.lighting&retail::PrimaryEnvironment)&&s.texture!=model.stadiumTexture&&
+            roadSampling::primaryLodOnly(model.samplers[lastSampler],model.samplers[i]);
+        const bool repeat=sameState&&(roadLodOnly||model.samplers.empty()||
+            !std::memcmp(model.samplers[i].data(),model.samplers[lastSampler].data(),sizeof(model.samplers[i])));
+        if(roadLodOnly){
+            auto* tex=model.textures[s.texture]->sampledGpu(model.samplers[i].data());
+            const GPU_TEXTURE_WRAP_PARAM wrap[]={GPU_CLAMP_TO_EDGE,GPU_REPEAT,GPU_MIRRORED_REPEAT,GPU_CLAMP_TO_EDGE};
+            C3D_TexSetWrap(tex,wrap[(s.flags>>8)&3],wrap[(s.flags>>10)&3]);C3D_TexBind(0,tex);
+            last=&s;
+        }
         bool retail=lastRetail,retailEnvironment=lastEnvironment;
         if(!repeat){
         if(pendingEnd){retailEndSubmesh();pendingEnd=false;}
@@ -950,7 +1244,86 @@ void Renderer::drawNow(const Model& model,const Vertex* vertices,const C3D_Mtx& 
                 C3D_TexEnvSrc(e0,C3D_RGB,GPU_TEXTURE0,GPU_PRIMARY_COLOR);
                 C3D_TexEnvFunc(e0,C3D_RGB,GPU_ADD);
             }
-            if(s.menuReflection==20){
+            if(!(s.flags&1)&&((s.animationFrames>>16)&255)==4){
+                // Funky overhead LED panels: P=logo*K+C2.a, RGB=2*(P+P*dots).
+                // Keep both original UV/SRT layers; these are not EFB screens.
+                C3D_TexEnvColor(e0,constant);
+                C3D_TexEnvSrc(e0,C3D_RGB,GPU_TEXTURE0,GPU_CONSTANT,GPU_CONSTANT);
+                C3D_TexEnvOpRgb(e0,GPU_TEVOP_RGB_SRC_COLOR,GPU_TEVOP_RGB_SRC_COLOR,GPU_TEVOP_RGB_SRC_ALPHA);
+                C3D_TexEnvFunc(e0,C3D_RGB,GPU_MULTIPLY_ADD);C3D_TexEnvScale(e0,C3D_RGB,GPU_TEVSCALE_1);
+                C3D_TexEnvSrc(e1,C3D_RGB,GPU_PREVIOUS,GPU_TEXTURE1,GPU_PREVIOUS);
+                C3D_TexEnvOpRgb(e1,GPU_TEVOP_RGB_SRC_COLOR,GPU_TEVOP_RGB_SRC_COLOR,GPU_TEVOP_RGB_SRC_COLOR);
+                C3D_TexEnvFunc(e1,C3D_RGB,GPU_MULTIPLY_ADD);C3D_TexEnvScale(e1,C3D_RGB,GPU_TEVSCALE_2);
+            }
+            if(s.menuReflection==28){
+                // Stopwatch: clamp(C2.a*raster + (metal or raster)), then
+                // add metal.rgb * metal.a * K2.a. Keep the first clamp.
+                C3D_TexEnvBufUpdate(C3D_RGB,1);
+                C3D_TexEnvColor(e0,s.reflectionConstant);
+                C3D_TexEnvSrc(e0,C3D_RGB,GPU_PRIMARY_COLOR,GPU_CONSTANT,s.reflectionAdd&1?GPU_PRIMARY_COLOR:GPU_TEXTURE1);
+                C3D_TexEnvFunc(e0,C3D_RGB,GPU_MULTIPLY_ADD);
+                C3D_TexEnvScale(e0,C3D_RGB,s.reflectionAdd&2?GPU_TEVSCALE_2:GPU_TEVSCALE_1);
+                C3D_TexEnvColor(e1,s.reflectionConstant);
+                C3D_TexEnvSrc(e1,C3D_Alpha,GPU_TEXTURE1,GPU_CONSTANT);C3D_TexEnvFunc(e1,C3D_Alpha,GPU_MODULATE);
+                auto* sum=C3D_GetTexEnv(2);
+                C3D_TexEnvSrc(sum,C3D_RGB,GPU_TEXTURE1,GPU_PREVIOUS,GPU_PREVIOUS_BUFFER);
+                C3D_TexEnvOpRgb(sum,GPU_TEVOP_RGB_SRC_COLOR,GPU_TEVOP_RGB_SRC_ALPHA,GPU_TEVOP_RGB_SRC_COLOR);
+                C3D_TexEnvFunc(sum,C3D_RGB,GPU_MULTIPLY_ADD);
+            }else if(s.menuReflection==29){
+                // Balloon: clamp(C0*raster + metal*C1)*raster + C2.
+                C3D_TexEnvColor(e0,constant);
+                C3D_TexEnvSrc(e0,C3D_RGB,GPU_CONSTANT,GPU_PRIMARY_COLOR);C3D_TexEnvFunc(e0,C3D_RGB,GPU_MODULATE);
+                C3D_TexEnvColor(e1,s.reflectionConstant);
+                C3D_TexEnvSrc(e1,C3D_RGB,GPU_TEXTURE1,GPU_CONSTANT,GPU_PREVIOUS);C3D_TexEnvFunc(e1,C3D_RGB,GPU_MULTIPLY_ADD);
+                auto* lit=C3D_GetTexEnv(2);C3D_TexEnvColor(lit,s.reflectionAdd);
+                C3D_TexEnvSrc(lit,C3D_RGB,GPU_PREVIOUS,GPU_PRIMARY_COLOR,GPU_CONSTANT);C3D_TexEnvFunc(lit,C3D_RGB,GPU_MULTIPLY_ADD);
+            }else if(s.menuReflection==30){
+                // Balloon: clamp(base*K + metal*(1-K)), then
+                // clamp(2*(previous*raster + C2 - .5)).
+                C3D_TexEnvBufUpdate(C3D_RGB,1);
+                C3D_TexEnvColor(e0,constant);C3D_TexEnvSrc(e0,C3D_RGB,GPU_TEXTURE0,GPU_CONSTANT);C3D_TexEnvFunc(e0,C3D_RGB,GPU_MODULATE);
+                C3D_TexEnvColor(e1,s.reflectionConstant);C3D_TexEnvSrc(e1,C3D_RGB,GPU_TEXTURE1,GPU_CONSTANT);C3D_TexEnvFunc(e1,C3D_RGB,GPU_MODULATE);
+                auto* sum=C3D_GetTexEnv(2);C3D_TexEnvSrc(sum,C3D_RGB,GPU_PREVIOUS_BUFFER,GPU_PREVIOUS);C3D_TexEnvFunc(sum,C3D_RGB,GPU_ADD);
+                auto* lit=C3D_GetTexEnv(3);C3D_TexEnvSrc(lit,C3D_RGB,GPU_PREVIOUS,GPU_PRIMARY_COLOR);C3D_TexEnvFunc(lit,C3D_RGB,GPU_MODULATE);
+                auto* lift=C3D_GetTexEnv(4);C3D_TexEnvColor(lift,s.reflectionAdd);
+                C3D_TexEnvSrc(lift,C3D_RGB,GPU_PREVIOUS,GPU_CONSTANT);C3D_TexEnvFunc(lift,C3D_RGB,GPU_ADD_SIGNED);C3D_TexEnvScale(lift,C3D_RGB,GPU_TEVSCALE_2);
+            }else if(s.menuReflection==31){
+                C3D_TexEnvSrc(e0,C3D_RGB,GPU_PRIMARY_COLOR,GPU_TEXTURE1);
+                C3D_TexEnvOpRgb(e0,GPU_TEVOP_RGB_SRC_COLOR,GPU_TEVOP_RGB_ONE_MINUS_SRC_COLOR);
+                C3D_TexEnvFunc(e0,C3D_RGB,GPU_MODULATE);
+            }else if(s.menuReflection==27){
+                // Award Tico's original signed yellow/metal environment layer.
+                C3D_TexEnvSrc(e0,C3D_RGB,GPU_TEXTURE0,GPU_PRIMARY_COLOR);
+                C3D_TexEnvFunc(e0,C3D_RGB,GPU_MODULATE);C3D_TexEnvScale(e0,C3D_RGB,GPU_TEVSCALE_1);
+                C3D_TexEnvBufUpdate(C3D_RGB,1);
+                C3D_TexEnvColor(e1,s.reflectionConstant);
+                C3D_TexEnvSrc(e1,C3D_RGB,GPU_CONSTANT,GPU_CONSTANT,GPU_TEXTURE1);
+                C3D_TexEnvOpRgb(e1,GPU_TEVOP_RGB_SRC_ALPHA,GPU_TEVOP_RGB_SRC_COLOR,GPU_TEVOP_RGB_SRC_COLOR);
+                C3D_TexEnvFunc(e1,C3D_RGB,GPU_INTERPOLATE);
+                auto* sum=C3D_GetTexEnv(2);
+                C3D_TexEnvSrc(sum,C3D_RGB,GPU_PREVIOUS_BUFFER,GPU_PREVIOUS);
+                C3D_TexEnvFunc(sum,C3D_RGB,GPU_ADD_SIGNED);C3D_TexEnvScale(sum,C3D_RGB,GPU_TEVSCALE_2);
+                C3D_TexEnvColor(sum,0xffffffff);C3D_TexEnvSrc(sum,C3D_Alpha,GPU_CONSTANT);C3D_TexEnvFunc(sum,C3D_Alpha,GPU_REPLACE);
+            }else if(s.menuReflection==26){
+                // thunder_m's positive environment ramp, then lit albedo.
+                C3D_TexEnvColor(e0,s.reflectionConstant);
+                C3D_TexEnvSrc(e0,C3D_RGB,GPU_CONSTANT);C3D_TexEnvFunc(e0,C3D_RGB,GPU_REPLACE);
+                C3D_TexEnvColor(e1,s.reflectionAdd);
+                C3D_TexEnvSrc(e1,C3D_RGB,GPU_CONSTANT,GPU_PREVIOUS,GPU_TEXTURE1);
+                C3D_TexEnvFunc(e1,C3D_RGB,GPU_INTERPOLATE);
+                auto* sum=C3D_GetTexEnv(2);
+                C3D_TexEnvSrc(sum,C3D_RGB,GPU_TEXTURE0,GPU_PRIMARY_COLOR,GPU_PREVIOUS);
+                C3D_TexEnvFunc(sum,C3D_RGB,GPU_MULTIPLY_ADD);
+            }else if(s.menuReflection==24){
+                C3D_TexEnvColor(e0,s.reflectionConstant);
+                C3D_TexEnvSrc(e0,C3D_RGB,GPU_PRIMARY_COLOR,GPU_CONSTANT,GPU_TEXTURE0);
+                C3D_TexEnvFunc(e0,C3D_RGB,GPU_INTERPOLATE);
+                C3D_TexEnvSrc(e1,C3D_RGB,GPU_PREVIOUS,GPU_TEXTURE0);
+                C3D_TexEnvFunc(e1,C3D_RGB,GPU_ADD);
+            }else if(s.menuReflection==25){
+                C3D_TexEnvColor(e0,constant);
+                C3D_TexEnvSrc(e0,C3D_RGB,GPU_CONSTANT);C3D_TexEnvFunc(e0,C3D_RGB,GPU_REPLACE);
+            }else if(s.menuReflection==20){
                 // Retail treehouse: clamp(2*T0*raster), then + T1*K1 RGB.
                 C3D_TexEnvSrc(e0,C3D_RGB,GPU_TEXTURE0,GPU_PRIMARY_COLOR);
                 C3D_TexEnvFunc(e0,C3D_RGB,GPU_MODULATE);C3D_TexEnvScale(e0,C3D_RGB,GPU_TEVSCALE_2);
@@ -1102,6 +1475,18 @@ void Renderer::drawNow(const Model& model,const Vertex* vertices,const C3D_Mtx& 
                 C3D_TexEnvColor(e1,s.reflectionAdd);
                 C3D_TexEnvSrc(e1,C3D_RGB,GPU_TEXTURE0,GPU_CONSTANT,GPU_PREVIOUS);
                 C3D_TexEnvFunc(e1,C3D_RGB,GPU_MULTIPLY_ADD);
+            }else if(s.menuReflection==23){
+                // quickSand_m: APREV=T0.a*rasA, then
+                // clamp(2*rasC*lerp(T0,T1,APREV)). Both UVs retain SRT0.
+                C3D_TexEnvSrc(e0,C3D_Alpha,GPU_TEXTURE0,GPU_PRIMARY_COLOR);
+                C3D_TexEnvFunc(e0,C3D_Alpha,GPU_MODULATE);
+                C3D_TexEnvSrc(e1,C3D_RGB,GPU_TEXTURE1,GPU_TEXTURE0,GPU_PREVIOUS);
+                C3D_TexEnvOpRgb(e1,GPU_TEVOP_RGB_SRC_COLOR,GPU_TEVOP_RGB_SRC_COLOR,GPU_TEVOP_RGB_SRC_ALPHA);
+                C3D_TexEnvFunc(e1,C3D_RGB,GPU_INTERPOLATE);
+                auto* finish=C3D_GetTexEnv(2);
+                C3D_TexEnvSrc(finish,C3D_RGB,GPU_PREVIOUS,GPU_PRIMARY_COLOR);
+                C3D_TexEnvFunc(finish,C3D_RGB,GPU_MODULATE);
+                C3D_TexEnvScale(finish,C3D_RGB,GPU_TEVSCALE_2);
             }else if(s.menuReflection==21){
                 // Sun halo: clamp(scale*(lerp(C1,C0,T)-bias)).
                 // In particular ef_sunFlare subtracts 1/2 BEFORE doubling;
@@ -1175,7 +1560,13 @@ void Renderer::drawNow(const Model& model,const Vertex* vertices,const C3D_Mtx& 
             // must not replace the road decal's actual alpha mask.
             const unsigned alphaMode=(s.flags>>20)&7;
             auto* alpha=C3D_GetTexEnv(3);
-            if(alphaMode==1||alphaMode==2){
+            if(s.menuReflection==25){
+                auto* intermediate=C3D_GetTexEnv(2);C3D_TexEnvColor(intermediate,constant);
+                C3D_TexEnvSrc(intermediate,C3D_Alpha,GPU_TEXTURE1,GPU_PRIMARY_COLOR,GPU_CONSTANT);
+                C3D_TexEnvFunc(intermediate,C3D_Alpha,GPU_MULTIPLY_ADD);
+                C3D_TexEnvSrc(alpha,C3D_Alpha,GPU_TEXTURE0,GPU_PREVIOUS);
+                C3D_TexEnvFunc(alpha,C3D_Alpha,GPU_MODULATE);
+            }else if(alphaMode==1||alphaMode==2){
                 C3D_TexEnvSrc(alpha,C3D_Alpha,alphaMode==1&&s.menuReflection!=22?GPU_TEXTURE0:GPU_TEXTURE1,GPU_PRIMARY_COLOR);
                 C3D_TexEnvFunc(alpha,C3D_Alpha,GPU_MODULATE);
             }else if(alphaMode==3||alphaMode==6){
@@ -1200,6 +1591,10 @@ void Renderer::drawNow(const Model& model,const Vertex* vertices,const C3D_Mtx& 
             }else if(alphaMode==5){
                 C3D_TexEnvColor(alpha,s.menuReflection==8?(constant&0xff000000u)|0x00808080u:constant);
                 C3D_TexEnvSrc(alpha,C3D_Alpha,GPU_TEXTURE0,GPU_TEXTURE1,GPU_CONSTANT);C3D_TexEnvFunc(alpha,C3D_Alpha,GPU_INTERPOLATE);
+                if(s.menuReflection==10||s.menuReflection==30){
+                    auto* vertexAlpha=C3D_GetTexEnv(4);
+                    C3D_TexEnvSrc(vertexAlpha,C3D_Alpha,GPU_PREVIOUS,GPU_PRIMARY_COLOR);C3D_TexEnvFunc(vertexAlpha,C3D_Alpha,GPU_MODULATE);
+                }
             }
         }
         if(additiveColor||((s.menuReflection!=7&&s.menuReflection!=8&&s.menuReflection!=14)&&o&&(o->flags&SubmeshOverride::Add))){
@@ -1254,8 +1649,8 @@ void Renderer::drawNow(const Model& model,const Vertex* vertices,const C3D_Mtx& 
         C3D_DepthTest(depthTest,GPU_GEQUAL,depthWrite?GPU_WRITE_ALL:GPU_WRITE_COLOR);
         // Retain authored layer order without reverting distant geometry to
         // nonlinear depth. The same mapping is used by actors and shadows.
-
-        sceneDepthMap(projection_,!backdrop&&(s.lighting&retail::CoplanarLayer));
+        if(menuDepthBase_>=0)C3D_DepthMap(true,-menuDepthSpan_,menuDepthBase_);
+        else sceneDepthMap(projection_,backdrop?0:s.lighting);
         const bool swap=o&&(o->flags&SubmeshOverride::Texture);
         const int32_t primaryIndex=swap&&o->texture[0]>=0&&size_t(o->texture[0])<model.textures.size()?o->texture[0]:s.texture;
         const int32_t secondaryIndex=swap&&o->texture[1]>=0&&size_t(o->texture[1])<model.textures.size()?o->texture[1]:s.secondary;
@@ -1291,9 +1686,17 @@ void Renderer::drawNow(const Model& model,const Vertex* vertices,const C3D_Mtx& 
             additiveColor?(additiveColor>>24)|((additiveColor>>8)&0xff00)|((additiveColor<<8)&0xff0000):o&&(o->flags&SubmeshOverride::Add)?o->add&0xffffff:0,constant);
         // A material binder owns the combiners and may replace any state above.
         if(material)material(context,i);
-        if(inkBlack){auto* ink=C3D_GetTexEnv(5);C3D_TexEnvColor(ink,ink->color&0xff000000u);
+        // Native CFL owns stages 0..2. Apply the same Star C1 contribution
+        // after its material binder, retaining coverage for glasses/masks.
+        if(model.nativeMiiLighting&&additiveColor){
+            const uint32_t rgb=(additiveColor>>24)|((additiveColor>>8)&0xff00)|((additiveColor<<8)&0xff0000);
+            auto* star=C3D_GetTexEnv(4);C3D_TexEnvInit(star);C3D_TexEnvColor(star,rgb);
+            C3D_TexEnvSrc(star,C3D_RGB,GPU_PREVIOUS,GPU_CONSTANT);C3D_TexEnvFunc(star,C3D_RGB,GPU_ADD);
+            C3D_TexEnvSrc(star,C3D_Alpha,GPU_PREVIOUS);C3D_TexEnvFunc(star,C3D_Alpha,GPU_REPLACE);
+        }
+        if(inkBlack){auto* ink=C3D_GetTexEnv(5);C3D_TexEnvColor(ink,(ink->color&0xff000000u)|((255u-inkBlack)*0x010101u));
             C3D_TexEnvOpRgb(ink,GPU_TEVOP_RGB_SRC_COLOR,GPU_TEVOP_RGB_SRC_COLOR,GPU_TEVOP_RGB_SRC_COLOR);
-            C3D_TexEnvSrc(ink,C3D_RGB,GPU_CONSTANT);C3D_TexEnvFunc(ink,C3D_RGB,GPU_REPLACE);C3D_TexEnvScale(ink,C3D_RGB,GPU_TEVSCALE_1);}
+            C3D_TexEnvSrc(ink,C3D_RGB,GPU_PREVIOUS,GPU_CONSTANT);C3D_TexEnvFunc(ink,C3D_RGB,GPU_MODULATE);C3D_TexEnvScale(ink,C3D_RGB,GPU_TEVSCALE_1);}
         last=o?nullptr:&s;lastRetail=retail;lastEnvironment=retailEnvironment;
         } // !repeat
         C3D_BoolUnifSet(GPU_VERTEX_SHADER,projectedWaterLoc_,s.menuReflection==11||s.menuReflection==22);
@@ -1317,8 +1720,23 @@ void Renderer::drawNow(const Model& model,const Vertex* vertices,const C3D_Mtx& 
             C3D_FVUnifSet(GPU_VERTEX_SHADER,envParamLoc_,0,0,0,0);
         }
         const bool primaryEnvironment=s.lighting&retail::PrimaryEnvironment;
-        const bool menuEnvironment=!model.fixedLighting&&(primaryEnvironment||(s.menuReflection&&s.menuReflection!=3&&s.menuReflection!=7&&s.menuReflection!=11&&s.menuReflection!=12&&s.menuReflection!=13&&s.menuReflection!=14&&s.menuReflection!=15&&s.menuReflection!=19&&s.menuReflection!=21&&s.menuReflection!=22&&
+        const bool menuEnvironment=!model.staticLightingBaked&&!model.fixedLighting&&!(s.lighting&retail::FixedEnvironment)&&(primaryEnvironment||(s.menuReflection&&s.menuReflection!=3&&s.menuReflection!=7&&s.menuReflection!=11&&s.menuReflection!=12&&s.menuReflection!=13&&s.menuReflection!=14&&s.menuReflection!=15&&s.menuReflection!=19&&s.menuReflection!=21&&s.menuReflection!=22&&s.menuReflection!=23&&s.menuReflection!=24&&s.menuReflection!=25&&
             !((s.menuReflection==10||s.menuReflection==20)&&(s.reflectionConstant&512))));
+        if((s.lighting&retail::FixedEnvironment)&&s.menuReflection!=8&&!primaryEnvironment){
+            // Dynamic EnvCamera replaced the input UV1 before its SRT. Keep
+            // that order with baked UV1: do not apply the ordinary UV delta
+            // first, or animate an environment transform twice.
+            if(model.staticLightingBaked){
+                C3D_FVUnifSet(GPU_VERTEX_SHADER,uvRowLoc_[2],1,0,0,0);
+                C3D_FVUnifSet(GPU_VERTEX_SHADER,uvRowLoc_[3],0,1,0,0);uvDirty_=true;
+            }
+            if(s.menuReflection&&normalEnvironment(s.lighting,s.menuReflection,s.reflectionConstant)){
+                if(s.menuReflection==17&&uv){float animatedUv[6];animatedEnvironment(s.reflectionUv,uv+6,animatedUv);uv1TransformNow(animatedUv);}
+                else uv1TransformNow(s.reflectionUv);
+            }
+        }
+        if(model.staticLightingBaked&&s.menuReflection==8)
+            C3D_BoolUnifSet(GPU_VERTEX_SHADER,environmentTexture2Loc_,true);
         if(menuEnvironment){
             float animatedUv[6];
             if((s.menuReflection==17||primaryEnvironment)&&uv){
@@ -1328,17 +1746,17 @@ void Renderer::drawNow(const Model& model,const Vertex* vertices,const C3D_Mtx& 
             C3D_BoolUnifSet(GPU_VERTEX_SHADER,environmentPrimaryLoc_,primaryEnvironment);
         }
         if(parts){
-            const bool environment=(s.flags&(1u<<25))&&((s.flags>>12)&3)==3&&rigid_->stride>=21;
+            const bool environment=!model.staticLightingBaked&&!(s.lighting&retail::FixedEnvironment)&&(s.flags&(1u<<25))&&((s.flags>>12)&3)==3&&rigid_->stride>=21;
             for(size_t n=0;n<parts->size();++n){
                 if(n<64&&!((shownParts>>n)&1))continue;
                 const auto& part=(*parts)[n];
                 const float* m=rigid_->palette+part.matrix*rigid_->stride;
                 C3D_Mtx bone;Mtx_Identity(&bone);
                 for(unsigned row=0;row<3;++row)for(unsigned col=0;col<4;++col)bone.r[row].c[3-col]=m[row*4+col];
-                C3D_Mtx local,partView;Mtx_Multiply(&local,&transform,&bone);Mtx_Multiply(&partView,&view_,&local);
+                C3D_Mtx partView;Mtx_Multiply(&partView,&mv,&bone); // view*object already computed once above
                 C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER,modelViewLoc_,&partView);
                 if(retailEnvironment||menuEnvironment)this->retailEnvironment(partView);
-                else if(retail&&!model.fixedLighting)normalMatrixNow(partView);
+                else if(retail&&!model.fixedLighting&&!model.staticLightingBaked)normalMatrixNow(partView);
                 if(environment){
                     for(unsigned row=0;row<3;++row)C3D_FVUnifSet(GPU_VERTEX_SHADER,envRowLoc_[row],m[12+row*3],m[13+row*3],m[14+row*3],0);
                     C3D_FVUnifSet(GPU_VERTEX_SHADER,envParamLoc_,std::cos(rigid_->environmentYaw),std::sin(rigid_->environmentYaw),1,0);
@@ -1351,16 +1769,16 @@ void Renderer::drawNow(const Model& model,const Vertex* vertices,const C3D_Mtx& 
                 C3D_FVUnifSet(GPU_VERTEX_SHADER,envParamLoc_,1,0,0,0);
                 C3D_BoolUnifSet(GPU_VERTEX_SHADER,environmentMappedLoc_,false);
             }
-            if(menuEnvironment)clearEnvironmentUvNow();
+            if(menuEnvironment||(s.lighting&retail::FixedEnvironment))clearEnvironmentUvNow();
             pendingEnd=retail;
             continue;
         }
         for(unsigned n=0;n<ranges.count;++n){
             const auto range=ranges.ranges[n];
-            C3D_DrawElements(GPU_TRIANGLES,range.count,C3D_UNSIGNED_SHORT,model.indices+range.first);
+            C3D_DrawElements(GPU_TRIANGLES,range.count,C3D_UNSIGNED_SHORT,drawIndices+range.first);
             stats_.triangles+=range.count/3;++stats_.drawCalls;
         }
-        if(menuEnvironment)clearEnvironmentUvNow();
+        if(menuEnvironment||(s.lighting&retail::FixedEnvironment))clearEnvironmentUvNow();
         pendingEnd=retail;
     }
     if(pendingEnd)retailEndSubmesh();
@@ -1374,11 +1792,12 @@ void Renderer::drawNow(const Model& model,const Vertex* vertices,const C3D_Mtx& 
         AttrInfo_Init(attr);AttrInfo_AddLoader(attr,0,GPU_FLOAT,3);AttrInfo_AddLoader(attr,1,GPU_FLOAT,3);AttrInfo_AddLoader(attr,2,GPU_FLOAT,4);AttrInfo_AddLoader(attr,3,GPU_UNSIGNED_BYTE,4);
         C3D_BoolUnifSet(GPU_VERTEX_SHADER,skinnedNormalsLoc_,false);
     }
+    if(model.nativeMiiLighting){C3D_LightEnvBind(nullptr);C3D_BindProgram(&program_);}
 }
 void Renderer::setMaterialCullNow(GPU_CULLMODE mode){
     C3D_CullFace(cameraCull(mode,view_));
 }
-void Renderer::shadowVolumesNow(const ShadowVolume* volumes,unsigned count,float darkness){
+void Renderer::shadowVolumesNow(const ShadowVolume* volumes,unsigned count,float darkness,uint8_t excludedStencil){
     flushSprites();
     sceneDepthMap(projection_);
     uploadProjection(projectionLoc_,projection_);
@@ -1401,7 +1820,8 @@ void Renderer::shadowVolumesNow(const ShadowVolume* volumes,unsigned count,float
     };
     // GX winds outward faces clockwise: culling CCW fronts keeps them.
     C3D_DepthTest(true,GPU_GEQUAL,GPU_WRITEMASK(0));
-    C3D_StencilTest(true,GPU_ALWAYS,0,0xff,0xff);
+    const uint8_t countMask=uint8_t(~excludedStencil);
+    C3D_StencilTest(true,excludedStencil?GPU_EQUAL:GPU_ALWAYS,0,excludedStencil,countMask);
     // Count occluded faces (z-fail). Original closed shadow meshes can
     // intersect the near plane, so z-pass leaves an unbalanced silhouette.
     C3D_StencilOp(GPU_STENCIL_KEEP,GPU_STENCIL_DECR_WRAP,GPU_STENCIL_KEEP);
@@ -1410,12 +1830,12 @@ void Renderer::shadowVolumesNow(const ShadowVolume* volumes,unsigned count,float
     drawAll(GPU_CULL_BACK_CCW);
     // Shade each marked pixel once and clear its count for later volumes.
     C3D_DepthTest(false,GPU_ALWAYS,GPU_WRITE_COLOR);
-    C3D_StencilTest(true,GPU_NOTEQUAL,0,0xff,0xff);
+    C3D_StencilTest(true,GPU_NOTEQUAL,0,countMask,countMask);
     C3D_StencilOp(GPU_STENCIL_KEEP,GPU_STENCIL_KEEP,GPU_STENCIL_ZERO);
     // A screen quad also shades/clears the stencil when the camera is
     // inside a volume. Drawing a volume face here depends on near clipping
     // again, and can leave stray counts for later objects/particles.
-    screenFadeNow(1.f-float(shade)/255.f,false);
+    screenFadeNow(1.f-float(shade)/255.f,false,false,shadowUnion_?4:0);
     // The fullscreen shade temporarily binds an orthographic projection.
     // Consecutive volume groups must return to this eye's perspective.
     uploadProjection(projectionLoc_,projection_);
@@ -1425,13 +1845,13 @@ void Renderer::shadowVolumesNow(const ShadowVolume* volumes,unsigned count,float
     C3D_DepthTest(true,GPU_GEQUAL,GPU_WRITE_ALL);
     C3D_AlphaBlend(GPU_BLEND_ADD,GPU_BLEND_ADD,GPU_SRC_ALPHA,GPU_ONE_MINUS_SRC_ALPHA,GPU_ONE,GPU_ONE_MINUS_SRC_ALPHA);
 }
-void Renderer::environmentUvNow(const C3D_Mtx& transform,const float (&uv)[6],bool texture2){
+void Renderer::environmentUvNow(const C3D_Mtx& transform,const float (&uv)[6],bool texture2,float blend){
     // GX EnvCamera: normalize(view-space normal) -> (0.5+0.5x, 0.5-0.5y) in
     // GX texture space, then the material SRT. The shader yields that point in
     // this renderer's V-up convention (v=1-t); convert the SRT rows to match.
     C3D_Mtx mv;Mtx_Multiply(&mv,&view_,&transform);
     normalMatrixNow(mv,true);
-    C3D_FVUnifSet(GPU_VERTEX_SHADER,envParamLoc_,1,0,1,0);
+    C3D_FVUnifSet(GPU_VERTEX_SHADER,envParamLoc_,1,0,std::clamp(blend,0.f,1.f),0);
     C3D_BoolUnifSet(GPU_VERTEX_SHADER,environmentMappedLoc_,true);
     C3D_BoolUnifSet(GPU_VERTEX_SHADER,environmentTexture2Loc_,texture2);
     uv1TransformNow(uv);
@@ -1442,7 +1862,13 @@ void Renderer::uv1TransformNow(const float (&uv)[6]){
     C3D_FVUnifSet(GPU_VERTEX_SHADER,uv1RowLoc_[0],a,-b,0,b+tx);
     C3D_FVUnifSet(GPU_VERTEX_SHADER,uv1RowLoc_[1],-c,d,0,1-d-ty);
 }
+void Renderer::setBakedEnvironmentUv(){
+    // Material binder only: immutable UV2 was prepared at model load.
+    C3D_BoolUnifSet(GPU_VERTEX_SHADER,environmentMappedLoc_,false);
+    C3D_BoolUnifSet(GPU_VERTEX_SHADER,environmentTexture2Loc_,true);
+}
 void Renderer::clearEnvironmentUvNow(){
+    C3D_BoolUnifSet(GPU_VERTEX_SHADER,playerShadowProjectLoc_,false);
     C3D_BoolUnifSet(GPU_VERTEX_SHADER,projectedWaterLoc_,false);
     C3D_BoolUnifSet(GPU_VERTEX_SHADER,environmentMappedLoc_,false);
     C3D_BoolUnifSet(GPU_VERTEX_SHADER,environmentTexture2Loc_,false);
@@ -1467,7 +1893,7 @@ void Renderer::drawSparksNow(const SparkSpec* specs,unsigned specCount,const Spa
     // Every quad is written first and flushed once; binds and draws follow in
     // the same order as when each particle flushed its own quad.
     unsigned offset=0;
-    for(unsigned pass=(eye_)?1:0;pass<2;++pass){offset=0;
+    for(unsigned pass=(eye_||bottomWorldPass_)?1:0;pass<2;++pass){offset=0;
     for(unsigned id=0;id<specCount;++id){
         const auto& s=specs[id];if(!textures[s.texture].ready)continue;
         if(pass){
@@ -1537,7 +1963,20 @@ bool Renderer::projectTop(Vec3 p,float& x,float& y,float& viewZ) const{
     x=(rx*d-b*ry)/det;y=(a*ry-c*rx)/det;
     return true;
 }
-
+bool Renderer::projectChaseTop(Vec3 p,float& x,float& y,float& viewZ,bool lookBack) const{
+    const C3D_FVec eye=Mtx_MultiplyFVec4(lookBack?&mainView_:&chaseView_,FVec4_New(p.x,p.y,p.z,1));
+    viewZ=eye.z;
+    const C3D_FVec clip=Mtx_MultiplyFVec4(&mainProjection_,eye);
+    if(clip.w<=0.0001f)return false;
+    const float nx=clip.x/clip.w,ny=clip.y/clip.w;
+    // Invert the overlay's Mtx_OrthoTilt pixel mapping (affine in x and y).
+    C3D_Mtx o;Mtx_OrthoTilt(&o,0,mainScreenWidth_,240,0,-1,1,false);
+    const float a=o.r[0].x,b=o.r[0].y,c=o.r[1].x,d=o.r[1].y,det=a*d-b*c;
+    if(std::fabs(det)<1e-9f)return false;
+    const float rx=nx-o.r[0].w,ry=ny-o.r[1].w;
+    x=(rx*d-b*ry)/det;y=(a*ry-c*rx)/det;
+    return true;
+}
 namespace {
 GPU_TEVSRC tevSource(ef::Src s){
     switch(s){
@@ -1616,7 +2055,7 @@ void Renderer::buildEffectList(RaceEffects& effects,const C3D_Mtx& viewMatrix,ef
     float rows[16];for(unsigned r=0;r<4;++r)for(unsigned c=0;c<4;++c)rows[r*4+c]=cullProjection_.r[r].c[3-c];
     const ClipFrustum frustum(rows);
     ef::buildDrawList(effects.system(),state.materials,state.sizes.data(),uint32_t(state.sizes.size()),view,list,kEffectVertices,
-        &frustum);
+        frameDualScreenIntro_?nullptr:&frustum);
 }
 // The immediate path; recorded frames build the list in drawEffects (render_thread.cpp).
 void Renderer::drawEffectsImmediate(RaceEffects& effects,const Texture* textures){
@@ -1624,11 +2063,43 @@ void Renderer::drawEffectsImmediate(RaceEffects& effects,const Texture* textures
     buildEffectList(effects,view_,effectDraw_->list);
     effectListNow(effects,effectDraw_->list,textures);
 }
-
-
-
-
-
+EffectLayerBuffer::~EffectLayerBuffer(){
+    if(vertices)linearFree(vertices);
+    if(lookup.data)C3D_TexDelete(&lookup);
+}
+bool EffectLayerBuffer::init(){
+    if(!vertices)vertices=linearAlloc(VertexCapacity*sizeof(ef::DrawVertex));
+    if(!vertices)return false;
+    if(!lookup.data&&!C3D_TexInit(&lookup,ef::DrawList::LookupSize,ef::DrawList::LookupSize,GPU_RGBA8))return false;
+    C3D_TexSetFilter(&lookup,GPU_NEAREST,GPU_NEAREST);
+    C3D_TexSetWrap(&lookup,GPU_CLAMP_TO_EDGE,GPU_CLAMP_TO_EDGE);
+    return true;
+}
+void Renderer::drawSceneEffectsImmediate(RaceEffects& effects,const Texture* textures,const EffectLayerBuffer& buffer){
+    updateEffectState(effects);buildEffectList(effects,view_,effectDraw_->list);
+    sceneEffectListNow(effects,effectDraw_->list,textures,buffer);
+}
+void Renderer::sceneEffectListNow(const RaceEffects& effects,const ef::DrawList& list,const Texture* textures,const EffectLayerBuffer& buffer){
+    flushSprites();
+    const auto oldLookup=effectLookup_;auto* oldVertices=effectVertices_;
+    effectLookup_=buffer.lookup;effectVertices_=buffer.vertices;
+    effectListNow(effects,list,textures);
+    effectLookup_=oldLookup;effectVertices_=oldVertices;
+}
+void Renderer::drawMenuEffects(RaceEffects& effects,const Texture* textures,EffectLayerBuffer& buffer){
+    if(recording()||!effects.ready||!effects.liveParticles()||!buffer.vertices||!buffer.lookup.data)return;
+    static_assert(kEffectVertices==EffectLayerBuffer::VertexCapacity);
+    flushSprites();
+    const auto oldProjection=projection_,oldView=view_;
+    const auto oldLookup=effectLookup_;auto* oldVertices=effectVertices_;
+    effectLookup_=buffer.lookup;effectVertices_=buffer.vertices;
+    Mtx_PerspTilt(&projection_,C3D_AngleFromDegrees(45.f),5.f/3.f,10.f,100000.f,false);
+    Mtx_LookAt(&view_,FVec3_New(0,0,1000),FVec3_New(0,0,0),FVec3_New(0,1,0),false);
+    for(unsigned col=0;col<4;++col)
+        projection_.r[2].c[col]=.01f*projection_.r[2].c[col]-.95f*projection_.r[3].c[col];
+    drawEffectsImmediate(effects,textures);
+    projection_=oldProjection;view_=oldView;effectLookup_=oldLookup;effectVertices_=oldVertices;
+}
 void Renderer::effectListNow(const RaceEffects& effects,const ef::DrawList& list,const Texture* textures){
     // Award world and driving banks can coexist in one recorded frame.
     updateEffectState(effects);
@@ -1640,7 +2111,7 @@ void Renderer::effectListNow(const RaceEffects& effects,const ef::DrawList& list
     flushSprites();
     // Both eyes and the intro's lower view reuse the centre camera list;
     // only its first top pass writes buffers that the GPU will read.
-    if(!eye_&&true){
+    if(!eye_&&!bottomWorldPass_){
     std::memcpy(effectVertices_,list.vertices.data(),vertexCount*sizeof(ef::DrawVertex));
     flushGpuData(effectVertices_,vertexCount*sizeof(ef::DrawVertex));
     // Lookup texels in index order are already in tiled order (8x8 Morton tiles).
@@ -1684,6 +2155,7 @@ void Renderer::effectListNow(const RaceEffects& effects,const ef::DrawList& list
             }
             C3D_TexBind(u,g);
         }
+#ifndef MKW_RELEASE
         constexpr const char* diagnosed[]={"rk_itemBox","rk_bananaSmk","rk_miniTurbo","rk_spinHalfL","rk_spinHalfR","rk_spinL","rk_spinR","rk_driftSpark1LB_Spark00","rk_driftSpark1LB_Spark01","rk_driftSpark1RB_Spark00","rk_driftSpark1RB_Spark01","rk_driftSpark1CB_Spark00","rk_driftSpark1CB_Spark01"};
         for(unsigned i=0;i<std::size(diagnosed);++i)if(!std::strcmp(b.res->name,diagnosed[i])&&!(state.diagnosticMask&(1u<<i))){
             state.diagnosticMask|=1u<<i;
@@ -1692,6 +2164,7 @@ void Renderer::effectListNow(const RaceEffects& effects,const ef::DrawList& list
                 std::fclose(log);
             }
         }
+#endif
         if(missing)continue;
         int rgbBuffer=0,alphaBuffer=0;
         for(int i=0;i<6;++i){
@@ -1746,11 +2219,11 @@ void Renderer::cinemaBarsNow(float topHeight,float bottomHeight,float opacity){
     Vertex* vertices=reserveOverlay(12);
     const auto alpha=static_cast<uint8_t>(std::round(std::clamp(opacity,0.f,1.f)*255.f));
     auto rectangle=[&](int first,float top,float bottom){
-        const Vec3 positions[6]={{0,top,0},{400,top,0},{400,bottom,0},
-                                 {0,top,0},{400,bottom,0},{0,bottom,0}};
+        const Vec3 positions[6]={{0,top,0},{screenWidth_,top,0},{screenWidth_,bottom,0},
+                                 {0,top,0},{screenWidth_,bottom,0},{0,bottom,0}};
         for(int i=0;i<6;++i)vertices[first+i]={positions[i],{0,0,1},{0,0},{0,0},{0,0,0,alpha}};
     };
-    if(!eye_){
+    if(writesVertices()){
         rectangle(0,0,240.f*std::clamp(topHeight,0.f,1.f));
         rectangle(6,240.f*(1.f-std::clamp(bottomHeight,0.f,1.f)),240.f);
         flushGpuData(vertices,12*sizeof(Vertex));
@@ -1768,14 +2241,30 @@ void Renderer::cinemaBarsNow(float topHeight,float bottomHeight,float opacity){
     auto* buf=C3D_GetBufInfo();BufInfo_Init(buf);BufInfo_Add(buf,vertices,sizeof(Vertex),4,0x3210);
     C3D_DrawArrays(GPU_TRIANGLES,0,12);stats_.triangles+=4;++stats_.drawCalls;
 }
-void Renderer::screenFadeNow(float opacity,bool white){
+void Renderer::shadowUnionNow(bool active){
+    flushSprites();resetMaterialUniforms();clearEnvironmentUvNow();
+    C3D_StencilTest(true,GPU_ALWAYS,0,0xff,0xff);
+    C3D_StencilOp(GPU_STENCIL_KEEP,GPU_STENCIL_KEEP,GPU_STENCIL_ZERO);
+    auto* attr=C3D_GetAttrInfo();AttrInfo_Init(attr);
+    AttrInfo_AddLoader(attr,0,GPU_FLOAT,3);AttrInfo_AddLoader(attr,1,GPU_FLOAT,3);
+    AttrInfo_AddLoader(attr,2,GPU_FLOAT,4);AttrInfo_AddLoader(attr,3,GPU_UNSIGNED_BYTE,4);
+    screenFadeNow(active?0.f:1.f,false,false,active?1:2);
+    shadowUnion_=active;
+    C3D_StencilTest(false,GPU_ALWAYS,0,0xff,0);
+    C3D_StencilOp(GPU_STENCIL_KEEP,GPU_STENCIL_KEEP,GPU_STENCIL_KEEP);
+    uploadProjection(projectionLoc_,projection_);sceneDepthMap(projection_);
+    C3D_DepthTest(true,GPU_GEQUAL,GPU_WRITE_ALL);
+    C3D_AlphaBlend(GPU_BLEND_ADD,GPU_BLEND_ADD,GPU_SRC_ALPHA,GPU_ONE_MINUS_SRC_ALPHA,GPU_ONE,GPU_ONE_MINUS_SRC_ALPHA);
+    spriteStateReady_=false;
+}
+void Renderer::screenFadeNow(float opacity,bool white,bool depthOnly,int shadowMode){
     flushSprites();
     const auto alpha=static_cast<uint8_t>(std::round(std::clamp(opacity,0.f,1.f)*255.f));
     const uint8_t value=white?255:0;
-    const Vec3 positions[6]={{0,0,0},{400,0,0},{400,240,0},
-                             {0,0,0},{400,240,0},{0,240,0}};
+    const Vec3 positions[6]={{0,0,0},{screenWidth_,0,0},{screenWidth_,240,0},
+                             {0,0,0},{screenWidth_,240,0},{0,240,0}};
     Vertex* fade=reserveOverlay(6);
-    if(!eye_){
+    if(writesVertices()){
         for(int i=0;i<6;++i)fade[i]={positions[i],{0,0,1},{0,0},{0,0},{value,value,value,alpha}};
         flushGpuData(fade,6*sizeof(Vertex));
     }
@@ -1787,8 +2276,16 @@ void Renderer::screenFadeNow(float opacity,bool white){
     for(int i=0;i<6;++i)C3D_TexEnvInit(C3D_GetTexEnv(i));
     auto* env=C3D_GetTexEnv(0);C3D_TexEnvSrc(env,C3D_Both,GPU_PRIMARY_COLOR);C3D_TexEnvFunc(env,C3D_Both,GPU_REPLACE);
     C3D_CullFace(GPU_CULL_NONE);C3D_AlphaTest(false,GPU_ALWAYS,0);
-    C3D_DepthTest(false,GPU_ALWAYS,GPU_WRITE_COLOR);
+    C3D_DepthTest(depthOnly,GPU_ALWAYS,depthOnly?GPU_WRITE_DEPTH:GPU_WRITE_COLOR);
+    if(depthOnly)C3D_DepthMap(true,0,0);
     C3D_AlphaBlend(GPU_BLEND_ADD,GPU_BLEND_ADD,GPU_SRC_ALPHA,GPU_ONE_MINUS_SRC_ALPHA,GPU_ONE,GPU_ONE_MINUS_SRC_ALPHA);
+    // Shadow modes: clear alpha, resolve once, preserve alpha for stencil,
+    // or accumulate fallback volume coverage. RGB/depth stay intact until resolve.
+    if(shadowMode){
+        C3D_DepthTest(false,GPU_ALWAYS,shadowMode==2?GPU_WRITE_COLOR:shadowMode==3?GPU_WRITEMASK(0):GPU_WRITE_ALPHA);
+        if(shadowMode==2)C3D_AlphaBlend(GPU_BLEND_ADD,GPU_BLEND_ADD,GPU_ZERO,GPU_ONE_MINUS_DST_ALPHA,GPU_ONE,GPU_ZERO);
+        else C3D_AlphaBlend(GPU_BLEND_ADD,shadowMode==4?GPU_BLEND_MAX:GPU_BLEND_ADD,GPU_ONE,GPU_ZERO,GPU_ONE,GPU_ZERO);
+    }
     auto* buf=C3D_GetBufInfo();BufInfo_Init(buf);BufInfo_Add(buf,fade,sizeof(Vertex),4,0x3210);
     C3D_DrawArrays(GPU_TRIANGLES,0,6);stats_.triangles+=2;++stats_.drawCalls;
 }
@@ -1876,7 +2373,7 @@ void Renderer::fontSpriteNow(const Texture& texture,float x,float y,float width,
     auto* buf=C3D_GetBufInfo();BufInfo_Init(buf);BufInfo_Add(buf,vertices,sizeof(Vertex),4,0x3210);
     C3D_DrawArrays(GPU_TRIANGLES,0,6);stats_.triangles+=2;++stats_.drawCalls;
 }
-void Renderer::materialQuadsNow(const Texture* texture,const MaterialQuad* quads,unsigned count,uint32_t color0,uint32_t color1,int wrapS,int wrapT){
+void Renderer::materialQuadsNow(const Texture* texture,const MaterialQuad* quads,unsigned count,uint32_t color0,uint32_t color1,int wrapS,int wrapT,bool additive){
     if(!count||spriteCount_>=spriteCapacity_)return;
     count=std::min(count,unsigned(spriteCapacity_-spriteCount_));
     flushSprites();
@@ -1913,7 +2410,7 @@ void Renderer::materialQuadsNow(const Texture* texture,const MaterialQuad* quads
     }
     C3D_CullFace(GPU_CULL_NONE);C3D_AlphaTest(false,GPU_ALWAYS,0);
     C3D_DepthTest(false,GPU_ALWAYS,GPU_WRITE_COLOR);
-    C3D_AlphaBlend(GPU_BLEND_ADD,GPU_BLEND_ADD,GPU_SRC_ALPHA,GPU_ONE_MINUS_SRC_ALPHA,GPU_ONE,GPU_ONE_MINUS_SRC_ALPHA);
+    C3D_AlphaBlend(GPU_BLEND_ADD,GPU_BLEND_ADD,GPU_SRC_ALPHA,additive?GPU_ONE:GPU_ONE_MINUS_SRC_ALPHA,GPU_ONE,GPU_ONE_MINUS_SRC_ALPHA);
     auto* buf=C3D_GetBufInfo();BufInfo_Init(buf);BufInfo_Add(buf,spriteBase_,sizeof(Vertex),4,0x3210);
     C3D_DrawArrays(GPU_TRIANGLES,6*first,6*int(count));stats_.triangles+=2*count;++stats_.drawCalls;
 }
@@ -1941,14 +2438,14 @@ void Renderer::textNow(const char* text,float x,float y,float size,uint32_t rgba
         if(!mask)continue;
         for(unsigned col=0;col<5;++col)for(unsigned row=0;row<7;++row)if(mask[col]&(1u<<row)){
             if(textCount_+6>kTextVertexLimit)break;
-            if(eye_){textCount_+=6;continue;}
+            if(!writesVertices()){textCount_+=6;continue;}
             float px=x+col*size,py=y+row*size;
             const Vec3 positions[]={{px,py,0},{px+size,py,0},{px+size,py+size,0},{px,py,0},{px+size,py+size,0},{px,py+size,0}};
             for(auto p:positions)text_[textCount_++]={p,{0,0,1},{0,0},{0,0},{uint8_t(rgba>>24),uint8_t(rgba>>16),uint8_t(rgba>>8),uint8_t(rgba)}};
         }
     }
     if(first==textCount_)return;
-    Vertex* vertices=text_+first;unsigned count=textCount_-first;if(!eye_)flushGpuData(vertices,count*sizeof(Vertex));
+    Vertex* vertices=text_+first;unsigned count=textCount_-first;if(writesVertices())flushGpuData(vertices,count*sizeof(Vertex));
     C3D_Mtx projection=screenProjection(screenParallax_),identity;Mtx_Identity(&identity);
     C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER,projectionLoc_,&projection);C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER,modelViewLoc_,&identity);
     C3D_FVUnifSet(GPU_VERTEX_SHADER,lightLoc_,1,1,1,1);C3D_FVUnifSet(GPU_VERTEX_SHADER,uvScrollLoc_,0,0,0,0);
@@ -2035,7 +2532,7 @@ bool Renderer::initBloomTargets(){
     return true;
 }
 bool Renderer::initBloom(){
-    static_assert(kBloomVertices>=6*BloomFullQuads);
+    static_assert(kBloomVertices>=6*(2*BloomFullQuads+2));
     if(!initBloomTargets())return false;
     if(bloomVertices_)return true;
     // The quad vertices are LINEAR: allocated with the first bloom request,
@@ -2063,7 +2560,7 @@ void Renderer::bloomPass(C3D_RenderTarget* target,unsigned width,unsigned height
     C3D_FVUnifSet(GPU_VERTEX_SHADER,uvScrollLoc_,0,0,0,0);
     C3D_CullFace(GPU_CULL_NONE);C3D_AlphaTest(false,GPU_ALWAYS,0);C3D_DepthTest(false,GPU_ALWAYS,GPU_WRITE_COLOR);
 }
-void Renderer::bloomQuad(const C3D_Tex& source,unsigned sourceWidth,unsigned sourceHeight,float width,float height,float du,float dv,unsigned secondWidth,unsigned secondHeight,const C3D_Tex* secondSource){
+void Renderer::bloomQuad(const C3D_Tex& source,unsigned sourceWidth,unsigned sourceHeight,float width,float height,float du,float dv,unsigned secondWidth,unsigned secondHeight,const C3D_Tex* secondSource,float secondDu,float secondDv){
     // A landscape point (X,Y) of a WxH region lies at window (H-Y, W-X) of its
     // portrait target; texture-backed targets store window (x,y) at texel (x,y).
     if(bloomCount_+6>kBloomVertices)return;
@@ -2076,12 +2573,12 @@ void Renderer::bloomQuad(const C3D_Tex& source,unsigned sourceWidth,unsigned sou
         quad[i]={{corners[i][0],corners[i][1],0},{0,0,1},{0,0},{0,0},{255,255,255,255}};
         uv(corners[i][0],corners[i][1],quad[i].uv);
         if(secondWidth){
-            quad[i].uv1[0]=(float(secondHeight)-corners[i][1]*float(secondHeight)/height)/float(secondSource?secondSource->width:source.width);
-            quad[i].uv1[1]=(float(secondWidth)-corners[i][0]*float(secondWidth)/width)/float(secondSource?secondSource->height:source.height);
+            quad[i].uv1[0]=(float(secondHeight)-corners[i][1]*float(secondHeight)/height-secondDv)/float(secondSource?secondSource->width:source.width);
+            quad[i].uv1[1]=(float(secondWidth)-corners[i][0]*float(secondWidth)/width-secondDu)/float(secondSource?secondSource->height:source.height);
         }
     }
-    // Each frame repeats the same quads in the same slots: rewrite (and flush)
-    // only a slot whose vertices differ. The GPU finished the last frame.
+    // Slots append across both eyes and remain unchanged until FrameEnd.
+    // Reuse matching data from an earlier, completed frame without a flush.
     if(std::memcmp(v,quad,sizeof quad)){std::memcpy(v,quad,sizeof quad);flushGpuData(v,sizeof quad);}
     C3D_TexBind(0,const_cast<C3D_Tex*>(&source));
     auto* buf=C3D_GetBufInfo();BufInfo_Init(buf);BufInfo_Add(buf,v,sizeof(Vertex),4,0x3210);
@@ -2135,15 +2632,28 @@ void Renderer::applyBloomNow(){
         C3D_TexEnvColor(e,coefficient*0x01010101u);
         C3D_TexEnvSrc(e,C3D_Both,GPU_TEXTURE0,GPU_CONSTANT);C3D_TexEnvFunc(e,C3D_Both,GPU_MODULATE);
         if(reduction==2)C3D_TexEnvScale(e,C3D_Both,GPU_TEVSCALE_2);
+        // Two independently offset samples per fragment use PICA's second
+        // texture unit. Retain every ring tap/radius/weight; halve only draw
+        // submissions and framebuffer blend traffic, not the blur kernel.
+        if(reduction==1){
+            auto* pair=C3D_GetTexEnv(1);C3D_TexEnvColor(pair,coefficient*0x01010101u);
+            C3D_TexEnvSrc(pair,C3D_Both,GPU_TEXTURE1,GPU_CONSTANT,GPU_PREVIOUS);
+            C3D_TexEnvFunc(pair,C3D_Both,GPU_MULTIPLY_ADD);
+        }
         const unsigned nativeTaps=stage?16:8,count=nativeTaps/reduction;
         // Convert the authored radius to this source's texel dimensions.
         const float radiusX=bloomTapRadius(settings.strength[band],band,sourceWidth,608);
         const float radiusY=bloomTapRadius(settings.strength[band],band,sourceHeight,456);
-        for(unsigned i=0;i<count;++i){
+        if(reduction==1)C3D_TexBind(1,&bloomTex_[source]);
+        for(unsigned i=0;i<count;i+=reduction==1?2:1){
             const auto& tap=BloomRing[i*(16/count)];blend(preserve||i>0);
-            bloomQuad(bloomTex_[source],sourceWidth,sourceHeight,float(width),float(height),
-                tap[0]*radiusX,tap[1]*radiusY);
+            if(reduction==1){
+                const auto& next=BloomRing[(i+1)*(16/count)];
+                bloomQuad(bloomTex_[source],sourceWidth,sourceHeight,float(width),float(height),
+                    tap[0]*radiusX,tap[1]*radiusY,sourceWidth,sourceHeight,&bloomTex_[source],next[0]*radiusX,next[1]*radiusY);
+            }else bloomQuad(bloomTex_[source],sourceWidth,sourceHeight,float(width),float(height),tap[0]*radiusX,tap[1]*radiusY);
         }
+        C3D_TexBind(1,nullptr);
     };
     ring(0,BloomNearWidth,BloomNearHeight,1,BloomNearWidth,BloomNearHeight,0,0,false);
     // DrawPathBloom (USA 8021d3c4..8021d41c) captures a half-size copy
@@ -2198,6 +2708,7 @@ void Renderer::beginBottomNow(){
     spriteBase_=text_+kTextVertexLimit;spriteCapacity_=kBottomSpriteCapacity;
     spriteCount_=0;spriteRunFirst_=0;spriteRunTexture_=nullptr;spriteStateReady_=false;
     bottomPass_=true;screenWidth_=320.f;screenParallax_=0;
+    overlayCount_=0;menuIconDrawCount_=0;
     for(int unit=0;unit<3;++unit)C3D_TexBind(unit,nullptr);
     // No clear: the first bottom draw covers every pixel opaquely (a memory
     // fill here would split the command list without flushing it).
@@ -2206,9 +2717,17 @@ void Renderer::beginBottomNow(){
 void Renderer::endNow(){
     // The GPU reads batched sprite vertices only after FrameEnd submits them.
     endEyeNow();
+    if(execLoadingFrame_){
+        // Flush the real scene/capture work before clearing the LCD outputs.
+        // Both eyes and the lower intro replay have finished at this point.
+        C3D_FrameSplit(GX_CMDLIST_FLUSH);
+        C3D_RenderTargetClear(target_,C3D_CLEAR_COLOR,0x000000ff,0);
+        if(execStereo_.active())C3D_RenderTargetClear(targetRight_,C3D_CLEAR_COLOR,0x000000ff,0);
+        if(bottomTarget_)C3D_RenderTargetClear(bottomTarget_,C3D_CLEAR_COLOR,0x000000ff,0);
+    }
     // FrameEnd transfers each eye to these (the right half only in 3D mode).
     if(execStereo_.active())for(unsigned eye=0;eye<2;++eye)presented_[eye]=gfxGetFramebuffer(GFX_TOP,eye?GFX_RIGHT:GFX_LEFT,nullptr,nullptr);
-
+    if(bottomPass_||bottomWorldPass_)presentedBottom_=gfxGetFramebuffer(GFX_BOTTOM,GFX_LEFT,nullptr,nullptr);
     stats_.commandUsage=C3D_GetCmdBufUsage();C3D_FrameEnd(GX_CMDLIST_FLUSH);
     if(stadiumPending_){stadiumRead_^=1;stadiumPending_=false;}
 }
@@ -2234,7 +2753,13 @@ bool Renderer::captureTop(uint8_t* rgb,unsigned eye){
     linearFree(linear);
     return true;
 }
-
+bool Renderer::copyPresentedBottom(uint8_t* bgr){
+    if(!ready_||!bgr||!presentedBottom_||!bottomTarget_)return false;
+    waitForGpu();
+    constexpr unsigned bytes=320*240*3;
+    GSPGPU_InvalidateDataCache(const_cast<uint8_t*>(presentedBottom_),bytes);
+    std::memcpy(bgr,presentedBottom_,bytes);return true;
+}
 bool Renderer::captureBottom(uint8_t* rgb){
     if(!ready_||!rgb||!bottomTarget_)return false;
     drain();

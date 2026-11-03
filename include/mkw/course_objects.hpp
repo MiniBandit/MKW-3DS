@@ -31,6 +31,9 @@ public:
     void draw(Renderer& renderer,unsigned tick,Vec3 camera);
     // Transparent tide layers, after opaque scenery and racers, before effects.
     void drawWater(Renderer& renderer);
+    // Only bobbing/deforming bridge supports; never all moving platforms.
+    bool suppressWheelContact(Vec3 center,float radius) const;
+    const std::vector<Renderer::ShadowReceiver>& shadowReceivers(Vec3 origin,float radius);
     // Sky-pass objects (suns, Rainbow Road's Earth glow): drawn after the sky,
     // before the course, so walls and scenery cover them.
     void drawSky(Renderer& renderer,unsigned tick,Vec3 camera);

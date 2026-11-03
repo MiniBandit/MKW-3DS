@@ -48,8 +48,28 @@ public:
   planes_[2][c]=m[12+c]+m[4+c];planes_[3][c]=m[12+c]-m[4+c];
   planes_[4][c]=m[12+c]+m[8+c];planes_[5][c]=-m[8+c];
  }}
- bool intersects(const Bounds& b)const{
-  for(const auto& p:planes_){
+ // Parent bounds can prove individual clip planes irrelevant to every child.
+ // Keep the original ordered sums/slack; this is not a distance/LOD change.
+ static constexpr unsigned AllPlanes=63,Outside=64;
+ unsigned remainingPlanes(const Bounds& b)const{
+  unsigned mask=AllPlanes;
+  for(unsigned i=0;i<6;++i){const auto& p=planes_[i];
+   const float x=p[0]*(p[0]>=0?b.maximum.x:b.minimum.x);
+   const float y=p[1]*(p[1]>=0?b.maximum.y:b.minimum.y);
+   const float z=p[2]*(p[2]>=0?b.maximum.z:b.minimum.z);
+   const float tolerance=1e-5f*(std::fabs(x)+std::fabs(y)+std::fabs(z)+std::fabs(p[3])+1.f);
+   if(x+y+z+p[3]<-tolerance)return Outside;
+   const float nx=p[0]*(p[0]>=0?b.minimum.x:b.maximum.x);
+   const float ny=p[1]*(p[1]>=0?b.minimum.y:b.maximum.y);
+   const float nz=p[2]*(p[2]>=0?b.minimum.z:b.maximum.z);
+   if(nx+ny+nz+p[3]>=0.f)mask&=~(1u<<i);
+  }
+  return mask;
+ }
+ bool intersects(const Bounds& b,unsigned mask=AllPlanes)const{
+  for(unsigned i=0;i<6;++i){
+   if(!(mask&(1u<<i)))continue;
+   const auto& p=planes_[i];
    const float x=p[0]*(p[0]>=0?b.maximum.x:b.minimum.x);
    const float y=p[1]*(p[1]>=0?b.maximum.y:b.minimum.y);
    const float z=p[2]*(p[2]>=0?b.maximum.z:b.minimum.z);
@@ -91,6 +111,26 @@ template<class Vertex> SubmeshVisibility buildVisibility(const Vertex* vertices,
  }
  return out;
 }
+// Shadow-only immutable index copy. Spatially adjacent triangles share bounds
+// and draw runs even when the authored material strip visits distant regions.
+// Never change the source order used by visible colour/transparent geometry.
+template<class Vertex> void spatialShadowIndices(const Vertex* vertices,const uint16_t* source,uint16_t* dest,uint32_t first,uint32_t count){
+ struct Triangle {uint32_t key,at;};
+ std::vector<Triangle> triangles;triangles.reserve(count/3);
+ if(!count)return;
+ Bounds bounds{vertices[source[first]].position,vertices[source[first]].position};
+ for(unsigned i=first;i<first+count;++i)bounds.include(vertices[source[i]].position);
+ const Vec3 span=bounds.maximum-bounds.minimum;
+ auto spread=[](uint32_t n){n&=1023;n=(n|(n<<16))&0x030000ff;n=(n|(n<<8))&0x0300f00f;n=(n|(n<<4))&0x030c30c3;return (n|(n<<2))&0x09249249;};
+ auto cell=[](float x,float lo,float size){return uint32_t(std::clamp((x-lo)/std::max(size,1.f)*1023.f,0.f,1023.f));};
+ for(unsigned i=first;i+2<first+count;i+=3){
+  const Vec3 c=(vertices[source[i]].position+vertices[source[i+1]].position+vertices[source[i+2]].position)*(1.f/3.f);
+  const uint32_t key=spread(cell(c.x,bounds.minimum.x,span.x))|(spread(cell(c.y,bounds.minimum.y,span.y))<<1)|(spread(cell(c.z,bounds.minimum.z,span.z))<<2);
+  triangles.push_back({key,i});
+ }
+ std::sort(triangles.begin(),triangles.end(),[](const auto& a,const auto& b){return a.key<b.key||(a.key==b.key&&a.at<b.at);});
+ unsigned at=first;for(const auto& t:triangles)for(unsigned k=0;k<3;++k)dest[at++]=source[t.at+k];
+}
 struct VisibleRanges {
  // Bound extra draw overhead. Merging a gap only submits extra invisible
  // triangles; all visible triangles keep their exact original order.
@@ -127,10 +167,11 @@ inline bool tinyFrom(const Bounds& b,Vec3 eye,float minRatio){
  return dot(h,h)<minRatio*minRatio*dot(d,d);
 }
 inline VisibleRanges selectVisible(const SubmeshVisibility& mesh,const ClipFrustum& frustum){
- VisibleRanges out;if(!frustum.intersects(mesh.bounds))return out;
- // Blocks lie inside the submesh bounds: a contained submesh keeps them all.
- if(frustum.contains(mesh.bounds)){for(const auto& b:mesh.blocks)out.append(b.indices);return out;}
- for(const auto& b:mesh.blocks)if(frustum.intersects(b.bounds))out.append(b.indices);
+ VisibleRanges out;
+ const unsigned mask=frustum.remainingPlanes(mesh.bounds);
+ if(mask==ClipFrustum::Outside)return out;
+ if(!mask){for(const auto& b:mesh.blocks)out.append(b.indices);return out;}
+ for(const auto& b:mesh.blocks)if(frustum.intersects(b.bounds,mask))out.append(b.indices);
  return out;
 }
 }

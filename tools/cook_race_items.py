@@ -112,8 +112,12 @@ def cook_world(source, model, name, clip, output):
     # material's first sampler as its base texture. Without them the exporter's
     # equation matching picks e.g. a shell's specular map, and shells, bananas
     # and Bullet Bill draw black.
+    bank_env={}
+    if name=='item_14':
+        (output/'models').mkdir(parents=True,exist_ok=True)
+        bank_env['MKW_OBJECT_BANK']=str((output/'models/item_14.dobj').resolve())
     subprocess.run(args, check=True, stdout=subprocess.DEVNULL,
-                   env={**os.environ, "MKW_FREEZE_NONLINEAR_UV": "1", "MKW_RACE_MATERIALS": "1", "MKW_FIRST_SAMPLER": "1"})
+                   env={**os.environ, **bank_env, "MKW_FREEZE_NONLINEAR_UV": "1", "MKW_RACE_MATERIALS": "1", "MKW_FIRST_SAMPLER": "1"})
     data = json.loads((temporary / "model.json").read_text())
     vertices = [v for m in data["models"] for s in m["shapes"] for v in s["vertices"]]
     parts = cook(temporary, output, name, preserve_vertices=bool(clip))

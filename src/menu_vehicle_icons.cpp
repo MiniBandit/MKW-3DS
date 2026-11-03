@@ -1,4 +1,6 @@
 #include <mkw/menu_vehicle_icons.hpp>
+#include <mkw/mii_garage.hpp>
+#include <mkw/menu_lighting.hpp>
 #include <mkw/menu_icon_params.hpp>
 #include <mkw/renderer.hpp>
 #include <mkw/render_metrics.hpp>
@@ -13,6 +15,7 @@ namespace {
 constexpr float Radians=3.14159265358979323846f/180.f;
 constexpr unsigned VehicleOrder[]={0,1,2,6,7,8,3,4,5,9,10,11};
 void environment(Model& model,float yaw){
+ if(model.staticLightingBaked)return;
  const float c=std::cos(yaw),s=std::sin(yaw);
  std::vector<bool> seen(model.vertexCount,false);bool modified=false;
  for(const auto& range:model.submeshes){
@@ -32,12 +35,14 @@ struct IconJob final:AssetJob {
  int driver;std::array<std::unique_ptr<Model>,12> models;std::array<C3D_Mtx,12> transforms{};bool complete=true;
  explicit IconJob(int d):driver(d){label="vehicle icons (12 models)";}
  void run()override{
-  const unsigned weight=UiCharacters[driver].weight;
+  Model::setLightingCourse(&MenuLightings[0]);
+  const unsigned weight=driver<24?UiCharacters[driver].weight:raceGarageChoice(288+miiGarageOffset(unsigned(driver-24))).vehicle%3;
   for(unsigned choice=0;choice<models.size();++choice){
    if(cancelled())return;
    const auto* pose=menuIconParam(192,44,weight,VehicleOrder[choice]*3+weight);
    if(!pose){complete=false;continue;}
-   char path[96];std::snprintf(path,sizeof path,"models/ui_machine_%d_%u_000.gmdl",driver,choice);
+   char path[96];if(driver<24)std::snprintf(path,sizeof path,"models/ui_machine_%d_%u_000.gmdl",driver,choice);
+   else std::snprintf(path,sizeof path,"models/%smenu_000.gmdl",raceGarageChoice(288+miiGarageOffset(unsigned(driver-24))+choice).prefix);
    auto model=std::make_unique<Model>();
    if(!model->load(path)){complete=false;continue;}
    auto& matrix=transforms[choice];Mtx_Identity(&matrix);
@@ -64,7 +69,7 @@ unsigned MenuVehicleIcons::residentCount()const{
  unsigned count=0;for(const auto& s:impl_->sets)for(const auto& model:s.models)count+=bool(model);return count;
 }
 void MenuVehicleIcons::request(int driver,AssetPriority priority){
- if(driver<0||driver>=24)return;
+ if(driver<0||driver>=66||(driver>=24&&driver<48))return;
  auto& s=*impl_;auto* set=s.find(driver);
  if(!set){s.sets.push_back({});set=&s.sets.back();set->driver=driver;}
  set->used=s.clock;
@@ -120,7 +125,9 @@ void MenuVehicleIcons::reset(Renderer& renderer){
  impl_->sets.clear();impl_->shown=-1;
 }
 bool MenuVehicleIcons::draw(Renderer& renderer,const UiQuad& quad)const{
- if(quad.bottom||quad.alpha<=0||quad.vehicleIcon>=12)return false;
+ // The caller has selected the target LCD. Vehicle buttons now live on the
+ // lower screen; drawMenuIcon uses that screen's width, crop and depth target.
+ if(quad.alpha<=0||quad.vehicleIcon>=12)return false;
  const auto* set=impl_->find(impl_->shown);if(!set||!set->resident)return false;
  const auto& model=set->models[quad.vehicleIcon];if(!model)return false;
  renderer.drawMenuIcon(*model,set->transforms[quad.vehicleIcon],quad);

@@ -27,6 +27,7 @@ struct ItemHud {
     ItemKind item=ItemKind::None;
     uint16_t roulette=0, star=0, mega=0, bullet=0, ink=0, cloud=0, golden=0, pow=0;
     uint16_t inkDelay=0;
+    uint8_t inkShade=0; // Visual-only fade, updated once per simulation tick.
     uint8_t charges=0;
     bool deployed=false;
     ItemKind rouletteIcon=ItemKind::None;
@@ -108,13 +109,18 @@ struct ItemActor {
 };
 struct HeldItemVisual { Vec3 right{1,0,0},up{0,1,0},forward{0,0,1},scale{}; };
 // Presentation events: what an item did to a racer this step.
-enum class ItemEffect : uint8_t { Mushroom, Spin, Launch, Explosion, Shrink, Crush, Cure, Knockback, Pow, Ink, Break, PowStomp, LightningFlash, Bolt };
+enum class ItemEffect : uint8_t { Mushroom, Spin, Launch, Explosion, Shrink, Crush, Cure, Knockback, Pow, Ink, Break, PowStomp, LightningFlash, Bolt, BlueLaunch, ElectricHit, BlooperLaunch };
 // Object events (Break, and Explosion with action -1) carry the item kind in `frames`, its
 // position in `direction` and its model scale. PowStomp carries the stomp in `frames` and
 // action 1 for a target, 0 for the user. Bolt (KartEffect +0x4c / +0x50 reset) has frames 0
 // for a Lightning bolt and 1 for the Thunder Cloud's strike.
-struct ItemEvent { ItemEffect effect; uint8_t player; uint16_t frames=0; Vec3 direction{}; int8_t action=-1; float scale=1; uint8_t source=0xff; };
-struct ItemSurface { Vec3 correction{}, floorNormal{}, wallNormal{}; bool kill=false; bool cannon=false; uint32_t floorTypes=0; };
+struct ItemEvent { ItemEffect effect; uint8_t player; uint16_t frames=0; Vec3 direction{}; int8_t action=-1; float scale=1; uint8_t source=0xff; ItemKind item=ItemKind::None; };
+struct ItemSurface { Vec3 correction{}, floorNormal{}, wallNormal{}; bool kill=false; bool cannon=false; uint32_t floorTypes=0;
+    // Original CoinUnit ground probe needs the collision result even at exact
+    // tangency. Support stays scene-owned; no item owns or frees this pointer.
+    bool collided=false;const void* floorObject=nullptr;float floorObjectY=0;
+    Vec3 floorMotion{}; // Scene-owned roulette support displacement for this contact.
+};
 // Sound cues: where retail item objects and holders call Audio::ItemActor, the
 // holder's KartActor or its CharacterActor (docs/AUDIO_SOURCE.md "Items").
 enum class ItemSoundCue : uint8_t {
@@ -145,6 +151,10 @@ enum class ItemSoundCue : uint8_t {
 };
 struct ItemSound { ItemSoundCue cue; uint8_t player=0xff, actor=0xff; ItemKind kind=ItemKind::None; Vec3 position{}; bool flag=false; uint8_t value=0; };
 using ItemWorldQuery=ItemSurface(*)(Vec3 previous,Vec3 position,float radius);
+using ItemTimedWorldQuery=ItemSurface(*)(Vec3 previous,Vec3 position,float radius,unsigned timeOffset);
+// Shared native course query: includes moving collision and item-only KCL.
+ItemSurface queryCourseItemSurface(Vec3 previous,Vec3 position,float radius);
+ItemSurface queryCourseItemSurfaceAt(Vec3 previous,Vec3 position,float radius,unsigned timeOffset);
 
 // Race item manager at 60 Hz. RMCU order: item boxes move with the course objects before the
 // karts; each kart resolves its box and item contacts inside its own collision pass
@@ -162,8 +172,17 @@ public:
     /// native Kinoko link.
     void setKarts(ItemKarts* karts);
     ItemKarts& karts() { return *karts_; }
-    bool loadOdds(const void* data,size_t size,unsigned mode=0){
-        woodboxOdds_.load(data,size);return odds_.load(data,size,2,3,mode);
+    bool loadOdds(const void* data,size_t size,unsigned mode=0,bool battle=false,bool coin=false){
+        battleOdds_=battle;coinOdds_=coin;battleScores_={};
+        woodboxOdds_.load(data,size);
+        const unsigned local=battle?(coin?8u:6u):2u;
+        return odds_.load(data,size,local,local+1,mode);
+    }
+    void setBattleScores(const std::array<uint16_t,12>& scores){battleScores_=scores;}
+    unsigned oddsRank(unsigned player)const{
+        if(!battleOdds_)return rank(player);
+        std::array<RaceTeam,12> teams;for(unsigned i=0;i<12;++i)teams[i]=racers_[i].team;
+        return battleItemColumn(coinOdds_,player,count_,battleScores_,teams);
     }
     unsigned courseDropWeight(unsigned slot)const;
     bool createCourseDrop(unsigned slot,Vec3 position,Vec3 velocity,uint8_t owner,
@@ -292,6 +311,8 @@ private:
     void sound(ItemSoundCue cue,unsigned player,uint8_t value=0){
         sounds_.push_back({cue,uint8_t(player),0xff,ItemKind::None,player<MaxRacers?racers_[player].position:Vec3{},false,value});
     }
+    bool battleOdds_=false,coinOdds_=false;
+    std::array<uint16_t,12> battleScores_{};
     unsigned count_=0;
     uint32_t rng_=1,frame_=0;
     bool active_=false,contactsDone_=false,stepOpen_=false;
@@ -304,7 +325,7 @@ private:
     void updatePow();
     void updateCloud(unsigned carrier);
     void powStomp(unsigned stomp);
-    bool strike(unsigned player,int action,unsigned owner,Vec3 direction,bool force=false);
+    bool strike(unsigned player,int action,unsigned owner,Vec3 direction,bool force=false,ItemKind item=ItemKind::None);
     bool shrink(unsigned player,uint16_t frames,bool spinShrink,bool cloud);
     void applyLoss(unsigned player,const ItemKartLoss& loss);
     void takeKartLosses();

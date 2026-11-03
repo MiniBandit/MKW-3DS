@@ -4,6 +4,7 @@
 #include <mkw/kart_smoke_effects.hpp>
 #include <mkw/kart_effect_lod.hpp>
 #include <game/field/ObjectDirector.hh>
+#include <game/field/ObjectDrivableDirector.hh>
 #include <game/field/obj/ObjectPenguin.hh>
 #include <game/field/obj/ObjectChoropu.hh>
 #include <game/field/obj/ObjectCrab.hh>
@@ -12,6 +13,7 @@
 #include <game/field/obj/ObjectWoodbox.hh>
 #include <game/field/obj/ObjectLeafEffect.hh>
 #include <game/field/obj/ObjectChimney.hh>
+#include <game/field/obj/ObjectDossun.hh>
 #include <game/kart/KartObjectManager.hh>
 #include <game/kart/KartObject.hh>
 #include <game/system/RaceConfig.hh>
@@ -22,8 +24,11 @@
 #include <game/field/obj/ObjectCannon.hh>
 #include <game/field/obj/ObjectHanachan.hh>
 #include <game/field/obj/ObjectFactoryEffect.hh>
+#include <game/field/obj/ObjectFlamePoleFoot.hh>
+#include <game/field/obj/ObjectFlamePoleV.hh>
 #include <mkw/hanachan_joint_assets.hpp>
 #include <game/field/obj/ObjectKoopaFigure.hh>
+#include <game/field/obj/ObjectKoopaFigure64.hh>
 #include <mkw/cannon_effect_assets.hpp>
 #include <cstring>
 #include <array>
@@ -48,7 +53,16 @@ public:
     static_assert(LeafFirstSlot+MaxLeaves*2<=RaceEffects::SlotCount);
     static constexpr unsigned ChimneyFirstSlot=LeafFirstSlot+MaxLeaves*2,MaxChimneys=18,ChimneySlots=13;
     static_assert(ChimneyFirstSlot+MaxChimneys*ChimneySlots<=RaceEffects::SlotCount);
+    static constexpr unsigned FlameFirstSlot=1914,MaxFlames=32;
+    static_assert(FlameFirstSlot+2*MaxFlames<=RaceEffects::SlotCount);
+    static constexpr unsigned N64StatueFirstSlot=1978,MaxN64Statues=5;
+    static_assert(N64StatueFirstSlot+MaxN64Statues<=RaceEffects::SlotCount);
     bool bind(RaceEffects& effects){
+        flameSpecs_[0]=effects.find("rk_flamePole");flameSpecs_[1]=effects.find("rk_flamePoleFoot");flameSpecs_[2]=effects.find("rk_flamePoleL");
+        for(unsigned i=0;i<3;++i){flameOffsets_[i]={};if(flameSpecs_[i]>=0){
+            const auto& t=effects.system().resources[flameSpecs_[i]].desc.translate;
+            flameOffsets_[i]={t.x,t.y,t.z};
+        }}
         const char* chimneyNames[]={"rk_truckChimSmkWCalc","rk_truckChimSmkW_A","rk_truckChimSmkW_B","rk_truckChimSmkW1T","rk_truckChimSmkW1TS","W_rk_truckChimSmkW_A","W_rk_truckChimSmkW_B","W_rk_truckChimSmkW1T","W_rk_truckChimSmkW1TS"};
         for(unsigned i=0;i<9;++i)chimneySpecs_[i]=effects.find(chimneyNames[i]);
         pileSpecs_[0]=effects.find("rk_karehayamaS");pileSpecs_[1]=effects.find("rk_karehayama0S");
@@ -67,19 +81,35 @@ public:
         crabSpecs_[2]=effects.find("rk_crab");
         cannonSmoke_=effects.find("rk_dkCannon");cannonSnow_=effects.find("rk_dkCannonSnw");
         koopaBreath_=effects.find("rk_koopaBallS");
+        n64FireSpecs_[0]=effects.find("rk_koopaFire");n64FireSpecs_[1]=effects.find("rk_koopaFireL");
+        thwompDust_=effects.find("rk_dossun");
+        desertImpact_=effects.find("rk_qsandDossun");
         pokeySand_=effects.find("rk_sanbo");
         starRing_=effects.find("rk_StarRing");
         hanachanDust_=effects.find("rk_hanaSmk");
         factorySpecs_[0]=effects.find("rk_steam");factorySpecs_[1]=effects.find("rk_alarm");
         return effects.ready; // Course-specific required roots are validated by the loader.
     }
-    void reset(){piles_={};pileCount_=0;chimneys_={};chimneyCount_=0;leaves_={};leafCount_=0;wood_={};woodCount_=0;blocks_={};blockCount_=0;volcano_={};volcanoCount_=0;propellers_={};propellerCount_=0;rocks_={};rockCount_=0;moles_={};moleCount_=0;factory_={};factoryCount_=0;hanachan_={};hanachanCount_=0;count_=0;crabCount_=0;linked_=false;owners_={};crabs_={};cannon_=nullptr;cannonSerial_=0;statues_={};statueCount_=0;pokeys_={};pokeyCount_=0;}
+    void reset(){flames_={};flameCount_=0;thwomps_={};thwompCount_=0;piles_={};pileCount_=0;chimneys_={};chimneyCount_=0;leaves_={};leafCount_=0;wood_={};woodCount_=0;blocks_={};blockCount_=0;volcano_={};volcanoCount_=0;propellers_={};propellerCount_=0;rocks_={};rockCount_=0;moles_={};moleCount_=0;factory_={};factoryCount_=0;hanachan_={};hanachanCount_=0;count_=0;crabCount_=0;linked_=false;owners_={};crabs_={};cannon_=nullptr;cannonSerial_=0;statues_={};statueCount_=0;n64Statues_={};n64StatueCount_=0;pokeys_={};pokeyCount_=0;}
     void step(RaceEffects& effects){
         namespace K=Kinoko;
         if(!linked_){
             auto* director=K::Field::ObjectDirector::Instance();if(!director)return;
+            // Retail ObjectDrivable::load registers geyser bases separately.
+            // Their FlamePoleEff children in ObjectDirector are not V instances.
+            if(auto* drivable=K::Field::ObjectDrivableDirector::Instance())
+                for(auto* object:drivable->objects())
+                    if(object->id()==K::Field::ObjectId::FlamePole&&flameCount_<flames_.size())
+                        flames_[flameCount_++]={object,clipSettings(*object),false};
             for(auto* object:director->objects()){
                 const auto id=object->id();
+                if((id==K::Field::ObjectId::FlamePoleV||id==K::Field::ObjectId::FlamePoleVBig)&&flameCount_<flames_.size())
+                    flames_[flameCount_++]={object,clipSettings(*object),false};
+
+                // All Dossunc children share the id; the holder has no collision.
+                if((id==K::Field::ObjectId::Dossunc||unsigned(id)==0x20c)&&
+                        static_cast<const K::Field::ObjectCollidable*>(object)->collision()&&thwompCount_<thwomps_.size())
+                    thwomps_[thwompCount_++].object=static_cast<const K::Field::ObjectDossun*>(object);
                 if((unsigned(id)==0x14c||unsigned(id)==0x2c0)&&chimneyCount_<chimneys_.size()){
                     auto& owner=chimneys_[chimneyCount_++];owner.object=static_cast<K::Field::ObjectChimney*>(object);owner.clip=clipSettings(*object);
                     // Original OnStart creates ordinary1 / W1/2 before the
@@ -118,6 +148,8 @@ public:
                 const auto* flow=director->flowTable().set(director->flowTable().slot(id));
                 if(flow&&(!std::strcmp(flow->name,"Steam")||!std::strcmp(flow->name,"Alarm"))&&factoryCount_<factory_.size())
                     factory_[factoryCount_++]=static_cast<const K::Field::ObjectFactoryEffect*>(object);
+                if(id==K::Field::ObjectId::KoopaFigure64&&n64StatueCount_<MaxN64Statues)
+                    n64Statues_[n64StatueCount_++]=static_cast<const K::Field::ObjectKoopaFigure64*>(object);
                 if(flow&&!std::strcmp(flow->name,"koopaFigure")&&statueCount_<statues_.size())
                     statues_[statueCount_++].object=static_cast<const K::Field::ObjectKoopaFigure*>(object);
                 if(flow&&!cannon_&&K::Field::ObjectCannon::matches(flow->name))
@@ -191,6 +223,37 @@ public:
                 effects.create(slot,leafSpecs_[kind],frame,0);
             }
             effects.move(slot,frame);
+        }
+        // USA80679f88 / 8067b45c / 806e61d0: top follows the moving
+        // pole, foot stays at the authored surface, each with its own lifetime.
+        for(unsigned i=0;i<flameCount_;++i){
+            auto& owner=flames_[i];const auto& object=*owner.object;EffectFrame top,foot;
+            bool topActive=false,footActive=false;
+            const bool big=object.id()==K::Field::ObjectId::FlamePoleVBig;
+            if(object.id()==K::Field::ObjectId::FlamePole){
+                const auto& base=static_cast<const K::Field::ObjectFlamePoleFoot&>(object);
+                const auto* pole=base.pole();
+                if(pole){const auto p=pole->pos();top.origin={p.x,p.y,p.z};top.scale=pole->scale().y;topActive=pole->active();}
+                const auto p=base.pos();foot.origin={p.x,p.y,p.z};foot.scale=base.scale().y;
+                footActive=base.footEffectActive();
+            }else{
+                const auto& pole=static_cast<const K::Field::ObjectFlamePoleV&>(object);
+                const auto p=pole.pos();top.origin={p.x,p.y,p.z};top.scale=pole.scale().y;
+                foot=top;foot.origin.y=pole.effectBaseY();
+                const auto state=pole.stateId();
+                topActive=pole.effectStarted()&&state>=1&&state<=3;
+                footActive=!big&&pole.effectStarted()&&(state<=3||(state==4&&pole.stateFrame()<=10));
+            }
+            // PICA presentation must keep the emitted plume when the tall pole's
+            // low root leaves the camera. Include both authored emission origins
+            // rather than applying a root-only sphere to a scaled vertical model.
+            const Vec3 tip=top.origin+flameOffsets_[big?2:0]*top.scale;
+            owner.clipCenter=(tip+foot.origin)*.5f;
+            owner.clipRadius=owner.clip.radius+.5f*length(tip-foot.origin);
+            const unsigned slot=FlameFirstSlot+2*i;
+            if(topActive&&!owner.suppressed)effects.create(slot,flameSpecs_[big?2:0],top,0);else effects.fade(slot);
+            if(footActive&&!owner.suppressed)effects.create(slot+1,flameSpecs_[1],foot,0);else effects.fade(slot+1);
+            effects.move(slot,top);effects.move(slot+1,foot);
         }
         for(unsigned i=0;i<volcanoCount_;++i){
             auto& owner=volcano_[i];const auto& ball=*owner.object;
@@ -310,6 +373,32 @@ public:
             if(pokey.scattered())effects.followFade(slot);
             effects.move(slot,frame);
         }
+        for(unsigned i=0;i<thwompCount_;++i){
+            auto& owner=thwomps_[i];const auto& thwomp=*owner.object;
+            if(owner.serial==thwomp.landingSerial())continue;
+            owner.serial=thwomp.landingSerial();
+            const auto p=thwomp.pos(),scale=thwomp.scale();
+            EffectFrame frame;frame.origin={p.x,p.y,p.z};
+            frame.x={scale.x,0,0};frame.y={0,scale.y,0};frame.z={0,0,scale.z};
+            // The desert child replaces the base effect at +104 in its
+            // original constructor (USA807fcf80..90). Its authored recursive
+            // root contains the impact wave as well as the sand burst.
+            const bool desert=thwomp.mapObj()&&thwomp.mapObj()->id()==0x20c;
+            effects.burst(desert?desertImpact_:thwompDust_,frame);
+        }
+        for(unsigned i=0;i<n64StatueCount_;++i){
+            const auto& statue=*n64Statues_[i];const auto& pose=statue.transform();
+            auto vec=[](const K::EGG::Vector3f& v){return Vec3{v.x,v.y,v.z};};
+            EffectFrame frame;frame.origin=vec(statue.pos());
+            const float scale=statue.scale().x;
+            frame.x=vec(pose.base(0))*scale;frame.y=vec(pose.base(1))*scale;frame.z=vec(pose.base(2))*scale;
+            const unsigned slot=N64StatueFirstSlot+i;
+            // RMCU806ecf04..cf50 creates and moves the original root each active frame;
+            // +0x10 fade ends emission and lets existing particles finish.
+            if(statue.fireActive())effects.create(slot,n64FireSpecs_[statue.bigStatue()?1:0],frame,0);
+            else effects.fade(slot);
+            effects.move(slot,frame);
+        }
         for(unsigned i=0;i<statueCount_;++i){
             auto& owner=statues_[i];const auto& statue=*owner.object;
             if(owner.serial==statue.breathSerial())continue;
@@ -397,6 +486,13 @@ public:
             for(unsigned i=0;i<count;++i)if(!cameras[i].objectCulled({p.x,p.y,p.z},owner.clip.radius,owner.clip.far,owner.clip.horizontal))return false;
             return true;
         };
+        for(unsigned i=0;i<flameCount_;++i){
+            auto& owner=flames_[i];owner.suppressed=allForward;
+            for(unsigned c=0;allForward&&c<count;++c)
+                if(!cameras[c].objectCulled(owner.clipCenter,owner.clipRadius,owner.clip.far,owner.clip.horizontal)){
+                    owner.suppressed=false;break;
+                }
+        }
         for(unsigned i=0;i<leafCount_;++i)leaves_[i].object->setEffectSuppressed(hidden(leaves_[i]));
         for(unsigned i=0;i<chimneyCount_;++i)chimneys_[i].object->setEffectSuppressed(hidden(chimneys_[i]));
     }
@@ -418,6 +514,9 @@ private:
     std::array<LeafOwner,MaxLeaves> leaves_{};unsigned leafCount_=0;
     std::array<int,2> leafSpecs_{};
 
+    struct FlameOwner {const Kinoko::Field::ObjectBase* object=nullptr;ClipSettings clip;bool suppressed=false;Vec3 clipCenter{};float clipRadius=0;};
+    std::array<FlameOwner,MaxFlames> flames_{};
+    unsigned flameCount_=0;int flameSpecs_[3]{-1,-1,-1};Vec3 flameOffsets_[3]{};
     struct VolcanoOwner {const Kinoko::Field::ObjectVolcanoBall* object=nullptr;unsigned state=0;};
     std::array<VolcanoOwner,MaxVolcanoBalls> volcano_{};
     unsigned volcanoCount_=0;int volcanoSpecs_[4]{-1,-1,-1,-1};
@@ -444,9 +543,15 @@ private:
     std::array<const Kinoko::Field::ObjectSanbo*,MaxPokeys> pokeys_{};
     unsigned pokeyCount_=0;
     int pokeySand_=-1;
+    std::array<const Kinoko::Field::ObjectKoopaFigure64*,MaxN64Statues> n64Statues_{};
+    unsigned n64StatueCount_=0;int n64FireSpecs_[2]{-1,-1};
     struct StatueOwner {const Kinoko::Field::ObjectKoopaFigure* object=nullptr;unsigned serial=0;};
     std::array<StatueOwner,4> statues_{};
     unsigned statueCount_=0;
+    struct ThwompOwner {const Kinoko::Field::ObjectDossun* object=nullptr;unsigned serial=0;};
+    std::array<ThwompOwner,32> thwomps_{};unsigned thwompCount_=0;
+    int desertImpact_=-1;
+    int thwompDust_=-1;
     int koopaBreath_=-1;
     const Kinoko::Field::ObjectCannon* cannon_=nullptr;
     unsigned cannonSerial_=0;

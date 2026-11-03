@@ -2,7 +2,7 @@
 """Cook the retail race-flow UI (out-of-bounds wipe, result board, end-of-race
 menu) from the locally extracted Race/Race_U/Font archives.
 
-Textures go to build/race-flow/textures (an overlay that tools/package_sd.py
+Textures go to build/race-flow/textures (an overlay that tools/resource_manifest.py
 adds to the package); the layout geometry and animation keys go to
 include/mkw/race_flow_layout.hpp. Nothing in the shared sd-card is written.
 """
@@ -47,6 +47,34 @@ def material_texture_srt(layout, material):
     raise ValueError(f'Missing material {material} in {layout}')
 
 
+def wipe_mask(layout, tpl):
+    """Bake Normal's explicit TEV: black RGB, A0 * (1 - texture alpha).
+
+    This material does not use the usual UI texture-alpha multiplication.
+    Keep the original texture and BRLYT read-only; only bake the output mask.
+    """
+    d = layout.read_bytes()
+    for tag, block, s in sections(d):
+        if tag != b'mat1':
+            continue
+        for i in range(struct.unpack_from('>H', d, s)[0]):
+            o = block + struct.unpack_from('>I', d, s + 4 + i * 4)[0]
+            if string(d, o) != 'Normal':
+                continue
+            # One sampler, SRT, texgen, channel control, material colour,
+            # swap table and one explicit TEV stage; no indirect stages.
+            flags = struct.unpack_from('>I', d, o + 60)[0]
+            if flags != 0x0b841111 or d[o + 104:o + 120] != bytes.fromhex(
+                    '00ff00002ffc00f8717400f800070000'):
+                raise ValueError('Unsupported wipe material; re-audit its TEV')
+            if struct.unpack_from('>h', d, o + 26)[0] != 255:
+                raise ValueError('Wipe A0 must be fully opaque')
+            image = decode_tpl(tpl)
+            image.putalpha(image.getchannel('A').point(lambda a: 255 - a))
+            return image
+    raise ValueError('Missing Normal wipe material')
+
+
 def cook_wipe(out, manifest, header):
     """game_image/wipe.brlyt 'Normal': a black pane whose clamped texture T
     translation follows wipe_Normal.brlan (Kart::Link::StartOobWipe)."""
@@ -58,9 +86,10 @@ def cook_wipe(out, manifest, header):
     duration, _, tracks = brlan(anim)
     keys = next(t['keys'] for t in tracks if t['element'] == 'Normal' and t['kind'] == 'RLTS' and t['target'] == 1)
     translate = [sample(keys, frame) for frame in range(duration)]
-    record = cook_image_sprite(decode_tpl(tpl), 'flow_wipe', out)
+    record = cook_image_sprite(wipe_mask(layout, tpl), 'flow_wipe', out)
     manifest['wipe'] = {'texture': record, 'frames': duration, 'scaleT': srt[4], 'translateT': translate,
-                        'sources': {p.relative_to(ROOT).as_posix(): digest(p) for p in (layout, anim, tpl)}}
+                        'alphaEquation': '1 - textureAlpha',
+                        'sources': {str(p.relative_to(ROOT)): digest(p) for p in (layout, anim, tpl)}}
     header += [
         '// game_image/wipe.brlyt pane "Normal" (832x456, colour 0 black) with',
         '// ij_wipe_a clamped; wipe_Normal.brlan translates the texture T axis.',
@@ -195,18 +224,24 @@ def controller_variants(control):
     """Control variants: name, delay, 16:9 transform and message id."""
     d = control.read_bytes()
     table, strings = struct.unpack_from('>2H', d, 14)
-    count = struct.unpack_from('>H', d, table + 2)[0]
+    variants_offset, count, messages_offset, messages_count = struct.unpack_from('>4H', d, table)
     result = {}
     for i in range(count):
-        at = table + 12 + i * 60
+        at = table + variants_offset + i * 60
         name, _, _, _, delay = struct.unpack_from('>4Hf', d, at)
         x, y, _, sx, sy = struct.unpack_from('>5f', d, at + 32)
-        message = struct.unpack_from('>I', d, table + 12 + count * 60 + i * 8 + 4)[0]
+        first_message, variant_messages = struct.unpack_from('>2H', d, at + 52)
+        if first_message + variant_messages > messages_count:
+            raise ValueError('BRCTR variant message range exceeds its table: ' + str(control))
+        # A variant may have no text binding (e.g. Award/ResultVS). Reading
+        # one entry per variant in that case consumed the following strings.
+        message = (struct.unpack_from('>I', d, table + messages_offset + first_message * 8 + 4)[0]
+                   if variant_messages else 0)
         result[string(d, strings + name)] = {'delay': delay, 'x': x, 'y': y, 'sx': sx, 'sy': sy, 'message': message}
     return result
 
 
-def font_glyphs(path, characters):
+def font_glyphs(path, characters, *, preserve_ink=""):
     """Glyph cells (BRFNT TGLP/CWDH/CMAP) for `characters`, plus FINF metrics."""
     from io import BytesIO
     from PIL import Image
@@ -246,6 +281,15 @@ def font_glyphs(path, characters):
         left, width, advance = widths[index]
         image = sheets[sheet].crop((x * (info['cellW'] + 1), y * (info['cellH'] + 1),
                                     x * (info['cellW'] + 1) + max(width, 1), y * (info['cellH'] + 1) + info['cellH']))
+        if c in preserve_ink:
+            # Some CWDH widths omit the last outline texel. Keep the original
+            # cell's ink for explicitly requested glyphs, without changing advance.
+            full = sheets[sheet].crop((x * (info['cellW'] + 1), y * (info['cellH'] + 1),
+                                       x * (info['cellW'] + 1) + info['cellW'], y * (info['cellH'] + 1) + info['cellH']))
+            bounds = full.getchannel('A').getbbox()
+            if bounds and bounds[2] > width:
+                width = min(info['cellW'], bounds[2] + 1)
+                image = full.crop((0, 0, width, info['cellH']))
         glyphs[c] = {'image': image, 'left': left, 'width': width, 'advance': advance}
     return info, glyphs
 
@@ -342,6 +386,16 @@ def cook_results(out, manifest, header):
     common = messages(UI / 'Race_U/message/Common.bmg')
     sources += [UI / 'Race_U/message/Race.bmg', UI / 'Race_U/message/Common.bmg']
 
+    team_layouts = []
+    for prefix, control in [('FlowTeamRow', 'ResultVSTeam'), ('FlowTeamPoint', 'ResultTeamPoint')]:
+        from menu_layout import controller_animations
+        ctr = result_dir / f'ctrl/{control}.brctr'
+        layout_path = result_dir / 'blyt' / (controller_animations(ctr)['layout'] + '.brlyt')
+        layout = parse_layout(layout_path)
+        clips = controller_clips(ctr, layout, result_dir / 'anim')
+        team_layouts.append((prefix, layout, clips))
+        sources += [ctr, layout_path] + sorted({c['source'] for c in clips})
+
     textures = []
     def add(name, image, fmt):
         textures.append(texture_file(image, name, out, fmt))
@@ -357,6 +411,9 @@ def cook_results(out, manifest, header):
     # 64x64 icons tile a 256x256 atlas exactly; their borders are transparent.
     icon_atlas, icon_rects = pack_atlas(icon_images, padding=0)
     icons = add('flow_result_icons', icon_atlas, 'rgba8')
+    white_path = result_dir / 'timg/ht_squareWhite_00.tpl'
+    team_white = add('flow_team_white', decode_tpl(white_path), 'rgba8')
+    sources.append(white_path)
 
     # Row text: kart_kanji_font. Positions 1st..12th, names, numbers, pt/pts.
     names = [common[0x2328 + i] for i in range(24)]
@@ -381,6 +438,8 @@ def cook_results(out, manifest, header):
                  ('position_12players', 'tt_pattern_chek_32x32_alpha.tpl'): row_alpha,
                  ('position_12players', 'tt_mario_64x64.tpl'): icons,
                  ('common_w004_menu', 'tt_pattern_chek_bokashi_32x32.tpl'): button_pattern}
+        if texture_slot.layout == 'team':
+            return {'tt_pattern_chek_bokashi_32x32.tpl': row_pattern, 'tt_mario_64x64.tpl': icons, 'ht_squareWhite_00.tpl': team_white}[name]
         return table[(texture_slot.layout, name)]
 
     if any(p['values'][2] for p in row['panes']):
@@ -458,7 +517,23 @@ def cook_results(out, manifest, header):
     emit_layout('FlowResult', row, row_clips, texture_slot, header)
     texture_slot.layout = 'common_w004_menu'
     emit_layout('FlowButton', button, button_clips, texture_slot, header)
-    manifest['results'] = {'textures': textures, 'sources': {p.relative_to(ROOT).as_posix(): digest(p) for p in sources}}
+    texture_slot.layout = 'team'
+    for prefix, layout, clips in team_layouts:
+        emit_layout(prefix, layout, clips, texture_slot, header)
+    for symbol, control, variants in [
+        ('FlowTeamColumns', 'ResultVSTeamNULL', ['ResultVSTeamNULL0', 'ResultVSTeamNULL1']),
+        ('FlowTeamRows', 'ResultVSTeam', [f'BlueRed{i}' for i in range(6)]),
+        ('FlowTeamPoints', 'ResultTeamPoint', ['red', 'blue']),
+    ]:
+        path = result_dir / f'ctrl/{control}.brctr'
+        source_variants = controller_variants(path)
+        sources.append(path)
+        header.append(f'inline constexpr std::array<FlowControl,{len(variants)}> {symbol}{{{{')
+        for variant in variants:
+            v = source_variants[variant]
+            header.append(f'    {{{f(v["x"])},{f(v["y"])},{f(v["sx"])},{f(v["sy"])},{f(v["delay"])}}},')
+        header.append('}};')
+    manifest['results'] = {'textures': textures, 'sources': {str(p.relative_to(ROOT)): digest(p) for p in sources}}
 
 
 def main():
@@ -472,6 +547,8 @@ def main():
               '#pragma once', '#include <array>', '#include <cstdint>', 'namespace mkw {']
     cook_wipe(out, manifest, header)
     cook_results(out, manifest, header)
+    from cook_award_ui import cook_awards
+    cook_awards(ROOT, out, manifest, header)
     header.append('}')
     (ROOT / 'include/mkw/race_flow_layout.hpp').write_text('\n'.join(header) + '\n')
     (out / 'race-flow.json').write_text(json.dumps(manifest, indent=2) + '\n')

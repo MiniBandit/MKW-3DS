@@ -1,0 +1,270 @@
+{
+  "schema": 1,
+  "description": "Game-derived/generated compile inputs; contents deliberately kept outside this source tree.",
+  "files": {
+    "mkw/award_camera_data.hpp": {
+      "sha256": "72a7162560e3d33e8889d7b093eb116e04ba871f1cd2669a0d35d510a39e351c",
+      "bytes": 12541
+    },
+    "mkw/award_drive_data.hpp": {
+      "sha256": "c2f96598b17a8cd6adcdd41a83be5739f7771c1c6fe73384e3f745c6b42a6a82",
+      "bytes": 9598
+    },
+    "mkw/award_effect_anchors.hpp": {
+      "sha256": "18d1595bcdb4cb7255b0b939a53fcd919992c4753a94aa97027c2025a691c172",
+      "bytes": 15935
+    },
+    "mkw/award_environment_data.hpp": {
+      "sha256": "a42e6dc773a5a7fed3625b8a9fa1275fc139ec9336e8875f88a9cda841c37c5c",
+      "bytes": 38227
+    },
+    "mkw/award_lighting.hpp": {
+      "sha256": "d5e2e986b7222d4664532e1be34a4eda9c4c2f82f03690e7c022ffe023001393",
+      "bytes": 6539
+    },
+    "mkw/award_model_assets.hpp": {
+      "sha256": "973f877c6439df4ded87561fd2dcd43dc505b1e4638f20a4da724f89d194f9a4",
+      "bytes": 14860
+    },
+    "mkw/battle_bottom_scores.hpp": {
+      "sha256": "0f6f33612d0e873db91b3818de91c13a4e1cb79a3842da0f67a47631b51db492",
+      "bytes": 428
+    },
+    "mkw/battle_hud_assets.hpp": {
+      "sha256": "4edba6aa2e57777b491ce52f5e5ea10d10fe4efe0af9ef9cbe7c593eb941d244",
+      "bytes": 5163
+    },
+    "mkw/battle_hud_motion_assets.hpp": {
+      "sha256": "62ac4238827942740d88445da2ac19b32ab20bdfcb2b8ca041cae238aa5734de",
+      "bytes": 80429
+    },
+    "mkw/battle_map_assets.hpp": {
+      "sha256": "8ba3a8cf3ff5c47d8349757027885c54d8bbdfc5b36ad00f02143420eb087380",
+      "bytes": 2308
+    },
+    "mkw/battle_menu_text.inc": {
+      "sha256": "4a204bc82fef532b9a331409fa227b5bea002cdd39b238bf313871e58cdb45c1",
+      "bytes": 974
+    },
+    "mkw/battle_result_assets.hpp": {
+      "sha256": "e9a28bf89d6d850fbaa21cc51c67e9560da3434748d0e0ab7f2a44a3a38a87b0",
+      "bytes": 14055
+    },
+    "mkw/bomb_blast.hpp": {
+      "sha256": "c41d97a88412cb1e0b0340c5481f98b34450a0328ce3bd37bc3f050c623f6067",
+      "bytes": 27026
+    },
+    "mkw/cannon_effect_assets.hpp": {
+      "sha256": "a72d327b642ada33856ef7813fee4fd8419f901c8cc595062ae6388169517bb6",
+      "bytes": 237
+    },
+    "mkw/course_bloom.hpp": {
+      "sha256": "ce83b95a7800c6217ff9bbece3167926407faf31f9ed4405ef038fc312b31e42",
+      "bytes": 6257
+    },
+    "mkw/course_catalog.hpp": {
+      "sha256": "c03eed504dc21392706721db17614a643b08610a2fab0ac16686d26302d3ac7e",
+      "bytes": 7210
+    },
+    "mkw/course_effect_roots.hpp": {
+      "sha256": "c66c9fd5a720228485950c08da2c132c5bb75130d73ca708f871e7044342cb0b",
+      "bytes": 5204
+    },
+    "mkw/course_lighting.hpp": {
+      "sha256": "0a271137bd1233d8060c4fc2424474c19038dc60aa2392acefa1f69a515ef1bc",
+      "bytes": 64954
+    },
+    "mkw/course_mii_billboards.hpp": {
+      "sha256": "d5143a0dc948a9d9382b5500c1aa5c956df0542217d06dff98a1fab038d95e97",
+      "bytes": 8810
+    },
+    "mkw/course_phase_ranges.hpp": {
+      "sha256": "03e9d430ac1f1f363586a40f8807a3a06860be9e91f12f399783d38a1ed3cee7",
+      "bytes": 2141
+    },
+    "mkw/cup_record_icons.hpp": {
+      "sha256": "0c48908d1caa08672df04e455feaf57c4077c15c7305935b8c5569ed3200dc8c",
+      "bytes": 401
+    },
+    "mkw/driver_look_data.hpp": {
+      "sha256": "6085feae82b35c35d3002daf3ba02664ed11888dcce0c02fa74a7f00b3daf86f",
+      "bytes": 17437
+    },
+    "mkw/garage.hpp": {
+      "sha256": "471db12bb6e2c02d690698878713916b55df420ef8cbf9e2fbf586bfdb07d5b4",
+      "bytes": 26727
+    },
+    "mkw/gp_rank_times.hpp": {
+      "sha256": "656defdefcdf70e85d480eb8e571374935430c0bdc5a8a6f1a5b6877ef0be84b",
+      "bytes": 878
+    },
+    "mkw/hanachan_joint_assets.hpp": {
+      "sha256": "eecebed2b25b2c29a79fdf4a5d64b0f73a3ff38c7ceb6a188260a70f97853672",
+      "bytes": 53977
+    },
+    "mkw/item_box_uv.hpp": {
+      "sha256": "d6d4efc34a44cac43e71e8cd70db0a29f5303f7e2535ba62059fb44c9b5c86ca",
+      "bytes": 80605
+    },
+    "mkw/lakitu_assets.hpp": {
+      "sha256": "cfad96d8c10b1239a69a09c868b0829ee268d4a93b4722830940eddd30b84574",
+      "bytes": 15946
+    },
+    "mkw/license_name_characters.hpp": {
+      "sha256": "3417492e788eba1ef95009f47baeff0e6065e629ca4016b59f0f7758f0b08bf0",
+      "bytes": 4781
+    },
+    "mkw/map_object_assets.hpp": {
+      "sha256": "4b80b7cf4a90cabc9eebd67baf9dea320106cef02d483263b1fb9d51efa4662c",
+      "bytes": 45389
+    },
+    "mkw/menu_animations.hpp": {
+      "sha256": "f5d13d0f0c7c02647f794eff4278fdcf2961c0479d4272f24fd4195545aa5754",
+      "bytes": 198309
+    },
+    "mkw/menu_assets.hpp": {
+      "sha256": "ed93cc87351ef05d5a9fd3a619d7e61d8691454a1905e5cca0c3d61ecad0486f",
+      "bytes": 3130822
+    },
+    "mkw/menu_audio_assets.hpp": {
+      "sha256": "590a93c1b79655209a72b8613b33014ba7ada99effe373f3a9635be529076f69",
+      "bytes": 214
+    },
+    "mkw/menu_footer_text.inc": {
+      "sha256": "33afd22cbfcf28030516a5db20f0fdba60c850de266f6cf9325e3aaf7de72c41",
+      "bytes": 6399
+    },
+    "mkw/menu_icon_params.hpp": {
+      "sha256": "441b6633c339d5996f97e8777a51210e813d0deaa9e1eb59dc4570991c602ab0",
+      "bytes": 29951
+    },
+    "mkw/menu_lighting.hpp": {
+      "sha256": "68f62ff49bc2769ffa6435d88f896c1e18cfcc939ddbc3af6f6186c91229d23c",
+      "bytes": 1857
+    },
+    "mkw/menu_mii_materials.hpp": {
+      "sha256": "a2693a34843eed5794677a445d1ca91ade2ae212cd54aea670b2fed591fc670a",
+      "bytes": 687
+    },
+    "mkw/menu_model_params.hpp": {
+      "sha256": "30a294645b4b36944b9532db877b65d379ad7e153f333d208c35a372b05225e8",
+      "bytes": 8764
+    },
+    "mkw/menu_movie_assets.hpp": {
+      "sha256": "a314d5571702b7916eb026b7e746829906135d24094b79017d0ccc9730aaa087",
+      "bytes": 7081
+    },
+    "mkw/menu_movie_chapters.hpp": {
+      "sha256": "95932248bfa2be406b86c67b17f0a5f44901f5184e8897a0b531eb3a2086704d",
+      "bytes": 1095
+    },
+    "mkw/menu_name_glyphs.hpp": {
+      "sha256": "3df15417fbe076730b192027b6b6ca36df38daceda443c04f2d3679a419a2fcb",
+      "bytes": 104659
+    },
+    "mkw/menu_record_text.inc": {
+      "sha256": "f8ea34c724cd5df78567b8d8e5795f425d4c9a090b803517046e31695875e5ad",
+      "bytes": 2406
+    },
+    "mkw/menu_text_styles.hpp": {
+      "sha256": "255441203e856ec6445a788051a865c4b115595916a8f8e4fc545d027cba2325",
+      "bytes": 3087
+    },
+    "mkw/menu_unlock_texts.hpp": {
+      "sha256": "d1f402f616acf6d66292d44a66b11cc90ac3abc10c829bd296a420ac7f5b2de6",
+      "bytes": 10877
+    },
+    "mkw/native_mii_icon_body.hpp": {
+      "sha256": "7a8f28c68ec8f8f7f721820921f88c5f73393b9018ba0b6b5e59a593537ebfe1",
+      "bytes": 6835
+    },
+    "mkw/nw4r_sin_table.hpp": {
+      "sha256": "8366df4bef61f49dda96d6aa54bd89a1874a6626b67450d25a4705e662ca294f",
+      "bytes": 23966
+    },
+    "mkw/object_sound_assets.hpp": {
+      "sha256": "da53eafa2fa42807b6705fcff32ee0698a8680e54d6fd0f96ba8689d73aef379",
+      "bytes": 3401
+    },
+    "mkw/pokey_joint_assets.hpp": {
+      "sha256": "6d7bf4197fdccfc5dee07daa32d023344421c31e71c510b5c50a0addebeb4420",
+      "bytes": 36612
+    },
+    "mkw/race_assets.hpp": {
+      "sha256": "04e165121e8dbfa9c98ea966b88b9c53a0b72ff678ae125259a97db577e389c7",
+      "bytes": 4717
+    },
+    "mkw/race_balloon.hpp": {
+      "sha256": "71c7c2a47b4675462615b3339883e9878ed0d8fde8c093a98a9bd42d621b4697",
+      "bytes": 2815
+    },
+    "mkw/race_flow_layout.hpp": {
+      "sha256": "b38411027c2538c5fd3926fb252bd79ee1e582caa4f3bd32306e88f35ef8eaf0",
+      "bytes": 96877
+    },
+    "mkw/race_hud_layout.hpp": {
+      "sha256": "d8cae9ac57b7f8b1f3867797e6233e460d72824568b69fbf4cfd3984ee091a2a",
+      "bytes": 42218
+    },
+    "mkw/race_intro_layout.hpp": {
+      "sha256": "421a6579358429bae10a5bec3d68083bfef73fc24443c8e705c45f6394a80a60",
+      "bytes": 6170
+    },
+    "mkw/race_map_assets.hpp": {
+      "sha256": "e8c5a99579835bd3ef08e902489d2f3d4c1dcc515168eb8ce4d81d6de0d0b898",
+      "bytes": 11081
+    },
+    "mkw/race_voice_tables.hpp": {
+      "sha256": "93c9b34b467e355c0fc64ebb8a97d3424d3d9093e68f3c04379a7d38e4933bda",
+      "bytes": 22587
+    },
+    "mkw/road_sampler_ranges.hpp": {
+      "sha256": "d805ff89624831b75c8a6e9f166a496da06a4ded51daa058f03f87363c6fe4a6",
+      "bytes": 4066
+    },
+    "mkw/roster.hpp": {
+      "sha256": "98ec0a5cc1f3a35a8fd6757f7808cdcfd21a54815e8fea75ff6b0783a326e3ab",
+      "bytes": 1797
+    },
+    "mkw/sound_ids.hpp": {
+      "sha256": "ad490260bf7df70fad9cde513321b9c26c09b28abd6b5a02295cd8b7a2b2707d",
+      "bytes": 174834
+    },
+    "mkw/staff_camera_data.hpp": {
+      "sha256": "393d6d4d0b7944d6533e030955484fcd1024e8a8d1fe58003f6c91c9ec4e8205",
+      "bytes": 7409
+    },
+    "mkw/staff_crowd_data.hpp": {
+      "sha256": "df1e507ef1aa00c110379f196fd374313fa93c69eb784bbb3f735701da302f9c",
+      "bytes": 1357
+    },
+    "mkw/staff_ui_data.hpp": {
+      "sha256": "9e3b7f03819769cc3f213ac0b914456546e21a8ba6c548135f547dc31e317c46",
+      "bytes": 19395
+    },
+    "mkw/star_colors.hpp": {
+      "sha256": "b8940f45480779a81fbb50aba5484ab1dfb943993e0f935d39927b396b2abfa1",
+      "bytes": 1808
+    },
+    "mkw/vehicle_exhaust.hpp": {
+      "sha256": "67c1bf66c1c6f1f5272df1f38c567b71e1de788968754427a3ae8b7b8e469930",
+      "bytes": 7700
+    },
+    "mkw/vehicle_rest_data.hpp": {
+      "sha256": "18cd1d0658dccc2330ea76d221296638997050e4ff388e29acbb4160ef2be791",
+      "bytes": 13698
+    },
+    "mkw/mii_garage.hpp": {
+      "sha256": "617cf81ca84e334aa243b24341fb6e75bb8ce9919a12c60817480a022a632bf6",
+      "bytes": 27038
+    },
+    "mkw/mii_award_materials.hpp": {
+      "sha256": "bb3976018b6d765323fd4b79fab943377489c967624b2356726e8eedc253d14a",
+      "bytes": 604
+    },
+    "mkw/mii_voice.hpp": {
+      "sha256": "b68e4af149baeb7482f297aefd3dd8c341ee7750eaf11efa66c3d2abda2fa3c1",
+      "bytes": 2045
+    }
+  }
+}

@@ -12,7 +12,7 @@ def check(source):
     lines=[(i,s.split(';',1)[0].strip()) for i,s in enumerate(source.splitlines(),1)]
     outputs=set();uniforms=[];start=None
     for i,s in lines:
-        if s.startswith('.out '):outputs.add(s.split()[1])
+        if s.startswith('.out ') and s.split()[1]!='-':outputs.add(s.split()[1])
         if s.startswith('.bool '):uniforms.extend(x.strip() for x in s[6:].split(','))
         if s.startswith('.proc '):
             if start is not None:raise ValueError('Only one entry procedure is supported')

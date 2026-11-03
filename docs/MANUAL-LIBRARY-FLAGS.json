@@ -1,0 +1,41 @@
+{
+  "hardware_sdk": {
+    "flags": [
+      "-march=armv6k",
+      "-mtune=mpcore",
+      "-mfloat-abi=hard",
+      "-mtp=soft",
+      "-O2",
+      "-g",
+      "-mword-relocations",
+      "-ffunction-sections",
+      "-fdata-sections",
+      "-fno-math-errno",
+      "-D__3DS__",
+      "-DCITRO3D_BUILD",
+      "-DNDEBUG=1",
+      "-I<SOURCE_ROOT>/vendor/citro3d/include",
+      "-I<DEVKITPRO>/libctru/include"
+    ],
+    "manual_reference_only": true
+  },
+  "native_mii": {
+    "flags": [
+      "-march=armv6k",
+      "-mtune=mpcore",
+      "-mfloat-abi=hard",
+      "-mtp=soft",
+      "-O2",
+      "-g",
+      "-mword-relocations",
+      "-ffunction-sections",
+      "-fdata-sections",
+      "-D__3DS__",
+      "-I<SOURCE_ROOT>/vendor/cfl-mii/include",
+      "-I<SOURCE_ROOT>/vendor/citro3d/include",
+      "-I<DEVKITPRO>/libctru/include",
+      "-I<EXTERNAL_OUTPUT>/native-mii"
+    ],
+    "manual_reference_only": true
+  }
+}

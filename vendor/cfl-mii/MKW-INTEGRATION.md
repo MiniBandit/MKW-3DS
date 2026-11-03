@@ -1,0 +1,6 @@
+Pinned upstream https://github.com/jamesrhg/cfl-mii commit b85be4d66e9c89d203840cbe7fa0f638a44cdde2.
+Use only the 3DS Mii model/texture algorithms for license portraits.
+Local changes: no implicit system Mii database reads/recent-DB writes at initialization/model creation; no console printing; icon alpha uses source-over accumulation so RGBA readback can be unpremultiplied.
+The user-provided mii/CFL_Res.dat is read on demand, with read-only system-title mounting as fallback; the resource and intermediate head are freed after generating an identity image. Only normal expression is requested.
+
+HW23: NativeMiiHead copies CFLVertex geometry into the scene renderer and transfers ownership of the requested six expression masks (normal/blink/smile/anger/sorrow/surprise) and native part textures. The construction archive/shader and temporary vertices are still freed after baking; the resident head does not call CFL or read resources during a draw. Native part alpha-only/cap recipes and per-part depth writes are retained, with scene lighting instead of CFL icon lighting. Menu and ending photo callers use the original body face_1 attachment; this does not enable the unfinished Mii racing selection.

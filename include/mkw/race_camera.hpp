@@ -78,12 +78,14 @@ struct RaceCameraInput {
  // position less the smoothed hop), from the presentation chase camera.
  Vec3 chaseEye,chasePivot;
  Vec3 rearEye,rearPivot;
- bool lookBack=false;
+ bool lookBack=false,bullet=false,inCannon=false;
  Vec3 kartPos,kartForward;     // KartMove smoothed forward (+0x80)
  float cameraDistY=0,targetPosY=0,cameraFov=60,boostFov=0;
+ float cameraPosY=0,cameraDistance=0; // original character camera parameters
  unsigned stage=0;             // Kinoko RaceManager::Stage
  bool previewActive=false;     // KMP course preview owns the screen
  bool beforeRespawn=false,inRespawn=false,finished=false;
+ unsigned battleWipeSerial=0; // KartMove zero-balloon type0 wipe request
  int respawnTimer=0;          // KartCollide countdown after its physics tick
  uint16_t oobRequest=0;        // KartCollide::oobCameraRequest
  // Camera AREA lookup (KMP::Manager::FindAREA, type 0): current id or -1.
@@ -152,10 +154,13 @@ private:
  RaceCameraView view_;
  Vec3 eye_,target_;           // RaceCamera +0xa0 / +0xac
  float targetHeight_=100,targetOffset_=0,slopeOffset_=0; // +0x344, +0x108, +0x104
+ float forwardPitch_=0,forwardPitchVelocity_=0;bool forwardPitchReady_=false;
+ float forwardYaw_=0,forwardYawVelocity_=0,forwardYawExitOffset_=0;bool bulletYawActive_=false,bulletYawExiting_=false;
  float riseEye_=0,riseTarget_=0;           // +0x124, +0x128
  uint16_t flags_=0;
  bool wasBeforeRespawn_=false,wasInRespawn_=false;
  int wipe_=-1;
+ unsigned battleWipeSerial_=0;
  // OpeningPan (+0x198).
  std::array<Vec3,16> panPoints_{};std::array<float,16> panSpeeds_{};unsigned panCount_=0;
  float panTension_=.2f,panFov_=55;uint16_t panFlags_=0;unsigned panFrame_=0;bool panStarted_=false;

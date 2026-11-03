@@ -1,0 +1,26 @@
+#pragma once
+
+#include "game/render/AnmMgr.hh"
+
+namespace Kinoko::Render {
+
+class DrawMdl {
+public:
+    DrawMdl() : m_anmMgr(nullptr) {}
+
+    ~DrawMdl() {
+        EGG::egg_delete(m_anmMgr);
+    }
+
+    void linkAnims(size_t idx, const Abstract::g3d::ResFile *resFile, const char *name,
+            AnmType anmType);
+
+    [[nodiscard]] AnmMgr *anmMgr() {
+        return m_anmMgr;
+    }
+
+private:
+    AnmMgr *m_anmMgr;
+};
+
+} // namespace Kinoko::Render
