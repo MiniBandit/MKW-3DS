@@ -53,8 +53,8 @@ inline constexpr std::array<RaceSprite,10> HudDigits{{
     {"textures/hud_digit_8.t3x",1.000000000f,1.000000000f,64,64},
     {"textures/hud_digit_9.t3x",1.000000000f,1.000000000f,64,64},
 }};
-enum HudExtra {HudFrame,HudLap,HudSlash,HudMushroomTwo,HudCount3,HudCount2,HudCount1,HudGo,HudFinish,HudInk,HudExtraCount};
-inline constexpr std::array<RaceSprite,10> HudExtras{{
+enum HudExtra {HudFrame,HudLap,HudSlash,HudMushroomTwo,HudCount3,HudCount2,HudCount1,HudGo,HudFinish,HudInk,HudChaseBase,HudChaseLight,HudExtraCount};
+inline constexpr std::array<RaceSprite,12> HudExtras{{
     {"textures/hud_frame.t3x",1.000000000f,0.804687500f,128,103},
     {"textures/hud_lap.t3x",0.937500000f,0.625000000f,240,40},
     {"textures/hud_slash.t3x",1.000000000f,1.000000000f,64,64},
@@ -62,9 +62,11 @@ inline constexpr std::array<RaceSprite,10> HudExtras{{
     {"textures/hud_count_3.t3x",0.812500000f,0.671875000f,26,43},
     {"textures/hud_count_2.t3x",0.812500000f,0.671875000f,26,43},
     {"textures/hud_count_1.t3x",0.812500000f,0.671875000f,26,43},
-    {"textures/hud_go.t3x",0.984375000f,0.671875000f,63,43},
-    {"textures/hud_finish.t3x",0.992187500f,0.671875000f,127,43},
+    {"textures/hud_go.t3x",0.523437500f,0.671875000f,67,43},
+    {"textures/hud_finish.t3x",0.519531250f,0.671875000f,133,43},
     {"textures/hud_ink.t3x",1.000000000f,1.000000000f,128,128},
+    {"textures/hud_chase_base.t3x",1.000000000f,1.000000000f,128,128},
+    {"textures/hud_chase_light.t3x",1.000000000f,1.000000000f,128,128},
 }};
 inline constexpr std::array<const char*,21> ItemModels{{
     "models/item_0.gmdl","models/item_1.gmdl","models/item_2.gmdl","models/item_3.gmdl","models/item_4.gmdl",nullptr,"models/item_6.gmdl","models/item_7.gmdl",nullptr,"models/item_9.gmdl",nullptr,nullptr,nullptr,"models/item_13.gmdl","models/item_14.gmdl","models/item_15.gmdl",nullptr,nullptr,nullptr,nullptr,nullptr

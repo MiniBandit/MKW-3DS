@@ -2,6 +2,11 @@
 #include <cstdint>
 
 namespace mkw {
+// Intro draws both screens from the authored 60 Hz camera; budget two ticks
+// per presentation without slowing animation or simulation.
+constexpr uint32_t racePresentationTicks(bool new3ds,bool stereo,bool intro){
+    return intro||!new3ds||stereo?2u:1u;
+}
 // One presentation per slot of source ticks: 1 tick (60 FPS, New 3DS in 2D) or
 // 2 ticks (30 FPS: Old 3DS, which cannot present every tick and would otherwise
 // judder between one- and two-tick frames, and New 3DS in stereo). Missed slots

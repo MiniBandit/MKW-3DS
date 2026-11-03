@@ -21,7 +21,7 @@ public:
  void reset(Renderer&);
  bool draw(Renderer&,const UiQuad&)const;
  unsigned residentCount()const;
- static int driverFor(const MenuState& state){return state.page==UiPage::Vehicle&&state.selection.driver<24?int(state.selection.driver):-1;}
+ static int driverFor(const MenuState& state){return state.page!=UiPage::Vehicle?-1:state.selection.driver<24?int(state.selection.driver):state.selection.miiSelected?24+int(state.selection.miiCharacter):-1;}
  struct Impl;
 private:
  std::unique_ptr<Impl> impl_;

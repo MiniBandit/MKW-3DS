@@ -77,7 +77,7 @@ void VehicleAnimation::step(Kinoko::Kart::KartObject& kart){
     bike_=kart.param()->isBike();count_=std::min(4u,unsigned(kart.param()->tireCount()));
     const unsigned vehicle=unsigned(Kinoko::System::RaceConfig::Instance()->raceScenario().players[kart.param()->playerIdx()].vehicle);
     if(vehicle_!=vehicle){roll_={};wheelMotion_={};readParameters(vehicle);}
-    base_=fromSource(kart.pose());kartScale_=vec(kart.scale());
+    base_=fromSource(kart.body()->visualPose());kartScale_=vec(kart.scale());
     steering_=std::clamp(kart.model()->steeringInput(),-1.f,1.f);
     const auto& bsp=kart.param()->bsp();
     using S=Kinoko::Kart::eStatus;
@@ -265,7 +265,12 @@ unsigned VehicleAnimation::accessoryCount(const char* name) const{
 C3D_Mtx VehicleAnimation::accessory(const char* name,bool sourceAnimated,unsigned instance) const{
     evaluate();
     const int index=accessoryIndex(name);if(index<0||!accessorySupported(name))return body_;
-    if(index==0&&sourceAnimated)return handleBase_;
+    if(index==0&&sourceAnimated){
+        // Wario Bike's original handle_drive already places/tilts the handle
+        // in chassis space (neutral root T(0,99,82), Rx(-32deg)). The other
+        // animated handles have a neutral local root and need handleBase_.
+        return vehicle_==unsigned(Kinoko::Vehicle::Wario_Bike)?body_:handleBase_;
+    }
     const unsigned slot=unsigned(index)*4+std::min(instance,3u);
     return accessorySet_>>slot&1?accessories_[slot]:body_;
 }

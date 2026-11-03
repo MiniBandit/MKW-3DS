@@ -78,10 +78,8 @@ public:
   held=KEY_A;down=0;
   const std::string* token=current();if(!token)return;
   // Once an end-of-race option is chosen the race is being left: the
-  // following tokens belong to the menus, until the next race begins. A
-  // Grand Prix skips the menus: the old results stay up for a few frames and
-  // must not count as the next race's finish.
-  if(leaving_){if(finished||(token->compare(0,5,"race:")&&token->compare(0,5,"auto:"))){held=0;return;}leaving_=false;}
+  // following tokens belong to the menus, until the next race begins.
+  if(leaving_){if(token->compare(0,5,"race:")&&token->compare(0,5,"auto:")){held=0;return;}leaving_=false;}
   if(!token->compare(0,5,"race:")||!token->compare(0,5,"auto:")){
    if(!racing_){racing_=true;raceStart_=simulationFrames;++races_;raceWait_=0;}
    route_=!token->compare(0,5,"auto:");

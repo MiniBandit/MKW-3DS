@@ -11,6 +11,7 @@ struct BlastMaterial { Renderer* renderer;const Model* model;const uint8_t* colo
 inline uint32_t rgba8(const uint8_t* c){return uint32_t(c[0])|uint32_t(c[1])<<8|uint32_t(c[2])<<16|uint32_t(c[3])<<24;}
 inline void bindBlast(void* context,std::size_t submesh){
     auto& m=*static_cast<BlastMaterial*>(context);
+    C3D_TexEnvBufUpdate(C3D_Both,0);
     for(int stage=0;stage<6;++stage)C3D_TexEnvInit(C3D_GetTexEnv(stage));
     auto texture=[&](int index,GPU_TEXTURE_WRAP_PARAM s,GPU_TEXTURE_WRAP_PARAM t){auto* x=&m.model->textures[index]->gpu;C3D_TexSetWrap(x,s,t);return x;};
     C3D_CullFace(GPU_CULL_NONE);
@@ -22,7 +23,8 @@ inline void bindBlast(void* context,std::size_t submesh){
         float glow[6];std::copy(BombGlowGXUV[m.frame].begin(),BombGlowGXUV[m.frame].end(),glow);
         // Runs inside the material binder on the render thread, after the
         // submesh's independent UV rows were set (also safe for immediate draws).
-        m.renderer->setEnvironmentUv(m.transform,glow,true);
+        if(m.model->staticLightingBaked&&m.model->staticEnvironment2)m.renderer->setBakedEnvironmentUv();
+        else m.renderer->setEnvironmentUv(m.transform,glow,true);
         // GX 0: lerp(C1, C0, ef_ami), alpha ef_ami (C1 rides in the combiner buffer colour).
         C3D_TexEnvBufColor(rgba8(c1));
         C3D_TexEnvColor(e0,rgba8(c0));

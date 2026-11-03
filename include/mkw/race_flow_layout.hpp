@@ -28,7 +28,7 @@ struct FlowGlyph {char16_t code;uint16_t x,y,w;int8_t left;uint8_t advance;};
 struct FlowFont {int8_t texture;uint16_t atlasW,atlasH;uint8_t cellH,width,height,linefeed;const FlowGlyph* glyphs;uint16_t glyphCount;};
 struct FlowControl {float x,y,sx,sy,delay;};
 // Textures are loaded when the player finishes and released with the race.
-inline constexpr std::array<const char*,5> FlowResultTextures{{"textures/flow_result_pattern.t3x","textures/flow_result_alpha.t3x","textures/flow_button_pattern.t3x","textures/flow_result_icons.t3x","textures/flow_font_kanji.t3x"}};
+inline constexpr std::array<const char*,6> FlowResultTextures{{"textures/flow_result_pattern.t3x","textures/flow_result_alpha.t3x","textures/flow_button_pattern.t3x","textures/flow_result_icons.t3x","textures/flow_team_white.t3x","textures/flow_font_kanji.t3x"}};
 inline constexpr FlowGlyph FlowKanjiGlyphs[]={
     {u' ',344,107,0,12,12},
     {u'+',61,54,27,-2,24},
@@ -80,7 +80,7 @@ inline constexpr FlowGlyph FlowKanjiGlyphs[]={
     {u'x',430,54,26,-3,21},
     {u'y',458,54,26,-3,21},
 };
-inline constexpr FlowFont FlowKanjiFont{4,512,256,51,42,51,51,FlowKanjiGlyphs,49}; // Kanji
+inline constexpr FlowFont FlowKanjiFont{5,512,256,51,42,51,51,FlowKanjiGlyphs,49}; // Kanji
 inline constexpr int8_t FlowIconTexture=3;
 // Character icon atlas rects (pixels: x,y,w,h) by retail character id; -1 rows use "?".
 inline constexpr std::array<std::array<int16_t,4>,25> FlowIconRects{{
@@ -526,4 +526,1054 @@ inline constexpr FlowKey FlowButtonKeys[]={
     {25.f,0.f,0.f},{0.f,1.f,0.f},{0.f,1.f,0.f},{0.f,0.f,0.f},
 };
 inline constexpr FlowLayoutDef FlowButtonLayout{FlowButtonPanes,16,FlowButtonMaterials,13,FlowButtonClips,9,FlowButtonTracks,FlowButtonKeys};
+inline constexpr FlowPane FlowTeamRowPanes[]={
+    {"RootPane",-1,0,1,4,255,-1,0.f,0.f,0.f,0.f,1.f,1.f,608.f,456.f,{{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},{{0.f,0.f,1.f,0.f,0.f,1.f,1.f,1.f}},0,0,0.f,0.f,0.f},
+    {"mii_name_null",0,0,5,4,255,-1,0.f,0.f,0.f,0.f,1.02540994f,1.02540994f,30.f,40.f,{{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},{{0.f,0.f,1.f,0.f,0.f,1.f,1.f,1.f}},0,0,0.f,0.f,0.f},
+    {"null_all",1,0,1,4,255,-1,-0.f,-0.f,0.f,0.f,1.f,1.f,30.f,40.f,{{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},{{0.f,0.f,1.f,0.f,0.f,1.f,1.f,1.f}},0,0,0.f,0.f,0.f},
+    {"black_base",2,1,0,4,255,16,-0.f,-0.f,0.f,0.f,1.f,1.f,239.f,41.f,{{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},{{0.f,0.f,1.f,0.f,0.f,1.f,1.f,1.f}},0,0,0.f,0.f,0.f},
+    {"gold_parts",2,1,0,4,255,15,0.f,0.f,0.f,0.f,1.f,1.f,235.f,37.f,{{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},{{0.f,0.f,1.f,0.f,0.f,1.f,1.f,1.f}},0,0,0.f,0.f,0.f},
+    {"black_parts_t",2,1,1,4,255,3,-0.f,-0.f,0.f,0.f,1.f,1.f,230.f,33.f,{{0x000000ffu,0x000000ffu,0x6b6b6bffu,0x6b6b6bffu}},{{0.f,0.f,1.f,0.f,0.f,1.f,1.f,1.f}},0,0,0.f,0.f,0.f},
+    {"obi_top",1,0,1,4,255,-1,-0.f,-0.f,0.f,0.f,1.f,1.f,30.f,40.f,{{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},{{0.f,0.f,1.f,0.f,0.f,1.f,1.f,1.f}},0,0,0.f,0.f,0.f},
+    {"blue_null",1,0,1,4,255,-1,-66.f,-38.f,0.f,0.f,1.f,1.f,30.f,40.f,{{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},{{0.f,0.f,1.f,0.f,0.f,1.f,1.f,1.f}},0,0,0.f,0.f,0.f},
+    {"black_parts_b_r",7,1,1,5,255,6,179.f,38.f,0.f,0.f,1.f,1.f,113.f,29.f,{{0xffffffffu,0xffffff00u,0xffffffffu,0xffffff00u}},{{0.f,0.f,1.f,0.f,0.f,1.f,1.f,1.f}},0,0,0.f,0.f,0.f},
+    {"black_parts_b_l",7,1,1,3,255,7,-47.f,38.f,0.f,0.f,1.f,1.f,113.f,29.f,{{0xffffff00u,0xffffffffu,0xffffff00u,0xffffffffu}},{{0.f,0.f,1.f,0.f,0.f,1.f,1.f,1.f}},0,0,0.f,0.f,0.f},
+    {"red_null",1,0,1,4,255,-1,55.3333282f,-38.f,0.f,0.f,1.f,1.f,30.f,40.f,{{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},{{0.f,0.f,1.f,0.f,0.f,1.f,1.f,1.f}},0,0,0.f,0.f,0.f},
+    {"black_parts_r_r",10,1,1,5,255,11,57.6666718f,38.f,0.f,0.f,1.f,1.f,113.f,29.f,{{0xffffffffu,0xffffff00u,0xffffffffu,0xffffff00u}},{{0.f,0.f,1.f,0.f,0.f,1.f,1.f,1.f}},0,0,0.f,0.f,0.f},
+    {"black_parts_r_l",10,1,1,3,255,12,-168.333328f,38.f,0.f,0.f,1.f,1.f,113.f,29.f,{{0xffffff00u,0xffffffffu,0xffffff00u,0xffffffffu}},{{0.f,0.f,1.f,0.f,0.f,1.f,1.f,1.f}},0,0,0.f,0.f,0.f},
+    {"line_t",1,1,1,5,255,2,-0.f,-0.25f,0.f,0.f,1.f,1.f,113.f,30.f,{{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},{{0.100000001f,0.f,0.f,0.f,0.100000001f,7.f,0.f,7.f}},0,0,0.f,0.f,0.f},
+    {"bou_t",1,1,1,4,255,4,-0.f,18.f,0.f,0.f,1.f,1.f,230.f,2.f,{{0xffffff00u,0xffffff00u,0xffffffffu,0xffffffffu}},{{0.f,0.f,1.f,0.f,0.f,1.f,1.f,1.f}},0,0,0.f,0.f,0.f},
+    {"bou_t_00",1,1,1,4,255,8,-0.f,-16.f,0.f,0.f,1.f,1.f,230.f,2.f,{{0xffffff00u,0xffffff00u,0xffffffffu,0xffffffffu}},{{0.f,0.f,1.f,0.f,0.f,1.f,1.f,1.f}},0,0,0.f,0.f,0.f},
+    {"shadow_t",1,1,1,1,255,5,1.f,-18.f,0.f,0.f,1.f,1.f,228.f,9.f,{{0xffffffffu,0xffffffffu,0xffffff00u,0xffffff00u}},{{0.f,0.f,1.f,0.f,0.f,1.f,1.f,1.f}},0,0,0.f,0.f,0.f},
+    {"line_t_00",1,1,1,3,255,1,-1.f,-0.25f,0.f,0.f,1.f,1.f,113.f,30.f,{{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},{{0.f,0.f,0.100000001f,0.f,0.f,7.f,0.100000001f,7.f}},0,0,0.f,0.f,0.f},
+    {"pikapika",1,1,1,4,50,17,1.33333588f,0.333328247f,0.f,0.f,1.f,1.f,232.000015f,32.6666565f,{{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},{{0.f,0.f,1.f,0.f,0.f,1.f,1.f,1.f}},0,0,0.f,0.f,0.f},
+    {"Null_00",1,0,1,4,255,-1,105.5f,2.5f,0.f,0.f,1.f,1.f,30.f,40.f,{{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},{{0.f,0.f,1.f,0.f,0.f,1.f,1.f,1.f}},0,0,0.f,0.f,0.f},
+    {"pts",19,2,1,4,255,14,0.5f,-10.5f,0.f,0.f,1.f,1.f,35.f,17.f,{{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},{{0.f,0.f,1.f,0.f,0.f,1.f,1.f,1.f}},4,1,16.9999981f,16.9999981f,0.f},
+    {"point",19,2,1,4,255,13,0.5f,2.5f,0.f,0.f,1.f,1.f,35.f,35.f,{{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},{{0.f,0.f,1.f,0.f,0.f,1.f,1.f,1.f}},4,1,31.9999981f,32.f,0.f},
+    {"mii_name",1,2,1,4,255,0,-0.f,2.f,0.f,0.f,1.f,1.f,170.f,35.f,{{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},{{0.f,0.f,1.f,0.f,0.f,1.f,1.f,1.f}},4,1,30.1000004f,35.7000008f,0.f},
+    {"chara_icon_null",1,0,3,4,255,-1,-101.f,2.f,0.f,0.f,1.f,1.f,40.f,40.f,{{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},{{0.f,0.f,1.f,0.f,0.f,1.f,1.f,1.f}},0,0,0.f,0.f,0.f},
+    {"chara_icon_sha",23,1,1,4,255,9,-0.469451994f,1.09160602f,0.f,0.f,1.f,1.f,35.f,35.f,{{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},{{0.f,0.f,1.f,0.f,0.f,1.f,1.f,1.f}},0,0,0.f,0.f,0.f},
+    {"chara_icon",23,1,1,4,255,10,-5.4694519f,1.09160602f,0.f,0.f,1.f,1.f,35.f,35.f,{{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},{{0.f,0.f,1.f,0.f,0.f,1.f,1.f,1.f}},0,0,0.f,0.f,0.f},
+};
+inline constexpr FlowMaterial FlowTeamRowMaterials[]={
+    {"mii_name",{{172,172,0,0}},{{255,255,255,255}},-1,0,0,{{0.f,0.f,0.f,1.f,1.f}}},
+    {"line_t_00",{{0,0,0,0}},{{255,255,255,30}},0,1,1,{{0.f,7.05714273f,0.f,1.f,1.f}}},
+    {"line_t",{{0,0,0,0}},{{255,255,255,30}},0,1,1,{{0.f,7.05714273f,0.f,1.f,1.f}}},
+    {"black_parts_t",{{0,0,0,0}},{{151,151,151,255}},4,0,0,{{0.f,0.f,0.f,1.f,1.f}}},
+    {"bou_t",{{0,0,0,0}},{{136,136,136,255}},4,0,0,{{0.f,0.f,0.f,1.f,1.f}}},
+    {"shadow_t",{{0,0,0,0}},{{0,0,0,255}},4,0,0,{{0.f,0.f,0.f,1.f,1.f}}},
+    {"black_parts_b_r",{{0,0,0,0}},{{0,0,255,255}},4,0,0,{{0.f,0.f,0.f,1.f,1.f}}},
+    {"black_parts_b_l",{{0,0,0,0}},{{0,0,255,255}},4,0,0,{{0.f,0.f,0.f,1.f,1.f}}},
+    {"bou_t_00",{{0,0,0,0}},{{157,157,157,255}},4,0,0,{{0.f,0.f,0.f,1.f,1.f}}},
+    {"chara_icon_sha",{{0,0,0,0}},{{0,0,0,255}},3,0,0,{{0.f,0.f,0.f,1.f,1.f}}},
+    {"chara_icon",{{133,133,0,0}},{{255,255,255,255}},3,0,0,{{0.f,0.f,0.f,1.f,1.f}}},
+    {"black_parts_r_r",{{0,0,0,0}},{{220,0,0,255}},4,0,0,{{0.f,0.f,0.f,1.f,1.f}}},
+    {"black_parts_r_l",{{0,0,0,0}},{{220,0,0,255}},4,0,0,{{0.f,0.f,0.f,1.f,1.f}}},
+    {"point",{{172,172,0,0}},{{255,255,255,255}},-1,0,0,{{0.f,0.f,0.f,1.f,1.f}}},
+    {"pts",{{172,172,0,0}},{{255,255,255,255}},-1,0,0,{{0.f,0.f,0.f,1.f,1.f}}},
+    {"gold_parts",{{149,86,0,0}},{{255,234,103,255}},0,0,0,{{0.f,0.f,324.f,1.f,1.f}}},
+    {"black_base",{{0,0,0,0}},{{0,0,0,255}},4,0,0,{{0.f,0.f,0.f,1.f,1.f}}},
+    {"pikapika",{{255,255,0,0}},{{255,255,0,255}},4,0,0,{{0.f,0.f,0.f,1.f,1.f}}},
+};
+inline constexpr FlowClip FlowTeamRowClips[]={
+    {"Loop","Loop",49.f,1.f,true,-1,0,2}, // common_w051_team_blue_red_chara_point_gold_loop.brlan
+    {"Select","SelectOn",49.f,1.f,true,-1,2,3}, // common_w051_team_blue_red_chara_point_select_gold_parts.brlan
+    {"Select","SelectOff",49.f,1.f,true,-1,5,3}, // common_w051_team_blue_red_chara_point_select_gold_parts_nasi.brlan
+    {"Select2","Select2On",50.f,1.f,true,-1,8,26}, // common_w051_team_blue_red_chara_point_flash.brlan
+    {"Select2","Select2Off",1.f,1.f,true,-1,34,26}, // common_w051_team_blue_red_chara_point_flash_stop.brlan
+};
+inline constexpr FlowTrack FlowTeamRowTracks[]={
+    {18,1,16,false,0,3},
+    {15,3,2,false,3,2},
+    {4,4,0,true,5,2},
+    {3,4,0,true,7,2},
+    {18,4,0,true,9,1},
+    {4,4,0,true,10,1},
+    {3,4,0,true,11,1},
+    {18,4,0,true,12,1},
+    {1,0,6,false,13,3},
+    {1,0,7,false,16,3},
+    {0,2,4,false,19,3},
+    {0,2,5,false,22,3},
+    {0,2,6,false,25,1},
+    {0,2,8,false,26,1},
+    {0,2,9,false,27,1},
+    {0,2,10,false,28,1},
+    {10,2,4,false,29,3},
+    {10,2,5,false,32,3},
+    {10,2,6,false,35,1},
+    {10,2,8,false,36,1},
+    {10,2,9,false,37,1},
+    {10,2,10,false,38,1},
+    {13,2,4,false,39,3},
+    {13,2,5,false,42,3},
+    {13,2,6,false,45,1},
+    {13,2,8,false,46,1},
+    {13,2,9,false,47,1},
+    {13,2,10,false,48,1},
+    {14,2,4,false,49,3},
+    {14,2,5,false,52,3},
+    {14,2,6,false,55,1},
+    {14,2,8,false,56,1},
+    {14,2,9,false,57,1},
+    {14,2,10,false,58,1},
+    {1,0,6,false,59,1},
+    {1,0,7,false,60,1},
+    {0,2,4,false,61,1},
+    {0,2,5,false,62,1},
+    {0,2,6,false,63,1},
+    {0,2,8,false,64,1},
+    {0,2,9,false,65,1},
+    {0,2,10,false,66,1},
+    {10,2,4,false,67,1},
+    {10,2,5,false,68,1},
+    {10,2,6,false,69,1},
+    {10,2,8,false,70,1},
+    {10,2,9,false,71,1},
+    {10,2,10,false,72,1},
+    {13,2,4,false,73,1},
+    {13,2,5,false,74,1},
+    {13,2,6,false,75,1},
+    {13,2,8,false,76,1},
+    {13,2,9,false,77,1},
+    {13,2,10,false,78,1},
+    {14,2,4,false,79,1},
+    {14,2,5,false,80,1},
+    {14,2,6,false,81,1},
+    {14,2,8,false,82,1},
+    {14,2,9,false,83,1},
+    {14,2,10,false,84,1},
+};
+inline constexpr FlowKey FlowTeamRowKeys[]={
+    {-1.f,0.f,0.f},{39.f,100.f,0.f},{49.f,0.f,0.f},{-1.f,0.f,7.19999981f},
+    {49.f,360.f,7.19999981f},{-1.f,1.f,0.f},{49.f,0.f,0.f},{0.f,1.f,0.f},
+    {49.f,0.f,0.f},{49.f,1.f,0.f},{-1.f,0.f,0.f},{-1.f,0.f,0.f},
+    {0.f,0.f,0.f},{0.f,1.f,0.000749999308f},{40.f,1.02999997f,0.f},{50.f,1.f,-0.00299999723f},
+    {0.f,1.f,0.000749999308f},{40.f,1.02999997f,0.f},{50.f,1.f,-0.00299999723f},{0.f,0.f,0.f},
+    {40.f,220.f,0.f},{50.f,0.f,0.f},{0.f,0.f,0.f},{40.f,220.f,0.f},
+    {50.f,0.f,0.f},{0.f,0.f,0.f},{0.f,255.f,0.f},{0.f,255.f,0.f},
+    {0.f,255.f,0.f},{0.f,0.f,0.f},{40.f,170.f,0.f},{50.f,0.f,0.f},
+    {0.f,0.f,0.f},{40.f,170.f,0.f},{50.f,0.f,0.f},{0.f,0.f,0.f},
+    {0.f,255.f,0.f},{0.f,255.f,0.f},{0.f,255.f,0.f},{0.f,0.f,0.f},
+    {40.f,220.f,0.f},{50.f,0.f,0.f},{0.f,0.f,0.f},{40.f,220.f,0.f},
+    {50.f,0.f,0.f},{0.f,0.f,0.f},{0.f,255.f,0.f},{0.f,255.f,0.f},
+    {0.f,255.f,0.f},{0.f,0.f,0.f},{40.f,220.f,0.f},{50.f,0.f,0.f},
+    {0.f,0.f,0.f},{40.f,220.f,0.f},{50.f,0.f,0.f},{0.f,0.f,0.f},
+    {0.f,255.f,0.f},{0.f,255.f,0.f},{0.f,255.f,0.f},{0.f,1.f,0.f},
+    {0.f,1.f,0.f},{0.f,0.f,0.f},{0.f,0.f,0.f},{0.f,0.f,0.f},
+    {0.f,255.f,0.f},{0.f,255.f,0.f},{0.f,255.f,0.f},{0.f,0.f,0.f},
+    {0.f,0.f,0.f},{0.f,0.f,0.f},{0.f,255.f,0.f},{0.f,255.f,0.f},
+    {0.f,255.f,0.f},{0.f,0.f,0.f},{0.f,0.f,0.f},{0.f,0.f,0.f},
+    {0.f,255.f,0.f},{0.f,255.f,0.f},{0.f,255.f,0.f},{0.f,0.f,0.f},
+    {0.f,0.f,0.f},{0.f,0.f,0.f},{0.f,255.f,0.f},{0.f,255.f,0.f},
+    {0.f,255.f,0.f},
+};
+inline constexpr FlowLayoutDef FlowTeamRowLayout{FlowTeamRowPanes,26,FlowTeamRowMaterials,18,FlowTeamRowClips,5,FlowTeamRowTracks,FlowTeamRowKeys};
+inline constexpr FlowPane FlowTeamPointPanes[]={
+    {"RootPane",-1,0,1,4,255,-1,0.f,0.f,0.f,0.f,1.f,1.f,608.f,456.f,{{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},{{0.f,0.f,1.f,0.f,0.f,1.f,1.f,1.f}},0,0,0.f,0.f,0.f},
+    {"total_point_null",0,0,1,4,255,-1,-0.f,-0.f,0.f,0.f,1.f,1.f,30.f,40.f,{{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},{{0.f,0.f,1.f,0.f,0.f,1.f,1.f,1.f}},0,0,0.f,0.f,0.f},
+    {"pts_sha",1,2,1,4,255,3,0.5f,-28.f,0.f,0.f,1.f,1.f,70.f,50.f,{{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},{{0.f,0.f,1.f,0.f,0.f,1.f,1.f,1.f}},4,1,34.4000015f,40.7999992f,0.f},
+    {"point_sha",1,2,1,4,255,2,-0.5f,-1.5f,0.f,0.f,1.f,1.f,100.f,70.f,{{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},{{0.f,0.f,1.f,0.f,0.f,1.f,1.f,1.f}},4,1,51.6000023f,61.2000008f,0.f},
+    {"pts",1,2,1,4,255,1,0.5f,-26.f,0.f,0.f,1.f,1.f,70.f,50.f,{{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},{{0.f,0.f,1.f,0.f,0.f,1.f,1.f,1.f}},4,1,34.4000015f,40.7999992f,0.f},
+    {"point",1,2,1,4,255,0,-0.f,2.5f,0.f,0.f,1.f,1.f,100.f,70.f,{{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},{{0.f,0.f,1.f,0.f,0.f,1.f,1.f,1.f}},4,1,51.6000023f,61.2000008f,0.f},
+};
+inline constexpr FlowMaterial FlowTeamPointMaterials[]={
+    {"point",{{0,0,0,0}},{{230,70,0,255}},-1,0,0,{{0.f,0.f,0.f,1.f,1.f}}},
+    {"pts",{{0,0,0,0}},{{180,30,0,255}},-1,0,0,{{0.f,0.f,0.f,1.f,1.f}}},
+    {"point_sha",{{0,0,0,0}},{{0,0,0,255}},-1,0,0,{{0.f,0.f,0.f,1.f,1.f}}},
+    {"pts_sha",{{0,0,0,0}},{{0,0,0,255}},-1,0,0,{{0.f,0.f,0.f,1.f,1.f}}},
+};
+inline constexpr FlowClip FlowTeamPointClips[]={
+    {"team","blue",100.f,1.f,true,-1,0,6}, // common_w054_team_big_total_point_blue_team.brlan
+    {"team","red",99.f,1.f,true,-1,6,6}, // common_w054_team_big_total_point_red_team.brlan
+};
+inline constexpr FlowTrack FlowTeamPointTracks[]={
+    {0,2,8,false,0,1},
+    {0,2,9,false,1,1},
+    {0,2,10,false,2,1},
+    {1,2,8,false,3,1},
+    {1,2,9,false,4,1},
+    {1,2,10,false,5,1},
+    {0,2,8,false,6,1},
+    {0,2,9,false,7,1},
+    {0,2,10,false,8,1},
+    {1,2,8,false,9,1},
+    {1,2,9,false,10,1},
+    {1,2,10,false,11,1},
+};
+inline constexpr FlowKey FlowTeamPointKeys[]={
+    {1.f,0.f,0.f},{1.f,180.f,0.f},{1.f,255.f,0.f},{1.f,80.f,0.f},
+    {1.f,80.f,0.f},{1.f,255.f,0.f},{-1.f,230.f,0.f},{-1.f,70.f,0.f},
+    {-1.f,0.f,0.f},{-1.f,180.f,0.f},{-1.f,30.f,0.f},{-1.f,0.f,0.f},
+};
+inline constexpr FlowLayoutDef FlowTeamPointLayout{FlowTeamPointPanes,6,FlowTeamPointMaterials,4,FlowTeamPointClips,2,FlowTeamPointTracks,FlowTeamPointKeys};
+inline constexpr std::array<FlowControl,2> FlowTeamColumns{{
+    {-190.f,0.f,1.f,1.f,0.f},
+    {190.f,0.f,1.f,1.f,5.f},
+}};
+inline constexpr std::array<FlowControl,6> FlowTeamRows{{
+    {0.f,70.f,1.f,1.f,0.f},
+    {0.f,25.f,1.f,1.f,2.f},
+    {0.f,-20.f,1.f,1.f,4.f},
+    {0.f,-65.f,1.f,1.f,6.f},
+    {0.f,-110.f,1.f,1.f,9.f},
+    {0.f,-155.f,1.f,1.f,14.f},
+}};
+inline constexpr std::array<FlowControl,2> FlowTeamPoints{{
+    {0.f,130.f,1.f,1.5f,0.f},
+    {0.f,130.f,1.f,1.5f,0.f},
+}};
+// Original Award controllers; texture indices use the separate award bank.
+inline constexpr const char* FlowAwardTextures[]={"textures/flow_award_st_battle_icon_balloon.t3x","textures/flow_award_st_battle_icon_coin.t3x","textures/flow_award_st_battle_icon_flag.t3x","textures/flow_award_tt_baby_daisy_64x64.t3x","textures/flow_award_tt_baby_luigi_64x64.t3x","textures/flow_award_tt_baby_mario_64x64.t3x","textures/flow_award_tt_baby_peach_64x64.t3x","textures/flow_award_tt_boss_packun_64x64.t3x","textures/flow_award_tt_catherine_64x64.t3x","textures/flow_award_tt_cup_icon_banana_00.t3x","textures/flow_award_tt_cup_icon_flower_00.t3x","textures/flow_award_tt_cup_icon_kinoko_00.t3x","textures/flow_award_tt_cup_icon_konoha_00.t3x","textures/flow_award_tt_cup_icon_koura_00.t3x","textures/flow_award_tt_cup_icon_mirror_00.t3x","textures/flow_award_tt_cup_icon_oukan_00.t3x","textures/flow_award_tt_cup_icon_star_00.t3x","textures/flow_award_tt_cup_icon_thunder_00.t3x","textures/flow_award_tt_daisy_64x64.t3x","textures/flow_award_tt_didy_64x64.t3x","textures/flow_award_tt_donky_64x64.t3x","textures/flow_award_tt_funky_64x64.t3x","textures/flow_award_tt_hammer_64x64.t3x","textures/flow_award_tt_hatena_64x64.t3x","textures/flow_award_tt_hone_koopa_64x64.t3x","textures/flow_award_tt_karon_64x64.t3x","textures/flow_award_tt_kinopico_64x64.t3x","textures/flow_award_tt_kinopio_64x64.t3x","textures/flow_award_tt_koopa_64x64.t3x","textures/flow_award_tt_koopa_jr_64x64.t3x","textures/flow_award_tt_luigi_64x64.t3x","textures/flow_award_tt_mario_64x64.t3x","textures/flow_award_tt_mii_suit_a_64x64.t3x","textures/flow_award_tt_mii_suit_b_64x64.t3x","textures/flow_award_tt_mii_suit_c_64x64.t3x","textures/flow_award_tt_noko_64x64.t3x","textures/flow_award_tt_pata_64x64.t3x","textures/flow_award_tt_pattern_chek_32x32_alpha.t3x","textures/flow_award_tt_pattern_chek_bokashi_32x32.t3x","textures/flow_award_tt_peach_64x64.t3x","textures/flow_award_tt_roseta_64x64.t3x","textures/flow_award_tt_teresa_64x64.t3x","textures/flow_award_tt_waluigi_64x64.t3x","textures/flow_award_tt_wario_64x64.t3x","textures/flow_award_tt_yoshi_64x64.t3x","textures/flow_award_font.t3x","textures/flow_award_rank_font.t3x"};
+inline constexpr const char* FlowAwardTextureNames[]={"st_battle_icon_balloon.tpl","st_battle_icon_coin.tpl","st_battle_icon_flag.tpl","tt_baby_daisy_64x64.tpl","tt_baby_luigi_64x64.tpl","tt_baby_mario_64x64.tpl","tt_baby_peach_64x64.tpl","tt_boss_packun_64x64.tpl","tt_catherine_64x64.tpl","tt_cup_icon_banana_00.tpl","tt_cup_icon_flower_00.tpl","tt_cup_icon_kinoko_00.tpl","tt_cup_icon_konoha_00.tpl","tt_cup_icon_koura_00.tpl","tt_cup_icon_mirror_00.tpl","tt_cup_icon_oukan_00.tpl","tt_cup_icon_star_00.tpl","tt_cup_icon_thunder_00.tpl","tt_daisy_64x64.tpl","tt_didy_64x64.tpl","tt_donky_64x64.tpl","tt_funky_64x64.tpl","tt_hammer_64x64.tpl","tt_hatena_64x64.tpl","tt_hone_koopa_64x64.tpl","tt_karon_64x64.tpl","tt_kinopico_64x64.tpl","tt_kinopio_64x64.tpl","tt_koopa_64x64.tpl","tt_koopa_jr_64x64.tpl","tt_luigi_64x64.tpl","tt_mario_64x64.tpl","tt_mii_suit_a_64x64.tpl","tt_mii_suit_b_64x64.tpl","tt_mii_suit_c_64x64.tpl","tt_noko_64x64.tpl","tt_pata_64x64.tpl","tt_pattern_chek_32x32_alpha.tpl","tt_pattern_chek_bokashi_32x32.tpl","tt_peach_64x64.tpl","tt_roseta_64x64.tpl","tt_teresa_64x64.tpl","tt_waluigi_64x64.tpl","tt_wario_64x64.tpl","tt_yoshi_64x64.tpl","font","rank_font"};
+struct FlowAwardVariant {const char* name;FlowControl pose;uint32_t message;};
+inline constexpr FlowPane FlowAwardCongratulationsDrawPanes[]={
+    {"RootPane",-1,0,1,4,255,-1,0.f,0.f,0.f,0.f,1.f,1.f,640.f,480.f,{{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},{{0.f,0.f,1.f,0.f,0.f,1.f,1.f,1.f}},0,0,0.f,0.f,0.f},
+    {"count_down_null",0,0,3,4,255,-1,-3.07636583e-09f,-4.1018211e-09f,0.f,0.f,1.f,1.f,100.f,100.f,{{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},{{0.f,0.f,1.f,0.f,0.f,1.f,1.f,1.f}},0,0,0.f,0.f,0.f},
+    {"text_00",1,2,1,4,0,0,0.f,0.f,100.f,0.f,1.70000005f,1.70000005f,330.f,200.f,{{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},{{0.f,0.f,1.f,0.f,0.f,1.f,1.f,1.f}},4,1,38.7000046f,45.8999977f,0.f},
+    {"text_light",1,2,3,4,0,1,2.22044605e-16f,-0.f,100.f,0.f,1.70000005f,1.70000005f,250.f,200.f,{{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},{{0.f,0.f,1.f,0.f,0.f,1.f,1.f,1.f}},4,1,38.7000046f,45.8999977f,0.f},
+};
+inline constexpr FlowMaterial FlowAwardCongratulationsDrawMaterials[]={
+    {"text_00",{{0,186,0,0}},{{255,255,0,255}},-1,0,0,{{0.f,0.f,0.f,1.f,1.f}}},
+    {"text_light",{{255,255,255,0}},{{255,255,255,255}},-1,0,0,{{0.f,0.f,0.f,1.f,1.f}}},
+};
+inline constexpr FlowClip FlowAwardCongratulationsDrawClips[]={
+    {"Fade","Hide",1.f,1.f,true,-1,0,12}, // congratulations_draw_fade_in_before.brlan
+    {"Fade","Fadein",70.f,1.f,false,2,12,12}, // congratulations_draw_fade_in.brlan
+    {"Fade","Show",10.f,1.f,true,-1,24,12}, // congratulations_draw_wait.brlan
+    {"Fade","Fadeout",91.f,1.f,false,0,36,12}, // congratulations_draw_fade_out.brlan
+};
+inline constexpr FlowTrack FlowAwardCongratulationsDrawTracks[]={
+    {2,0,6,false,0,1},
+    {2,0,7,false,1,1},
+    {2,1,16,false,2,1},
+    {3,0,6,false,3,1},
+    {3,0,7,false,4,1},
+    {3,1,16,false,5,1},
+    {0,2,4,false,6,1},
+    {0,2,5,false,7,1},
+    {0,2,6,false,8,1},
+    {0,2,8,false,9,1},
+    {0,2,9,false,10,1},
+    {0,2,10,false,11,1},
+    {2,0,6,false,12,2},
+    {2,0,7,false,14,2},
+    {2,1,16,false,16,2},
+    {3,0,6,false,18,7},
+    {3,0,7,false,25,7},
+    {3,1,16,false,32,1},
+    {0,2,4,false,33,1},
+    {0,2,5,false,34,1},
+    {0,2,6,false,35,1},
+    {0,2,8,false,36,1},
+    {0,2,9,false,37,1},
+    {0,2,10,false,38,1},
+    {2,0,6,false,39,1},
+    {2,0,7,false,40,1},
+    {2,1,16,false,41,1},
+    {3,0,6,false,42,1},
+    {3,0,7,false,43,1},
+    {3,1,16,false,44,1},
+    {0,2,4,false,45,1},
+    {0,2,5,false,46,1},
+    {0,2,6,false,47,1},
+    {0,2,8,false,48,1},
+    {0,2,9,false,49,1},
+    {0,2,10,false,50,1},
+    {2,0,6,false,51,3},
+    {2,0,7,false,54,3},
+    {2,1,16,false,57,2},
+    {3,0,6,false,59,1},
+    {3,0,7,false,60,1},
+    {3,1,16,false,61,1},
+    {0,2,4,false,62,1},
+    {0,2,5,false,63,1},
+    {0,2,6,false,64,1},
+    {0,2,8,false,65,2},
+    {0,2,9,false,67,1},
+    {0,2,10,false,68,2},
+};
+inline constexpr FlowKey FlowAwardCongratulationsDrawKeys[]={
+    {0.f,1.70000005f,0.f},{0.f,1.70000005f,0.f},{0.f,0.f,0.f},{10.f,1.70000005f,0.0100000026f},
+    {10.f,1.70000005f,0.0100000026f},{0.f,0.f,0.f},{0.f,0.f,0.f},{0.f,186.f,0.f},
+    {0.f,0.f,0.f},{0.f,255.f,0.f},{0.f,255.f,0.f},{0.f,0.f,0.f},
+    {0.f,1.70000005f,0.00144927402f},{69.f,1.79999995f,0.00144927402f},{0.f,1.70000005f,0.00144927402f},{69.f,1.79999995f,0.00144927402f},
+    {0.f,0.f,3.69565225f},{69.f,255.f,3.69565225f},{9.f,1.70000005f,0.0100000026f},{29.f,1.9000001f,0.0100000026f},
+    {29.f,1.9000001f,-1.1920929e-07f},{30.f,1.89999998f,-1.1920929e-07f},{30.f,1.89999998f,0.0111111142f},{39.f,2.f,0.0111111142f},
+    {39.f,2.f,0.f},{9.f,1.70000005f,0.0100000026f},{29.f,1.9000001f,0.0100000026f},{29.f,1.9000001f,-1.1920929e-07f},
+    {30.f,1.89999998f,-1.1920929e-07f},{30.f,1.89999998f,0.0111111142f},{39.f,2.f,0.0111111142f},{39.f,2.f,0.f},
+    {29.f,0.f,0.f},{-1.f,0.f,0.f},{-1.f,186.f,0.f},{-1.f,0.f,0.f},
+    {-1.f,255.f,0.f},{-1.f,255.f,0.f},{-1.f,0.f,0.f},{0.f,1.79999995f,0.f},
+    {0.f,1.79999995f,0.f},{0.f,255.f,0.f},{-30.f,2.f,0.f},{-30.f,2.f,0.f},
+    {-40.f,0.f,0.f},{-70.f,0.f,0.f},{-70.f,186.f,0.f},{-70.f,0.f,0.f},
+    {10.f,255.f,0.f},{10.f,255.f,0.f},{10.f,0.f,0.f},{0.f,1.79999995f,0.00126582314f},
+    {79.f,1.89999998f,0.00126582314f},{79.f,1.89999998f,5.30064249f},{0.f,1.79999995f,0.00126582314f},{79.f,1.89999998f,0.00126582314f},
+    {79.f,1.89999998f,5.30064249f},{0.f,255.f,0.f},{80.f,0.f,0.f},{50.f,2.f,0.f},
+    {50.f,2.f,0.f},{50.f,0.f,0.f},{-80.f,0.f,0.f},{-80.f,186.f,0.f},
+    {-80.f,0.f,0.f},{11.f,255.f,0.f},{90.f,195.f,0.f},{0.f,255.f,0.f},
+    {11.f,0.f,0.f},{90.f,77.f,0.f},
+};
+inline constexpr FlowLayoutDef FlowAwardCongratulationsDrawLayout{FlowAwardCongratulationsDrawPanes,4,FlowAwardCongratulationsDrawMaterials,2,FlowAwardCongratulationsDrawClips,4,FlowAwardCongratulationsDrawTracks,FlowAwardCongratulationsDrawKeys};
+inline constexpr FlowAwardVariant FlowAwardCongratulationsDrawVariants[]={
+{"Congratulations",{0.f,100.f,0.800000012f,0.800000012f,0.f},0},
+};
+inline constexpr FlowPane FlowAwardCongratulationsLosePanes[]={
+    {"RootPane",-1,0,1,4,255,-1,0.f,0.f,0.f,0.f,1.f,1.f,640.f,480.f,{{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},{{0.f,0.f,1.f,0.f,0.f,1.f,1.f,1.f}},0,0,0.f,0.f,0.f},
+    {"count_down_null",0,0,3,4,255,-1,-3.07636583e-09f,-4.1018211e-09f,0.f,0.f,1.f,1.f,100.f,100.f,{{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},{{0.f,0.f,1.f,0.f,0.f,1.f,1.f,1.f}},0,0,0.f,0.f,0.f},
+    {"text_00",1,2,1,4,255,0,0.f,0.f,100.f,0.f,1.79999995f,1.79999995f,330.f,200.f,{{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},{{0.f,0.f,1.f,0.f,0.f,1.f,1.f,1.f}},4,1,38.7000046f,45.8999977f,0.f},
+    {"text_light",1,2,3,4,0,1,2.22044605e-16f,-0.f,100.f,0.f,2.f,2.f,250.f,200.f,{{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},{{0.f,0.f,1.f,0.f,0.f,1.f,1.f,1.f}},4,1,38.7000046f,45.8999977f,0.f},
+};
+inline constexpr FlowMaterial FlowAwardCongratulationsLoseMaterials[]={
+    {"text_00",{{255,255,255,0}},{{0,168,198,255}},-1,0,0,{{0.f,0.f,0.f,1.f,1.f}}},
+    {"text_light",{{255,255,255,0}},{{255,255,255,255}},-1,0,0,{{0.f,0.f,0.f,1.f,1.f}}},
+};
+inline constexpr FlowClip FlowAwardCongratulationsLoseClips[]={
+    {"Fade","Hide",1.f,1.f,true,-1,0,12}, // congratulations_zannen_fade_in_before.brlan
+    {"Fade","Fadein",70.f,1.f,false,2,12,12}, // congratulations_zannen_fade_in.brlan
+    {"Fade","Show",10.f,1.f,true,-1,24,12}, // congratulations_zannen_wait.brlan
+    {"Fade","Fadeout",91.f,1.f,false,0,36,12}, // congratulations_zannen_fade_out.brlan
+};
+inline constexpr FlowTrack FlowAwardCongratulationsLoseTracks[]={
+    {2,0,6,false,0,1},
+    {2,0,7,false,1,1},
+    {2,1,16,false,2,1},
+    {3,0,6,false,3,1},
+    {3,0,7,false,4,1},
+    {3,1,16,false,5,1},
+    {0,2,4,false,6,1},
+    {0,2,5,false,7,1},
+    {0,2,6,false,8,1},
+    {0,2,8,false,9,1},
+    {0,2,9,false,10,1},
+    {0,2,10,false,11,1},
+    {2,0,6,false,12,2},
+    {2,0,7,false,14,2},
+    {2,1,16,false,16,2},
+    {3,0,6,false,18,7},
+    {3,0,7,false,25,7},
+    {3,1,16,false,32,1},
+    {0,2,4,false,33,1},
+    {0,2,5,false,34,1},
+    {0,2,6,false,35,1},
+    {0,2,8,false,36,1},
+    {0,2,9,false,37,1},
+    {0,2,10,false,38,1},
+    {2,0,6,false,39,1},
+    {2,0,7,false,40,1},
+    {2,1,16,false,41,1},
+    {3,0,6,false,42,1},
+    {3,0,7,false,43,1},
+    {3,1,16,false,44,1},
+    {0,2,4,false,45,1},
+    {0,2,5,false,46,1},
+    {0,2,6,false,47,1},
+    {0,2,8,false,48,1},
+    {0,2,9,false,49,1},
+    {0,2,10,false,50,1},
+    {2,0,6,false,51,3},
+    {2,0,7,false,54,3},
+    {2,1,16,false,57,2},
+    {3,0,6,false,59,1},
+    {3,0,7,false,60,1},
+    {3,1,16,false,61,1},
+    {0,2,4,false,62,1},
+    {0,2,5,false,63,1},
+    {0,2,6,false,64,1},
+    {0,2,8,false,65,3},
+    {0,2,9,false,68,3},
+    {0,2,10,false,71,4},
+};
+inline constexpr FlowKey FlowAwardCongratulationsLoseKeys[]={
+    {0.f,1.70000005f,0.f},{0.f,1.70000005f,0.f},{0.f,0.f,0.f},{10.f,1.70000005f,0.0100000026f},
+    {10.f,1.70000005f,0.0100000026f},{0.f,0.f,0.f},{0.f,255.f,0.f},{0.f,255.f,0.f},
+    {0.f,255.f,0.f},{0.f,0.f,0.f},{0.f,168.f,0.f},{0.f,198.f,0.f},
+    {0.f,1.70000005f,0.00144927402f},{69.f,1.79999995f,0.00144927402f},{0.f,1.70000005f,0.00144927402f},{69.f,1.79999995f,0.00144927402f},
+    {0.f,0.f,3.69565225f},{69.f,255.f,3.69565225f},{9.f,1.70000005f,0.0100000026f},{29.f,1.9000001f,0.0100000026f},
+    {29.f,1.9000001f,-1.1920929e-07f},{30.f,1.89999998f,-1.1920929e-07f},{30.f,1.89999998f,0.0111111142f},{39.f,2.f,0.0111111142f},
+    {39.f,2.f,0.f},{9.f,1.70000005f,0.0100000026f},{29.f,1.9000001f,0.0100000026f},{29.f,1.9000001f,-1.1920929e-07f},
+    {30.f,1.89999998f,-1.1920929e-07f},{30.f,1.89999998f,0.0111111142f},{39.f,2.f,0.0111111142f},{39.f,2.f,0.f},
+    {29.f,0.f,0.f},{9.f,255.f,0.f},{9.f,255.f,0.f},{9.f,255.f,0.f},
+    {-1.f,0.f,0.f},{-1.f,168.f,0.f},{-1.f,198.f,0.f},{0.f,1.79999995f,0.f},
+    {0.f,1.79999995f,0.f},{0.f,255.f,0.f},{-30.f,2.f,0.f},{-30.f,2.f,0.f},
+    {-40.f,0.f,0.f},{-30.f,255.f,0.f},{-30.f,255.f,0.f},{-30.f,255.f,0.f},
+    {10.f,0.f,0.f},{10.f,168.f,0.f},{10.f,198.f,0.f},{0.f,1.79999995f,0.00126582314f},
+    {79.f,1.89999998f,0.00126582314f},{79.f,1.89999998f,5.30064249f},{0.f,1.79999995f,0.00126582314f},{79.f,1.89999998f,0.00126582314f},
+    {79.f,1.89999998f,5.30064249f},{0.f,255.f,0.f},{80.f,0.f,0.f},{50.f,2.f,0.f},
+    {50.f,2.f,0.f},{50.f,0.f,0.f},{80.f,255.f,0.f},{80.f,255.f,0.f},
+    {80.f,255.f,0.f},{0.f,0.f,0.f},{11.f,0.f,0.f},{11.f,0.f,28.333334f},
+    {0.f,168.f,0.f},{11.f,168.f,0.f},{11.f,168.f,-3.14058471f},{0.f,198.f,0.f},
+    {11.f,198.f,0.f},{11.f,198.f,-2.21048403f},{90.f,77.f,0.f},
+};
+inline constexpr FlowLayoutDef FlowAwardCongratulationsLoseLayout{FlowAwardCongratulationsLosePanes,4,FlowAwardCongratulationsLoseMaterials,2,FlowAwardCongratulationsLoseClips,4,FlowAwardCongratulationsLoseTracks,FlowAwardCongratulationsLoseKeys};
+inline constexpr FlowAwardVariant FlowAwardCongratulationsLoseVariants[]={
+{"Congratulations",{0.f,100.f,0.800000012f,0.800000012f,0.f},0},
+};
+inline constexpr FlowPane FlowAwardCongratulationsWinPanes[]={
+    {"RootPane",-1,0,1,4,255,-1,0.f,0.f,0.f,0.f,1.f,1.f,640.f,480.f,{{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},{{0.f,0.f,1.f,0.f,0.f,1.f,1.f,1.f}},0,0,0.f,0.f,0.f},
+    {"count_down_null",0,0,3,4,255,-1,-3.07636583e-09f,-4.1018211e-09f,0.f,0.f,1.f,1.f,100.f,100.f,{{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},{{0.f,0.f,1.f,0.f,0.f,1.f,1.f,1.f}},0,0,0.f,0.f,0.f},
+    {"text_00",1,2,1,4,255,0,0.f,0.f,100.f,0.f,1.70000005f,1.70000005f,250.f,200.f,{{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},{{0.f,0.f,1.f,0.f,0.f,1.f,1.f,1.f}},4,1,38.7000046f,45.8999977f,0.f},
+    {"text_light",1,2,3,4,246,1,2.22044605e-16f,-0.f,100.f,0.f,1.70999992f,1.70999992f,250.f,200.f,{{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},{{0.f,0.f,1.f,0.f,0.f,1.f,1.f,1.f}},4,1,38.7000046f,45.8999977f,0.f},
+};
+inline constexpr FlowMaterial FlowAwardCongratulationsWinMaterials[]={
+    {"text_00",{{255,255,255,0}},{{255,113,150,255}},-1,0,0,{{0.f,0.f,0.f,1.f,1.f}}},
+    {"text_light",{{255,255,255,0}},{{255,255,255,255}},-1,0,0,{{0.f,0.f,0.f,1.f,1.f}}},
+};
+inline constexpr FlowClip FlowAwardCongratulationsWinClips[]={
+    {"Fade","Hide",1.f,1.f,true,-1,0,13}, // congratulations_fade_in_before.brlan
+    {"Fade","Fadein",30.f,1.f,false,2,13,13}, // congratulations_fade_in.brlan
+    {"Fade","Show",1.f,1.f,true,-1,26,13}, // congratulations_wait.brlan
+    {"Fade","Fadeout",100.f,1.f,false,0,39,13}, // congratulations_fade_out.brlan
+};
+inline constexpr FlowTrack FlowAwardCongratulationsWinTracks[]={
+    {2,0,6,false,0,1},
+    {2,0,7,false,1,1},
+    {2,1,16,false,2,1},
+    {3,0,6,false,3,1},
+    {3,0,7,false,4,1},
+    {3,1,16,false,5,1},
+    {1,4,0,true,6,2},
+    {0,2,4,false,8,1},
+    {0,2,5,false,9,1},
+    {0,2,6,false,10,1},
+    {0,2,8,false,11,1},
+    {0,2,9,false,12,1},
+    {0,2,10,false,13,1},
+    {2,0,6,false,14,4},
+    {2,0,7,false,18,4},
+    {2,1,16,false,22,3},
+    {3,0,6,false,25,2},
+    {3,0,7,false,27,2},
+    {3,1,16,false,29,7},
+    {1,4,0,true,36,1},
+    {0,2,4,false,37,1},
+    {0,2,5,false,38,1},
+    {0,2,6,false,39,1},
+    {0,2,8,false,40,1},
+    {0,2,9,false,41,1},
+    {0,2,10,false,42,1},
+    {2,0,6,false,43,2},
+    {2,0,7,false,45,2},
+    {2,1,16,false,47,1},
+    {3,0,6,false,48,2},
+    {3,0,7,false,50,2},
+    {3,1,16,false,52,1},
+    {1,4,0,true,53,1},
+    {0,2,4,false,54,1},
+    {0,2,5,false,55,1},
+    {0,2,6,false,56,1},
+    {0,2,8,false,57,1},
+    {0,2,9,false,58,1},
+    {0,2,10,false,59,1},
+    {2,0,6,false,60,2},
+    {2,0,7,false,62,2},
+    {2,1,16,false,64,2},
+    {3,0,6,false,66,3},
+    {3,0,7,false,69,3},
+    {3,1,16,false,72,1},
+    {1,4,0,true,73,1},
+    {0,2,4,false,74,1},
+    {0,2,5,false,75,1},
+    {0,2,6,false,76,1},
+    {0,2,8,false,77,1},
+    {0,2,9,false,78,2},
+    {0,2,10,false,80,3},
+};
+inline constexpr FlowKey FlowAwardCongratulationsWinKeys[]={
+    {0.f,90.f,0.f},{0.f,90.f,0.f},{0.f,0.f,0.f},{10.f,1.70000005f,0.0100000026f},
+    {10.f,1.70000005f,0.0100000026f},{0.f,0.f,0.f},{0.f,0.f,0.f},{1.f,1.f,0.f},
+    {0.f,255.f,0.f},{0.f,255.f,0.f},{0.f,255.f,0.f},{0.f,255.f,0.f},
+    {0.f,113.f,0.f},{0.f,150.f,0.f},{0.f,90.f,-9.81111145f},{9.f,1.70000005f,-9.81111145f},
+    {9.f,1.70000005f,0.f},{29.f,1.70000005f,-1.03882383e-06f},{0.f,90.f,-9.81111145f},{9.f,1.70000005f,-9.81111145f},
+    {9.f,1.70000005f,0.f},{29.f,1.70000005f,-1.03882383e-06f},{0.f,0.f,28.333334f},{9.f,255.f,28.333334f},
+    {9.f,255.f,0.f},{9.f,1.70000005f,0.0100000026f},{29.f,1.9000001f,0.0100000026f},{9.f,1.70000005f,0.0100000026f},
+    {29.f,1.9000001f,0.0100000026f},{0.f,0.f,0.f},{8.f,0.f,0.f},{8.f,0.f,255.f},
+    {9.f,255.f,255.f},{9.f,255.f,-1.7708106f},{17.f,0.f,-31.875f},{17.f,0.f,0.f},
+    {0.f,1.f,0.f},{9.f,255.f,0.f},{9.f,255.f,0.f},{9.f,255.f,0.f},
+    {29.f,255.f,0.f},{14.f,113.f,0.f},{14.f,150.f,0.f},{0.f,1.70000005f,-1.03882383e-06f},
+    {1.f,1.69997823f,0.00155038701f},{0.f,1.70000005f,-1.03882383e-06f},{1.f,1.69997823f,0.00155038701f},{-20.f,255.f,0.f},
+    {0.f,1.9000001f,-1.1920929e-07f},{1.f,1.89999998f,-1.1920929e-07f},{0.f,1.9000001f,-1.1920929e-07f},{1.f,1.89999998f,-1.1920929e-07f},
+    {0.f,0.f,0.f},{-29.f,1.f,0.f},{0.f,255.f,0.f},{0.f,255.f,0.f},
+    {0.f,255.f,0.f},{0.f,255.f,0.f},{0.f,113.f,0.f},{0.f,150.f,0.f},
+    {0.f,1.69997823f,0.00155038701f},{128.f,1.89999998f,0.00156266987f},{0.f,1.69997823f,0.00155038701f},{128.f,1.89999998f,0.00156266987f},
+    {19.f,255.f,0.f},{99.f,0.f,0.f},{0.f,1.89999998f,0.0111111142f},{9.f,2.f,0.0111111142f},
+    {9.f,2.f,0.f},{0.f,1.89999998f,0.0111111142f},{9.f,2.f,0.0111111142f},{9.f,2.f,0.f},
+    {99.f,0.f,0.f},{-30.f,1.f,0.f},{0.f,255.f,0.f},{0.f,255.f,0.f},
+    {0.f,255.f,0.f},{0.f,255.f,0.f},{0.f,113.f,-3.14058471f},{99.f,77.f,0.f},
+    {0.f,150.f,-2.21048403f},{47.f,105.f,-0.73737371f},{99.f,77.f,-0.341463417f},
+};
+inline constexpr FlowLayoutDef FlowAwardCongratulationsWinLayout{FlowAwardCongratulationsWinPanes,4,FlowAwardCongratulationsWinMaterials,2,FlowAwardCongratulationsWinClips,4,FlowAwardCongratulationsWinTracks,FlowAwardCongratulationsWinKeys};
+inline constexpr FlowAwardVariant FlowAwardCongratulationsWinVariants[]={
+{"Congratulations",{0.f,100.f,0.800000012f,0.800000012f,0.f},0},
+};
+inline constexpr FlowPane FlowAwardItemLosePanes[]={
+    {"RootPane",-1,0,1,4,255,-1,0.f,0.f,0.f,0.f,1.f,1.f,640.f,480.f,{{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},{{0.f,0.f,1.f,0.f,0.f,1.f,1.f,1.f}},0,0,0.f,0.f,0.f},
+    {"mii_name_null",0,0,5,4,255,-1,0.f,0.f,0.f,0.f,1.f,1.f,30.f,40.f,{{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},{{0.f,0.f,1.f,0.f,0.f,1.f,1.f,1.f}},0,0,0.f,0.f,0.f},
+    {"gold_p_null",1,0,5,4,255,-1,-0.f,-0.f,0.f,0.f,1.f,1.f,30.f,40.f,{{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},{{0.f,0.f,1.f,0.f,0.f,1.f,1.f,1.f}},0,0,0.f,0.f,0.f},
+    {"gold_parts",2,1,0,4,255,6,-5.f,-0.f,0.f,0.f,1.f,1.f,262.f,41.f,{{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},{{0.f,0.f,1.f,0.f,0.f,1.f,1.f,1.f}},0,0,0.f,0.f,0.f},
+    {"obi_top",1,0,1,4,255,-1,-0.f,-0.f,0.f,0.f,1.f,1.f,30.f,40.f,{{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},{{0.f,0.f,1.f,0.f,0.f,1.f,1.f,1.f}},0,0,0.f,0.f,0.f},
+    {"p_color_null",1,0,3,4,0,-1,-66.f,-38.f,0.f,0.f,1.f,1.f,30.f,40.f,{{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},{{0.f,0.f,1.f,0.f,0.f,1.f,1.f,1.f}},0,0,0.f,0.f,0.f},
+    {"p_color_r",5,1,1,5,255,1,189.f,38.f,0.f,0.f,1.f,1.f,256.f,33.f,{{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},{{0.f,0.f,1.f,0.f,0.f,1.f,1.f,1.f}},0,0,0.f,0.f,0.f},
+    {"team_color_c",1,1,0,4,0,11,-5.f,-1.f,0.f,0.f,1.f,1.f,256.f,24.f,{{0xffffff64u,0xffffff64u,0xffffffffu,0xffffffffu}},{{0.f,0.f,0.100000001f,0.f,0.f,1.f,0.100000001f,1.f}},0,0,0.f,0.f,0.f},
+    {"position",1,2,1,4,255,7,-110.f,-0.f,0.f,0.f,0.899999976f,1.f,46.9696999f,25.f,{{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},{{0.f,0.f,1.f,0.f,0.f,1.f,1.f,1.f}},3,0,23.1000004f,28.0500011f,-1.f},
+    {"mii_name",1,2,1,4,255,0,13.3333359f,1.f,0.f,0.f,1.f,1.f,124.666672f,36.f,{{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},{{0.f,0.f,1.f,0.f,0.f,1.f,1.f,1.f}},4,1,32.25f,38.25f,0.f},
+    {"ranking_null",1,0,1,4,255,-1,-0.f,-0.f,0.f,0.f,1.f,1.f,600.f,40.f,{{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},{{0.f,0.f,1.f,0.f,0.f,1.f,1.f,1.f}},0,0,0.f,0.f,0.f},
+    {"line",10,1,1,6,255,8,-133.f,-18.93573f,0.f,0.f,1.f,1.f,256.f,3.f,{{0xffffff00u,0xffffff00u,0xffffffffu,0xffffffffu}},{{0.f,0.f,1.f,0.f,0.f,1.f,1.f,1.f}},0,0,0.f,0.f,0.f},
+    {"hight_light",10,1,1,4,255,9,-4.7046051f,18.0863094f,0.f,0.f,1.f,1.f,256.f,1.f,{{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},{{0.f,0.f,0.100000001f,0.f,0.f,1.f,0.100000001f,1.f}},0,0,0.f,0.f,0.f},
+    {"grade",10,1,1,4,100,10,-4.86883593f,1.08403003f,0.f,0.f,1.f,1.f,256.f,32.f,{{0xffffff00u,0xffffffffu,0xffffffffu,0xffffff00u}},{{0.f,0.f,1.f,0.f,0.f,1.f,1.f,1.f}},0,0,0.f,0.f,0.f},
+    {"Null_00",1,0,1,4,255,-1,96.5f,2.5f,0.f,0.f,1.f,1.f,30.f,40.f,{{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},{{0.f,0.f,1.f,0.f,0.f,1.f,1.f,1.f}},0,0,0.f,0.f,0.f},
+    {"pts",14,2,1,4,255,5,4.5f,-10.5f,0.f,0.f,1.f,0.899999976f,35.f,24.f,{{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},{{0.f,0.f,1.f,0.f,0.f,1.f,1.f,1.f}},4,1,21.2999992f,20.3999996f,0.f},
+    {"point",14,2,1,4,255,4,2.5f,4.5f,0.f,0.f,1.f,0.899999976f,35.f,35.f,{{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},{{0.f,0.f,1.f,0.f,0.f,1.f,1.f,1.f}},4,1,31.9999981f,32.f,0.f},
+    {"chara_icon_null",1,0,3,4,255,-1,-70.f,1.f,0.f,0.f,0.899999976f,0.899999976f,40.f,40.f,{{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},{{0.f,0.f,1.f,0.f,0.f,1.f,1.f,1.f}},0,0,0.f,0.f,0.f},
+    {"chara_icon_sha",17,1,1,4,255,2,2.5305481f,2.0916059f,0.f,0.f,1.10000002f,1.10000002f,35.f,35.f,{{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},{{0.f,0.f,1.f,0.f,0.f,1.f,1.f,1.f}},0,0,0.f,0.f,0.f},
+    {"chara_icon",17,1,1,4,255,3,-2.4694519f,4.09160614f,0.f,0.f,1.20000005f,1.20000005f,35.f,35.f,{{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},{{0.f,0.f,1.f,0.f,0.f,1.f,1.f,1.f}},0,0,0.f,0.f,0.f},
+};
+inline constexpr FlowMaterial FlowAwardItemLoseMaterials[]={
+    {"mii_name",{{0,0,0,0}},{{255,255,255,255}},-1,0,0,{{0.f,0.f,0.f,1.f,1.f}}},
+    {"p_color_r",{{255,100,0,0}},{{255,180,0,255}},38,2,2,{{1.f,0.f,0.f,1.f,1.f}}},
+    {"chara_icon_sha",{{0,0,0,0}},{{0,0,0,255}},31,0,0,{{0.f,0.f,0.f,1.f,1.f}}},
+    {"chara_icon",{{0,0,0,0}},{{255,255,255,255}},31,0,0,{{0.f,0.f,0.f,1.f,1.f}}},
+    {"point",{{0,0,0,0}},{{164,203,255,255}},-1,0,0,{{0.f,0.f,0.f,1.f,1.f}}},
+    {"pts",{{0,0,0,0}},{{164,201,255,255}},-1,0,0,{{0.f,0.f,0.f,1.f,1.f}}},
+    {"gold_parts",{{149,86,0,0}},{{255,234,103,255}},38,0,0,{{0.f,0.f,0.f,1.f,1.f}}},
+    {"position",{{0,0,0,0}},{{255,255,0,255}},-1,0,0,{{0.f,0.f,0.f,1.f,1.f}}},
+    {"line",{{0,0,0,0}},{{53,53,53,255}},38,0,0,{{0.f,0.f,0.f,1.f,1.f}}},
+    {"hight_light",{{255,255,255,0}},{{255,255,255,255}},38,0,0,{{0.f,0.f,0.f,1.f,1.f}}},
+    {"grade",{{255,255,255,0}},{{255,255,255,255}},37,0,0,{{0.f,0.f,0.f,1.f,1.f}}},
+    {"team_color_c",{{255,0,0,0}},{{255,0,0,255}},38,0,0,{{0.f,0.f,0.f,1.f,1.f}}},
+};
+inline constexpr FlowClip FlowAwardItemLoseClips[]={
+    {"Loop","Loop",49.f,1.f,true,-1,0,1}, // common_w121_ending_team_blue_red_chara_point_gold_loop.brlan
+    {"Player","Player",100.f,1.f,true,-1,1,1}, // common_w121_ending_team_blue_red_chara_point_select_gold_parts.brlan
+    {"Player","CPU",199.f,1.f,true,-1,2,1}, // common_w121_ending_team_blue_red_chara_point_select_gold_parts_nasi.brlan
+    {"PlayerColorOn","PlayerColorOn",100.f,1.f,true,-1,3,1}, // common_w121_ending_team_blue_red_chara_point_color_on.brlan
+    {"PlayerColorOn","PlayerColorOff",199.f,1.f,true,-1,4,1}, // common_w121_ending_team_blue_red_chara_point_color_off.brlan
+    {"PlayerColorType","PlayerColor1P",49.f,1.f,true,-1,5,7}, // common_w121_ending_team_blue_red_chara_point_1p_color.brlan
+    {"PlayerColorType","PlayerColor2P",18.f,1.f,true,-1,12,7}, // common_w121_ending_team_blue_red_chara_point_2p_color.brlan
+    {"PlayerColorType","PlayerColor3P",18.f,1.f,true,-1,19,7}, // common_w121_ending_team_blue_red_chara_point_3p_color.brlan
+    {"PlayerColorType","PlayerColor4P",49.f,1.f,true,-1,26,7}, // common_w121_ending_team_blue_red_chara_point_4p_color.brlan
+    {"PlayerColorType","PlayerColorRed",19.f,1.f,true,-1,33,7}, // common_w121_ending_team_blue_red_chara_point_red_team_color.brlan
+    {"PlayerColorType","PlayerColorBlue",29.f,1.f,true,-1,40,7}, // common_w121_ending_team_blue_red_chara_point_blue_team_color.brlan
+    {"CPUColorType","CPUColorOff",10.f,1.f,true,-1,47,10}, // common_w121_ending_team_blue_red_chara_point_com_c_off.brlan
+    {"CPUColorType","CPUColorRed",9.f,1.f,true,-1,57,10}, // common_w121_ending_team_blue_red_chara_point_red_color_clear.brlan
+    {"CPUColorType","CPUColorBlue",19.f,1.f,true,-1,67,10}, // common_w121_ending_team_blue_red_chara_point_blue_color_clear.brlan
+    {"PlayerFlash","FlashPlayer",50.f,1.f,true,-1,77,2}, // common_w121_ending_team_blue_red_chara_point_flash.brlan
+    {"PlayerFlash","FlashCPU",1.f,1.f,true,-1,79,26}, // common_w121_ending_team_blue_red_chara_point_flash_stop.brlan
+};
+inline constexpr FlowTrack FlowAwardItemLoseTracks[]={
+    {6,3,2,false,0,2},
+    {3,4,0,true,2,2},
+    {3,4,0,true,4,2},
+    {5,1,16,false,6,1},
+    {5,1,16,false,7,4},
+    {1,2,4,false,11,1},
+    {1,2,5,false,12,1},
+    {1,2,6,false,13,1},
+    {1,2,8,false,14,1},
+    {1,2,9,false,15,1},
+    {1,2,10,false,16,1},
+    {1,2,11,false,17,1},
+    {1,2,4,false,18,1},
+    {1,2,5,false,19,1},
+    {1,2,6,false,20,1},
+    {1,2,8,false,21,1},
+    {1,2,9,false,22,1},
+    {1,2,10,false,23,1},
+    {1,2,11,false,24,1},
+    {1,2,4,false,25,1},
+    {1,2,5,false,26,1},
+    {1,2,6,false,27,1},
+    {1,2,8,false,28,1},
+    {1,2,9,false,29,1},
+    {1,2,10,false,30,1},
+    {1,2,11,false,31,1},
+    {1,2,4,false,32,1},
+    {1,2,5,false,33,1},
+    {1,2,6,false,34,1},
+    {1,2,8,false,35,1},
+    {1,2,9,false,36,1},
+    {1,2,10,false,37,1},
+    {1,2,11,false,38,1},
+    {1,2,4,false,39,1},
+    {1,2,5,false,40,1},
+    {1,2,6,false,41,1},
+    {1,2,8,false,42,1},
+    {1,2,9,false,43,1},
+    {1,2,10,false,44,1},
+    {1,2,11,false,45,1},
+    {1,2,4,false,46,1},
+    {1,2,5,false,47,1},
+    {1,2,6,false,48,1},
+    {1,2,8,false,49,1},
+    {1,2,9,false,50,1},
+    {1,2,10,false,51,1},
+    {1,2,11,false,52,1},
+    {7,4,0,true,53,1},
+    {7,1,16,false,54,1},
+    {11,2,4,false,55,1},
+    {11,2,5,false,56,1},
+    {11,2,6,false,57,1},
+    {11,2,7,false,58,1},
+    {11,2,8,false,59,1},
+    {11,2,9,false,60,1},
+    {11,2,10,false,61,1},
+    {11,2,11,false,62,1},
+    {7,4,0,true,63,1},
+    {7,1,16,false,64,1},
+    {11,2,4,false,65,1},
+    {11,2,5,false,66,1},
+    {11,2,6,false,67,1},
+    {11,2,7,false,68,1},
+    {11,2,8,false,69,1},
+    {11,2,9,false,70,1},
+    {11,2,10,false,71,1},
+    {11,2,11,false,72,1},
+    {7,4,0,true,73,1},
+    {7,1,16,false,74,1},
+    {11,2,4,false,75,1},
+    {11,2,5,false,76,1},
+    {11,2,6,false,77,1},
+    {11,2,7,false,78,1},
+    {11,2,8,false,79,1},
+    {11,2,9,false,80,1},
+    {11,2,10,false,81,1},
+    {11,2,11,false,82,1},
+    {1,0,6,false,83,3},
+    {1,0,7,false,86,3},
+    {1,0,6,false,89,1},
+    {1,0,7,false,90,1},
+    {0,2,4,false,91,1},
+    {0,2,5,false,92,1},
+    {0,2,6,false,93,1},
+    {0,2,8,false,94,1},
+    {0,2,9,false,95,1},
+    {0,2,10,false,96,1},
+    {3,2,4,false,97,1},
+    {3,2,5,false,98,1},
+    {3,2,6,false,99,1},
+    {4,2,4,false,100,1},
+    {4,2,5,false,101,1},
+    {4,2,6,false,102,1},
+    {4,2,8,false,103,1},
+    {4,2,9,false,104,1},
+    {4,2,10,false,105,1},
+    {5,2,4,false,106,1},
+    {5,2,5,false,107,1},
+    {5,2,6,false,108,1},
+    {5,2,8,false,109,1},
+    {5,2,9,false,110,1},
+    {5,2,10,false,111,1},
+    {7,2,4,false,112,1},
+    {7,2,5,false,113,1},
+    {7,2,6,false,114,1},
+};
+inline constexpr FlowKey FlowAwardItemLoseKeys[]={
+    {-1.f,0.f,7.19999981f},{49.f,360.f,7.19999981f},{-1.f,1.f,0.f},{200.f,0.f,0.f},
+    {0.f,0.f,0.f},{199.f,1.f,0.f},{100.f,255.f,0.f},{0.f,0.f,0.f},
+    {198.f,0.f,0.f},{198.f,0.f,255.f},{199.f,255.f,255.f},{0.f,255.f,0.f},
+    {0.f,100.f,0.f},{0.f,0.f,0.f},{0.f,255.f,0.f},{0.f,180.f,0.f},
+    {0.f,0.f,0.f},{68.f,255.f,0.f},{0.f,0.f,0.f},{0.f,110.f,0.f},
+    {0.f,255.f,0.f},{0.f,15.f,0.f},{0.f,230.f,0.f},{0.f,255.f,0.f},
+    {18.f,255.f,0.f},{0.f,255.f,0.f},{0.f,0.f,0.f},{0.f,150.f,0.f},
+    {0.f,255.f,0.f},{0.f,80.f,0.f},{0.f,255.f,0.f},{-2.f,255.f,0.f},
+    {0.f,0.f,0.f},{0.f,180.f,0.f},{0.f,0.f,0.f},{0.f,75.f,0.f},
+    {0.f,255.f,0.f},{0.f,130.f,0.f},{-52.f,255.f,0.f},{0.f,255.f,0.f},
+    {0.f,0.f,0.f},{0.f,0.f,0.f},{0.f,255.f,0.f},{0.f,0.f,0.f},
+    {0.f,0.f,0.f},{-21.f,255.f,0.f},{0.f,0.f,0.f},{0.f,110.f,0.f},
+    {0.f,255.f,0.f},{0.f,0.f,0.f},{0.f,110.f,0.f},{0.f,255.f,0.f},
+    {0.f,255.f,0.f},{-9.f,0.f,0.f},{-10.f,0.f,0.f},{-10.f,255.f,0.f},
+    {-10.f,0.f,0.f},{-10.f,0.f,0.f},{-10.f,0.f,0.f},{-10.f,255.f,0.f},
+    {-10.f,0.f,0.f},{-10.f,0.f,0.f},{-10.f,255.f,0.f},{0.f,1.f,0.f},
+    {0.f,150.f,0.f},{9.f,255.f,0.f},{9.f,0.f,0.f},{9.f,0.f,0.f},
+    {9.f,0.f,0.f},{9.f,255.f,0.f},{9.f,0.f,0.f},{9.f,0.f,0.f},
+    {9.f,255.f,0.f},{19.f,1.f,0.f},{0.f,150.f,0.f},{0.f,0.f,0.f},
+    {0.f,0.f,0.f},{0.f,255.f,0.f},{0.f,0.f,0.f},{0.f,0.f,0.f},
+    {0.f,0.f,0.f},{0.f,255.f,0.f},{0.f,255.f,0.f},{0.f,1.f,0.000749999308f},
+    {40.f,1.02999997f,0.f},{50.f,1.f,-0.00299999723f},{0.f,1.f,0.000749999308f},{40.f,1.02999997f,0.f},
+    {50.f,1.f,-0.00299999723f},{0.f,1.f,0.f},{0.f,1.f,0.f},{0.f,0.f,0.f},
+    {0.f,0.f,0.f},{-50.f,0.f,0.f},{-50.f,255.f,0.f},{-50.f,255.f,0.f},
+    {-50.f,255.f,0.f},{0.f,0.f,0.f},{0.f,0.f,0.f},{-50.f,0.f,0.f},
+    {0.f,0.f,0.f},{0.f,0.f,0.f},{-50.f,0.f,0.f},{-50.f,164.f,0.f},
+    {-50.f,203.f,0.f},{-50.f,255.f,0.f},{0.f,0.f,0.f},{0.f,0.f,0.f},
+    {-50.f,0.f,0.f},{-50.f,164.f,0.f},{-50.f,201.f,0.f},{-50.f,255.f,0.f},
+    {0.f,0.f,0.f},{0.f,0.f,0.f},{-50.f,0.f,0.f},
+};
+inline constexpr FlowLayoutDef FlowAwardItemLoseLayout{FlowAwardItemLosePanes,20,FlowAwardItemLoseMaterials,12,FlowAwardItemLoseClips,16,FlowAwardItemLoseTracks,FlowAwardItemLoseKeys};
+inline constexpr FlowAwardVariant FlowAwardItemLoseVariants[]={
+{"Pos0",{-150.f,20.f,1.f,1.f,302.f},0},
+{"Pos1",{-150.f,-20.f,1.f,1.f,303.f},0},
+{"Pos2",{-150.f,-60.f,1.f,1.f,305.f},0},
+{"Pos3",{-150.f,-100.f,1.f,1.f,308.f},0},
+{"Pos4",{-150.f,-140.f,1.f,1.f,311.f},0},
+{"Pos5",{-150.f,-180.f,1.f,1.f,315.f},0},
+{"Pos6",{150.f,20.f,1.f,1.f,302.f},0},
+{"Pos7",{150.f,-20.f,1.f,1.f,303.f},0},
+{"Pos8",{150.f,-60.f,1.f,1.f,305.f},0},
+{"Pos9",{150.f,-100.f,1.f,1.f,308.f},0},
+{"Pos10",{150.f,-140.f,1.f,1.f,311.f},0},
+{"Pos11",{150.f,-180.f,1.f,1.f,315.f},0},
+{"Pos0C",{0.f,20.f,1.f,1.f,302.f},0},
+{"Pos1C",{0.f,-20.f,1.f,1.f,303.f},0},
+{"Pos2C",{0.f,-60.f,1.f,1.f,305.f},0},
+{"Pos3C",{0.f,-100.f,1.f,1.f,308.f},0},
+};
+inline constexpr FlowPane FlowAwardItemWinPanes[]={
+    {"RootPane",-1,0,1,4,255,-1,0.f,0.f,0.f,0.f,1.f,1.f,640.f,480.f,{{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},{{0.f,0.f,1.f,0.f,0.f,1.f,1.f,1.f}},0,0,0.f,0.f,0.f},
+    {"mii_name_null",0,0,5,4,255,-1,0.f,0.f,0.f,0.f,1.f,1.f,30.f,40.f,{{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},{{0.f,0.f,1.f,0.f,0.f,1.f,1.f,1.f}},0,0,0.f,0.f,0.f},
+    {"gold_p_null",1,0,5,4,255,-1,-0.f,-0.f,0.f,0.f,1.f,1.f,30.f,40.f,{{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},{{0.f,0.f,1.f,0.f,0.f,1.f,1.f,1.f}},0,0,0.f,0.f,0.f},
+    {"gold_parts",2,1,0,4,255,6,-5.f,-0.f,0.f,0.f,1.f,1.f,262.f,41.f,{{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},{{0.f,0.f,1.f,0.f,0.f,1.f,1.f,1.f}},0,0,0.f,0.f,0.f},
+    {"obi_top",1,0,1,4,255,-1,-0.f,-0.f,0.f,0.f,1.f,1.f,30.f,40.f,{{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},{{0.f,0.f,1.f,0.f,0.f,1.f,1.f,1.f}},0,0,0.f,0.f,0.f},
+    {"p_color_null",1,0,3,4,0,-1,-66.f,-38.f,0.f,0.f,1.f,1.f,30.f,40.f,{{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},{{0.f,0.f,1.f,0.f,0.f,1.f,1.f,1.f}},0,0,0.f,0.f,0.f},
+    {"p_color_r",5,1,1,5,255,1,189.f,38.f,0.f,0.f,1.f,1.f,256.f,33.f,{{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},{{0.f,0.f,1.f,0.f,0.f,1.f,1.f,1.f}},0,0,0.f,0.f,0.f},
+    {"team_color_c",1,1,0,4,0,11,-5.f,-1.f,0.f,0.f,1.f,1.f,256.f,24.f,{{0xffffff64u,0xffffff64u,0xffffffffu,0xffffffffu}},{{0.f,0.f,0.100000001f,0.f,0.f,1.f,0.100000001f,1.f}},0,0,0.f,0.f,0.f},
+    {"position",1,2,1,4,255,7,-110.f,-0.f,0.f,0.f,0.899999976f,1.f,46.9696999f,25.f,{{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},{{0.f,0.f,1.f,0.f,0.f,1.f,1.f,1.f}},3,0,23.1000004f,28.0500011f,-1.f},
+    {"mii_name",1,2,1,4,255,0,13.3333359f,1.f,0.f,0.f,1.f,1.f,124.666672f,36.f,{{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},{{0.f,0.f,1.f,0.f,0.f,1.f,1.f,1.f}},4,1,32.25f,38.25f,0.f},
+    {"ranking_null",1,0,1,4,255,-1,-0.f,-0.f,0.f,0.f,1.f,1.f,600.f,40.f,{{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},{{0.f,0.f,1.f,0.f,0.f,1.f,1.f,1.f}},0,0,0.f,0.f,0.f},
+    {"line",10,1,1,6,255,8,-133.f,-18.93573f,0.f,0.f,1.f,1.f,256.f,3.f,{{0xffffff00u,0xffffff00u,0xffffffffu,0xffffffffu}},{{0.f,0.f,1.f,0.f,0.f,1.f,1.f,1.f}},0,0,0.f,0.f,0.f},
+    {"hight_light",10,1,1,4,255,9,-4.7046051f,18.0863094f,0.f,0.f,1.f,1.f,256.f,1.f,{{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},{{0.f,0.f,0.100000001f,0.f,0.f,1.f,0.100000001f,1.f}},0,0,0.f,0.f,0.f},
+    {"grade",10,1,1,4,100,10,-4.86883593f,1.08403003f,0.f,0.f,1.f,1.f,256.f,32.f,{{0xffffff00u,0xffffffffu,0xffffffffu,0xffffff00u}},{{0.f,0.f,1.f,0.f,0.f,1.f,1.f,1.f}},0,0,0.f,0.f,0.f},
+    {"Null_00",1,0,1,4,255,-1,96.5f,2.5f,0.f,0.f,1.f,1.f,30.f,40.f,{{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},{{0.f,0.f,1.f,0.f,0.f,1.f,1.f,1.f}},0,0,0.f,0.f,0.f},
+    {"pts",14,2,1,4,255,5,4.5f,-10.5f,0.f,0.f,1.f,0.899999976f,35.f,24.f,{{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},{{0.f,0.f,1.f,0.f,0.f,1.f,1.f,1.f}},4,1,21.2999992f,20.3999996f,0.f},
+    {"point",14,2,1,4,255,4,2.5f,4.5f,0.f,0.f,1.f,0.899999976f,35.f,35.f,{{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},{{0.f,0.f,1.f,0.f,0.f,1.f,1.f,1.f}},4,1,31.9999981f,32.f,0.f},
+    {"chara_icon_null",1,0,3,4,255,-1,-70.f,1.f,0.f,0.f,0.899999976f,0.899999976f,40.f,40.f,{{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},{{0.f,0.f,1.f,0.f,0.f,1.f,1.f,1.f}},0,0,0.f,0.f,0.f},
+    {"chara_icon_sha",17,1,1,4,255,2,2.5305481f,2.0916059f,0.f,0.f,1.10000002f,1.10000002f,35.f,35.f,{{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},{{0.f,0.f,1.f,0.f,0.f,1.f,1.f,1.f}},0,0,0.f,0.f,0.f},
+    {"chara_icon",17,1,1,4,255,3,-2.4694519f,4.09160614f,0.f,0.f,1.20000005f,1.20000005f,35.f,35.f,{{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},{{0.f,0.f,1.f,0.f,0.f,1.f,1.f,1.f}},0,0,0.f,0.f,0.f},
+};
+inline constexpr FlowMaterial FlowAwardItemWinMaterials[]={
+    {"mii_name",{{0,0,0,0}},{{255,255,255,255}},-1,0,0,{{0.f,0.f,0.f,1.f,1.f}}},
+    {"p_color_r",{{255,100,0,0}},{{255,180,0,255}},38,2,2,{{1.f,0.f,0.f,1.f,1.f}}},
+    {"chara_icon_sha",{{0,0,0,0}},{{0,0,0,255}},31,0,0,{{0.f,0.f,0.f,1.f,1.f}}},
+    {"chara_icon",{{0,0,0,0}},{{255,255,255,255}},31,0,0,{{0.f,0.f,0.f,1.f,1.f}}},
+    {"point",{{0,0,0,0}},{{164,203,255,255}},-1,0,0,{{0.f,0.f,0.f,1.f,1.f}}},
+    {"pts",{{0,0,0,0}},{{164,201,255,255}},-1,0,0,{{0.f,0.f,0.f,1.f,1.f}}},
+    {"gold_parts",{{149,86,0,0}},{{255,234,103,255}},38,0,0,{{0.f,0.f,0.f,1.f,1.f}}},
+    {"position",{{0,0,0,0}},{{255,255,0,255}},-1,0,0,{{0.f,0.f,0.f,1.f,1.f}}},
+    {"line",{{0,0,0,0}},{{53,53,53,255}},38,0,0,{{0.f,0.f,0.f,1.f,1.f}}},
+    {"hight_light",{{255,255,255,0}},{{255,255,255,255}},38,0,0,{{0.f,0.f,0.f,1.f,1.f}}},
+    {"grade",{{255,255,255,0}},{{255,255,255,255}},37,0,0,{{0.f,0.f,0.f,1.f,1.f}}},
+    {"team_color_c",{{255,0,0,0}},{{255,0,0,255}},38,0,0,{{0.f,0.f,0.f,1.f,1.f}}},
+};
+inline constexpr FlowClip FlowAwardItemWinClips[]={
+    {"Loop","Loop",49.f,1.f,true,-1,0,1}, // common_w121_ending_team_blue_red_chara_point_gold_loop.brlan
+    {"Player","Player",100.f,1.f,true,-1,1,1}, // common_w121_ending_team_blue_red_chara_point_select_gold_parts.brlan
+    {"Player","CPU",199.f,1.f,true,-1,2,1}, // common_w121_ending_team_blue_red_chara_point_select_gold_parts_nasi.brlan
+    {"PlayerColorOn","PlayerColorOn",100.f,1.f,true,-1,3,1}, // common_w121_ending_team_blue_red_chara_point_color_on.brlan
+    {"PlayerColorOn","PlayerColorOff",199.f,1.f,true,-1,4,1}, // common_w121_ending_team_blue_red_chara_point_color_off.brlan
+    {"PlayerColorType","PlayerColor1P",49.f,1.f,true,-1,5,7}, // common_w121_ending_team_blue_red_chara_point_1p_color.brlan
+    {"PlayerColorType","PlayerColor2P",18.f,1.f,true,-1,12,7}, // common_w121_ending_team_blue_red_chara_point_2p_color.brlan
+    {"PlayerColorType","PlayerColor3P",18.f,1.f,true,-1,19,7}, // common_w121_ending_team_blue_red_chara_point_3p_color.brlan
+    {"PlayerColorType","PlayerColor4P",49.f,1.f,true,-1,26,7}, // common_w121_ending_team_blue_red_chara_point_4p_color.brlan
+    {"PlayerColorType","PlayerColorRed",19.f,1.f,true,-1,33,7}, // common_w121_ending_team_blue_red_chara_point_red_team_color.brlan
+    {"PlayerColorType","PlayerColorBlue",29.f,1.f,true,-1,40,7}, // common_w121_ending_team_blue_red_chara_point_blue_team_color.brlan
+    {"CPUColorType","CPUColorOff",10.f,1.f,true,-1,47,10}, // common_w121_ending_team_blue_red_chara_point_com_c_off.brlan
+    {"CPUColorType","CPUColorRed",9.f,1.f,true,-1,57,10}, // common_w121_ending_team_blue_red_chara_point_red_color_clear.brlan
+    {"CPUColorType","CPUColorBlue",19.f,1.f,true,-1,67,10}, // common_w121_ending_team_blue_red_chara_point_blue_color_clear.brlan
+    {"PlayerFlash","FlashPlayer",50.f,1.f,true,-1,77,2}, // common_w121_ending_team_blue_red_chara_point_flash.brlan
+    {"PlayerFlash","FlashCPU",1.f,1.f,true,-1,79,26}, // common_w121_ending_team_blue_red_chara_point_flash_stop.brlan
+};
+inline constexpr FlowTrack FlowAwardItemWinTracks[]={
+    {6,3,2,false,0,2},
+    {3,4,0,true,2,2},
+    {3,4,0,true,4,2},
+    {5,1,16,false,6,1},
+    {5,1,16,false,7,4},
+    {1,2,4,false,11,1},
+    {1,2,5,false,12,1},
+    {1,2,6,false,13,1},
+    {1,2,8,false,14,1},
+    {1,2,9,false,15,1},
+    {1,2,10,false,16,1},
+    {1,2,11,false,17,1},
+    {1,2,4,false,18,1},
+    {1,2,5,false,19,1},
+    {1,2,6,false,20,1},
+    {1,2,8,false,21,1},
+    {1,2,9,false,22,1},
+    {1,2,10,false,23,1},
+    {1,2,11,false,24,1},
+    {1,2,4,false,25,1},
+    {1,2,5,false,26,1},
+    {1,2,6,false,27,1},
+    {1,2,8,false,28,1},
+    {1,2,9,false,29,1},
+    {1,2,10,false,30,1},
+    {1,2,11,false,31,1},
+    {1,2,4,false,32,1},
+    {1,2,5,false,33,1},
+    {1,2,6,false,34,1},
+    {1,2,8,false,35,1},
+    {1,2,9,false,36,1},
+    {1,2,10,false,37,1},
+    {1,2,11,false,38,1},
+    {1,2,4,false,39,1},
+    {1,2,5,false,40,1},
+    {1,2,6,false,41,1},
+    {1,2,8,false,42,1},
+    {1,2,9,false,43,1},
+    {1,2,10,false,44,1},
+    {1,2,11,false,45,1},
+    {1,2,4,false,46,1},
+    {1,2,5,false,47,1},
+    {1,2,6,false,48,1},
+    {1,2,8,false,49,1},
+    {1,2,9,false,50,1},
+    {1,2,10,false,51,1},
+    {1,2,11,false,52,1},
+    {7,4,0,true,53,1},
+    {7,1,16,false,54,1},
+    {11,2,4,false,55,1},
+    {11,2,5,false,56,1},
+    {11,2,6,false,57,1},
+    {11,2,7,false,58,1},
+    {11,2,8,false,59,1},
+    {11,2,9,false,60,1},
+    {11,2,10,false,61,1},
+    {11,2,11,false,62,1},
+    {7,4,0,true,63,1},
+    {7,1,16,false,64,1},
+    {11,2,4,false,65,1},
+    {11,2,5,false,66,1},
+    {11,2,6,false,67,1},
+    {11,2,7,false,68,1},
+    {11,2,8,false,69,1},
+    {11,2,9,false,70,1},
+    {11,2,10,false,71,1},
+    {11,2,11,false,72,1},
+    {7,4,0,true,73,1},
+    {7,1,16,false,74,1},
+    {11,2,4,false,75,1},
+    {11,2,5,false,76,1},
+    {11,2,6,false,77,1},
+    {11,2,7,false,78,1},
+    {11,2,8,false,79,1},
+    {11,2,9,false,80,1},
+    {11,2,10,false,81,1},
+    {11,2,11,false,82,1},
+    {1,0,6,false,83,3},
+    {1,0,7,false,86,3},
+    {1,0,6,false,89,1},
+    {1,0,7,false,90,1},
+    {0,2,4,false,91,1},
+    {0,2,5,false,92,1},
+    {0,2,6,false,93,1},
+    {0,2,8,false,94,1},
+    {0,2,9,false,95,1},
+    {0,2,10,false,96,1},
+    {3,2,4,false,97,1},
+    {3,2,5,false,98,1},
+    {3,2,6,false,99,1},
+    {4,2,4,false,100,1},
+    {4,2,5,false,101,1},
+    {4,2,6,false,102,1},
+    {4,2,8,false,103,1},
+    {4,2,9,false,104,1},
+    {4,2,10,false,105,1},
+    {5,2,4,false,106,1},
+    {5,2,5,false,107,1},
+    {5,2,6,false,108,1},
+    {5,2,8,false,109,1},
+    {5,2,9,false,110,1},
+    {5,2,10,false,111,1},
+    {7,2,4,false,112,1},
+    {7,2,5,false,113,1},
+    {7,2,6,false,114,1},
+};
+inline constexpr FlowKey FlowAwardItemWinKeys[]={
+    {-1.f,0.f,7.19999981f},{49.f,360.f,7.19999981f},{-1.f,1.f,0.f},{200.f,0.f,0.f},
+    {0.f,0.f,0.f},{199.f,1.f,0.f},{100.f,255.f,0.f},{0.f,0.f,0.f},
+    {198.f,0.f,0.f},{198.f,0.f,255.f},{199.f,255.f,255.f},{0.f,255.f,0.f},
+    {0.f,100.f,0.f},{0.f,0.f,0.f},{0.f,255.f,0.f},{0.f,180.f,0.f},
+    {0.f,0.f,0.f},{68.f,255.f,0.f},{0.f,0.f,0.f},{0.f,110.f,0.f},
+    {0.f,255.f,0.f},{0.f,15.f,0.f},{0.f,230.f,0.f},{0.f,255.f,0.f},
+    {18.f,255.f,0.f},{0.f,255.f,0.f},{0.f,0.f,0.f},{0.f,150.f,0.f},
+    {0.f,255.f,0.f},{0.f,80.f,0.f},{0.f,255.f,0.f},{-2.f,255.f,0.f},
+    {0.f,0.f,0.f},{0.f,180.f,0.f},{0.f,0.f,0.f},{0.f,75.f,0.f},
+    {0.f,255.f,0.f},{0.f,130.f,0.f},{-52.f,255.f,0.f},{0.f,255.f,0.f},
+    {0.f,0.f,0.f},{0.f,0.f,0.f},{0.f,255.f,0.f},{0.f,0.f,0.f},
+    {0.f,0.f,0.f},{-21.f,255.f,0.f},{0.f,0.f,0.f},{0.f,110.f,0.f},
+    {0.f,255.f,0.f},{0.f,0.f,0.f},{0.f,110.f,0.f},{0.f,255.f,0.f},
+    {0.f,255.f,0.f},{-9.f,0.f,0.f},{-10.f,0.f,0.f},{-10.f,255.f,0.f},
+    {-10.f,0.f,0.f},{-10.f,0.f,0.f},{-10.f,0.f,0.f},{-10.f,255.f,0.f},
+    {-10.f,0.f,0.f},{-10.f,0.f,0.f},{-10.f,255.f,0.f},{0.f,1.f,0.f},
+    {0.f,150.f,0.f},{9.f,255.f,0.f},{9.f,0.f,0.f},{9.f,0.f,0.f},
+    {9.f,0.f,0.f},{9.f,255.f,0.f},{9.f,0.f,0.f},{9.f,0.f,0.f},
+    {9.f,255.f,0.f},{19.f,1.f,0.f},{0.f,150.f,0.f},{0.f,0.f,0.f},
+    {0.f,0.f,0.f},{0.f,255.f,0.f},{0.f,0.f,0.f},{0.f,0.f,0.f},
+    {0.f,0.f,0.f},{0.f,255.f,0.f},{0.f,255.f,0.f},{0.f,1.f,0.000749999308f},
+    {40.f,1.02999997f,0.f},{50.f,1.f,-0.00299999723f},{0.f,1.f,0.000749999308f},{40.f,1.02999997f,0.f},
+    {50.f,1.f,-0.00299999723f},{0.f,1.f,0.f},{0.f,1.f,0.f},{0.f,0.f,0.f},
+    {0.f,0.f,0.f},{-50.f,0.f,0.f},{-50.f,255.f,0.f},{-50.f,255.f,0.f},
+    {-50.f,255.f,0.f},{0.f,0.f,0.f},{0.f,0.f,0.f},{-50.f,0.f,0.f},
+    {0.f,0.f,0.f},{0.f,0.f,0.f},{-50.f,0.f,0.f},{-50.f,164.f,0.f},
+    {-50.f,203.f,0.f},{-50.f,255.f,0.f},{0.f,0.f,0.f},{0.f,0.f,0.f},
+    {-50.f,0.f,0.f},{-50.f,164.f,0.f},{-50.f,201.f,0.f},{-50.f,255.f,0.f},
+    {0.f,0.f,0.f},{0.f,0.f,0.f},{-50.f,0.f,0.f},
+};
+inline constexpr FlowLayoutDef FlowAwardItemWinLayout{FlowAwardItemWinPanes,20,FlowAwardItemWinMaterials,12,FlowAwardItemWinClips,16,FlowAwardItemWinTracks,FlowAwardItemWinKeys};
+inline constexpr FlowAwardVariant FlowAwardItemWinVariants[]={
+{"Pos0",{-150.f,20.f,1.f,1.f,182.f},0},
+{"Pos1",{-150.f,-20.f,1.f,1.f,183.f},0},
+{"Pos2",{-150.f,-60.f,1.f,1.f,185.f},0},
+{"Pos3",{-150.f,-100.f,1.f,1.f,188.f},0},
+{"Pos4",{-150.f,-140.f,1.f,1.f,191.f},0},
+{"Pos5",{-150.f,-180.f,1.f,1.f,195.f},0},
+{"Pos6",{150.f,20.f,1.f,1.f,182.f},0},
+{"Pos7",{150.f,-20.f,1.f,1.f,183.f},0},
+{"Pos8",{150.f,-60.f,1.f,1.f,185.f},0},
+{"Pos9",{150.f,-100.f,1.f,1.f,188.f},0},
+{"Pos10",{150.f,-140.f,1.f,1.f,191.f},0},
+{"Pos11",{150.f,-180.f,1.f,1.f,195.f},0},
+{"Pos0C",{0.f,20.f,1.f,1.f,182.f},0},
+{"Pos1C",{0.f,-20.f,1.f,1.f,183.f},0},
+{"Pos2C",{0.f,-60.f,1.f,1.f,185.f},0},
+{"Pos3C",{0.f,-100.f,1.f,1.f,188.f},0},
+};
+inline constexpr FlowPane FlowAwardRankLosePanes[]={
+    {"RootPane",-1,0,1,4,255,-1,0.f,0.f,0.f,0.f,1.f,1.f,608.f,456.f,{{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},{{0.f,0.f,1.f,0.f,0.f,1.f,1.f,1.f}},0,0,0.f,0.f,0.f},
+    {"rank_null",0,0,5,4,255,-1,25.5f,0.f,0.f,0.f,1.f,1.f,40.f,40.f,{{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},{{0.f,0.f,1.f,0.f,0.f,1.f,1.f,1.f}},0,0,0.f,0.f,0.f},
+    {"star",1,2,1,4,255,1,-11.5f,0.5f,0.f,0.f,1.f,1.f,53.25f,35.f,{{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},{{0.f,0.f,1.f,0.f,0.f,1.f,1.f,1.f}},3,0,34.4000015f,40.7999992f,0.f},
+    {"rank",1,2,1,4,255,0,-108.5f,0.5f,0.f,0.f,1.f,1.f,138.75f,35.f,{{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},{{0.f,0.f,1.f,0.f,0.f,1.f,1.f,1.f}},5,2,25.8000011f,30.6000004f,0.f},
+};
+inline constexpr FlowMaterial FlowAwardRankLoseMaterials[]={
+    {"rank",{{0,0,0,0}},{{255,199,58,255}},-1,0,0,{{0.f,0.f,0.f,1.f,1.f}}},
+    {"star",{{0,0,0,0}},{{255,199,58,255}},-1,0,0,{{0.f,0.f,0.f,1.f,1.f}}},
+};
+inline constexpr FlowClip FlowAwardRankLoseClips[]={
+};
+inline constexpr FlowTrack FlowAwardRankLoseTracks[]={
+};
+inline constexpr FlowKey FlowAwardRankLoseKeys[]={
+};
+inline constexpr FlowLayoutDef FlowAwardRankLoseLayout{FlowAwardRankLosePanes,4,FlowAwardRankLoseMaterials,2,FlowAwardRankLoseClips,0,FlowAwardRankLoseTracks,FlowAwardRankLoseKeys};
+inline constexpr FlowAwardVariant FlowAwardRankLoseVariants[]={
+{"Rank",{300.f,165.f,1.29999995f,1.29999995f,300.f},1423},
+};
+inline constexpr FlowPane FlowAwardRankWinPanes[]={
+    {"RootPane",-1,0,1,4,255,-1,0.f,0.f,0.f,0.f,1.f,1.f,608.f,456.f,{{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},{{0.f,0.f,1.f,0.f,0.f,1.f,1.f,1.f}},0,0,0.f,0.f,0.f},
+    {"rank_null",0,0,5,4,255,-1,25.5f,0.f,0.f,0.f,1.f,1.f,40.f,40.f,{{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},{{0.f,0.f,1.f,0.f,0.f,1.f,1.f,1.f}},0,0,0.f,0.f,0.f},
+    {"star",1,2,1,4,255,1,-11.5f,0.5f,0.f,0.f,1.f,1.f,53.25f,35.f,{{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},{{0.f,0.f,1.f,0.f,0.f,1.f,1.f,1.f}},3,0,34.4000015f,40.7999992f,0.f},
+    {"rank",1,2,1,4,255,0,-108.5f,0.5f,0.f,0.f,1.f,1.f,138.75f,35.f,{{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},{{0.f,0.f,1.f,0.f,0.f,1.f,1.f,1.f}},5,2,25.8000011f,30.6000004f,0.f},
+};
+inline constexpr FlowMaterial FlowAwardRankWinMaterials[]={
+    {"rank",{{0,0,0,0}},{{255,199,58,255}},-1,0,0,{{0.f,0.f,0.f,1.f,1.f}}},
+    {"star",{{0,0,0,0}},{{255,199,58,255}},-1,0,0,{{0.f,0.f,0.f,1.f,1.f}}},
+};
+inline constexpr FlowClip FlowAwardRankWinClips[]={
+};
+inline constexpr FlowTrack FlowAwardRankWinTracks[]={
+};
+inline constexpr FlowKey FlowAwardRankWinKeys[]={
+};
+inline constexpr FlowLayoutDef FlowAwardRankWinLayout{FlowAwardRankWinPanes,4,FlowAwardRankWinMaterials,2,FlowAwardRankWinClips,0,FlowAwardRankWinTracks,FlowAwardRankWinKeys};
+inline constexpr FlowAwardVariant FlowAwardRankWinVariants[]={
+{"Rank",{300.f,165.f,1.29999995f,1.29999995f,180.f},1423},
+};
+inline constexpr FlowPane FlowAwardTypeLosePanes[]={
+    {"RootPane",-1,0,1,4,255,-1,0.f,0.f,0.f,0.f,1.f,1.f,608.f,456.f,{{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},{{0.f,0.f,1.f,0.f,0.f,1.f,1.f,1.f}},0,0,0.f,0.f,0.f},
+    {"cup_name_null",0,0,7,4,255,-1,0.f,0.f,0.f,0.f,1.f,1.f,30.f,40.f,{{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},{{0.f,0.f,1.f,0.f,0.f,1.f,1.f,1.f}},0,0,0.f,0.f,0.f},
+    {"cup_icon",1,1,1,4,255,1,-6.5f,1.5f,0.f,0.f,1.f,1.f,64.f,64.f,{{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},{{0.f,0.f,1.f,0.f,0.f,1.f,1.f,1.f}},0,0,0.f,0.f,0.f},
+    {"cup_name",1,2,1,4,255,0,175.499939f,-10.f,0.f,0.f,1.f,1.f,284.f,35.f,{{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},{{0.f,0.f,1.f,0.f,0.f,1.f,1.f,1.f}},3,0,25.8000011f,30.6000004f,0.f},
+};
+inline constexpr FlowMaterial FlowAwardTypeLoseMaterials[]={
+    {"cup_name",{{0,0,0,0}},{{255,199,58,255}},-1,0,0,{{0.f,0.f,0.f,1.f,1.f}}},
+    {"cup_icon",{{0,0,0,0}},{{255,255,255,255}},11,0,0,{{0.f,0.f,0.f,1.f,1.f}}},
+};
+inline constexpr FlowClip FlowAwardTypeLoseClips[]={
+};
+inline constexpr FlowTrack FlowAwardTypeLoseTracks[]={
+};
+inline constexpr FlowKey FlowAwardTypeLoseKeys[]={
+};
+inline constexpr FlowLayoutDef FlowAwardTypeLoseLayout{FlowAwardTypeLosePanes,4,FlowAwardTypeLoseMaterials,2,FlowAwardTypeLoseClips,0,FlowAwardTypeLoseTracks,FlowAwardTypeLoseKeys};
+inline constexpr FlowAwardVariant FlowAwardTypeLoseVariants[]={
+{"Type",{-320.f,175.f,1.f,1.f,300.f},0},
+};
+inline constexpr FlowPane FlowAwardTypeWinPanes[]={
+    {"RootPane",-1,0,1,4,255,-1,0.f,0.f,0.f,0.f,1.f,1.f,608.f,456.f,{{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},{{0.f,0.f,1.f,0.f,0.f,1.f,1.f,1.f}},0,0,0.f,0.f,0.f},
+    {"cup_name_null",0,0,7,4,255,-1,0.f,0.f,0.f,0.f,1.f,1.f,30.f,40.f,{{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},{{0.f,0.f,1.f,0.f,0.f,1.f,1.f,1.f}},0,0,0.f,0.f,0.f},
+    {"cup_icon",1,1,1,4,255,1,-6.5f,1.5f,0.f,0.f,1.f,1.f,64.f,64.f,{{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},{{0.f,0.f,1.f,0.f,0.f,1.f,1.f,1.f}},0,0,0.f,0.f,0.f},
+    {"cup_name",1,2,1,4,255,0,175.499939f,-10.f,0.f,0.f,1.f,1.f,284.f,35.f,{{0xffffffffu,0xffffffffu,0xffffffffu,0xffffffffu}},{{0.f,0.f,1.f,0.f,0.f,1.f,1.f,1.f}},3,0,25.8000011f,30.6000004f,0.f},
+};
+inline constexpr FlowMaterial FlowAwardTypeWinMaterials[]={
+    {"cup_name",{{0,0,0,0}},{{255,199,58,255}},-1,0,0,{{0.f,0.f,0.f,1.f,1.f}}},
+    {"cup_icon",{{0,0,0,0}},{{255,255,255,255}},11,0,0,{{0.f,0.f,0.f,1.f,1.f}}},
+};
+inline constexpr FlowClip FlowAwardTypeWinClips[]={
+};
+inline constexpr FlowTrack FlowAwardTypeWinTracks[]={
+};
+inline constexpr FlowKey FlowAwardTypeWinKeys[]={
+};
+inline constexpr FlowLayoutDef FlowAwardTypeWinLayout{FlowAwardTypeWinPanes,4,FlowAwardTypeWinMaterials,2,FlowAwardTypeWinClips,0,FlowAwardTypeWinTracks,FlowAwardTypeWinKeys};
+inline constexpr FlowAwardVariant FlowAwardTypeWinVariants[]={
+{"Type",{-320.f,175.f,1.f,1.f,180.f},0},
+};
+inline constexpr FlowGlyph FlowAwardGlyphs[]={
+{char16_t(32),484,107,0,12,12},
+{char16_t(33),410,107,13,0,14},
+{char16_t(43),121,54,27,-2,24},
+{char16_t(46),425,107,13,0,12},
+{char16_t(48),150,54,27,-2,24},
+{char16_t(49),368,107,19,1,24},
+{char16_t(50),266,54,26,-1,24},
+{char16_t(51),349,1,28,-3,24},
+{char16_t(52),379,1,28,-2,24},
+{char16_t(53),409,1,28,-2,24},
+{char16_t(54),179,54,27,-2,24},
+{char16_t(55),294,54,26,-1,24},
+{char16_t(56),439,1,28,-2,24},
+{char16_t(57),208,54,27,-2,24},
+{char16_t(58),470,107,12,1,14},
+{char16_t(65),156,1,32,-2,28},
+{char16_t(66),469,1,28,-2,23},
+{char16_t(67),287,1,29,-2,25},
+{char16_t(68),223,1,30,-2,25},
+{char16_t(69),322,54,26,-2,21},
+{char16_t(70),220,107,24,-2,20},
+{char16_t(74),324,107,20,-2,17},
+{char16_t(75),318,1,29,-1,26},
+{char16_t(76),246,107,24,-2,20},
+{char16_t(77),121,1,33,-2,29},
+{char16_t(78),1,54,28,-2,25},
+{char16_t(80),237,54,27,-2,22},
+{char16_t(82),31,54,28,-2,24},
+{char16_t(83),61,54,28,-3,23},
+{char16_t(84),91,54,28,-2,23},
+{char16_t(86),190,1,31,-3,26},
+{char16_t(87),1,1,41,-4,33},
+{char16_t(89),255,1,30,-3,25},
+{char16_t(97),350,54,26,-1,23},
+{char16_t(98),378,54,26,-2,21},
+{char16_t(99),272,107,24,-1,22},
+{char16_t(100),406,54,26,-2,23},
+{char16_t(101),434,54,26,-2,21},
+{char16_t(103),85,107,25,-2,22},
+{char16_t(104),112,107,25,-1,22},
+{char16_t(105),440,107,13,0,12},
+{char16_t(107),139,107,25,-2,20},
+{char16_t(108),455,107,13,0,12},
+{char16_t(109),84,1,35,-3,29},
+{char16_t(110),166,107,25,-1,23},
+{char16_t(111),462,54,26,-1,24},
+{char16_t(112),1,107,26,-2,21},
+{char16_t(114),389,107,19,-2,15},
+{char16_t(115),298,107,24,-3,19},
+{char16_t(116),346,107,20,-2,15},
+{char16_t(117),193,107,25,-2,21},
+{char16_t(119),44,1,38,-3,32},
+{char16_t(120),29,107,26,-3,21},
+{char16_t(121),57,107,26,-3,21},
+};
+inline constexpr FlowFont FlowAwardFont{45,512,256,51,42,51,51,FlowAwardGlyphs,54};
+inline constexpr FlowGlyph FlowAwardRankGlyphs[]={
+{char16_t(61537),1,1,43,0,43},
+{char16_t(61538),46,1,43,0,43},
+{char16_t(61539),91,1,43,0,43},
+{char16_t(61560),136,1,43,0,43},
+{char16_t(61561),181,1,43,0,43},
+{char16_t(61562),1,54,43,0,43},
+{char16_t(61563),46,54,43,0,43},
+{char16_t(61564),91,54,43,0,43},
+};
+inline constexpr FlowFont FlowAwardRankFont{46,256,128,51,43,51,51,FlowAwardRankGlyphs,8};
+struct FlowAwardMessage {uint32_t id;const char* text;};
+inline constexpr FlowAwardMessage FlowAwardMessages[]={{1214,"The red team wins!"},{1215,"The blue team wins!"},{1216,"The red team wins!"},{1217,"The blue team wins!"},{1218,"Tie"},{1219,"You got 1st place!"},{1220,"You got 2nd place!"},{1221,"You got 3rd place!"},{1222,"Better luck next time!"},{1223,"The red team lost."},{1224,"The blue team lost."},{1225,"The red team lost."},{1226,"The blue team lost."},{1415,"Balloon Battle"},{1416,"Coin Runners"},{1417,"50cc"},{1418,"100cc"},{1419,"150cc"},{1420,"Mirror"},{1421," "},{1422," VS"},{1423,"RANK:"},{1424,"\uf063"},{1425,"\uf062"},{1426,"\uf061"},{1427,"\uf078"},{1428,"\uf079"},{1429,"\uf07a"},{1430,"\uf07b"},{1431,"\uf07c"}};
 }

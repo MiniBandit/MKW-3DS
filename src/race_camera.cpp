@@ -255,8 +255,8 @@ RaceCameraDirector::Mode RaceCameraDirector::mode()const{
 }
 
 void RaceCameraDirector::reset(const StartPanParam& pan,Vec3 startPos,Vec3 startAngles,const RaceCameraInput& first){
- flags_=0;riseEye_=riseTarget_=0;wasBeforeRespawn_=wasInRespawn_=false;wipe_=-1;
- auto_={};
+ flags_=0;riseEye_=riseTarget_=0;wasBeforeRespawn_=wasInRespawn_=false;wipe_=-1;battleWipeSerial_=first.battleWipeSerial;
+ auto_={};forwardPitchReady_=false;bulletYawActive_=false;
  // RaceCamera::Init: OpeningPan::Init sets the target height to 100, OnRespawn
  // evaluates the target once (easing it), then Init sets 100 again.
  targetHeight_=100;computeTarget(first,true);targetHeight_=100;
@@ -292,7 +292,7 @@ void RaceCameraDirector::step(const RaceCameraInput& in){
  // UpdateCameraOnRespawn (PAL 0x80590E28): RaceCamera::OnRespawn re-seats the
  // camera behind the kart and clears every request.
  if(in.inRespawn&&!wasInRespawn_){
-  flags_=0;riseEye_=riseTarget_=0;
+  flags_=0;riseEye_=riseTarget_=0;forwardPitchReady_=false;
   computeTarget(in,true);eye_=in.chaseEye;
  }
  // Out of bounds: the request issued with the activation (KartCollide hook).
@@ -302,7 +302,10 @@ void RaceCameraDirector::step(const RaceCameraInput& in){
  // actual respawn timer reaches 90; do not infer it from the camera edge.
  // Kart::Status advances the existing wipe before collision starts a new one.
  if(wipe_>=0&&++wipe_>int(WipeFrames))wipe_=-1;
- if(in.beforeRespawn&&in.respawnTimer==90&&wipe_<0)wipe_=0;
+ // Zero-balloon rescue directly requests respawn, bypassing the OOB
+ // BeforeRespawn countdown. Consume its native wipe request separately.
+ if(in.battleWipeSerial!=battleWipeSerial_){battleWipeSerial_=in.battleWipeSerial;wipe_=0;}
+ else if(in.beforeRespawn&&in.respawnTimer==90&&wipe_<0)wipe_=0;
  // RaceCamera::Update (PAL 0x805A21D0).
  computeTarget(in,false);
  if(!(flags_&FlagHold))eye_=in.chaseEye;
@@ -315,36 +318,79 @@ void RaceCameraDirector::step(const RaceCameraInput& in){
  if(in.finished&&course_&&!(flags_&FlagOobHit))flags_|=FlagAuto;else flags_&=uint16_t(~FlagAuto);
  stepPan(in);
  if(flags_&FlagAuto)stepAuto(in);
+ // Establish Killer's chase bearing, while giving it the same depression
+ // angle as the original flat-ground forward camera. Do not inherit the
+ // missile body's pitch or the long-airtime height/falling correction.
+ // Cannon is the native super-flight (bike and kart), explicitly set to 1deg.
+ if((in.bullet||in.inCannon)&&in.stage>=2&&!in.finished&&
+    !(flags_&(FlagHold|FlagAuto))&&!(panFlags_&2)){
+  float angle=1.f*DegToRad;
+  if(!in.inCannon){
+   const float distance=std::max(in.cameraDistance,1.f);
+   const float h=in.cameraPosY-in.cameraDistY;
+   const float norm=std::sqrt(distance*distance+h*h);
+   const float x=distance*distance/norm;
+   const float y=distance*h/norm-(in.targetPosY-in.cameraDistY);
+   angle=std::atan2(y,x);
+  }
+  const Vec3 forward=normalized({in.kartForward.x,0,in.kartForward.z},{0,0,1});
+  const float distance=std::max(length(view_.eye-view_.target),1.f);
+  view_.eye=view_.target-forward*(distance*std::cos(angle))+Vec3{0,distance*std::sin(angle),0};
+ }
+ // The port's Bullet/Cannon overrides above bypass native calcCamera's
+ // positional interpolation. Ease the final forward depression at simulation
+ // rate on both entry and exit; cinematic/rescue views retain ownership.
+ // Port-only final pitch response: critically damped at the fixed 60 Hz
+ // simulation rate. Retain angular velocity across retargets rather than
+ // jumping immediately to 20% of the new error on the first frame.
+ const bool forwardRace=in.stage>=2&&!in.finished&&!in.lookBack&&!in.inRespawn&&
+     !(flags_&(FlagHold|FlagAuto))&&!(panFlags_&2);
+ if(forwardRace){
+  const Vec3 offset=view_.eye-view_.target;
+  const float horizontal=std::sqrt(offset.x*offset.x+offset.z*offset.z);
+  const float wanted=std::atan2(offset.y,horizontal);
+  if(!forwardPitchReady_){
+   forwardPitch_=wanted;forwardPitchVelocity_=0;
+   forwardYaw_=std::atan2(offset.x,offset.z);forwardYawVelocity_=0;bulletYawActive_=false;
+  }
+  else{
+   constexpr float omega=12.f,dt=1.f/60.f,decay=.8187307531f;
+   const float error=forwardPitch_-wanted;
+   const float impulse=(forwardPitchVelocity_+omega*error)*dt;
+   forwardPitch_=wanted+(error+impulse)*decay;
+   forwardPitchVelocity_=(forwardPitchVelocity_-omega*impulse)*decay;
+  }
+  forwardPitchReady_=true;
+  const float distance=length(offset);
+  Vec3 bearing=normalized({offset.x,0,offset.z},{0,0,-1});
+  const float wantedYaw=std::atan2(bearing.x,bearing.z);
+  if(in.bullet){bulletYawActive_=true;bulletYawExiting_=false;}
+  if(bulletYawActive_){
+   // Killer entry, steering and exit share one angular velocity. Unwrap
+   // relative to the current bearing so crossing +/-pi never spins around.
+   constexpr float omega=24.f,dt=1.f/60.f,decay=.670320046f;
+   if(!in.bullet&&!bulletYawExiting_){
+    forwardYawExitOffset_=std::remainder(forwardYaw_-wantedYaw,2.f*3.14159265358979323846f);
+    bulletYawExiting_=true;
+   }
+   const float error=bulletYawExiting_?forwardYawExitOffset_:
+       std::remainder(forwardYaw_-wantedYaw,2.f*3.14159265358979323846f);
+   const float impulse=(forwardYawVelocity_+omega*error)*dt;
+   const float remaining=(error+impulse)*decay;
+   forwardYaw_=wantedYaw+remaining;
+   forwardYawVelocity_=(forwardYawVelocity_-omega*impulse)*decay;
+   // Exit blends a decaying offset onto the live native chase bearing. A
+   // continuing turn must not keep the special filter active indefinitely.
+   if(bulletYawExiting_)forwardYawExitOffset_=remaining;
+   bearing={std::sin(forwardYaw_),0,std::cos(forwardYaw_)};
+   if(!in.bullet&&std::fabs(remaining)<1e-4f&&std::fabs(forwardYawVelocity_)<1e-3f)bulletYawActive_=false;
+  }else{forwardYaw_=wantedYaw;forwardYawVelocity_=0;}
+  view_.eye=view_.target+bearing*(distance*std::cos(forwardPitch_))+Vec3{0,distance*std::sin(forwardPitch_),0};
+ }else{forwardPitchReady_=false;bulletYawActive_=false;}
  // Rear state has already been updated and collision-tested by KartCamera.
  // Preview, start pan, rescue and goal cameras retain ownership of the view.
  if(in.lookBack&&in.stage>=2&&!in.finished&&!(flags_&(FlagHold|FlagAuto))&&!(panFlags_&2))
   view_={in.rearEye,in.rearPivot+Vec3{0,targetOffset_,0},in.cameraFov+in.boostFov};
- smoothChase(in);
-}
-
-void RaceCameraDirector::smoothChase(const RaceCameraInput& in){
- const bool chase=in.stage>=2&&!in.finished&&!in.lookBack&&!in.beforeRespawn&&!in.inRespawn&&
-                  !(flags_&(FlagHold|FlagAuto))&&!(panFlags_&2);
- const Vec3 d=view_.target-view_.eye;
- const float across=std::sqrt(d.x*d.x+d.z*d.z),distance=length(d);
- const float pitch=std::atan2(d.y,across);
- if(!chase||distance<1){pitchLive_=false;glide_={};lastBullet_=in.bullet;lastCannon_=in.cannon;return;}
- // A camera switch: keep the previous eye and let the difference fade out.
- if(pitchLive_&&(in.bullet!=lastBullet_||in.cannon!=lastCannon_))glide_=glide_+(lastEye_-view_.eye);
- lastBullet_=in.bullet;lastCannon_=in.cannon;
- if(!pitchLive_){pitch_=pitch;pitchLive_=true;}
- // Pitch changes over crests and dips ease in over roughly 1/4 s.
- pitch_+=(pitch-pitch_)*.18f;
- if(std::fabs(pitch-pitch_)>.6f)pitch_=pitch; // never trail far behind
- Vec3 eye=view_.eye;
- if(across>.001f){
-  const Vec3 flat{d.x/across,0,d.z/across};
-  eye=view_.target-(flat*(std::cos(pitch_)*distance)+Vec3{0,std::sin(pitch_)*distance,0});
- }
- glide_=glide_*.9f;
- if(length(glide_)<1)glide_={};
- view_.eye=eye+glide_;
- lastEye_=view_.eye;
 }
 
 // OpeningPan::Calc (PAL 0x805A7358).

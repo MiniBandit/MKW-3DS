@@ -15,6 +15,7 @@ struct UiTransitionView {
  const char* underlaySelectedControl="";
  const MenuState* underlay=nullptr;
  UiPage from=UiPage::Strap,to=UiPage::Strap;
+ int fromBackground=-1,toBackground=-1;
 };
 
 const char* uiSelectedMenuControl(const MenuState&,bool back=false);
@@ -33,6 +34,7 @@ public:
  // Start on `incoming` as a section change seen from black (the race faded
  // out): fade in with the page's entrance. The caller resets the page age.
  void enterSection(const MenuState& incoming);
+ void holdConfirmation(float frames);
  void enterPage(const MenuState& incoming);
  // Replaces logical.advance(): the incoming clock is held while the previous
  // page is visible. Returns true when the visible page changes this call.
@@ -53,6 +55,7 @@ private:
  MenuState outgoing_{};
  MenuState underlay_{};
  UiPage incoming_=UiPage::Strap;
+ int fromBackground_=-1,toBackground_=-1;
  bool back_=false,section_=false,skipEnter_=false,skipExit_=false;
  bool hasUnderlay_=false,openingModal_=false,closingModal_=false,holding_=false;
  float elapsed_=-1,exitHold_=0,outDelay_=0,inDelay_=0;

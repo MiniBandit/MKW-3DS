@@ -1,4 +1,5 @@
 #include <mkw/vehicle_visual_assets.hpp>
+#include <mkw/mii_garage.hpp>
 #include <cstdio>
 #include <cstring>
 
@@ -8,9 +9,10 @@ bool VehicleVisualAssets::load(unsigned character,unsigned vehicle,RaceTeam team
  if(failure)*failure="vehicle selection";
  for(const auto& entry:GarageChoices)
   if(entry.character==character&&entry.vehicle==vehicle){next.choice=&entry;break;}
+ if(!next.choice)for(const auto& entry:MiiGarageChoices)if(entry.character==character&&entry.vehicle==vehicle){next.choice=&entry;break;}
  if(!next.choice)return false;
  auto path=[&](const char* part,const char* extension){
-  const char* suffix=!std::strncmp(part,"driver",6)||!std::strcmp(part,"shadow")?"":teamVehicleSuffix(vehicle,team);
+  const char* suffix=!std::strcmp(part,"driver")||!std::strcmp(part,"shadow")?"":teamVehicleSuffix(vehicle,team);
   char name[160];std::snprintf(name,sizeof name,"models/%s%s%s.%s",next.choice->prefix,suffix,part,extension);
   return std::string(name);
  };
@@ -34,8 +36,6 @@ bool VehicleVisualAssets::load(unsigned character,unsigned vehicle,RaceTeam team
   if(!model(GarageExtraNames[i],next.extras[i]))return false;
   if((next.choice->extraAnimationMask&(1u<<i))&&!bank(GarageExtraNames[i],*next.extras[i],next.extraAnimation[i]))return false;
  }
- // Optional: builds from before 0.7 have no low-detail drivers.
- {auto lod=std::make_unique<Model>();if(lod->load(path("driver_lod","gmdl").c_str()))next.driverLod=std::move(lod);}
  *this=std::move(next);if(failure)failure->clear();return true;
 }
 }

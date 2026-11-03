@@ -14,11 +14,10 @@ public:
     bool load();
     void reset();
     void resetAnimation();
-    bool lowDetailTest=false; // QA: every opponent at the low-detail tier
     void step(unsigned tick,const RaceItems& items);
     // Poses and culls every opponent for this frame, on the job worker where
     // possible. Call after Renderer::begin; race state must not change until draw.
-    void prepare(const Renderer& renderer,const RaceItems& items,Vec3 viewer,unsigned tick);
+    void prepare(const Renderer& renderer,const RaceItems& items,Vec3 viewer,unsigned tick,bool fullDetail=false);
     // Draws in racer order; prepares inline first when prepare() was not called.
     // Original vehicle shadow volumes resolve on the world before racers draw.
     void draw(Renderer& renderer,const RaceItems& items,Vec3 viewer,unsigned tick,

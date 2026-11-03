@@ -1,0 +1,61 @@
+#include "ObjectHitTable.hh"
+
+#include "game/kart/KartObject.hh"
+#include "game/system/ResourceManager.hh"
+
+#include <egg/util/Stream.hh>
+
+namespace Kinoko::Field {
+
+/// @addr{0x807F9278}
+ObjectHitTable::ObjectHitTable(const char *filename) {
+    size_t size;
+    void *file =
+            System::ResourceManager::Instance()->getFile(filename, &size, System::ArchiveId::Core);
+
+    EGG::RamStream stream = EGG::RamStream(file, size);
+
+    m_count = stream.read_s16();
+    m_fieldCount = stream.read_s16();
+    m_reactions = owning_span<s16>(m_count * m_fieldCount);
+
+    // Each row is the object ID then one reaction per field.
+    for (s16 row = 0; row < m_count; ++row) {
+        stream.skip(0x2);
+        for (s16 field = 0; field < m_fieldCount; ++field) {
+            m_reactions[row * m_fieldCount + field] = stream.read_s16();
+        }
+    }
+
+    m_slots = reinterpret_cast<const s16 *>(stream.dataAtIndex());
+}
+
+/// @addr{0x807F9348}
+ObjectHitTable::~ObjectHitTable() = default;
+
+Kart::Reaction ObjectHitTable::reaction(s16 i, s16 column) const {
+    ASSERT(i != -1);
+    ASSERT(i < m_count);
+    ASSERT(column >= 0 && column < m_fieldCount);
+    return static_cast<Kart::Reaction>(m_reactions[i * m_fieldCount + column]);
+}
+
+s16 ObjectHitTable::KartColumn(const Kart::KartObject *kartObj) {
+    const auto &status = kartObj->status();
+    if (status.onBit(Kart::eStatus::Star)) {
+        return 1;
+    }
+    if (status.onBit(Kart::eStatus::Mega)) {
+        return 2;
+    }
+    return status.onBit(Kart::eStatus::Bullet) ? 3 : 0;
+}
+
+s16 ObjectHitTable::slot(ObjectId id) const {
+    constexpr size_t SLOT_COUNT = 0x2f4;
+
+    size_t i = static_cast<std::underlying_type_t<ObjectId>>(id);
+    return i < SLOT_COUNT ? parse<s16>(m_slots[i]) : -1;
+}
+
+} // namespace Kinoko::Field

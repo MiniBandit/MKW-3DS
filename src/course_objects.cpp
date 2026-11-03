@@ -1,15 +1,18 @@
+#include <malloc.h>
 #include <mkw/course_mii_billboards.hpp>
 #include <mkw/joint_billboard.hpp>
 #include <mkw/course_mii_statue.hpp>
 #include <game/system/RaceConfig.hh>
 #include <mkw/blast_renderer.hpp>
 #include "mkw/course_objects.hpp"
+#include <mkw/animation_budget.hpp>
 #include "mkw/course_object_kinds.hpp"
 #include "mkw/render_quality.hpp"
 #include "mkw/escalator_landing.hpp"
 #include "mkw/retail_lighting.hpp"
 #include <mkw/render_metrics.hpp>
 #include <mkw/job_worker.hpp>
+#include <mkw/player_shadow.hpp>
 #include <game/field/ObjectDirector.hh>
 #include <game/field/ObjectDrivableDirector.hh>
 #include <game/field/obj/ObjectEscalator.hh>
@@ -55,6 +58,13 @@ std::unique_ptr<Model> cloneModel(const Model& source){
     std::memcpy(copy->indices,source.indices,source.indexCount*sizeof(uint16_t));
     copy->submeshes=source.submeshes;copy->textures=source.textures;
     copy->samplers=source.samplers;
+    copy->staticLightingBaked=source.staticLightingBaked;copy->sourceVertexHash=source.sourceVertexHash;
+    copy->fixedLighting=source.fixedLighting;
+    if(source.staticEnvironment2){
+        const size_t bytes=size_t(source.vertexCount)*2*sizeof(float);
+        copy->staticEnvironment2=static_cast<float*>(linearAlloc(bytes));if(!copy->staticEnvironment2)return nullptr;
+        std::memcpy(copy->staticEnvironment2,source.staticEnvironment2,bytes);flushGpuData(copy->staticEnvironment2,bytes);
+    }
     copy->minimum=source.minimum;copy->maximum=source.maximum;
     flushGpuData(copy->indices,copy->indexCount*sizeof(uint16_t));
     return copy;
@@ -117,12 +127,16 @@ bool ObjectAssets::load(int course){
         // No Mii racer means the original manager returns no statue identity.
         // Keep the base statue; do not load an unused substitute head pool.
         if(!miiHeads&&!std::strcmp(resource,"__MiiStatueHeads"))continue;
+        // Battle coin visuals belong exclusively to CoinBattleRuntime. The
+        // GOBJ entry registers a spawn, not a permanently placed idle model.
+        if(course>=32&&course<=41&&!std::strcmp(resource,"coin"))continue;
         auto m=std::make_unique<ObjModel>();m->resource=resource;m->name=name;m->model=std::make_unique<Model>();
         char file[128];std::snprintf(file,sizeof file,"models/%s.gmdl",mesh);
         if(!m->model->load(file)){ok=false;break;}
         if((course==18&&!std::strcmp(resource,"WLscreenGC")&&!std::strcmp(name,"WLscreenGC"))||
-           (course==6&&!std::strcmp(resource,"dkmonitor")&&!std::strcmp(name,"dkmonitor"))){
-            const int screenTexture=course==6?3:0;m->model->stadiumTexture=screenTexture;
+           (course==6&&!std::strcmp(resource,"dkmonitor")&&!std::strcmp(name,"dkmonitor"))||
+           (course==35&&!std::strcmp(resource,"fks_screen_wii")&&!std::strcmp(name,"fks_screen_wii"))){
+            const int screenTexture=course==6?3:course==35?2:0;m->model->stadiumTexture=screenTexture;
             // This display face is immutable. Do not walk all its indexed
             // triangles on the simulation thread every frame to cull capture.
             for(const auto& shape:m->model->submeshes)if(shape.texture==screenTexture)
@@ -132,21 +146,14 @@ bool ObjectAssets::load(int course){
                     else m->stadiumFace.include(p);
                 }
         }
-        // Peach Beach crowds currently produce black silhouettes through the
-        // light-texture combiner. Retain albedo, vertex shading, GX diffuse and
-        // fog, but bypass lm_0/lm_1 for these spectators. Animation and the
-        // regular rigid-mesh path remain unchanged.
-        const bool beachSpectator=course==16&&(!std::strncmp(resource,"group_",6)||
-            !std::strncmp(resource,"monte_",6)||!std::strncmp(resource,"mare_",5));
-        if(beachSpectator)for(auto& shape:m->model->submeshes)
-            if(((shape.lighting&retail::ChannelMask)>>retail::ChannelShift)==2){
-                shape.lighting=(shape.lighting&0x7ffu&~retail::ChannelMask)|(1u<<retail::ChannelShift);
-                shape.add=0;
-            }
-        // Fixed local lighting for non-player spectators; this also allows
-        // weighted crowds to use the existing position-only GPU palette path.
-        if(!std::strncmp(resource,"group_",6)||!std::strncmp(resource,"monte_",6)||!std::strncmp(resource,"mare_",5))
-            m->model->freezeLighting();
+        // Keep the original spectator TEV/light-texture material intact.
+        // Model::load already bakes course diffuse and environment UV once;
+        // Renderer selects the fixed (not camera-sampled) map pair for it.
+        // HW108: these small flag textures use trilinear GX mip sampling.
+        // Keep the original base pixels/lighting, and avoid the PICA mip path
+        // only for Gold Mine's flags, including both FlagB model LODs.
+        if(course==7&&(!std::strcmp(resource,"FlagA1")||!std::strcmp(resource,"FlagB1")))
+            for(auto& row:m->model->samplers)if(row[0].valid)row[0].minFilter&=1;
         m->bounds={m->model->minimum,m->model->maximum};
         if(std::strcmp(bankName,"-")){
             m->bank=std::make_unique<ObjectBank>();std::snprintf(file,sizeof file,"models/%s.dobj",bankName);
@@ -163,7 +170,7 @@ bool ObjectAssets::load(int course){
                 if(!animatedShadow&&m->bank->makeRigid(*m->model))m->rigid=true;
                 else if((m->cpuSkin=m->bank->weighted()||animatedShadow)){
                     m->crowd=!std::strncmp(resource,"group_",6)||!std::strncmp(resource,"monte_",6);
-                    for(const auto& s:m->model->submeshes)
+                    if(!m->model->staticLightingBaked)for(const auto& s:m->model->submeshes)
                         m->litNormals|=(s.lighting&retail::PrimaryEnvironment)||((s.lighting&retail::Retail)&&((s.lighting&retail::ChannelMask)>>retail::ChannelShift)!=0);
                     // Unlit objects never read skinned normals: skin on the GPU
                     // (one shared mesh, any pose per instance), else positions only.
@@ -193,7 +200,10 @@ bool ObjectAssets::load(int course){
         if(m->resource=="WLfirebarGC"&&m->name=="fireBPlane"){
             m->firePhases=std::make_unique<FirePhaseStream>();
             auto texture=std::make_shared<Texture>();
-            if(!m->firePhases->open("textures/firebar-indirect.ftan")||
+            // Leave ordinary heap headroom for racers, menus and live effects.
+            const size_t heapBytes=envGetHeapSize(),usedBytes=mallinfo().uordblks;
+            const size_t budget=heapBytes>usedBytes+(8u<<20)?heapBytes-usedBytes-(8u<<20):0;
+            if(!m->firePhases->open("textures/firebar-indirect.ftan",budget)||
                !C3D_TexInit(&texture->gpu,256,256,GPU_LA8)){ok=false;break;}
             texture->ready=true;
             if(!m->firePhases->read(0,texture->gpu.data,texture->gpu.size)){ok=false;break;}
@@ -201,6 +211,7 @@ bool ObjectAssets::load(int course){
             C3D_TexSetWrap(&texture->gpu,GPU_CLAMP_TO_EDGE,GPU_CLAMP_TO_EDGE);
             C3D_TexFlush(&texture->gpu);
             m->fireTexture=int(m->model->textures.size());m->firePhase=0;
+            fireCacheBytes.store(m->firePhases->bytes());fireCacheStride.store(m->firePhases->stride());
             m->model->textures.push_back(std::move(texture));
         }
         models.push_back(std::move(m));
@@ -235,6 +246,7 @@ struct CourseObjects::Impl {
     uint32_t lastTimer=0;
     std::vector<float> scratch;
     std::vector<Renderer::ShadowVolume> shadows,skyShadows;
+    std::vector<Renderer::ShadowReceiver> shadowReceivers;
     void link();
     // Re-links after a restarted race builds a new Kinoko scene.
     bool ready();
@@ -333,6 +345,7 @@ bool CourseObjects::loadCoconut(){
     return true;
 }
 bool CourseObjects::loadCourse(int courseId){
+    fireCacheBytes.store(0);fireCacheStride.store(0);
     auto& d=*impl_;
     d.visuals.clear();d.assets.models.clear();d.linked=false;d.course=courseId;
     return d.assets.load(courseId);
@@ -351,6 +364,11 @@ void CourseObjects::Impl::link(){
     for(const auto* obj:objects->objects())if(obj->mapObj())owner[obj->mapObj()].push_back(obj);
     if(const auto* drivable=K::Field::ObjectDrivableDirector::Instance())
         for(const auto* obj:drivable->objects())if(obj->mapObj())owner[obj->mapObj()].push_back(obj);
+    // Blocks live only in their manager, not the ordinary object lists.
+    // Override the manager's first-placement alias with the actual block.
+    if(const auto* drivable=K::Field::ObjectDrivableDirector::Instance())
+        if(const auto* manager=drivable->obakeManager())
+            for(const auto* block:manager->blocks())if(block->mapObj())owner[block->mapObj()]={block};
     const auto& flow=objects->flowTable();
     for(unsigned i=0;i<map->getGeoObjCount();++i){
         const auto* geo=map->getGeoObj(i);
@@ -495,6 +513,94 @@ void CourseObjects::draw(Renderer& renderer,unsigned tick,Vec3 camera){
     d.recorded=false;
 }
 
+bool CourseObjects::suppressWheelContact(Vec3 center,float radius) const{
+    const auto* director=K::Field::ObjectDrivableDirector::Instance();
+    if(!director||radius<=0)return false;
+    const K::EGG::Vector3f p{center.x,center.y,center.z};
+    for(auto* object:director->objects()){
+        using K::Field::ObjectId;
+        // Original Turibashi/Ami are vertically deforming road surfaces.
+        // Keep VolcanoPiece, factory belts and all other supports unchanged.
+        if(object->id()!=ObjectId::Turibashi&&object->id()!=ObjectId::Ami)continue;
+        // Non-pushing query: no collision entries, status or physical motion
+        // are modified. Include the existing AO fade band so the policy does
+        // not flicker when wheel contact briefly clears during a small hop.
+        if(object->checkSpherePartial(radius+playerShadow::contactHeightTolerance()+2.f,
+            p,p,K::Field::KCLTypeMask(KCL_TYPE_FLOOR),nullptr,nullptr,0))return true;
+    }
+    return false;
+}
+
+const std::vector<Renderer::ShadowReceiver>& CourseObjects::shadowReceivers(Vec3 origin,float radius){
+    auto& d=*impl_;auto& out=d.shadowReceivers;out.clear();
+    // draw() joined the pose worker. Reuse exactly that frame's geometry,
+    // not KMP's initial placement or a guessed supporting quad.
+    float recordRows[12];
+    auto append=[&](const ObjectDrawRecord& record,const C3D_Mtx& transform,
+                    unsigned first,unsigned count,unsigned lighting,const Bounds& local,const float* palette=nullptr,unsigned bones=0){
+        // Static and GPU-skinned blocks share the record transform. Extract
+        // its rows once; rigid parts still use their current bone transform.
+        float partRows[12];const float* rows=recordRows;
+        if(&transform!=&record.transform){
+            for(unsigned i=0;i<3;++i)for(unsigned j=0;j<4;++j)partRows[i*4+j]=transform.r[i].c[3-j];
+            rows=partRows;
+        }
+        const Bounds bounds=transformBoundsPadded(local,rows);
+        if(!playerShadow::intersects(bounds.minimum,bounds.maximum,origin,radius))return;
+        if(!out.empty()){
+            auto& previous=out.back();
+            if(previous.model==record.target&&previous.first+previous.count==first&&
+               previous.lighting==lighting&&previous.palette==palette&&previous.bones==bones&&
+               std::memcmp(&previous.transform,&transform,sizeof transform)==0){
+                previous.count+=count;previous.bounds.include(bounds.minimum);previous.bounds.include(bounds.maximum);return;
+            }
+        }
+        out.push_back({record.target,transform,first,count,lighting,palette,bones,bounds});
+    };
+    for(const auto& record:d.objects.records){
+        if(record.backdrop||record.kind==ObjectDrawRecord::Explosion||!record.target)continue;
+        const auto& model=*record.target;
+        for(unsigned i=0;i<3;++i)for(unsigned j=0;j<4;++j)recordRows[i*4+j]=record.transform.r[i].c[3-j];
+        // Only immutable visibility geometry has a reliable model envelope.
+        // Posed/CPU-deformed objects keep their existing per-part path.
+        if(!record.pose&&!model.visibility.empty()){
+            const auto bounds=transformBoundsPadded({model.minimum,model.maximum},recordRows);
+            if(!playerShadow::intersects(bounds.minimum,bounds.maximum,origin,radius))continue;
+        }
+        for(unsigned j=0;j<model.submeshes.size();++j){
+            const auto& sub=model.submeshes[j];
+            // Transparent/cutout foliage is not a solid driving surface.
+            if(!sub.count||(sub.flags&1)||!playerShadow::receives(sub.flags))continue;
+            if(record.pose==1){
+                if(!record.parts||j>=record.parts->size())continue;
+                for(const auto& part:(*record.parts)[j]){
+                    const float* m=d.objects.palettes.data()+record.palette+part.matrix*12;
+                    C3D_Mtx bone;Mtx_Identity(&bone);
+                    for(unsigned row=0;row<3;++row)for(unsigned col=0;col<4;++col)bone.r[row].c[3-col]=m[row*4+col];
+                    C3D_Mtx world;Mtx_Multiply(&world,&record.transform,&bone);
+                    append(record,world,part.first,part.count,sub.lighting,part.bounds);
+                }
+            }else if(record.pose==2){
+                if(record.bones>Renderer::MaxSkinBones||j>=model.skinVisibility.size())continue;
+                const float* palette=d.objects.palettes.data()+record.palette;
+                for(const auto& block:model.skinVisibility[j])
+                    append(record,record.transform,block.indices.first,block.indices.count,sub.lighting,
+                           posedSkinBounds(block,palette,12),palette,record.bones);
+            }else if(j<model.visibility.size()){
+                for(const auto& block:model.visibility[j].blocks)
+                    append(record,record.transform,block.indices.first,block.indices.count,sub.lighting,block.bounds);
+            }else{
+                // Visibility blocks are optional, just as in drawNow(). Plain
+                // moving platforms still draw their complete submesh. Omitting
+                // them here leaves scene depth but no shadow receiver at all.
+                append(record,record.transform,sub.first,sub.count,sub.lighting,
+                       {model.minimum,model.maximum});
+            }
+        }
+    }
+    return out;
+}
+
 void CourseObjects::drawWater(Renderer& renderer){
     // draw() has joined the object job. Keep the recorded materials and pose
     // at that same tick; no second simulation or recording is needed.
@@ -565,7 +671,11 @@ void ObjectDraw::submit(ObjModel* m,const C3D_Mtx& transform,const Anim& source)
     if(!m||!m->model)return;
     // Reduced quality: crowds step their clip (one frame per tick) every
     // animationStep frames, so a skinned pose repeats instead of being skinned again.
-    Anim anim=source;const float step=float(renderQuality().animationStep);
+    Anim anim=source;const unsigned budget=animationStep();
+    // Never decimate procedural palettes (moving platforms, billboards,
+    // suspension/collision-linked deformation). Crowd clips are decorative.
+    if(budget>1&&m->crowd&&!anim.palette&&anim.clip>=0)anim.frame=std::floor(anim.frame/budget)*budget;
+    const float step=float(renderQuality().animationStep);
     if(m->crowd&&step>0&&anim.clip>=0&&!anim.palette)anim.frame=std::floor(anim.frame/step)*step;
     if(!view.model(transform).intersects(anim.bounds?*anim.bounds:m->bounds))return;
     if(renderQuality().tooSmall(anim.bounds?*anim.bounds:m->bounds,transform,camera))return;
@@ -576,7 +686,12 @@ void ObjectDraw::submit(ObjModel* m,const C3D_Mtx& transform,const Anim& source)
     if(posed){
         palette_.resize(size_t(bank->matrixCount())*12);
         if(anim.palette)palette=anim.palette;
-        else{bank->pose(anim.clip,anim.frame,palette_.data());palette=palette_.data();}
+        else{
+            if(m->budgetClip==anim.clip&&m->budgetFrame==anim.frame&&m->budgetPalette.size()==palette_.size()){
+                std::copy(m->budgetPalette.begin(),m->budgetPalette.end(),palette_.begin());++renderMetrics.scenePoseReuses;
+            }else{bank->pose(anim.clip,anim.frame,palette_.data());m->budgetPalette=palette_;m->budgetClip=anim.clip;m->budgetFrame=anim.frame;++renderMetrics.scenePoseSamples;}
+            palette=palette_.data();
+        }
         if(!m->miiBillboards.empty()){
             // Head planes retain their own animated origins and scales. Never
             // turn the complete crowd/car model towards the viewer.
@@ -624,6 +739,10 @@ void ObjectDraw::submit(ObjModel* m,const C3D_Mtx& transform,const Anim& source)
             else return;
         }
         target=m->skins[copy].get();
+        if(m->resource=="quicksand"&&anim.bounds){
+            m->skins[copy]->minimum=anim.bounds->minimum;
+            m->skins[copy]->maximum=anim.bounds->maximum;
+        }
     }
     bool material=false;
     if(bank&&!m->overrides.empty()&&(anim.pat>=0||anim.srt>=0||anim.clr>=0||anim.opacity!=1||anim.mirrorU)){
@@ -639,7 +758,7 @@ void ObjectDraw::submit(ObjModel* m,const C3D_Mtx& transform,const Anim& source)
         }
     }
     if(m->firePhases&&!m->overrides.empty()){
-        const unsigned phase=unsigned(std::max(0.f,anim.srtFrame))%m->firePhases->frames;
+        const unsigned phase=m->firePhases->phase((unsigned(std::max(0.f,anim.srtFrame))/budget)*budget);
         bool ready=int(phase)==m->firePhase;
         if(!ready){
             auto& texture=*m->model->textures[m->fireTexture];
@@ -652,7 +771,7 @@ void ObjectDraw::submit(ObjModel* m,const C3D_Mtx& transform,const Anim& source)
                 ready=m->firePhases->read(phase,texture.gpu.data,texture.gpu.size);
                 if(ready)C3D_TexFlush(&texture.gpu);
             }
-            if(ready)m->firePhase=int(phase);
+            if(ready){m->firePhase=int(phase);++renderMetrics.fireReads;}
             else std::fprintf(stderr,"fireBPlane phase %u read failed\n",phase);
         }
         if(ready)for(auto& o:m->overrides){

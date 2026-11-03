@@ -69,7 +69,7 @@ def machine_record(item, output, reuse_textures=False):
                    check=True,capture_output=True,text=True,env={**os.environ,'MKW_MENU_MATERIALS':'1'})
     parts=cook(export,output,prefix,max_texture=256,reuse_textures=reuse_textures)
     if len(parts)!=1:raise ValueError('Expected one bounded menu machine '+prefix)
-    record={'key':f'machine_{i}_{choice}','prefix':prefix,'source':source.relative_to(ROOT).as_posix(),
+    record={'key':f'machine_{i}_{choice}','prefix':prefix,'source':str(source.relative_to(ROOT)),
             'source_sha256':sha(source),'model':parts[0],'conversion_revision':3,'material_converter_sha256':material_revision()}
     (output/'models'/f'{prefix}-source.json').write_text(json.dumps(record,indent=2)+'\n')
     return record
@@ -110,7 +110,7 @@ def write_icon_parameters():
         values=[struct.unpack_from('>7f',data,i*28) for i in range(12)]
         lines+=[' {%s,%s,%d,{'%(width,height,'SML'.index(weight))+
                 ','.join('{'+','.join('%.9ff'%v for v in row)+'}' for row in values)+'}},']
-        sources.append({'source':path.relative_to(ROOT).as_posix(),'sha256':sha(path),
+        sources.append({'source':str(path.relative_to(ROOT)),'sha256':sha(path),
                         'width':int(width),'height':int(height),'weight':'SML'.index(weight),'vehicles':values})
     lines+=['};',
             'inline constexpr const MenuIconParam* menuIconParam(unsigned width,unsigned height,unsigned weight,unsigned retailVehicle){',
@@ -159,10 +159,10 @@ def main():
         animation = json.loads(result.stdout)
         if animation['vertices'] != parts[0]['vertices']:
             raise ValueError('Menu animation/model vertex order mismatch: '+prefix)
-        record = {'key': key, 'prefix': prefix, 'source': source.relative_to(ROOT).as_posix(),
+        record = {'key': key, 'prefix': prefix, 'source': str(source.relative_to(ROOT)),
                   'source_sha256': sha(source), 'animation_sha256': sha(animation_path),
                   'animation': animation, 'model': parts[0], 'idle_clip': idle,'conversion_revision':3,'material_converter_sha256':material_revision()}
-        if extra and extra.is_file():record['seated_animation_source']={'path':extra.relative_to(ROOT).as_posix(),'sha256':sha(extra)}
+        if extra and extra.is_file():record['seated_animation_source']={'path':str(extra.relative_to(ROOT)),'sha256':sha(extra)}
         records=[r for r in records if r['prefix']!=prefix]+[record]
         (args.output/'models'/f'{prefix}-source.json').write_text(json.dumps(record, indent=2)+'\n')
     if args.machines:

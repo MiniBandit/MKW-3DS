@@ -1,6 +1,8 @@
 #include <mkw/driver_look_target.hpp>
 #include "mkw/animation.hpp"
+#include <malloc.h>
 #include <mkw/render_metrics.hpp>
+#include <mkw/animation_budget.hpp>
 #include <mkw/skin_draw_reuse.hpp>
 #include <mkw/asset_pack.hpp>
 #include "mkw/pose_blend.hpp"
@@ -8,7 +10,6 @@
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
-#include <malloc.h>
 #include <algorithm>
 #include <cmath>
 namespace mkw {
@@ -58,6 +59,16 @@ bool DriverAnimation::prepareUnlitSkinning(Model& model){
     skinNormals(false);
     return false;
 }
+bool DriverAnimation::prepareLitSkinning(Model& model){
+    if(model.staticLightingBaked)return prepareUnlitSkinning(model);
+    skinNormals(true);
+    if(!ready)return false;
+    if(gpu_&&model.skinBoneIndices)return true;
+    gpu_=false; // An earlier unlit setup must retain normals before lit draws.
+    return gpuSkin(model);
+}
+int DriverAnimation::find(const char* name)const{if(name)for(unsigned i=0;i<count_;++i)if(!std::strcmp(name,clips_[i].name))return i;return -1;}
+int DriverAnimation::face(const char* name)const{if(name)for(unsigned i=0;i<faceCount_;++i)if(!std::strcmp(name,faces_[i].name))return i;return -1;}
 namespace {
 // Ordinary heap still available: the unclaimed space up to the heap's end plus
 // the allocator's free blocks inside what it already claimed.
@@ -68,22 +79,13 @@ size_t heapSpaceFree(){
     return (total>size_t(m.arena)?total-size_t(m.arena):0)+size_t(m.fordblks);
 }
 }
-bool DriverAnimation::prepareLitSkinning(Model& model){
-    skinNormals(true);
-    if(!ready)return false;
-    if(gpu_&&model.skinBoneIndices)return true;
-    gpu_=false; // An earlier unlit setup must retain normals before lit draws.
-    return gpuSkin(model);
-}
-int DriverAnimation::find(const char* name)const{if(name)for(unsigned i=0;i<count_;++i)if(!std::strcmp(name,clips_[i].name))return i;return -1;}
-int DriverAnimation::face(const char* name)const{if(name)for(unsigned i=0;i<faceCount_;++i)if(!std::strcmp(name,faces_[i].name))return i;return -1;}
 bool DriverAnimation::load(const char* path,const Model& model){
     reset();
     // These banks are read by the CPU, never directly by PICA or DSP. Leave
     // LINEAR room for meshes/textures and the race sound cache: prefer ordinary
     // heap, but only while it keeps a reserve. On Old 3DS (about 29.6 MiB of heap,
-    // 16 MiB of it Kinoko's arena) eleven racers' banks (about 1 MiB each) filled
-    // the heap, and the next small allocation (a texture read) aborted the race.
+    // most of it Kinoko's arena) eleven racers' banks (about 1 MiB each) filled
+    // the heap, and the next small allocation (a texture read) aborted the race (#84).
     constexpr size_t HeapReserve=4u<<20;
     auto allocateBank=[&](size_t bytes){
         if(heapSpaceFree()>=bytes+HeapReserve){
@@ -367,6 +369,11 @@ bool DriverAnimation::apply(Model& model,int clip,float frame,unsigned tick,int 
         }
         return frustum->intersects(poseBounds_);
     };
+    const unsigned step=fullRate?1:animationStep();
+    if(step>1&&cachedSettled_&&blend>=1&&cachedVertices_==model.vertices&&cachedClip_==clip&&
+       cachedExpression_==expression&&tick>=cachedTick_&&tick/step==cachedTick_/step){
+        ++renderMetrics.animationHolds;return poseVisible();
+    }
     if(cachedSettled_&&blend>=1&&cachedVertices_==model.vertices&&cachedClip_==clip&&
        cachedFrame_==frame&&cachedExpression_==expression&&cachedExpressionFrame_==faceFrame&&
        ((!hairClipCount_&&!hasBraids_)||cachedTick_==tick)){++renderMetrics.poseReuses;return poseVisible();}
@@ -447,7 +454,7 @@ void DriverAnimation::write(Model& model,const uint32_t* shown,const int32_t* te
         const auto& v=source_[i];auto m=palette+v.matrix*21;
         Vec3 p{m[0]*v.p[0]+m[1]*v.p[1]+m[2]*v.p[2]+m[3],m[4]*v.p[0]+m[5]*v.p[1]+m[6]*v.p[2]+m[7],m[8]*v.p[0]+m[9]*v.p[1]+m[10]*v.p[2]+m[11]};
         model.vertices[i].position=p;
-        if(skinNormals_){
+        if(skinNormals_&&!model.staticLightingBaked){
             Vec3 n{m[12]*v.n[0]+m[13]*v.n[1]+m[14]*v.n[2],m[15]*v.n[0]+m[16]*v.n[1]+m[17]*v.n[2],m[18]*v.n[0]+m[19]*v.n[1]+m[20]*v.n[2]};
             model.vertices[i].normal=normalized(n);
         }
@@ -480,6 +487,9 @@ void DriverAnimation::stepLook(int clip,float frame,unsigned tick,bool active,Ve
     // beforeLookPalette_ excludes last tick's procedural rotations.
     // This query computes head targeting before the render transform is set.
     // Advance world-space braid physics only with the final rendered pose.
+    const unsigned step=fullRate?1:animationStep();
+    const bool hold=step>1&&cachedSettled_&&cachedClip_==clip&&tick>=cachedTick_&&tick/step==cachedTick_/step;
+    if(hold)return;
     if(!pose(clip,frame,tick,false)){resetLook();return;}
     float world[12];for(unsigned row=0;row<3;++row){world[row*4]=seated.r[row].x;world[row*4+1]=seated.r[row].y;world[row*4+2]=seated.r[row].z;world[row*4+3]=seated.r[row].w;}
     auto a=driverLookTargetAngles(world,palette_.data()+lookHead_*21,target);

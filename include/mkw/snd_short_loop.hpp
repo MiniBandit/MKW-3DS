@@ -6,10 +6,12 @@
 #include <algorithm>
 
 namespace mkw::snd {
+// Includes SE_RC_LAP's 340-sample oscillator: at key 81 a period is
+// only 4.58 ms, below a DSP frame and unsafe for CPU bridge refills.
 inline bool shortAdpcmLoop(const WaveData& w) {
  return w.format == 2 && w.loop && !w.streamed && w.loopStart % 14 &&
         w.loopStart < w.loopEnd && w.loopEnd <= 4096 &&
-        w.loopEnd - w.loopStart <= 256;
+        w.loopEnd - w.loopStart <= 384;
 }
 inline bool decodeAdpcmRange(const WaveData::Channel& c, u32 first, u32 end,
                             u16 ps, s16 yn1, s16 yn2, s16* pcm) {

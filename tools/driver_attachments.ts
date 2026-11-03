@@ -15,9 +15,7 @@ export function resolveEnvelopes(model:any,matrices:mat4[]):mat4[]{
  const envelopes:mat4[]=[];
  for(const op of model.sceneGraph.nodeMixOps){
   if(op.op===ByteCodeOp.EVPMTX)envelopes[op.mtxId]=mat4.mul(mat4.create(),matrices[op.mtxId],model.nodes[op.nodeId].inverseBindPose);
-  else{const m=new Float32Array(16);op.blendMtxIds.forEach((id:number,i:number)=>{
-   const envelope=envelopes[id];if(!envelope)throw new Error(`Envelope ${id} used before it is defined in ${model.name}`);
-   for(let j=0;j<16;j++)m[j]+=envelope[j]*op.weights[i];});matrices[op.dstMtxId]=m as mat4;}
+  else{const m=new Float32Array(16);op.blendMtxIds.forEach((id:number,i:number)=>{for(let j=0;j<16;j++)m[j]+=envelopes[id][j]*op.weights[i];});matrices[op.dstMtxId]=m as mat4;}
  }
  return matrices;
 }

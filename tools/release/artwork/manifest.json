@@ -1,0 +1,21 @@
+{
+  "icon.png": {
+    "sha256": "3c10edeca7338906e006345d9f8516104d2fca79a481ce87c0e0e54ad826947d",
+    "bytes": 8716
+  },
+  "logo.png": {
+    "sha256": "12f21139f97ea8547c58dd69dd48936abc6f852bf8bbaf534fc0b1ea2c2a63fe",
+    "bytes": 2545421
+  },
+  "banneraudio.wav": {
+    "source": "Maintainer-supplied banneraudio.wav; replaces the superseded upstream CIA audio.",
+    "sha256": "4a41e5350d51704fc802c9df4d63bc9cf7f70609e992f035404cec32a1347b40",
+    "bytes": 529700,
+    "format": "PCM16",
+    "sample_rate": 44100,
+    "channels": 2,
+    "samples_per_channel": 132414,
+    "duration_seconds": 3.0025850340136055,
+    "processing": "Source copied byte for byte; no trimming, normalization or resampling."
+  }
+}

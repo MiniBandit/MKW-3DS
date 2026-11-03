@@ -311,7 +311,7 @@ def render_layout(path, source, animations=(), frame=0, bounds=None, exclude=(),
     return out,bounds,posed
 
 
-def messages(path):
+def messages(path, icon_glyphs=False):
     """Return retail BMG message IDs and text, skipping binary control commands."""
     d=path.read_bytes()
     if d[:8]!=b'MESGbmg1':raise ValueError('Invalid BMG: '+str(path))
@@ -329,6 +329,8 @@ def messages(path):
             if d[at:at+2]==b'\0\x1a':
                 size=d[at+2]
                 if size<4:raise ValueError('Invalid BMG control command')
+                if icon_glyphs and size==8 and d[at+3:at+6]==b'\x01\x00\x00':
+                    chars.append(d[at+6:at+8].decode('utf-16be'))
                 at+=size;continue
             chars.append(d[at:at+2].decode('utf-16be'));at+=2
         identifier=struct.unpack_from('>I',d,blocks[b'MID1']+16+index*4)[0] if b'MID1' in blocks else index

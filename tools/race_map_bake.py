@@ -19,6 +19,7 @@ import math
 import struct
 from pathlib import Path
 
+from gx_material import GMDL_SUBMESH_BYTES
 import numpy as np
 from PIL import Image
 
@@ -45,22 +46,20 @@ def course_path(relative):
 
 
 class Part:
-    """One GMDL v3/v4/v5 part as numpy arrays; shared diffuse fields only."""
+    """One GMDL v3/v4 part as numpy arrays."""
 
     def __init__(self, path):
         b = path.read_bytes()
         magic, version, nv, ni, ns, nt = struct.unpack_from('<4s5I', b)
-        from gx_material import GMDL_SUBMESH_BYTES
         if magic != b'GMDL' or version not in GMDL_SUBMESH_BYTES:
-            raise ValueError(f'Unsupported GMDL model: {path}')
+            raise ValueError(f'Not a GMDL v3/v4 model: {path}')
         record = GMDL_SUBMESH_BYTES[version]
         self.submeshes = []
         for i in range(ns):
-            # v5 appends reflection state after the v4 prefix. The static map
-            # keeps its existing diffuse lighting; advance by the full record.
-            raw = b[24 + i * record:24 + i * record + min(record, SUBMESH.size)]
-            raw = raw.ljust(SUBMESH.size, b'\0')
-            self.submeshes.append(SUBMESH.unpack(raw))
+            raw = b[24 + i * record:24 + (i + 1) * record]
+            if version == 3:
+                raw += bytes(12)
+            self.submeshes.append(SUBMESH.unpack(raw[:56]))
         at = 24 + ns * record
         self.textures = [b[at + i * 64:at + (i + 1) * 64].split(b'\0')[0].decode() for i in range(nt)]
         at += nt * 64

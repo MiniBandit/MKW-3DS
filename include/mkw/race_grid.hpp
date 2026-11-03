@@ -16,9 +16,9 @@ class EnemyRoute {
 public:
     static constexpr unsigned Invalid=0xffff;
     // ENPT: setting1 u16, setting2 u8 (drift: 1 end, 2 forbid, 3 force), setting3 u8 flags.
-    struct Point { Vec3 position; float width=0; uint16_t setting1=0,setting2=0; uint8_t driftSetting=0,flags=0; std::array<unsigned,6> next{}; unsigned nextCount=0; bool requiresBoost=false; };
-    bool load(const void* bytes,size_t size,bool itemPath=false);
-    void clear(){points_.clear();}
+    struct Point { Vec3 position; float width=0; uint16_t setting1=0,setting2=0; uint8_t driftSetting=0,flags=0; std::array<unsigned,12> next{}; unsigned nextCount=0; bool requiresBoost=false; };
+    bool load(const void* bytes,size_t size,bool itemPath=false,bool battle=false);
+    void clear(){points_.clear();itemPath_=false;}
     unsigned size() const{return unsigned(points_.size());}
     const Point& point(unsigned index) const{return points_[index];}
     unsigned successor(unsigned index,unsigned racer) const;
@@ -26,6 +26,7 @@ public:
     Vec3 target(unsigned segment,unsigned racer,Vec3 position,float lookahead,bool horizontalRecovery=false) const;
 private:
     std::vector<Point> points_;
+    bool itemPath_=false;
 };
 
 class RaceGrid {
@@ -40,8 +41,19 @@ public:
     // CPU inputs never press the item key.
     void beforeStep(uint16_t bulletPlayers=0);
     void afterStep();
+    void setBattleRanks(const std::array<unsigned,Capacity>& ranks){if(battleArena_)ranks_=ranks;}
     unsigned count() const{return count_;}
     bool routeReady() const{return route_.size()!=0;}
+    // Fixed sun reference from drivable paths, never decorative ocean/sky bounds.
+    bool routeCenter(Vec3& center) const {
+        if(!route_.size())return false;
+        Vec3 lo=route_.point(0).position,hi=lo;
+        for(unsigned i=1;i<route_.size();++i){const Vec3 p=route_.point(i).position;
+            lo={std::min(lo.x,p.x),std::min(lo.y,p.y),std::min(lo.z,p.z)};
+            hi={std::max(hi.x,p.x),std::max(hi.y,p.y),std::max(hi.z,p.z)};
+        }
+        center=(lo+hi)*.5f;return true;
+    }
     uint16_t bulletNoEndPlayers() const;
     unsigned rank(unsigned player=0) const{return player<count_?ranks_[player]:0;}
     bool finished(unsigned player=0) const{return player<count_&&finished_[player];}

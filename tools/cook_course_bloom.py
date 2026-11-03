@@ -29,8 +29,11 @@ def parse(data):
 
 def main():
     rows=[];evidence=[]
-    for source in sorted((ROOT/'data/extracted/Race/Course').glob('*.szs')):
-        if source.name.startswith('._'):continue
+    # The 32 races and 10 arenas only: a reused builder folder can also hold the
+    # award and ending stages (Race/Course/*_demo.szs) older builders extracted.
+    from course_catalog import courses
+    for name in sorted(Path(c['archive']).name for c in courses()):
+        source=ROOT/'data/extracted/Race/Course'/name
         files=archive(source);default=None
         for name,data in sorted(files.items()):
             if not name.endswith('.bblm'):continue

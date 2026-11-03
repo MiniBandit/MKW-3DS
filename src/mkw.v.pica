@@ -17,16 +17,17 @@
 .fvec lightDiff, lightDir, lightFn
 ; GX fog: texcoord2.x = eye depth normalized to the fog start/end
 ; (fogParam.x * view z + fogParam.y), the coordinate of a fog ramp texture.
+.fvec shadowDepth, shadowFloor, shadowReceiverFade
 .fvec fogParam
 ; Light-texture materials: texcoord2 repeats the EnvCamera UV1 (lm_1).
 .bool retailLightTexture
 ; Uniform branches skip work whose result cannot contribute to the draw.
 .bool environmentMapped, environmentTexture2, environmentPrimary, diffuseLighting
-.bool projectedWater
+.bool projectedWater, playerShadowProject, shadowCapture
 ; Unlit course objects keep their palette index in innormal.x. Lit racers
 ; use a separate attribute, retaining both UV pairs and bone-local normals.
 .fvec bones[57]
-.bool skinned, skinnedNormals
+.bool skinned, skinnedNormals, staticLighting
 .constf constants(0.0, 1.0, 0.35, 0.65)
 .constf colorScale(0.00392156863, 0.0, 0.0, 0.0)
 .constf half(0.5, 0.5, 0.5, 0.5)
@@ -42,6 +43,7 @@
 .alias inuv v2
 .alias incolor v3
 .alias inbone v4
+.alias instaticuv v5
 .proc main
     mov r15.xyz, innormal
     mov r0.xyz, inpos
@@ -55,6 +57,9 @@
         dp4 r14.x, bones[a0.x], r0
         dp4 r14.y, bones[a0.x+1], r0
         dp4 r14.z, bones[a0.x+2], r0
+        ifu shadowCapture
+            ; Silhouette needs skinned positions and alpha only.
+        .else
         ifu skinnedNormals
             ; Cofactor(B)*n / det(B) = inverse-transpose(B)*n. Its magnitude
             ; cancels in downstream normalization; keep determinant sign.
@@ -94,6 +99,7 @@
             rsq r7.x, r7.x
             mul r15.xyz, r15, r7.x
         .end
+        .end
         mov r0.xyz, r14.xyz
         mov r0.w, constants.y
     .end
@@ -108,6 +114,35 @@
     dp4 r6.z, projection[2], r1
     dp4 r6.w, projection[3], r1
     mov outpos, r6
+    ifu playerShadowProject
+        ; Exact receiver coordinates without material UV, fog or lighting work.
+        ; Both body and local AO use actual geometry and the same depth test.
+        mov r13, constants.xxxy
+        dp4 r13.x, envRow0, r12
+        dp4 r13.y, envRow1, r12
+        dp4 r10.x, envRow2, r12
+        mov outtc, r13
+        mov outtcw, r10.xxxx
+        mov r5, constants.xxxy
+        dp4 r5.x, uv1Row0, r12
+        dp4 r5.y, uv1Row1, r12
+        mul r5.y, shadowReceiverFade.x, r5.y
+        mul r11.x, shadowReceiverFade.y, incolor.w
+        add r5.y, r11.x, r5.y
+        add r5.y, shadowReceiverFade.z, r5.y
+        mov outtc1, r5
+        mov r14, constants.xxxy
+        ifu environmentTexture2
+            dp4 r14.x, normalRow0, r12
+            dp4 r14.y, normalRow1, r12
+        .else
+            dp4 r14.x, shadowDepth, r12
+            mov r14.y, half.y
+        .end
+        mov outtc2, r14
+        ; Receiver TEV uses textures/constants only, not vertex colour.
+        mov outcolor, constants.yyyy
+    .else
     mov r11, constants.yyyx
     mov r11.xy, inuv.xy
     mov r5, constants.xxxy
@@ -159,6 +194,9 @@
         .end
     .end
     ifu environmentTexture2
+        ifu staticLighting
+            mov r14.xy, instaticuv.xy
+        .end
         ; UV1 already has its authored SRT from the cooker/material animation.
     .else
         dp4 r11.x, uv1Row0, r5
@@ -186,6 +224,17 @@
         mul r11.xy, envParam.zw, inuv.zw
         mul r11.xy, r11.xy, r10.xx
         add r13.xy, r13.xy, r11.xy
+    .end
+    ifu playerShadowProject
+        ; Unit 1 gates the light-space receiver depth, rather than receiving
+        ; on surfaces in front of the caster (an unbounded 2D projector).
+        dp4 r5.x, uv1Row0, r12
+        dp4 r5.y, uv1Row1, r12
+        ; Authored translucent road: sample opacity ramp using original vertex alpha.
+        mul r5.y, shadowReceiverFade.x, r5.y
+        mul r11.x, shadowReceiverFade.y, incolor.w
+        add r5.y, r11.x, r5.y
+        add r5.y, shadowReceiverFade.z, r5.y
     .end
     mov outtc1, r5
     mov outtc, r13
@@ -220,16 +269,40 @@
     ; PICA requires all lanes of each output, including unused ones, written.
     mul r4, r4, r3
     mul r4, tint, r4
-    ifu environmentTexture2
+    ifu playerShadowProject
+        ; Unclamped interpolated depth, sampled through the fixed ramp.
+        mov r14, constants.xxxy
+        ifu environmentTexture2
+            ; Local wheel AO coordinates are independent of sunlight UV0.
+            dp4 r14.x, normalRow0, r12
+            dp4 r14.y, normalRow1, r12
+        .else
+            dp4 r14.x, shadowDepth, r12
+            mov r14.y, half.y
+        .end
         mov outtc2, r14
     .else
-        ifu retailLightTexture
-            ; lm_1 shares the EnvCamera coordinates of lm_0 (texture unit 1).
-            mov outtc2, r5
+        ifu environmentTexture2
+            mov outtc2, r14
         .else
-            mov outtc2, r13
+            ifu retailLightTexture
+                ; lm_1 shares the EnvCamera coordinates of lm_0 (texture unit 1).
+                mov outtc2, r5
+            .else
+                mov outtc2, r13
+            .end
         .end
     .end
+    ; Store light-depth in capture red; receiver red carries the same metric.
+    ; RGB is discarded when shading the black silhouette, alpha stays intact.
+    ifu shadowCapture
+        dp4 r4.x, shadowDepth, r12
+        ; Penetrating tire/body vertices cast from the supporting floor, not
+        ; from behind it. Keep their silhouette UV and hardware capture depth.
+        dp4 r14.x, shadowFloor, r12
+        min r4.x, r4.x, r14.x
+    .end
     mov outcolor, r4
+    .end
     end
 .end

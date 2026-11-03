@@ -1,0 +1,134 @@
+#pragma once
+
+#include "game/field/CourseColMgr.hh"
+
+#include <egg/math/Vector.hh>
+
+#define COLLISION_ARR_LENGTH 0x40
+
+namespace Kinoko {
+
+namespace Host {
+
+class Context;
+
+} // namespace Host
+
+/// @brief Pertains to collision.
+namespace Field {
+
+/// @brief Manages the caching of colliding KCL triangles and exposes queries for collision checks.
+/// @addr{0x809C2F44}
+/// @nosubgrouping
+class CollisionDirector : EGG::Disposer {
+    friend class Host::Context;
+
+public:
+    /// @brief Collision Entry Attribute fields.
+    /// @details |  0 - 4   |  5 - 7  | 8 | 9 | 10 |  11 - 12  |     13    |   14    |  15  |
+    ///          | BaseType | Variant |   |   |    | Intensity | Trickable | Offroad | Soft |
+    enum class eCollisionAttribute {
+        Trickable = 13,
+        RejectRoad = 14,
+        Soft = 15,
+    };
+    typedef EGG::TBitFlag<u16, eCollisionAttribute> CollisionAttribute;
+
+    struct CollisionEntry {
+        KCLTypeMask typeMask;
+        CollisionAttribute attribute;
+        f32 dist;
+
+        u16 baseType() const {
+            return attribute & 0x1F;
+        }
+
+        u16 variant() const {
+            return (attribute >> 5) & 7;
+        }
+
+        u16 intensity() const {
+            return (attribute >> 11) & 3;
+        }
+
+        void setVariant(u16 variant) {
+            u16 current = static_cast<u16>(attribute);
+            attribute = static_cast<CollisionAttribute>((current & ~0xE0) | ((variant & 7) << 5));
+        }
+    };
+
+    void checkCourseColNarrScLocal(f32 radius, const EGG::Vector3f &pos, KCLTypeMask mask,
+            u32 timeOffset);
+
+    [[nodiscard]] bool checkSpherePartialPush(f32 radius, const EGG::Vector3f &pos,
+            const EGG::Vector3f &prevPos, KCLTypeMask flags, CollisionInfoPartial *info,
+            KCLTypeMask *typeMaskOut, u32 timeOffset);
+    [[nodiscard]] bool checkSphereFull(f32 radius, const EGG::Vector3f &v0, const EGG::Vector3f &v1,
+            KCLTypeMask flags, CollisionInfo *pInfo, KCLTypeMask *pFlagsOut, u32 timeOffset);
+    [[nodiscard]] bool checkSphereFullPush(f32 radius, const EGG::Vector3f &v0,
+            const EGG::Vector3f &v1, KCLTypeMask flags, CollisionInfo *pInfo,
+            KCLTypeMask *pFlagsOut, u32 timeOffset);
+
+    [[nodiscard]] bool checkSphereCachedPartial(f32 radius, const EGG::Vector3f &pos,
+            const EGG::Vector3f &prevPos, KCLTypeMask typeMask, CollisionInfoPartial *info,
+            KCLTypeMask *typeMaskOut, u32 timeOffset);
+    [[nodiscard]] bool checkSphereCachedPartialPush(f32 radius, const EGG::Vector3f &pos,
+            const EGG::Vector3f &prevPos, KCLTypeMask typeMask, CollisionInfoPartial *info,
+            KCLTypeMask *typeMaskOut, u32 timeOffset);
+    [[nodiscard]] bool checkSphereCachedFullPush(f32 radius, const EGG::Vector3f &pos,
+            const EGG::Vector3f &prevPos, KCLTypeMask typeMask, CollisionInfo *info,
+            KCLTypeMask *typeMaskOut, u32 timeOffset);
+
+    // Presentation-only query. Preserve the simulation's collision entries and
+    // pending no-bounce output while using the same course/drivable KCL path.
+    bool checkCameraSphere(f32 radius, const EGG::Vector3f &pos,
+            const EGG::Vector3f &prevPos, EGG::Vector3f &push, bool &wall);
+
+    void resetCollisionEntries(KCLTypeMask *ptr);
+    void pushCollisionEntry(f32 dist, KCLTypeMask *typeMask, KCLTypeMask kclTypeBit,
+            CollisionAttribute attribute);
+
+    /// @addr{0x807BDB5C}
+    void setCurrentCollisionVariant(u16 attribute) {
+        ASSERT(m_collisionEntryCount > 0);
+        m_entries[m_collisionEntryCount - 1].setVariant(attribute);
+    }
+
+    /// @addr{0x807BDBC4}
+    void setCurrentCollisionTrickable(bool trickable) {
+        ASSERT(m_collisionEntryCount > 0);
+        CollisionEntry &entry = m_entries[m_collisionEntryCount - 1];
+        entry.attribute.changeBit(trickable, eCollisionAttribute::Trickable);
+    }
+
+    bool findClosestCollisionEntry(KCLTypeMask *typeMask, KCLTypeMask type);
+
+    /// @beginGetters
+    [[nodiscard]] const CollisionEntry *closestCollisionEntry() const {
+        return m_closestCollisionEntry;
+    }
+    /// @endGetters
+
+    static CollisionDirector *CreateInstance();
+    static void DestroyInstance();
+
+    [[nodiscard]] static CollisionDirector *Instance() {
+        return s_instance;
+    }
+
+private:
+    EGG_NEW_DELETE_FRIEND
+
+    CollisionDirector();
+    ~CollisionDirector() override;
+
+    const CollisionEntry *m_closestCollisionEntry;
+    std::array<CollisionEntry, COLLISION_ARR_LENGTH> m_entries;
+    size_t m_collisionEntryCount;
+
+    static CollisionDirector *s_instance; ///< @addr{0x809C2F44}
+};
+
+} // namespace Field
+
+} // namespace Kinoko

@@ -59,6 +59,7 @@ struct MenuMovieAudio::Impl {
  std::shared_ptr<OpenJob> opening;
  std::array<ndspWaveBuf,3> waves{};
  std::array<std::shared_ptr<FillJob>,3> fills;
+ unsigned nextRead=0,nextQueue=0;
  float volume=1;bool dsp=false,failed=false,ended=false;
  // NDSP channel: 0 when the sound system is not running, otherwise one it
  // lends us while this stream plays (sound_system.hpp reserveChannel).
@@ -70,6 +71,7 @@ void MenuMovieAudio::initialize(){
  // One-time DSP component load, done at boot rather than on a page change.
  if(dspState)return;
  const Result result=ndspInit();dspState=R_SUCCEEDED(result)?1:-1;
+#ifndef MKW_RELEASE
  // A failed DSP bootstrap disables all audio. Keep its result available in
  // release test builds, without logging audio streams or writing per frame.
  if(auto* log=std::fopen("sdmc:/3ds/mkw-3ds/audio-status.txt","w")){
@@ -77,6 +79,7 @@ void MenuMovieAudio::initialize(){
       static_cast<unsigned long>(result),dspState>0?"true":"false");
   std::fclose(log);
  }
+#endif
 #ifndef MKW_RELEASE
  if(dspState<0)std::fprintf(stderr,"Opening audio unavailable: NDSP initialization failed (0x%08lx).\n",static_cast<unsigned long>(result));
 #endif
@@ -92,7 +95,7 @@ void MenuMovieAudio::close(){
  // The DSP may finish its current frame from these buffers: free them on a
  // later call, never in the same instant the channel is cleared.
  if(s.stream)s.retired=std::move(s.stream);
- s.waves={};s.failed=false;s.ended=false;
+ s.waves={};s.nextRead=s.nextQueue=0;s.failed=false;s.ended=false;
 }
 bool MenuMovieAudio::open(const char* path,bool loop,unsigned loopStartSample){
  close();auto& s=*impl_;
@@ -127,20 +130,23 @@ void MenuMovieAudio::update(){
   return;
  }
  if(!s.dsp||s.failed||!s.stream)return;
- for(unsigned i=0;i<s.waves.size();++i){
-  auto& wave=s.waves[i];auto& fill=s.fills[i];
-  if(fill){
-   if(!fill->done())continue;
-   auto job=std::move(fill);
-   if(!job->ok){s.failed=true;return;}
-   if(!job->bytes){s.ended=true;continue;}
-   wave.nsamples=job->bytes/(s.stream->channels*2);wave.looping=false;ndspChnWaveBufAdd(s.channel,&wave);
-   continue;
-  }
-  if(s.ended)continue;
-  if(wave.status!=NDSP_WBUF_DONE&&wave.status!=NDSP_WBUF_FREE)continue;
-  fill=std::make_shared<FillJob>();fill->stream=s.stream;fill->index=i;
+ // Recycle in playback order, not array-index order. When a slow frame
+ // spans the ring wrap, scanning 0,1,2 could submit a later PCM chunk first.
+ for(unsigned n=0;n<s.waves.size()&&!s.ended;++n){
+  const unsigned i=s.nextRead;auto& wave=s.waves[i];
+  if(s.fills[i]||(wave.status!=NDSP_WBUF_DONE&&wave.status!=NDSP_WBUF_FREE))break;
+  auto fill=std::make_shared<FillJob>();fill->stream=s.stream;fill->index=i;s.fills[i]=fill;
   AssetLoader::instance().submit(fill,AssetPriority::Realtime);
+  s.nextRead=(i+1)%s.waves.size();
+ }
+ for(unsigned n=0;n<s.waves.size();++n){
+  const unsigned i=s.nextQueue;auto& fill=s.fills[i];
+  if(!fill||!fill->done())break;
+  auto job=std::move(fill);
+  if(!job->ok){s.failed=true;return;}
+  if(!job->bytes)s.ended=true;
+  else{auto& wave=s.waves[i];wave.nsamples=job->bytes/(s.stream->channels*2);wave.looping=false;ndspChnWaveBufAdd(s.channel,&wave);}
+  s.nextQueue=(i+1)%s.waves.size();
  }
 }
 void MenuMovieAudio::setVolume(float gain){

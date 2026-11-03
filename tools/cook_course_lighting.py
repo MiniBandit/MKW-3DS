@@ -181,9 +181,11 @@ def main():
     default_light = common.get('lightset/default.blight') or common['./lightset/default.blight']
     default_map = common.get('lightset/default.blmap') or common['./lightset/default.blmap']
     rows = []
-    for src in sorted((ROOT / 'data/extracted/Race/Course').glob('*.szs')):
-        if src.name.startswith('._') or src.stem.endswith(('_d', '_Dif')):
-            continue
+    # The 32 races and 10 arenas only: a reused builder folder can also hold the
+    # award and ending stages (Race/Course/*_demo.szs) older builders extracted.
+    from course_catalog import courses
+    for name in sorted(Path(c['archive']).name for c in courses()):
+        src = ROOT / 'data/extracted/Race/Course' / name
         rows.append((f'Race/Course/{src.name}', course_lighting(src, default_light, default_map)))
     if len(rows) != 42:
         raise ValueError(f'expected 42 course archives, found {len(rows)}')

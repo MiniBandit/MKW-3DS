@@ -99,10 +99,12 @@ struct Lakitu::Impl {
     Mode mode=Mode::Away;Phase phase=Phase::Drop;Interp interp;
     unsigned phaseTimer=0,ascendTimer=0,introFrames=0,lastLap=1,tick=0;
     bool started=false,wasRespawning=false,wasFinished=false,released=false;
+    std::unique_ptr<Model> shadow;
+    std::vector<Renderer::ShadowCaster> shadowCasters;
     float reverseActivation=0;bool reverseOn=false;
     // Direct placement (pickup, goal): position, facing, oscillation phases.
     Vec3 pos{},goalFrom{},goalTo{},forward{0,0,1};float phaseX=0,phaseY=0;
-    C3D_Mtx world{};Vec3 lapPosition{};bool lapPositionReady=false;
+    C3D_Mtx world{};Vec3 clearancePosition{};bool clearancePositionReady=false;
     Attachment attachment=None;int digit=-1;std::array<uint32_t,6> lamps{};
     const char* bodyClip="wait";const char* rodClip="wait";unsigned clipStart=0;int clipFrame=-1;
     Vec3 cameraFrame(Vec3 forwardH,Vec3 local) const {
@@ -120,7 +122,7 @@ struct Lakitu::Impl {
     }
     void clips(const char* b,const char* r,int frame=-1){if(std::strcmp(b,bodyClip)||std::strcmp(r,rodClip)){bodyClip=b;rodClip=r;clipStart=tick;}clipFrame=frame;}
     void begin(Mode m,Phase p,float duration,Vec3 at){
-        mode=m;phase=p;interp.init(duration);phaseTimer=ascendTimer=0;lapPositionReady=false;
+        mode=m;phase=p;interp.init(duration);phaseTimer=ascendTimer=0;clearancePositionReady=false;
         move->init();move->setPos(egg(at),true);move->setForwardFromKartObjMainRot(true);move->setDescending(false);
     }
     void ascend(float duration){phase=Phase::Ascend;interp.init(duration);move->setDescending(false);ascendTimer=0;}
@@ -153,19 +155,21 @@ bool Lakitu::load(){
         p.model=std::make_unique<Model>();if(!p.model->load(model)){p.model.reset();return false;}
         if(!bank)return true;
         p.bank=std::make_unique<DriverAnimation>();if(!p.bank->load(bank,*p.model)){p.bank.reset();p.model.reset();return false;}
-        p.bank->skinNormals(true);
+        p.bank->skinNormals(!p.model->staticLightingBaked);
         p.rigid=p.bank->makeRigid(*p.model);return true;
     };
     m.ready=part(m.body,LakituBody,LakituBodyBank)&&part(m.rod,LakituRod,LakituRodBank)&&part(m.flag,LakituFlag,LakituFlagBank)&&
             part(m.signal,LakituSignal,nullptr)&&part(m.lap,LakituLap,nullptr)&&part(m.lapFinal,LakituLapFinal,nullptr)&&
             part(m.reverse,LakituReverse,nullptr)&&m.bodyJoints.load(LakituBodyJoints)&&m.rodJoints.load(LakituRodJoints)&&
             m.bodyJoints.joints>=2&&m.rodJoints.joints>=1;
+    if(m.ready){m.shadow=std::make_unique<Model>();if(!m.shadow->load("models/lakitu_shadow.gmdl"))m.shadow.reset();}
     if(!m.ready)unload();
     reset();return m.ready;
 }
 void Lakitu::unload(){
     auto& m=*impl_;
     for(auto* p:{&m.body,&m.rod,&m.flag,&m.signal,&m.lap,&m.lapFinal,&m.reverse}){p->bank.reset();p->model.reset();p->rigid=false;}
+    m.shadow.reset();m.shadowCasters.clear();
     m.bodyJoints.data.clear();m.rodJoints.data.clear();m.ready=false;m.move.reset();m.kart=nullptr;
 }
 void Lakitu::reset(){
@@ -286,14 +290,22 @@ void Lakitu::step(const LakituInput& in){
         m.place(m.pos,kartPos-m.pos,true);break;
     }
     }
-    if(m.mode==Mode::Lap){
+    if((m.mode==Mode::Lap&&m.phase==Phase::Stay)||m.mode==Mode::Reverse){
+        // Lap arrival/departure follows the original flight path. Sweeping
+        // its 2000-unit spawn down through Volcano's start arch caught it on
+        // the roof and then kept the corrected integrator above/behind the kart.
+        // Only the visible hold uses collision response; Reverse retains its
+        // full anti-penetration path.
         // Original JugemUnit::calcCollision uses radius150 after the movement
         // transform. Its native query merely notifies objects; this port also
         // uses the existing side-effect-preserving camera sphere solver to
         // prevent the final inertial/oscillating position entering terrain.
+        // Reverse needs the same correction on uphill sections: correctPosition
+        // moves both the visible pose and integrator, removing inward velocity
+        // rather than only moving the rendered judge for this one frame.
         if(auto* collision=Kinoko::Field::CollisionDirector::Instance()){
             const auto wanted=move.transPos();
-            Vector3f placed=m.lapPositionReady?egg(m.lapPosition):wanted;
+            Vector3f placed=m.clearancePositionReady?egg(m.clearancePosition):wanted;
             const auto delta=wanted-placed;
             const unsigned steps=std::clamp(unsigned(std::ceil(delta.length()/75.f)),1u,32u);
             for(unsigned n=1;n<=steps;++n){
@@ -307,8 +319,8 @@ void Lakitu::step(const LakituInput& in){
             }
             move.correctPosition(placed-wanted);
         }
-        m.lapPosition=vec(move.transPos());m.lapPositionReady=true;
-    }else m.lapPositionReady=false;
+        m.clearancePosition=vec(move.transPos());m.clearancePositionReady=true;
+    }else m.clearancePositionReady=false;
     if(m.mode==Mode::Start||m.mode==Mode::Lap||m.mode==Mode::Reverse){
         const auto& t=move.transform();float rows[12];
         for(unsigned r=0;r<3;++r)for(unsigned c=0;c<4;++c)rows[r*4+c]=t[r,c];
@@ -329,7 +341,7 @@ uint16_t Lakitu::soundLoop()const{
 }
 Vec3 Lakitu::position()const{const auto& w=impl_->world;return {w.r[0].c[0],w.r[1].c[0],w.r[2].c[0]};}
 void Lakitu::draw(Renderer& renderer){
-    auto& m=*impl_;if(!m.ready||!m.kart||m.mode==Mode::Away)return;
+    auto& m=*impl_;m.shadowCasters.clear();if(!m.ready||!m.kart||m.mode==Mode::Away)return;
     const unsigned elapsed=m.tick-m.clipStart;
     auto frameOf=[&](DriverAnimation& bank,const char* name){
         const int clip=bank.find(name);if(clip<0)return std::pair<int,unsigned>{-1,0};
@@ -337,13 +349,21 @@ void Lakitu::draw(Renderer& renderer){
         const unsigned f=m.clipFrame>=0?unsigned(m.clipFrame):elapsed;
         return std::pair<int,unsigned>{clip,bank.loop(clip)?f%duration:std::min(f,duration-1)};
     };
+    auto append=[&](const Model* model,const C3D_Mtx& transform,unsigned first=0,unsigned count=0){
+        Renderer::ShadowCaster c;c.model=model;c.transform=transform;c.first=first;c.count=count;
+        m.shadowCasters.push_back(c);
+    };
     auto drawPart=[&](Impl::Part& p,const char* name,const C3D_Mtx& transform){
         auto [clip,frame]=frameOf(*p.bank,name);if(clip<0)return;
         if(p.rigid){
             RigidPose pose;pose.parts=&p.bank->rigidParts();pose.palette=p.bank->pose(clip,float(frame),m.tick);pose.matrices=p.bank->matrixCount();
             if(!pose.palette)return;
             renderer.setRigidPose(&pose);renderer.draw(*p.model,transform);renderer.setRigidPose(nullptr);
-        }else{p.bank->apply(*p.model,clip,float(frame),m.tick);renderer.draw(*p.model,transform);}
+            for(const auto& sub:*pose.parts)for(const auto& part:sub){
+                C3D_Mtx bone,world;store(bone,pose.palette+part.matrix*pose.stride);Mtx_Multiply(&world,&transform,&bone);
+                append(p.model.get(),world,part.first,part.count);
+            }
+        }else{p.bank->apply(*p.model,clip,float(frame),m.tick);renderer.draw(*p.model,transform);append(p.model.get(),transform);}
     };
     drawPart(m.body,m.bodyClip,m.world);
     auto [bodyClip,bodyFrame]=frameOf(*m.body.bank,m.bodyClip);
@@ -359,6 +379,31 @@ void Lakitu::draw(Renderer& renderer){
     Model* board=m.attachment==Signal?m.signal.model.get():m.attachment==LapBoard?m.lap.model.get():
                  m.attachment==LapFinal?m.lapFinal.model.get():m.reverse.model.get();
     const Binding binding{board,m.lamps,m.attachment==Signal,m.attachment==LapBoard?m.digit:-1,m.attachment==Reverse?int(elapsed%60):-1};
-    renderer.draw(*board,hookWorld,false,bindLakitu,binding);
+    renderer.draw(*board,hookWorld,false,bindLakitu,binding);append(board,hookWorld);
 }
+bool Lakitu::shadowVisible()const{return impl_->ready&&impl_->kart&&impl_->mode!=Mode::Away&&!impl_->shadowCasters.empty();}
+void Lakitu::drawShadow(Renderer& renderer,const Model* const* receivers,unsigned receiverCount,Vec3 light,bool dynamic,
+                        const Renderer::ShadowReceiver* objects,unsigned objectCount){
+    auto& m=*impl_;if(!m.ready||!m.kart||m.mode==Mode::Away||m.shadowCasters.empty())return;
+    // RMCU 8071eb3c..8071ec70: identity rotation, kart Y + 100,
+    // X/Z at the judge; horizontal scale 9 -> 0 over height 500 -> 1500,
+    // vertical volume scale 30. No invented ground ray or blob placement.
+    const Vec3 at=position();const float kartY=m.kart->pos().y;
+    const float size=9.f*(1.f-std::clamp((at.y-kartY-500.f)/1000.f,0.f,1.f));
+    if(size<=0.f)return;
+    // The exporter has already applied jg_shadow's authored root bind.
+    // Retail overwrites palette matrix 0 (8006daf0), rather than multiplying
+    // that bind again. Undo it here before the original shadow scale/pose.
+    constexpr float inverseBind=1.f/9.581673622131348f;
+    constexpr float bindY=-3.1829841136932373f;
+    C3D_Mtx pose;Mtx_Identity(&pose);
+    Mtx_Translate(&pose,at.x,kartY+100.f-30.f*bindY*inverseBind,at.z,false);
+    Mtx_Scale(&pose,size*inverseBind,30.f*inverseBind,size*inverseBind);
+    const Renderer::ShadowVolume fallback{m.shadow.get(),pose};
+    if(dynamic&&renderer.playerShadowReady())
+        renderer.drawPlayerShadow(m.shadowCasters.data(),unsigned(m.shadowCasters.size()),receivers,receiverCount,at,light,1.f,
+                                  m.shadow?&fallback:nullptr,objects,objectCount,true);
+    else if(m.shadow)renderer.drawShadowVolumes(&fallback,1,.5f);
+}
+
 }

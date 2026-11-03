@@ -1,0 +1,15 @@
+#include "DrawMdl.hh"
+
+namespace Kinoko::Render {
+
+/// @addr{0x8055DDEC}
+void DrawMdl::linkAnims(size_t idx, const Abstract::g3d::ResFile *resFile, const char *name,
+        AnmType anmType) {
+    if (!m_anmMgr) {
+        m_anmMgr = EGG::egg_new<AnmMgr>(this);
+    }
+
+    m_anmMgr->linkAnims(idx, resFile, name, anmType);
+}
+
+} // namespace Kinoko::Render

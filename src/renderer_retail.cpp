@@ -11,10 +11,12 @@
 //  - GX fog through a ramp texture on unit 2 indexed by eye depth, or, for
 //    light-texture materials (which need unit 2), as a last combiner stage
 //    with the fog factor at the object's eye depth.
-// Everything is set once per frame or per submesh; no per-vertex CPU work.
+// Static meshes retain fixed maps; the local racer samples dynamic lighting
+// every five simulation ticks and interpolates its colours and environment UVs.
 #include "mkw/renderer.hpp"
 #include <mkw/normal_matrix.hpp>
 #include <mkw/retail_lighting.hpp>
+#include <mkw/light_texture_blend.hpp>
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -55,11 +57,11 @@ void Renderer::setRetailLighting(const CourseLighting* course,bool fixedLightTex
     if(course==retail_&&fixedLightTextures==fixedLightTextures_)return;
     // Light textures and the fog ramp belong to the drawing side.
     drain();
-    retail_=course;fixedLightTextures_=fixedLightTextures;retailTexturesValid_=false;
+    retail_=course;fixedLightTextures_=fixedLightTextures;retailTexturesValid_=false;lightTextureAppliedTick_=~0u;
     retailFog_[7]=-1.f;
     if(!course)return;
     for(unsigned which=0;which<2;++which)retailTextureDynamic_[which]=retailLightTextureDynamic(*course,which);
-    for(auto& t:retailTexture_){
+    for(auto* pair:{retailTexture_,fixedRetailTexture_})for(unsigned index=0;index<2;++index){auto& t=pair[index];
         if(t.data)continue;
         if(!C3D_TexInit(&t,LightTextureSize,LightTextureSize,GPU_RGBA8)){retail_=nullptr;return;}
         // CapTexture: bilinear, clamped (LightTexture::configure).
@@ -80,7 +82,7 @@ void Renderer::retailFogNow(const RetailFog& fog){
 }
 
 void Renderer::retailShutdown(){
-    for(auto& t:retailTexture_){if(t.data)C3D_TexDelete(&t);t={};}
+    for(auto* pair:{retailTexture_,fixedRetailTexture_})for(unsigned i=0;i<2;++i){auto& t=pair[i];if(t.data)C3D_TexDelete(&t);t={};}
     if(retailFogRamp_.data)C3D_TexDelete(&retailFogRamp_);
     retailFogRamp_={};retail_=nullptr;retailTexturesValid_=false;
 }
@@ -98,15 +100,19 @@ void Renderer::retailBeginFrame(){
     retailLightDirty_=retailFogBound_=retailTextureDirty_=false;
     if(!retail_){C3D_FVUnifSet(GPU_VERTEX_SHADER,fogParamLoc_,0,0,0,0);return;}
     // EGG::LightObject::CalcView for this frame's camera.
-    float rows[3][3];
-    for(unsigned r=0;r<3;++r)for(unsigned c=0;c<3;++c)rows[r][c]=view_.r[r].c[3-c];
-    for(unsigned i=0;i<16;++i)retailLightView_[i]=retailLightViewDirection(retail_->lights[i],rows);
+    std::fill(std::begin(retailLightViewReady_),std::end(retailLightViewReady_),false);
+    // Static meshes never need a camera-space light direction. A local held
+    // item resolves only the light sets it actually uses, below in retailLight.
+    if(!fixedLightTextures_){
+        float rows[3][3];
+        for(unsigned r=0;r<3;++r)for(unsigned c=0;c<3;++c)rows[r][c]=view_.r[r].c[3-c];
+        for(unsigned i=0;i<16;++i){retailLightView_[i]=retailLightViewDirection(retail_->lights[i],rows);retailLightViewReady_[i]=true;}
+    }
     // Independently cache each light texture at GX's existing S1.10 direction
     // precision: camera motion below a quantization boundary changes no texel.
     // C3D_FrameBegin has retired every earlier use of these textures.
-    // Races use a fixed light-texture pair per course. Diffuse lighting
-    // above still follows the actual camera; the costly 32x32 CPU sphere
-    // maps no longer regenerate on turns or once for each stereo eye.
+    // Sample the local racer maps every five simulation ticks. Both eyes
+    // share the result; static objects retain their separate fixed map pair.
     Vec3 textureDirections[16];
     const Vec3* directions=retailLightView_;
     if(fixedLightTextures_&&!retailTexturesValid_){
@@ -114,21 +120,42 @@ void Renderer::retailBeginFrame(){
         for(unsigned i=0;i<16;++i)textureDirections[i]=retailLightViewDirection(retail_->lights[i],neutral);
         directions=textureDirections;
     }
-    for(unsigned which=0;which<2;++which){
-        if(retailTexturesValid_&&(fixedLightTextures_||!retailTextureDynamic_[which]))continue;
-        int key[12];retailLightTextureKey(*retail_,which,directions,key);
-        if(retailTexturesValid_&&!std::memcmp(key,retailTextureKeys_[which],sizeof key))continue;
-        uint8_t rgba[LightTextureSize*LightTextureSize*4];
-        retailLightTexture(*retail_,which,directions,rgba);
-        auto* out=static_cast<uint8_t*>(retailTexture_[which].data);
-        for(unsigned y=0;y<LightTextureSize;++y)for(unsigned x=0;x<LightTextureSize;++x){
-            // GX row y (t down) is texcoord v = 1 - t (cooked UVs flip v).
-            const uint8_t* p=rgba+(y*LightTextureSize+x)*4;
-            uint8_t* q=out+tiled(x,LightTextureSize-1-y,LightTextureSize)*4;
-            q[0]=p[3];q[1]=p[2];q[2]=p[1];q[3]=p[0];
+    if(!retailTexturesValid_){
+        Vec3 fixed[16];const float identity[3][3]={{1,0,0},{0,1,0},{0,0,1}};
+        for(unsigned i=0;i<16;++i)fixed[i]=retailLightViewDirection(retail_->lights[i],identity);
+        for(unsigned which=0;which<2;++which){uint8_t rgba[32*32*4];retailLightTexture(*retail_,which,fixed,rgba);
+            auto* out=static_cast<uint8_t*>(fixedRetailTexture_[which].data);
+            for(unsigned y=0;y<32;++y)for(unsigned x=0;x<32;++x)for(unsigned c=0;c<4;++c)
+                out[tiled(x,31-y,32)*4+3-c]=rgba[(y*32+x)*4+c];
+            C3D_TexFlush(&fixedRetailTexture_[which]);
         }
+    }
+    const unsigned elapsed=execFrame_-lightTextureTick_;
+    const bool sample=!retailTexturesValid_||(!fixedLightTextures_&&elapsed>=5);
+    if(sample){
+        for(unsigned which=0;which<2;++which){
+            std::memcpy(lightTextureFrom_[which],lightTextureTo_[which],sizeof lightTextureTo_[which]);
+            int key[12];retailLightTextureKey(*retail_,which,directions,key);
+            if(!retailTexturesValid_||std::memcmp(key,retailTextureKeys_[which],sizeof key))
+                retailLightTexture(*retail_,which,directions,lightTextureTo_[which]);
+            if(!retailTexturesValid_||elapsed>10)std::memcpy(lightTextureFrom_[which],lightTextureTo_[which],sizeof lightTextureTo_[which]);
+            lightTextureTransition_[which]=std::memcmp(lightTextureFrom_[which],lightTextureTo_[which],sizeof lightTextureTo_[which])!=0;
+            std::memcpy(retailTextureKeys_[which],key,sizeof key);
+        }
+        lightTextureTick_=execFrame_;
+    }
+    const unsigned blendTick=std::min<unsigned>(5u,execFrame_-lightTextureTick_);
+    if(!retailTexturesValid_||(!fixedLightTextures_&&execFrame_!=lightTextureAppliedTick_)){
+    for(unsigned which=0;which<2;++which){
+        // Commit on a new sample even when its endpoints match: the preceding
+        // frame may still hold the old transition's 4/5 value. Afterwards a
+        // stable pair needs neither conversion nor another cache flush.
+        if(retailTexturesValid_&&!sample&&!lightTextureTransition_[which])continue;
+        auto* out=static_cast<uint8_t*>(retailTexture_[which].data);
+        blendLightTexture32(out,lightTextureFrom_[which],lightTextureTo_[which],blendTick);
         C3D_TexFlush(&retailTexture_[which]);
-        std::memcpy(retailTextureKeys_[which],key,sizeof key);
+    }
+    lightTextureAppliedTick_=execFrame_;
     }
     retailTexturesValid_=true;
     // GX fog: ramp of the fog function over eye depth normalized to
@@ -151,7 +178,7 @@ void Renderer::retailBeginFrame(){
 bool Renderer::retailLight(const Submesh& s){
     if(!retail_||!(s.lighting&retail::Retail))return false;
     const unsigned channel=(s.lighting&retail::ChannelMask)>>retail::ChannelShift;
-    if(!channel){
+    if(!channel||(s.lighting&retail::StaticLighting)){
         // Unlit GX channel: the vertex (or register) colour as authored.
         C3D_FVUnifSet(GPU_VERTEX_SHADER,lightLoc_,1,1,1,1);
         return true;
@@ -163,6 +190,12 @@ bool Renderer::retailLight(const Submesh& s){
     for(unsigned i=0;i<4;++i)
         ambient[i]=float(unsigned(0.5f+float((retail_->ambient[0]>>(24-8*i))&255)*float((s.ambient>>(24-8*i))&255)*(1.f/255.f)))/255.f;
     if(!alphaLit)ambient[3]=1.f;
+    if(!retailLightViewReady_[set]){
+        float rows[3][3];
+        for(unsigned r=0;r<3;++r)for(unsigned c=0;c<3;++c)rows[r][c]=view_.r[r].c[3-c];
+        retailLightView_[set]=retailLightViewDirection(retail_->lights[set],rows);
+        retailLightViewReady_[set]=true;
+    }
     const RetailLight& light=retail_->lights[set];
     // G3D light: enabled with the GX flag; colour/alpha only when flagged.
     const bool on=(light.flags&0x41)==0x41;
@@ -307,8 +340,10 @@ bool Renderer::retailCombiners(const Submesh& s,const C3D_Mtx& modelView,bool ba
             auto* alpha=next();C3D_TexEnvColor(alpha,s.constant);
             C3D_TexEnvSrc(alpha,C3D_Alpha,GPU_CONSTANT);C3D_TexEnvFunc(alpha,C3D_Alpha,GPU_REPLACE);
         }
-        C3D_TexBind(1,&retailTexture_[0]);C3D_TexBind(2,&retailTexture_[1]);retailFogBound_=true;
+        auto* maps=drawSampledLighting_?retailTexture_:fixedRetailTexture_;
+        C3D_TexBind(1,&maps[0]);C3D_TexBind(2,&maps[1]);retailFogBound_=true;
         C3D_BoolUnifSet(GPU_VERTEX_SHADER,retailBoolLoc_,true);retailTextureDirty_=true;
+        if(s.lighting&retail::FixedEnvironment)return false;
         retailEnvironment(modelView);
         return true;
     }

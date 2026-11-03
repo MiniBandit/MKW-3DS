@@ -18,6 +18,9 @@
 // Disparity is measured in top-screen pixels as right-eye x minus left-eye x:
 // positive behind the screen, negative in front of it.
 namespace mkw::stereo {
+// Dad requested stronger depth than the MK7 reference. Keep its convergence
+// planes and slider range; amplify the resulting binocular disparity only.
+inline constexpr float DepthStrength=1.5f;
 // The console's stereo display settings (config block 0x50005, which the SDK
 // camera reads at start-up), in mm: the viewer's eye separation and distance,
 // the top screen's size, and the limit parallax (the disparity of the far
@@ -92,7 +95,7 @@ struct Frame {
 inline Frame frame(float slider,const Display& display,const Scene& scene,float subjectDepth){
     Frame f;
     if(!(slider>0))return f;
-    f.separation=std::min(slider,1.f)*scene.factor*display.limitParallax*display.pixelsPerMm()*scene.farFactor;
+    f.separation=DepthStrength*std::min(slider,1.f)*scene.factor*display.limitParallax*display.pixelsPerMm()*scene.farFactor;
     f.convergence=std::max(scene.levelRatio*subjectDepth,1.f);
     return f;
 }
@@ -100,7 +103,7 @@ inline Frame frame(float slider,const Display& display,const Scene& scene,float 
 inline float layerParallax(float slider,const Display& display,float depth){
     if(!(slider>0))return 0.f;
     const float k=display.pixelsPerMm();
-    return std::min(slider,1.f)*display.eyeSeparation*k*depth/(display.viewingDistance*k+depth);
+    return DepthStrength*std::min(slider,1.f)*display.eyeSeparation*k*depth/(display.viewingDistance*k+depth);
 }
 
 // Projection rows m[r][c] (clip = m * view). `horizontal` is the clip row of

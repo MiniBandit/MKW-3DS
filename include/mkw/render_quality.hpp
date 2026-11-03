@@ -9,15 +9,15 @@
 #include <cmath>
 #include <cstddef>
 namespace mkw {
-// Detail traded for frame rate on Old 3DS (the user accepted lower visual
-// fidelity there on 2026-10-07). New 3DS and QA runs with full-quality.txt
-// keep every draw, so captures can still prove nothing else changed.
+// 3DS presentation policy: subpixel object rejection and spare-VRAM texture
+// placement apply to both models. Old 3DS additionally trades visible detail
+// for frame rate; New 3DS retains the full authored effect sampling kernel.
 struct RenderQuality {
     bool reduced=false;
     bool mipmaps=true; // authored per-material filters/LOD bias; LOD0 fallback remains available
     // Objects whose bounding sphere spans less than this radius/distance
     // ratio (about 4 px of the 240 px screen at the race FOV) are not drawn.
-    float minScreenRatio=0;
+    float minScreenRatio=.003f;
     // Course objects switch to their authored -low LOD beyond this distance.
     float objectLowDistance=7000.f;
     // Retail stencil shadow volumes; bloom blur rounds (horizontal + vertical).
@@ -37,23 +37,31 @@ struct RenderQuality {
     unsigned animationStep=0;
     // Course, sky and course-object textures move from LINEAR (FCRAM) to VRAM
     // after the race's VRAM users have loaded, leaving vramReserve bytes free.
-    bool vramCourseTextures=false;
+    bool vramCourseTextures=true;
     static constexpr std::size_t vramReserve=1024*1024;
-    // Old 3DS course-object detail distance and particle limit: lowered from
-    // 4000 and 96 following Codiak540's Old 3DS tests (PR #40). He ran 150 units
-    // and 16 particles; these are the cautious values until performance logs
-    // from other Old 3DS consoles show how far to go.
     void setReduced(bool on){
         *this=RenderQuality{};
         if(!on)return;
-        reduced=true;minScreenRatio=.015f;objectLowDistance=1500.f;
-        shadowVolumes=false;bloomBlurRounds=1;boxSparkleRatio=.04f;particleBudget=48;kartEffectScreens=2;animationStep=4;vramCourseTextures=true;
+        reduced=true;minScreenRatio=.015f;objectLowDistance=4000.f;
+        shadowVolumes=false;bloomBlurRounds=1;boxSparkleRatio=.04f;particleBudget=96;kartEffectScreens=2;animationStep=4;vramCourseTextures=true;
     }
 #ifdef MKW_RENDER_QUALITY_C3D
     // True when bounds b placed by transform t are too small to draw from camera.
     bool tooSmall(const Bounds& b,const C3D_Mtx& t,Vec3 camera) const {
         if(minScreenRatio<=0)return false;
-        return screenRatio(b,t,camera)<minScreenRatio;
+        // Compare squared radii/distances: this hot path runs for every
+        // object and racer part. Preserve uncertain/borderline geometry.
+        if(!(minScreenRatio<1.f))return screenRatio(b,t,camera)<minScreenRatio;
+        const Vec3 c=(b.minimum+b.maximum)*.5f,h=(b.maximum-b.minimum)*.5f;
+        float scale2=0;
+        for(unsigned col=0;col<3;++col){
+            const float x=t.r[0].c[3-col],y=t.r[1].c[3-col],z=t.r[2].c[3-col];
+            scale2=std::max(scale2,x*x+y*y+z*z);
+        }
+        const Vec3 d{t.r[0].x*c.x+t.r[0].y*c.y+t.r[0].z*c.z+t.r[0].w-camera.x,
+                     t.r[1].x*c.x+t.r[1].y*c.y+t.r[1].z*c.z+t.r[1].w-camera.y,
+                     t.r[2].x*c.x+t.r[2].y*c.y+t.r[2].z*c.z+t.r[2].w-camera.z};
+        return dot(h,h)*scale2 < minScreenRatio*minScreenRatio*dot(d,d)*(1.f-1e-5f);
     }
     static float screenRatio(const Bounds& b,const C3D_Mtx& t,Vec3 camera){
         const Vec3 c=(b.minimum+b.maximum)*.5f,h=(b.maximum-b.minimum)*.5f;

@@ -2,6 +2,7 @@
 // 806f296c) with Sound3DCalc's CalcAngleAndDistance (806f2024),
 // CalcPanStereo (806f23b0) and CalcPitch (806f1e74); constants 8089c4d0.
 #include <mkw/snd_3d.hpp>
+#include <mkw/explosion_audio.hpp>
 #include <algorithm>
 #include <cmath>
 
@@ -81,12 +82,15 @@ Ambient Engine3D::update(const SoundEntry& s, u32 soundId, const Actor3D& actor,
                  l.m[1][0] * actor.position.x + l.m[1][1] * actor.position.y + l.m[1][2] * actor.position.z + l.m[1][3],
                  l.m[2][0] * actor.position.x + l.m[2][1] * actor.position.y + l.m[2][2] * actor.position.z + l.m[2][3]};
  const f32 distance = length(rel);
+ // Bounded 3DS object mixer: rank spatial objects by listener distance,
+ // independent of authored loudness. Other players retain retail policy.
+ if (s.playerId == 2) a.distancePriority = 64 - int(std::min(distance / 128.0f, 64.0f));
  const bool primed = h && h->primed;
  if (flags & 9) {
   f32 volume = 1.0f;
-  const f32 full = Distance[actor.userParam & 0xf];
+  const f32 full = explosionSound(soundId)?std::max(Distance[actor.userParam & 0xf],ExplosionFullDistance):Distance[actor.userParam & 0xf];
   if (distance > full) {
-   const f32 units = (distance - full) / unitDistance, ratio = s.decayRatio * (1.0f / 256.0f);
+   const f32 units = (distance - full) / (explosionSound(soundId)?ExplosionUnitDistance:unitDistance), ratio = s.decayRatio * (1.0f / 256.0f);
    if (s.decayCurve == 1) volume = std::pow(ratio, units);
    else if (s.decayCurve == 2) volume = std::max(0.0f, 1.0f - (1.0f - ratio) * units);
   }

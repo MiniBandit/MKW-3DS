@@ -3,7 +3,7 @@
 
 The shared race items carry bombCore with frame-zero UVs and fallback materials. This
 writes a raw-UV copy (models/bomb_blast.gmdl and textures) into the build overlay
-build/vfx, which tools/package_sd.py packages, and regenerates include/mkw/bomb_blast.hpp
+build/vfx, which tools/resource_manifest.py packages, and regenerates include/mkw/bomb_blast.hpp
 with the original SRT0 and bombCoreRed / bombCoreBlue CLR0 tracks (tools/export_blast.ts).
 The models/bomb_core.dskm pose bank keeps driving the geometry: the vertex order is the same.
 """
@@ -17,7 +17,7 @@ OUT = ROOT / 'build/vfx'
 
 
 def main():
-    subprocess.run(['node', 'tools/bundle_cooker.mjs'], cwd=ROOT, check=True)
+    if not (ROOT/'build/export_brres.mjs').is_file():raise FileNotFoundError('Prepare the individual BRRES exporter manually; see docs/MANUAL-BUILD.md')
     work = ROOT / 'build/blast-export'
     work.mkdir(parents=True, exist_ok=True)
     env = {**os.environ, 'MKW_FREEZE_NONLINEAR_UV': '1', 'MKW_RAW_UV': '1'}

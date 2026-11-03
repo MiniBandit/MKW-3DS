@@ -22,9 +22,16 @@ HERE=Path(__file__).parent
 sys.path[:0]=[str(ROOT/'tools'),str(HERE)]
 SD='sd-card/3ds/mkw-3ds'
 DISC_MANIFEST=json.loads((HERE/'usa-disc.json').read_text())
-MENU_ARCHIVES=['MenuSingle','MenuSingle_U','MenuOther','MenuOther_U','Title','Title_U','Award','Award_U','Globe']
-COURSE_OVERLAY_IDS=[str(i) for i in range(42)]
+MENU_ARCHIVES=['MenuSingle','MenuSingle_U','MenuOther','MenuOther_U','Title','Title_U','Award','Award_U','Globe',
+               'Channel','Channel_U','Present','Present_U']
+MENU_MODEL_ARCHIVES=['Driver','BackModel','MiiBody']
+# Offline exporters, bundled one each (tools/bundle_cooker.mjs).
+EXPORTERS=['export_brres','export_driver','export_joints','export_star','export_award_scene','export_blast',
+           'export_item_box_uv','export_mii_photo']
+# Courses whose materials Redux re-converts (docs/MANUAL-RESOURCE-STAGES.md).
+COURSE_OVERLAY_IDS=['1','5','7','8','10','15','19','27','29','31']
 COURSE_OBJECT_OUTPUTS=[SD+f'/models/course_{course_id:02d}_visuals.list' for course_id in range(32)]
+HOST_EXE='.exe' if os.name=='nt' else ''
 
 # (name, command, outputs that mean the step is done). {py} is this Python,
 # {disc} the disc image, {jobs} the worker count. Order is dependency order.
@@ -33,71 +40,141 @@ COURSE_OBJECT_OUTPUTS=[SD+f'/models/course_{course_id:02d}_visuals.list' for cou
 PRUNE_AFTER={'course material overlay':['build/course-exports','build/object-exports'],
              'full roster':['assets/garage-parts']}
 
+# The stages follow docs/MANUAL-RESOURCE-STAGES.md (Epic's Redux), with the
+# batch converters for courses, drivers, vehicles and course lighting kept,
+# and each of config/generated-inputs.json's headers produced by a step.
 COOK_STEPS=[
- ('Node packages',['npm.cmd' if os.name=='nt' else 'npm','ci','--no-audit','--no-fund'],['node_modules/.package-lock.json']),
- ('BRRES exporters',['node','tools/bundle_cooker.mjs'],['build/export_brres.mjs']),
- # The game module, read as data (menu palettes, layouts, animation tables).
+ ('Node packages',['npm.cmd' if os.name=='nt' else 'npm','ci','--omit=dev','--no-audit','--no-fund'],['node_modules/.package-lock.json']),
+ ('BRRES exporters',[['node','tools/bundle_cooker.mjs',f'tools/{e}.ts'] for e in EXPORTERS],[f'build/{e}.mjs' for e in EXPORTERS]),
+ # The game module and program, read as data (menu palettes, layouts, animation
+ # tables, the retail default Miis, runtime tables).
  ('game module',['{py}','tools/extract_disc.py','{disc}','data/extracted','--file','rel/StaticR.rel','--to','build/itembox-retail.rel'],['build/itembox-retail.rel']),
+ ('game program',['{py}','tools/extract_disc.py','{disc}','data/extracted','--dol','--to','build/original/main.dol'],['build/original/main.dol']),
  ('menus, movies and sound',['{py}','tools/extract_disc.py','{disc}','data/extracted','--prefix','Scene/','--prefix','thp/','--prefix','sound/','--prefix','Boot/'],['data/extracted/Scene/UI/Title.szs','data/extracted/sound/revo_kart.brsar','data/extracted/thp/title','data/extracted/Boot/Strap/us/English.szs']),
+ # Every course model conversion (the Coconut Mall sky first) reads this policy.
+ ('finish-line source policy',['{py}','tools/generate_startline_policy.py'],['tools/course_startline_faces.json']),
  # Coconut Mall's sky predates the course importer, which reuses it (README.txt).
  ('Coconut Mall archive',['{py}','tools/unpack_szs.py','data/extracted/Race/Course/shopping_course.szs','assets/coconut-mall'],['assets/coconut-mall/vrcorn_model.brres']),
  ('Coconut Mall sky export',['node','build/export_brres.mjs','assets/coconut-mall/vrcorn_model.brres','assets/cooked-coconut-sky'],['assets/cooked-coconut-sky/model.json']),
  ('Coconut Mall sky',['{py}','tools/cook_model.py','assets/cooked-coconut-sky',SD,'--prefix','coconut_sky'],[SD+'/models/coconut_sky.list']),
+ # The disc's Wii Mii parts (RFLRes01.arc) and its six retail default Miis.
+ ('Mii parts',[['{py}','tools/extract_disc.py','{disc}','data/extracted','--file','contents/RFLRes01.arc','--to','data/extracted/contents/RFLRes01.arc'],
+               ['{py}','tools/unpack_szs.py','data/extracted/contents/RFLRes01.arc','assets/rfl'],
+               ['{py}','tools/cook_mii_bank.py','assets/rfl/RFL_Res.dat',SD+'/mii/parts.mpr']],[SD+'/mii/parts.mpr']),
+ ('retail default Miis',[['{py}','tools/host_tools.py','mii-head'],
+                         ['{py}','tools/cook_default_mii_portraits.py','build/original/main.dol',SD+'/mii/parts.mpr',
+                          'build/host-tools/export_mii_head'+HOST_EXE,'build/mii-parts/retail-defaults']],
+  ['build/mii-parts/retail-defaults/default-faces-atlas.png']),
+ ('runtime catalog metadata',['{py}','tools/generate_runtime_tables.py','catalog'],['include/mkw/course_catalog.hpp']),
+ ('native Mii icon body',['{py}','tools/generate_native_icon.py'],['include/mkw/native_mii_icon_body.hpp']),
  ('race courses and arenas',['{py}','tools/import_courses.py','--jobs','{jobs}'],[SD+'/models/course-catalog.json']),
- ('course objects',['{py}','tools/cook_course_objects.py','--jobs','{jobs}'],COURSE_OBJECT_OUTPUTS),
- ('Wiggler effect joints',['{py}','tools/cook_hanachan_joints.py'],['include/mkw/hanachan_joint_assets.hpp']),
- ('Pokey effect joints',['{py}','tools/cook_pokey_joints.py'],['include/mkw/pokey_joint_assets.hpp']),
+ ('course objects',['{py}','tools/cook_course_objects.py','--jobs','{jobs}','--ids',*[str(i) for i in range(32)]],COURSE_OBJECT_OUTPUTS),
  ('Coconut Mall escalators and palms',['{py}','tools/cook_coconut_objects.py'],[SD+'/models/coconut_escalator_000.gmdl',SD+'/models/coconut_palm_000.gmdl']),
  ('course lighting',['{py}','tools/lighting/recook_courses.py','--jobs','{jobs}','--no-pack'],[]),
- ('course material overlay',['{py}','tools/cook_course_overlay.py','--ids',*COURSE_OVERLAY_IDS,'--objects'],['build/course-materials/models']),
- ('world mipmaps',['{py}','tools/cook_world_mipmaps.py','--jobs','{jobs}'],['build/world-mipmaps/receipt.json']),
- ('water mipmaps',['{py}','tools/cook_water_mipmaps.py'],['build/water-mipmaps/receipt.json']),
+ ('course lighting tables',['{py}','tools/cook_course_lighting.py'],['include/mkw/course_lighting.hpp']),
+ ('course bloom tables',['{py}','tools/cook_course_bloom.py'],['include/mkw/course_bloom.hpp']),
+ ('course material overlay',['{py}','tools/cook_course_overlay.py','--ids',*COURSE_OVERLAY_IDS],['build/course-materials/models']),
  ('drivers',['{py}','tools/cook_roster.py','{disc}',SD],[SD+'/models/roster.json']),
  ('karts and bikes',['{py}','tools/cook_garage.py','{disc}',SD],[SD+'/models/garage.json']),
  ('full roster',['{py}','tools/cook_full_roster.py','--jobs','{jobs}'],['build/roster']),
- ('race racer lighting',['{py}','tools/cook_racer_lighting.py'],['build/roster/models/garage.json']),
- ('distant drivers',['{py}','tools/cook_driver_lod.py'],['build/roster/models/mario_mdf_kart_driver_lod.gmdl']),
- ('team vehicles',['{py}','tools/cook_team_vehicles.py','{disc}','--jobs','{jobs}'],['build/team-vehicles/team-vehicles.json']),
+ ('driver LOD',['{py}','tools/cook_racer_lod.py','--output',SD,'--work','build/racer-lod-cook'],[SD+'/models/mario_mdf_kart_driver_lod.gmdl']),
+ ('vehicle LOD',['{py}','tools/cook_vehicle_lod.py','--disc','{disc}','--output',SD,'--work','build/vehicle-lod-cook'],[SD+'/models/mario_mdf_kart_body_lod.gmdl','include/mkw/vehicle_lod_layout.hpp']),
  ('driver effect roots',['{py}','tools/cook_driver_effects.py','--jobs','{jobs}'],['build/driver-effects/receipt.json']),
- ('driver look data',['{py}','tools/cook_driver_look.py'],['include/mkw/driver_look_data.hpp']),
- ('vehicle rest poses',['{py}','tools/cook_vehicle_rest.py'],['include/mkw/vehicle_rest_data.hpp']),
- ('GP grade reference times',['{py}','tools/cook_gp_rank.py'],['include/mkw/gp_rank_times.hpp']),
+ ('team vehicle colors',['{py}','tools/cook_team_vehicles.py','{disc}','--jobs','{jobs}'],['build/team-vehicles/team-vehicles.json']),
  ('vehicle shadows',['{py}','tools/cook_vehicle_shadows.py','--jobs','{jobs}'],['build/vehicle-shadows/models/vehicle-shadows.json']),
+ ('vehicle rest poses',['{py}','tools/cook_vehicle_rest.py'],['include/mkw/vehicle_rest_data.hpp']),
+ ('driver look data',['{py}','tools/cook_driver_look.py'],['include/mkw/driver_look_data.hpp']),
  ('kart effects',['{py}','tools/cook_effects.py','assets/common/Effect/RKRace.breft',SD+'/textures'],[SD+'/textures/drift-effects.bin']),
  ('bike effects',['{py}','tools/cook_effects.py','assets/common/Effect/RKRace.breft',SD+'/textures','--bike'],[SD+'/textures/drift-effects-bike.bin']),
  # The item box model comes from Luigi Circuit's archive, unpacked where the item cook expects it.
  ('Luigi Circuit archive',['{py}','tools/unpack_szs.py','data/extracted/Race/Course/beginner_course.szs','assets/luigi'],['assets/luigi/itembox.brres']),
  ('items and HUD',['{py}','tools/cook_race_items.py',SD,'--disc','{disc}'],[SD+'/models/race-items.json']),
+ ('race HUD layout',['{py}','tools/cook_race_hud.py'],['include/mkw/race_hud_layout.hpp']),
  ('world item lighting',['{py}','tools/cook_item_lighting.py'],['build/item-lighting/receipt.json']),
- ('race effects',['{py}','tools/cook_race_effects.py','--output','build/vfx/textures','--course-only'],['build/vfx/textures/course-effects.json','include/mkw/cannon_effect_assets.hpp']),
- ('blast effects',['{py}','tools/cook_blast.py'],['build/vfx/models/bomb_blast.gmdl']),
  ('item shadows',['{py}','tools/cook_item_shadows.py'],['build/item-shadows/models/item-shadows.json']),
- ('Blooper model',['{py}','tools/cook_blooper.py'],['build/blooper/receipt.json']),
- ('Rosalina companion',['{py}','tools/cook_luma.py'],['build/vfx/models/luma.dskm']),
- ('Firebar phase stream',['{py}','tools/cook_firebar_phases.py'],['build/firebar/textures/firebar-indirect.ftan']),
- ('Lakitu',['{py}','tools/cook_lakitu.py'],['build/vfx/models/lakitu_body.dskm']),
- ('award ceremony',['{py}','tools/cook_ceremony.py','{disc}'],[SD+'/models/ceremony.json']),
- ('credits movies',['{py}','tools/cook_credits.py','--jobs','{jobs}'],[SD+'/models/credits.json']),
- ('battle and award screens',['{py}','tools/cook_battle.py'],[SD+'/models/battle.json']),
- ('effect archives',['{py}','tools/cook_effect_archives.py'],[SD+'/models/effect-archives.json']),
+ ('race effects',['{py}','tools/cook_race_effects.py','--course-only','--output','build/vfx/textures'],['build/vfx/textures/course-effects.json','include/mkw/cannon_effect_assets.hpp']),
+ ('blast effects',['{py}','tools/cook_blast.py'],['build/vfx/models/bomb_blast.gmdl']),
+ ('Lakitu',['{py}','tools/cook_lakitu.py'],['build/vfx/models/lakitu_body.dskm','build/vfx/models/lakitu_shadow.gmdl']),
  ('name balloons',['{py}','tools/cook_race_balloon.py'],['build/vfx/textures/hud_balloon_line.t3x']),
- ('race flow and results',['{py}','tools/cook_race_flow.py'],['build/race-flow/textures/flow_wipe.t3x']),
- ('audio',['{py}','tools/cook_audio.py'],['build/audio/audio/manifest.json']),
- ('object sound points',['{py}','tools/cook_object_sounds.py'],['include/mkw/object_sound_assets.hpp']),
+ # Grand Prix award ceremonies and the GP grade table.
+ ('ceremony source assets',['{py}','tools/prepare_award_assets.py','{disc}'],['build/award-source/award-sources.json']),
+ ('ceremony scene bindings',['node','build/export_award_scene.mjs','build/award-source'],['build/award-source/scene-bindings.json']),
+ ('ceremony cameras',['{py}','tools/cook_award_cameras.py'],['include/mkw/award_camera_data.hpp']),
+ ('GP reference times',['{py}','tools/cook_gp_rank.py'],['include/mkw/gp_rank_times.hpp']),
+ ('ceremony models and animation',['{py}','tools/cook_award_models.py','--jobs','{jobs}'],['build/award-models/award-models.json','include/mkw/award_model_assets.hpp']),
+ ('ceremony environment',['{py}','tools/cook_award_environment.py'],['include/mkw/award_environment_data.hpp']),
+ ('ceremony drive',['{py}','tools/cook_award_drive.py'],['include/mkw/award_drive_data.hpp']),
+ ('ceremony effects',['{py}','tools/cook_award_effects.py'],['include/mkw/award_effect_anchors.hpp']),
+ ('ceremony lighting',['{py}','tools/cook_award_lighting.py'],['include/mkw/award_lighting.hpp']),
  # Menu layouts and models, unpacked where the menu cooks read them.
  ('menu archives',[['{py}','tools/unpack_szs.py',f'data/extracted/Scene/UI/{a}.szs',f'assets/menu-ui/{a}'] for a in MENU_ARCHIVES],
-  ['assets/menu-ui/Title/title/timg/tt_title_screen_mario2.tpl']),
- ('menu model archives',[['{py}','tools/unpack_szs.py',f'data/extracted/Scene/Model/{a}.szs',f'assets/menu-models/{a}'] for a in ('Driver','BackModel')],
-  ['assets/menu-models/Driver','assets/menu-models/BackModel']),
+  ['assets/menu-ui/Title/title/timg/tt_title_screen_mario2.tpl','assets/menu-ui/Present_U/message/Common.bmg']),
+ ('race flow results and awards',['{py}','tools/cook_race_flow.py'],['build/race-flow/textures/flow_wipe.t3x','build/race-flow/textures/flow_award_font.t3x','build/race-flow/race-flow.json']),
+ ('audio',['{py}','tools/cook_audio.py'],['build/audio/audio/manifest.json']),
+ ('Wiggler effect joints',['{py}','tools/cook_hanachan_joints.py'],['include/mkw/hanachan_joint_assets.hpp']),
+ ('Pokey separation joints',['{py}','tools/cook_pokey_joints.py'],['include/mkw/pokey_joint_assets.hpp']),
+ ('object animation sounds',['{py}','tools/cook_object_sounds.py'],['include/mkw/object_sound_assets.hpp','build/object-sounds.json']),
+ ('menu model archives',[['{py}','tools/unpack_szs.py',f'data/extracted/Scene/Model/{a}.szs',f'assets/menu-models/{a}'] for a in MENU_MODEL_ARCHIVES],
+  [f'assets/menu-models/{a}' for a in MENU_MODEL_ARCHIVES]),
+ ('Battle menu labels',['{py}','tools/cook_battle_menu_text.py'],['build/battle-menu-assets/receipt.json','include/mkw/battle_menu_text.inc']),
  ('menu interface',['{py}','tools/cook_menu_ui.py'],[SD+'/models/menu-ui.json']),
+ # Run separately after the core menu conversion (docs/MANUAL-BUILD.md).
+ ('menu names',['{py}','tools/cook_menu_names.py'],['include/mkw/menu_name_glyphs.hpp','include/mkw/license_name_characters.hpp']),
+ ('menu footer',['{py}','tools/cook_menu_footer.py'],['include/mkw/menu_footer_text.inc']),
+ ('cup record icons',['{py}','tools/cook_cup_record_icons.py'],['include/mkw/cup_record_icons.hpp']),
+ ('menu record text',['{py}','tools/cook_menu_record_text.py'],['include/mkw/menu_record_text.inc']),
+ ('menu text styles',['{py}','tools/cook_menu_styles.py'],['include/mkw/menu_text_styles.hpp']),
+ ('menu animations',['{py}','tools/cook_menu_animations.py'],['include/mkw/menu_animations.hpp']),
+ ('menu unlock messages',['{py}','tools/cook_menu_unlocks.py'],['include/mkw/menu_unlock_texts.hpp']),
+ ('Mirror unlock',['{py}','tools/cook_unlock_mirror.py'],[]),
+ ('menu movie chapters',['{py}','tools/cook_menu_movie_chapters.py'],['include/mkw/menu_movie_chapters.hpp']),
  ('menu lighting',['{py}','tools/cook_menu_lighting.py'],['include/mkw/menu_lighting.hpp','build/menu-lighting.json']),
  ('menu models',['{py}','tools/cook_menu_models.py','--machines','--jobs','{jobs}'],[SD+'/models/menu-models.json']),
  ('menu movies',['{py}','tools/cook_menu_movies.py','--jobs','{jobs}'],[SD+'/models/menu-movies.json',SD+'/movies/title.wav']),
+ ('menu sprite scales',['{py}','tools/host_tools.py','sprite-scales'],['build/host-tools/sprite-scales.json']),
+ ('menu texture fitting',['{py}','tools/optimize_menu_textures.py','--jobs','{jobs}'],[SD+'/models/menu-texture-fit.json']),
  ('menu audio',['{py}','tools/cook_menu_audio.py'],[SD+'/models/menu-audio.json']),
  ('race bottom screen',['{py}','tools/cook_race_map.py','--jobs','{jobs}'],['build/race-map/textures/race_bottom_ui.t3x']),
- # The SD build's archives index the finished package, so they come last.
+ ('Luma model',['{py}','tools/cook_luma.py'],['build/vfx/luma-receipt.json']),
+ ('firebar phase stream',['{py}','tools/prepare_firebar_stream.py'],['build/course-water-feedback/textures/firebar-indirect.ftan']),
+ ('star color table',['node','build/export_star.mjs','assets/common/driver.brres','include/mkw/star_colors.hpp'],['include/mkw/star_colors.hpp']),
+ ('menu Mii bodies',['{py}','tools/cook_menu_mii_bodies.py'],['build/menu-mii-bodies/menu-mii-bodies.json','include/mkw/menu_mii_materials.hpp']),
+ ('race intro UI',['{py}','tools/cook_race_intro.py'],['build/race-intro/receipt.json','include/mkw/race_intro_layout.hpp']),
+ # Offline Battle presentation.
+ ('Battle balloons',['{py}','tools/cook_battle_balloons.py'],['build/battle-balloon-assets/receipt.json']),
+ ('Battle coins',['{py}','tools/cook_battle_coins.py'],['build/battle-coin-assets/receipt.json']),
+ ('Battle objects',['{py}','tools/cook_battle_objects.py'],['build/battle-object-assets/receipt.json']),
+ ('Battle screens',['{py}','tools/cook_battle_screens.py'],['build/battle-screen-assets/receipt.json']),
+ ('Battle HUD',['{py}','tools/cook_battle_hud.py'],['build/battle-hud-assets/receipt.json','include/mkw/battle_hud_assets.hpp','include/mkw/battle_map_assets.hpp']),
+ ('Battle HUD motion',['{py}','tools/cook_battle_hud_motion.py'],['build/battle-hud-motion/receipt.json','include/mkw/battle_hud_motion_assets.hpp']),
+ ('Battle bottom scores',['{py}','tools/cook_battle_bottom_scores.py'],['build/battle-bottom-scores/receipt.json','include/mkw/battle_bottom_scores.hpp']),
+ ('Battle results',['{py}','tools/cook_battle_results.py'],['build/battle-results-assets/receipt.json','include/mkw/battle_result_assets.hpp']),
+ ('Coin HUD stacks',['{py}','tools/cook_coin_hud_stack.py'],['build/battle-coin-hud-assets/receipt.json']),
+ ('Balloon effects',['{py}','tools/cook_race_effects.py','--balloon-only','--output','build/battle-balloon-effects/textures'],['build/battle-balloon-effects/textures/balloon-effects.json']),
+ ('Coin effects',['{py}','tools/cook_race_effects.py','--coin-only','--output','build/battle-coin-effects/textures'],['build/battle-coin-effects/textures/coin-effects.json']),
+ ('water mipmaps',['{py}','tools/cook_water_mipmaps.py'],['build/water-mipmaps/receipt.json']),
+ ('world mipmaps',['{py}','tools/cook_world_mipmaps.py','--jobs','{jobs}'],['build/world-mipmaps/receipt.json']),
+ ('Blooper model',['{py}','tools/cook_blooper.py'],['build/blooper/receipt.json']),
+ # Staff credits (normal and full endings).
+ ('Staff UI',['{py}','tools/cook_staff_ui.py','--retail-rel','build/itembox-retail.rel','--output','build/staff'],['build/staff/models/staff-ui.json','include/mkw/staff_ui_data.hpp']),
+ ('Staff movies',['{py}','tools/cook_staff_movies.py','--output','build/staff'],['build/staff/movies/staff_true.source.json']),
+ ('Staff crowd joints',['{py}','tools/generate_staff_crowd.py'],['include/mkw/staff_crowd_data.hpp']),
+ ('Staff camera',['{py}','tools/cook_staff_camera.py'],['include/mkw/staff_camera_data.hpp']),
+ ('dynamic map sprites',['{py}','tools/cook_map_objects.py'],['include/mkw/map_object_assets.hpp']),
+ ('runtime voice tables',['{py}','tools/generate_runtime_tables.py','audio'],['include/mkw/race_voice_tables.hpp']),
+ ('runtime trig table',['{py}','tools/generate_runtime_tables.py','math'],['include/mkw/nw4r_sin_table.hpp']),
+ ('runtime Mii billboards',['{py}','tools/generate_runtime_tables.py','billboards'],['include/mkw/course_mii_billboards.hpp']),
+ ('road depth policy',['{py}','tools/generate_road_policy.py'],['include/mkw/road_sampler_ranges.hpp']),
+ ('course draw phases',['{py}','tools/generate_course_phases.py'],['include/mkw/course_phase_ranges.hpp']),
+ ('Battle legacy material migration',['{py}','tools/cook_battle_course_feedback.py'],['build/battle-course-feedback/receipt.json']),
+ # Mii drivers.
+ ('Mii race models',['{py}','tools/cook_mii_racers.py','{disc}','build/mii-racers','--jobs','{jobs}'],['build/mii-racers/models/mii-garage.json']),
+ ('Mii menu, team and metadata',['{py}','tools/finish_mii_racers.py','{disc}','build/mii-racers','--jobs','{jobs}'],['build/mii-racers/models/mii-complete.json','include/mkw/mii_garage.hpp']),
+ ('Mii award bodies',['{py}','tools/cook_mii_awards.py','build/mii-racers'],['build/mii-racers/models/mii-awards.json','include/mkw/mii_award_materials.hpp']),
+ ('Mii voice tables',['{py}','tools/cook_mii_voice.py','build/itembox-retail.rel'],['include/mkw/mii_voice.hpp']),
+ # The menu archive indexes the menu files; the race archives are packed with
+ # the finished game (tools/package_sd.py), which their file map lists.
  ('menu archive',['{py}','tools/pack_menu_assets.py'],[SD+'/menu.pak']),
- ('race archive',['{py}','tools/pack_race_assets.py'],[SD+'/race.pak']),
 ]
 
 def log(*a):print('[build_cia]',*a,flush=True)
@@ -136,6 +213,13 @@ def stage_tools():
     dkp=devkitpro_root()
     for need in (dkp/'devkitARM',dkp/'libctru',tool('tex3ds')):
         if not need.exists():raise SystemExit(f'Missing {need}: install devkitPro 3ds-dev (https://devkitpro.org/wiki/Getting_Started)')
+    # The bundled Citro3D needs a current libctru (CTR_ALIGN, #62).
+    if b'CTR_ALIGN' not in (dkp/'libctru/include/3ds/types.h').read_bytes():
+        raise SystemExit('devkitPro is out of date: update it (devkitPro MSYS2 or a terminal: dkp-pacman -Syu), then run the builder again.')
+    # OneDrive and similar sync folders lock files while uploading them (#111).
+    if any(part.lower().startswith(('onedrive','icloud','dropbox','google drive')) for part in ROOT.parts):
+        raise SystemExit(f'The builder is inside a synced folder ({ROOT}). Move the MKW-3DS-Builder folder somewhere '
+                         'that is not synced (for example C:\\MKW-3DS-Builder) and run it again.')
     missing=[m for m in ('numpy','PIL','Crypto') if not __import__('importlib.util').util.find_spec(m)]
     if missing:raise SystemExit(f'Missing Python packages {", ".join(missing)} in {sys.executable}: run "{sys.executable}" -m pip install -r requirements.txt')
     if not shutil.which('node'):raise SystemExit('Missing Node.js (https://nodejs.org), used by the model exporters')
@@ -379,10 +463,12 @@ def stage_compile(jobs):
 
 SD_OUTPUT=ROOT/'build/release/sd-card'
 
-def stage_package(version,cci,keep_stage):
+def stage_package(version,cci,keep_stage,embed_assets=False):
     run([sys.executable,'tools/package_sd.py','--no-zip'])
     import package_cia
-    target=package_cia.package(cci,version)
+    # The CIA reads the game files from the SD card unless asked to carry them
+    # (a cartridge image for emulators always does).
+    target=package_cia.package(cci,version,sd_assets=not (cci or embed_assets))
     # The staged files become the SD card copy for the update CIA:
     # build/release/sd-card/3ds/mkw-3ds plus its content stamp.
     if not cci:
@@ -405,6 +491,7 @@ def main():
     p.add_argument('--force-cook',action='store_true',help='re-run every cook step')
     p.add_argument('--skip-compile',action='store_true',help='package the existing build/mkw-3ds.elf')
     p.add_argument('--keep-stage',action='store_true',help='keep build/playable after packaging')
+    p.add_argument('--embed-assets',action='store_true',help='put the game files in the CIA too (several GB; the SD copy is still made)')
     p.add_argument('--check',action='store_true',help='verify tools, disc and cooked assets, then stop')
     p.add_argument('--cook-only',action='store_true',help='stop after cooking')
     a=p.parse_args()
@@ -412,10 +499,11 @@ def main():
     if a.check:log('check passed: ready to compile and package');return
     if a.cook_only:log('cook complete');return
     if not a.skip_compile:stage_compile(a.jobs)
-    cia=stage_package(a.version,False,a.keep_stage or a.cci)
+    cia=stage_package(a.version,False,a.keep_stage or a.cci,a.embed_assets)
     if a.cci:stage_package(a.version,True,a.keep_stage)
     log('done:',cia)
-    log('Copy it to your SD card and install it with FBI, or use FBI remote install.')
-    log('For quick updates later, also copy build/release/sd-card/3ds to the root of your SD card (see README).')
+    log('1. Copy build/release/sd-card/3ds to the root of your SD card (the game files; merge with the 3ds folder there).')
+    if a.embed_assets:log('2. Copy the CIA to your SD card and install it with FBI, or use FBI remote install.')
+    else:log('2. Install the CIA with FBI (it is small: the game reads its files from the SD card).')
 
 if __name__=='__main__':main()

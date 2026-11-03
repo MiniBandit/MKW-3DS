@@ -1,33 +1,41 @@
-Mario Kart Wii 3DS: licensing notice
-====================================
+Mario Kart Wii 3DS Redux: attribution and license scope
+=====================================================
 
-The original port
------------------
-This project continues the Mario Kart Wii 3DS port and CIA builder written by
-dudewhat. dudewhat released its source publicly (mkw-3ds-cia-builder v0.1.0)
-without an explicit license. That code is imported unchanged in the first
-commit of this repository and remains dudewhat's; it is credited here and is
-not covered by this repository's LICENSE. If you are dudewhat and want
-something changed, please open an issue.
+This source snapshot continues dudewhat's original Mario Kart Wii 3DS port
+and MiniBandit's continuation, with Redux development by epicreds. It does
+not carry the original repositories' commit history.
 
-This continuation
------------------
-MiniBandit's changes and additions (every commit after the import) are
-released under the MIT License in LICENSE.
+The inherited LICENSE grants MIT terms for MiniBandit's contributions.
+The inherited upstream notice states that dudewhat's original release did
+not include an explicit license; this snapshot does not expand that grant.
+The Redux author has chosen not to declare a separate license for the later
+Redux contributions at this time.
+Do not interpret the root MIT text as a blanket license for every file.
 
-Third-party components
-----------------------
-Fetched at build time or included, each under its own license (see licenses/):
-  Kinoko (vabold)            MIT
-  noclip.website             MIT
-  gclib (LagoLunatic)        MIT
-  citro3d (fincs)            zlib
-  ogws, mkw decompilations   CC0 (reference only)
-  makerom, bannertool        their own licenses, downloaded at build time
+Bundled and external components
+-------------------------------
+Kinoko, noclip.website and gclib: MIT; see licenses/.
+Citro3D: zlib; see licenses/ and vendor/citro3d/.
+ogws and mkw decompilation references: CC0; see licenses/.
+CFL Mii rendering source: jamesrhg/cfl-mii, revision and local hashes in
+vendor/sources.lock.json; no explicit license was found in the bundled
+source or upstream repository root during the 2026-10-25 review.
+CFL-tool: separately acquired input, pinned in dependencies.json; its license
+terms also require clarification. No tool checkout or IconBody.iqm is shipped.
+pycgfx: separately acquired banner converter, pinned in dependencies.json;
+no explicit license file was found in the locally inspected pinned checkout.
+makerom, bannertool and the SDK are acquired separately under their own terms;
+this repository does not automatically download them.
 
-Nintendo
---------
-Mario Kart Wii and all of its content are (c) Nintendo. No Nintendo files are
-in this repository: the builder converts the user's own disc on their own
-computer. This is an unofficial fan project, not affiliated with or endorsed
-by Nintendo. Do not distribute built CIAs.
+Included artwork and excluded inputs
+------------------------------------
+Mario Kart Wii and its artwork are copyright Nintendo. The repository
+contains eight inherited MK7 marker PNGs and the separately supplied HOME
+icon, logo and approved banner audio in tools/release/artwork/. These media
+assets are not covered by the MIT license. Inclusion here is not a grant of rights to Nintendo artwork.
+Game archives, banner CGFX models, native CFL_Res.dat, saves and compiled
+packages are not supplied. Builders must supply the game and system inputs.
+
+This is an unofficial fan project, not affiliated with Nintendo.
+The unresolved source-license scopes above must be clarified before claiming
+that this snapshot is fully licensed for redistribution.

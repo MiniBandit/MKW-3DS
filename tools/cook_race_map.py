@@ -90,24 +90,27 @@ MAX_UNITS_PER_PIXEL = 110.0
 OVERVIEW = 256
 
 
-def cook_course(index, course, out):
+def cook_course(index, course, out, reuse_rendered=False):
     import race_map_bake as rb
     from import_courses import kmp_database
     folder = ROOT / 'assets/courses' / course['key']
     kcl = rb.kcl_triangles(folder / 'course.kcl')
     kmp = kmp_database(folder / 'course.kmp')
     frame, size = rb.course_frame(kmp)
-    image, stats = rb.bake(course['key'], course['models'], course['archive'], frame, size)
     png = out / 'textures' / f'race_map_{index:02d}.png'
-    image.save(png)
-    subprocess.run([TEX3DS, '-f', 'etc1', '-q', 'high', '-z', 'none', '-o', str(png.with_suffix('.t3x')), str(png)],
-                   check=True, stdout=subprocess.DEVNULL)
-    # The tap-to-toggle overview shows the whole frame: a separately filtered small copy.
     small = (OVERVIEW, OVERVIEW * size[1] // size[0]) if size[0] >= size[1] else (OVERVIEW * size[0] // size[1], OVERVIEW)
     overview = out / 'textures' / f'race_map_{index:02d}_overview.png'
-    image.resize(small, Image.Resampling.LANCZOS).save(overview)
-    subprocess.run([TEX3DS, '-f', 'etc1', '-q', 'high', '-z', 'none', '-o', str(overview.with_suffix('.t3x')), str(overview)],
-                   check=True, stdout=subprocess.DEVNULL)
+    if reuse_rendered:
+        for image_path,expected in [(png,size),(overview,small)]:
+            if Image.open(image_path).size!=tuple(expected) or image_path.with_suffix('.t3x').stat().st_size==0:
+                raise ValueError('Incomplete rendered map: '+str(image_path))
+        stats={'explicit_reuse_rendered':True,'previous_render_statistics_not_retained':True}
+    else:
+        image, stats = rb.bake(course['key'], course['models'], course['archive'], frame, size)
+        image.save(png)
+        subprocess.run([TEX3DS, '-f', 'etc1', '-q', 'high', '-z', 'none', '-o', str(png.with_suffix('.t3x')), str(png)],check=True,stdout=subprocess.DEVNULL)
+        image.resize(small, Image.Resampling.LANCZOS).save(overview)
+        subprocess.run([TEX3DS, '-f', 'etc1', '-q', 'high', '-z', 'none', '-o', str(overview.with_suffix('.t3x')), str(overview)],check=True,stdout=subprocess.DEVNULL)
     texel = (frame[2] - frame[0]) / size[0]
     view = min(max(UNITS_PER_PIXEL, 0.85 * texel), MAX_UNITS_PER_PIXEL)
     width = rb.road_width(kcl, route_length(kmp))
@@ -246,6 +249,9 @@ def cook_atlas(out, cci, manifest):
     images = {}
     for i, name in enumerate(FACES):
         images[('face', i)] = resize(tpl(GAME / f'timg/st_{name}_32x32.tpl'), (28, 28))
+        silhouette = Image.new('RGBA', (28,28), (255,255,255,255))
+        silhouette.putalpha(images[('face', i)].getchannel('A'))
+        images[('face_shadow', i)] = silhouette
     # Item icons appear only in the standings rows (17 px).
     for kind, name in ICONS.items():
         images[('item', kind)] = resize(tpl(GAME / f'timg/{name}.tpl'), (20, 20))
@@ -282,7 +288,7 @@ def cook_atlas(out, cci, manifest):
     subprocess.run([TEX3DS, '-f', 'rgba8', '-z', 'none', '-o', str(png.with_suffix('.t3x')), str(png)], check=True, stdout=subprocess.DEVNULL)
     manifest['atlas'] = {'texture': 'textures/race_bottom_ui.t3x', 'size': list(atlas.size),
                          't3xBytes': png.with_suffix('.t3x').stat().st_size, 'ordinals': texts,
-                         'mk7Source': {'cci' if cci and Path(cci).is_file() else 'shipped': str(cci) if cci and Path(cci).is_file() else MK7_SHIPPED.relative_to(ROOT).as_posix(), 'archive': '/UI/race.szs', 'markers': MK7_MARKERS},
+                         'mk7Source': {'cci' if cci and Path(cci).is_file() else 'shipped': str(cci) if cci and Path(cci).is_file() else str(MK7_SHIPPED), 'archive': '/UI/race.szs', 'markers': MK7_MARKERS},
                          'sources': {Path(p).relative_to(ROOT).as_posix(): digest(p) for p in sorted(set(sources))}}
     return atlas.size, rects
 
@@ -326,6 +332,7 @@ def write_header(manifest, atlas_size, rects, timer, timer_source):
               f'inline constexpr uint16_t RaceMapAtlasSize[2]={{{atlas_size[0]},{atlas_size[1]}}};',
               '// st_*_32x32 by retail character id (Kinoko Character 0..23).',
               'inline constexpr std::array<RaceMapRect,24> RaceMapFaces{{' + ','.join(rect(('face', i)) for i in range(24)) + '}};',
+              'inline constexpr std::array<RaceMapRect,24> RaceMapFaceShadows{{' + ','.join(rect(('face_shadow', i)) for i in range(24)) + '}};',
               '// Item window icons (tools/cook_race_items.py ICONS) by ItemKind; 19 = two Triple Mushrooms left (kinoko_2).',
               'inline constexpr std::array<RaceMapRect,21> RaceMapItems{{' +
               ','.join(rect(('item', k)) if ('item', k) in rects else '{0,0,0,0}' for k in range(21)) + '}};',
@@ -354,14 +361,21 @@ def write_header(manifest, atlas_size, rects, timer, timer_source):
 
 
 def main():
-    from mk7_assets import DEFAULT_CCI
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--output', type=Path, default=ROOT / 'build/race-map')
-    p.add_argument('--mk7-cci', type=Path, default=DEFAULT_CCI)
+    p.add_argument('--mk7-cci', type=Path, help='Optional owner-supplied MK7 dump; defaults to retained marker PNGs')
+    p.add_argument('--mk7-markers',type=Path,help='External directory of the eight original exported MK7 markers')
     p.add_argument('--jobs', type=int, default=6)
+    p.add_argument('--reuse-rendered-maps',action='store_true',help='Explicitly reuse PNG/T3X maps from an interrupted local cook')
+    p.add_argument('--metadata-only',action='store_true',help='Save map records before external UI inputs are provided')
+    p.add_argument('--atlas-only',action='store_true',help='Finish an existing complete map manifest without rendering maps again')
     p.add_argument('--courses', type=str, default='', help='comma-separated catalog indices (default all)')
     p.add_argument('--export-mk7-markers', action='store_true', help='write the eight markers from the MK7 dump to tools/release/mk7_markers and exit')
     a = p.parse_args()
+    global MK7_SHIPPED
+    if a.mk7_markers:MK7_SHIPPED=a.mk7_markers.resolve()
+    if not a.export_mk7_markers and not a.metadata_only and not (a.mk7_cci and a.mk7_cci.is_file()) and not all((MK7_SHIPPED/(marker_key(n)+'.png')).is_file() for n in MK7_MARKERS):
+        p.error('Supply --mk7-cci or --mk7-markers; these eight original markers cannot be generated from a Wii disc.')
     if a.export_mk7_markers:
         from mk7_assets import race_textures
         MK7_SHIPPED.mkdir(parents=True, exist_ok=True)
@@ -375,20 +389,23 @@ def main():
     if len(catalog) < 32:
         raise SystemExit(f'Expected at least 32 race courses, found {len(catalog)}')
     catalog = catalog[:32]
-    wanted = [int(i) for i in a.courses.split(',')] if a.courses else list(range(len(catalog)))
+    wanted = [] if a.atlas_only else [int(i) for i in a.courses.split(',')] if a.courses else list(range(len(catalog)))
     manifest_path = a.output / 'race-map.json'
     manifest = json.loads(manifest_path.read_text()) if manifest_path.exists() else {'version': 1, 'courses': []}
     previous = {c['index']: c for c in manifest.get('courses', [])}
     with concurrent.futures.ProcessPoolExecutor(max_workers=a.jobs) as pool:
-        jobs = {pool.submit(cook_course, i, catalog[i], a.output): i for i in wanted}
+        jobs = {pool.submit(cook_course, i, catalog[i], a.output,a.reuse_rendered_maps): i for i in wanted}
         for job in concurrent.futures.as_completed(jobs):
             result = job.result()
             previous[result['index']] = result
+            manifest['courses']=[previous[i] for i in sorted(previous)]
+            manifest_path.write_text(json.dumps(manifest,indent=1)+'\n')
             print(f"{result['index']:2d} {result['name']:24s} {result['size'][0]}x{result['size'][1]} "
                   f"{result['unitsPerPixel']:.1f} u/px road {result['roadWidth']:.0f}", flush=True)
     manifest['courses'] = [previous[i] for i in sorted(previous)]
     if len(manifest['courses']) != len(catalog):
         raise SystemExit('Cook every course before writing the header (missing maps)')
+    if a.metadata_only:return
     atlas_size, rects = cook_atlas(a.output, a.mk7_cci, manifest)
     timer, timer_source = timer_layout()
     manifest['timer'] = {'source': timer_source.relative_to(ROOT).as_posix(), 'sha256': digest(timer_source), 'panes': timer}

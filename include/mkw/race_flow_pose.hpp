@@ -26,7 +26,7 @@ struct FlowPanePose {
 struct FlowMaterialPose {std::array<float,4> c0{},c1{};std::array<float,5> srt{};};
 class FlowPose {
 public:
- static constexpr unsigned MaxPanes=24,MaxMaterials=16;
+ static constexpr unsigned MaxPanes=32,MaxMaterials=20;
  void evaluate(const FlowLayoutDef& def,const FlowPlay* plays,unsigned playCount);
  std::array<FlowPanePose,MaxPanes> panes{};
  std::array<FlowMaterialPose,MaxMaterials> materials{};

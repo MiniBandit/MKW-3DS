@@ -1,7 +1,9 @@
+#include <mkw/menu_vehicle_rotation.hpp>
 #pragma once
 #include "mkw/animation.hpp"
 #include "mkw/menu_transition.hpp"
 #include "mkw/asset_loader.hpp"
+#include "mkw/license_identity.hpp"
 #include <memory>
 #include <vector>
 
@@ -19,13 +21,16 @@ public:
     ~MenuModels();
     // Non-blocking: queues loads for the models this state shows.
     void request(const MenuState&, AssetPriority);
+    // Call between frames; identity changes invalidate only that slot's models.
+    void setIdentity(Renderer&,unsigned slot,const NativeMii&);
     bool ready(const MenuState&) const;
+    float confirmationFrames()const;
     // Publishes finished loads, chooses the displayed models for this
     // visual state and evicts least-recently-used cache entries.
-    void update(Renderer&, const MenuState& visual);
+    void update(Renderer&, const MenuState& visual,const UiTransitionView& = {});
     // Synchronous load of everything the state shows (QA captures).
     void prepare(Renderer&, const MenuState&);
-    void advance(unsigned ticks){backgroundFrame_+=ticks;driverFrame_+=ticks;}
+    void advance(unsigned ticks);
     // The menu camera and its stereo: Mario Kart 7's garage camera, whose
     // subject is the selection models.
     void begin(Renderer&);
@@ -35,20 +40,18 @@ public:
     void draw(Renderer&, const MenuState&, const UiTransitionView& = {});
     void reset(Renderer&);
     bool hasDriver() const { return shownDriver_ >= 0; }
-    // The page's controls are on the lower screen: the preview is centred and larger, and the
-    // decorative backdrop model (the trophy) is not drawn on those pages.
-    void setCenteredPreview(bool on) { centered_ = on; }
     struct Entry;
 private:
     Entry* find(int kind,int id);
     const Entry* find(int kind,int id) const;
     Entry& obtain(int kind,int id);
     void show(Renderer&,int kind,int id);
+    std::array<NativeMii,4> identities_{};
     std::vector<std::unique_ptr<Entry>> entries_;
     int shownDriver_=-1,shownBackground_=-1,shownMachine_=-1;
-    bool centered_=false;
     int driverClip_=-1,driverFace_=-1,backgroundClip_=-1;
     unsigned backgroundFrame_=0,driverFrame_=0;
+    MenuVehicleRotation machineRotation_;
     std::uint32_t clock_=1;
 };
 }

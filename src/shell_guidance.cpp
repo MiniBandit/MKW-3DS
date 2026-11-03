@@ -92,7 +92,7 @@ void RaceItems::shellTerrain(ItemActor& a,ItemWorldQuery query,bool blue,bool ro
     // (Spiny) is explicitly exempt. It follows the authored airborne route.
     if(surface.cannon&&!blue){a.active=false;return;}
     if(surface.kill&&!blue){a.active=false;return;}
-    if(blue){a.position.y+=std::max(0.f,surface.correction.y);}else a.position+=surface.correction;
+    if(blue){a.position.y+=std::max(0.f,surface.correction.y);}else a.position+=surface.correction+surface.floorMotion;
     bool floor=length(surface.floorNormal)>.1f;
     if(floor){s.up=normalized(surface.floorNormal);if(s.up.y<.00300002f)s.slopeTicks=30;else if(s.slopeTicks)--s.slopeTicks;
         if(!route){
@@ -160,6 +160,12 @@ void RaceItems::moveShellRoute(ItemActor& a,ItemWorldQuery query,int target,bool
 }
 void RaceItems::updateShell(ItemActor& a,ItemWorldQuery query){
     auto& s=a.guidance;const bool blue=a.kind==ItemKind::BlueShell;
+    // Acquisition already excludes finished racers. Retire an existing red lock
+    // as well: finished racers reject contact, so retaining it pins the shell
+    // to a target it can never hit. Keep Blue Shell leader selection separate.
+    if(!blue&&a.target>=0&&unsigned(a.target)<count_&&racers_[a.target].finished){
+        a.target=-1;shatter(a);return;
+    }
     if(s.pending>=0){s.phase=uint8_t(s.pending);s.pending=-1;s.ticks=0;
         if(blue){
             if(s.phase==2){s.approachSpeed=length(a.velocity);s.orbitRadius=300;}
@@ -175,9 +181,6 @@ void RaceItems::updateShell(ItemActor& a,ItemWorldQuery query){
         }else if((s.phase==4||s.phase==5)&&a.target>=0){
             const auto& r=racers_[a.target];
             if(s.phase==5&&(missing(r)||s.ticks>60)){a.active=false;return;}
-            // Not in the original: a shell still locked on once its target has
-            // finished would circle the finished racer; it breaks instead.
-            if(r.finished){shatter(a);return;}
             if(missing(r)){a.velocity+=s.homing;s.homing={};s.pending=6;a.target=-1;}
             else{
                 // 2984c0 (0x807a44f4): retain kart-follow velocity and a separate capped

@@ -23,6 +23,42 @@ def source_signature(signature, source):
     return digest.hexdigest()
 
 
+def build_cfl(output, dkp):
+    """The bundled CFL Mii library (vendor/cfl-mii) with its own head shader."""
+    source = ROOT / "vendor/cfl-mii/source"
+    folder = output / "native-mii"
+    folder.mkdir(parents=True, exist_ok=True)
+    shbin = folder / "vshader.shbin"
+    subprocess.run([str(tool("picasso")), "-o", str(shbin), str(source / "vshader.v.pica")], check=True)
+    data = shbin.read_bytes()
+    header = (
+        "#pragma once\n#include <stdint.h>\n#include <stddef.h>\n"
+        "static const uint8_t vshader_shbin[] __attribute__((aligned(4)))={"
+        + ",".join(map(str, data))
+        + "};\nstatic const size_t vshader_shbin_size=sizeof(vshader_shbin);\n"
+    )
+    target = folder / "vshader_shbin.h"
+    if not target.is_file() or target.read_text() != header:
+        target.write_text(header)
+    flags = [
+        "-march=armv6k", "-mtune=mpcore", "-mfloat-abi=hard", "-mtp=soft", "-O2", "-g",
+        "-mword-relocations", "-ffunction-sections", "-fdata-sections", "-D__3DS__",
+        "-I" + str(ROOT / "vendor/cfl-mii/include"), "-I" + str(ROOT / "vendor/citro3d/include"),
+        "-I" + str(dkp / "libctru/include"), "-I" + str(folder),
+    ]
+    obj = folder / "cfl_mii.o"
+    stamp = folder / "cfl_mii.sig"
+    signature = hashlib.sha256(" ".join(flags).encode() + (source / "cfl_mii.c").read_bytes()
+                               + header.encode() + (ROOT / "vendor/cfl-mii/include/cfl_mii.h").read_bytes()).hexdigest()
+    library = folder / "libCFL.a"
+    if not library.is_file() or not stamp.is_file() or stamp.read_text() != signature:
+        subprocess.run([str(arm("arm-none-eabi-gcc")), *flags, "-c", str(source / "cfl_mii.c"), "-o", str(obj)], check=True)
+        library.unlink(missing_ok=True)
+        subprocess.run([str(arm("arm-none-eabi-ar")), "rcs", str(library), str(obj)], check=True)
+        stamp.write_text(signature)
+    return library
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--jobs", type=int, default=6)
@@ -43,10 +79,17 @@ def main():
     cxx = arm("arm-none-eabi-g++")
 
     from shader_outputs import check as check_shader_outputs
+    from mii_shader import variant as mii_shader_variant
     for shader in ("mkw.v.pica", "effect.v.pica"):
         check_shader_outputs((ROOT / "src" / shader).read_text())
+    # DVLE 2: the scene shader's native Mii head variant (tools/mii_shader.py).
+    mii_shader = output / "mii.v.pica"
+    mii_source = mii_shader_variant((ROOT / "src/mkw.v.pica").read_text())
+    check_shader_outputs(mii_source)
+    if not mii_shader.is_file() or mii_shader.read_text() != mii_source:
+        mii_shader.write_text(mii_source)
 
-    # DVLE 0: scene shader; DVLE 1: NW4R EF particles (src/effect.v.pica).
+    # DVLE 0: scene shader; DVLE 1: NW4R EF particles (src/effect.v.pica); DVLE 2: Mii heads.
     subprocess.run(
         [
             str(tool("picasso")),
@@ -54,9 +97,11 @@ def main():
             str(output / "mkw.shbin"),
             str(ROOT / "src/mkw.v.pica"),
             str(ROOT / "src/effect.v.pica"),
+            str(mii_shader),
         ],
         check=True,
     )
+    cfl = build_cfl(output, dkp)
 
     # The content stamp the update CIA checks against the SD card's content.txt.
     sys.path.insert(0, str(ROOT / "tools/release"))
@@ -128,6 +173,7 @@ def main():
         "-I" + str(kinoko / "source"),
         "-I" + str(ROOT / "include"),
         "-I" + str(ROOT / "vendor/citro3d/include"),
+        "-I" + str(ROOT / "vendor/cfl-mii/include"),
         "-I" + str(dkp / "libctru/include"),
         "-I" + str(output),
     ]
@@ -152,16 +198,13 @@ def main():
         "-fno-strict-aliasing",
         "-ffp-contract=off",
     ]
-    sources = [
-        source
-        for source in sorted((kinoko / "source").rglob("*.cc"))
-        if not source.name.startswith("._")
-        and source.name not in ("main.cc", "KReplaySystem.cc", "Context.cc")
-    ] + [
-        source
-        for source in sorted((ROOT / "src").glob("*.cpp"))
-        if not source.name.startswith("._")
-    ]
+    # The game's translation units (docs/MANUAL-PROGRAM-SOURCES.txt), plus the
+    # update overlay that quick updates read.
+    listed = (ROOT / "docs/MANUAL-PROGRAM-SOURCES.txt").read_text().split()
+    sources = [ROOT / name for name in listed] + [ROOT / "src/overlay.cpp"]
+    missing = [str(source) for source in sources if not source.is_file()]
+    if missing:
+        raise SystemExit("Missing program sources: " + ", ".join(missing))
 
     # All headers invalidate objects; conservative but reproducible.
     headers = (
@@ -169,6 +212,7 @@ def main():
         + list(kinoko.rglob("*.hh"))
         + list((ROOT / "include").rglob("*.hpp"))
         + list((ROOT / "vendor/citro3d/include").rglob("*.h"))
+        + list((ROOT / "vendor/cfl-mii/include").rglob("*.h"))
         + list((dkp / "libctru/include").rglob("*.h"))
     )
     signature = hashlib.sha256(
@@ -249,6 +293,7 @@ def main():
             *wraps,
             "-Wl,-Map," + str(output / "mkw-3ds.map"),
             "@" + str(objects_file),
+            str(cfl),
             str(citro),
             "-L" + str(dkp / "libctru/lib"),
             "-lctru",
@@ -272,9 +317,7 @@ def main():
         "libctru_sha256": hashlib.sha256(
             (dkp / "libctru/lib/libctru.a").read_bytes()
         ).hexdigest(),
-        "kinoko_commit": subprocess.check_output(
-            ["git", "-C", str(kinoko), "rev-parse", "HEAD"], text=True
-        ).strip(),
+        "kinoko_commit": json.loads((ROOT / "vendor/sources.lock.json").read_text())["kinoko"]["upstream_commit"],
         "sha256": hashlib.sha256((output / "mkw-3ds.3dsx").read_bytes()).hexdigest(),
         "flags": flags,
         "sources": {

@@ -28,18 +28,28 @@ public:
         // absence (reload, respawn or hidden menu) starts in the current pose.
         const unsigned steps=discontinuity?1:std::max(1u,elapsed);
         for(unsigned step=0;step<steps;++step){
+            // Retail integrates consecutive 60 Hz anchors (80780290). When a
+            // 3DS render skips ticks, do not teleport to the newest head and
+            // integrate several stationary steps: that injects false impulses.
+            Frames interpolated;
+            const Frames* sampled=&rest;Vec3 sampledHead=head;
+            if(steps>1){
+                const float t=float(step+1)/float(steps);
+                for(unsigned i=0;i<rest.size();++i)interpolated[i]=interpolate(lastRest_[i],rest[i],t);
+                sampled=&interpolated;sampledHead=lerp(lastHead_,head,t);
+            }
             for(unsigned side=0;side<2;++side){
                 auto& chain=chains_[side];const auto old=chain.p;
-                chain.p[0]=rest[side*3].p;
+                chain.p[0]=(*sampled)[side*3].p;
                 for(unsigned j=1;j<4;++j)chain.p[j]+=chain.v[j];
                 for(unsigned j=0;j<3;++j){
-                    const auto& basis=rest[side*3+j];
+                    const auto& basis=(*sampled)[side*3+j];
                     const float scale=length(basis.x);
                     const float radius=20.f*scale;
                     Vec3 correction{};
-                    const Vec3 radial=chain.p[j+1]-head;
+                    const Vec3 radial=chain.p[j+1]-sampledHead;
                     if(length(radial)<radius){
-                        const Vec3 pushed=head+normalized(radial,basis.x)*radius;
+                        const Vec3 pushed=sampledHead+normalized(radial,basis.x)*radius;
                         correction=chain.p[j+1]-pushed;chain.p[j+1]=pushed;
                     }
                     const Vec3 forward=normalized(basis.x);
@@ -58,9 +68,19 @@ public:
                 }
             }
         }
-        tick_=tick;lastRoot_=rest[0].p;return output_;
+        tick_=tick;lastRoot_=rest[0].p;lastRest_=rest;lastHead_=head;return output_;
     }
 private:
+    static Frame interpolate(const Frame& a,const Frame& b,float t){
+        if(t>=1.f)return b; // final pose uses the exact supplied basis
+        const Vec3 x=normalized(lerp(normalized(a.x),normalized(b.x),t),normalized(b.x));
+        const Vec3 y0=lerp(normalized(a.y),normalized(b.y),t);
+        const Vec3 y=normalized(y0-x*dot(x,y0),normalized(cross(b.z,x),normalized(b.y)));
+        Vec3 z=normalized(cross(x,y),normalized(b.z));
+        if(dot(cross(b.x,b.y),b.z)<0)z=-z;
+        return {lerp(a.p,b.p,t),x*(length(a.x)+(length(b.x)-length(a.x))*t),
+                y*(length(a.y)+(length(b.y)-length(a.y))*t),z*(length(a.z)+(length(b.z)-length(a.z))*t)};
+    }
     static Vec3 rotate(Vec3 v,Vec3 axis,float angle){
         const float c=std::cos(angle),s=std::sin(angle);
         return v*c+cross(axis,v)*s+axis*(dot(axis,v)*(1-c));
@@ -69,7 +89,8 @@ private:
     inline static constexpr float limits[3]={40,45,60};
     struct Chain {std::array<Vec3,4> p{},v{};};
     std::array<Chain,2> chains_{};
-    Frames output_{};
+    Frames output_{},lastRest_{};
+    Vec3 lastHead_{};
     Vec3 lastRoot_{};
     unsigned tick_=0;bool initialized_=false;
 };

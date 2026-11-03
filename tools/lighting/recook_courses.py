@@ -68,7 +68,7 @@ def main():
     p.add_argument('--no-objects', action='store_true')
     p.add_argument('--no-pack', action='store_true')
     a = p.parse_args()
-    subprocess.run(['node', 'tools/bundle_cooker.mjs'], cwd=ROOT, check=True)
+    subprocess.run(['node', 'tools/bundle_cooker.mjs', 'tools/export_brres.ts'], cwd=ROOT, check=True)
     selected = [c for c in courses() if not a.ids or c['id'] in a.ids]
     with concurrent.futures.ThreadPoolExecutor(max_workers=a.jobs) as pool:
         for course_id, cooked in pool.map(lambda c: recook(c, not a.no_objects), selected):

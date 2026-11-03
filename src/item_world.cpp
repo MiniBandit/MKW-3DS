@@ -36,6 +36,7 @@ constexpr uint8_t ItemPairResponses[15][15]={
 };
 bool blueFlight(const ItemActor& a){return a.kind==ItemKind::BlueShell&&!a.explosion&&!a.diving();}
 void traceLanding(const ItemActor& a,const ItemSurface& surface){
+#ifndef MKW_RELEASE
     static unsigned count=0;
     if(a.owner!=0||(!(a.kind==ItemKind::Banana)&&!a.scattered)||a.age%32||count>=16)return;
     ++count;
@@ -43,6 +44,7 @@ void traceLanding(const ItemActor& a,const ItemSurface& surface){
         std::fprintf(log,"kind=%u age=%u scattered=%u settled=%u pos=%.2f,%.2f,%.2f velocity=%.2f,%.2f,%.2f floor=%.3f,%.3f,%.3f correction=%.2f,%.2f,%.2f\n",unsigned(a.kind),a.age,a.scattered,a.settled,a.position.x,a.position.y,a.position.z,a.velocity.x,a.velocity.y,a.velocity.z,surface.floorNormal.x,surface.floorNormal.y,surface.floorNormal.z,surface.correction.x,surface.correction.y,surface.correction.z);
         std::fclose(log);
     }
+#endif
 }
 uint8_t pairResponse(ItemKind source,ItemKind target){
     return ItemPairResponses[retailObjectId(source)][retailObjectId(target)];
@@ -128,7 +130,13 @@ ItemActor& RaceItems::spawn(unsigned player,ItemKind kind,bool backwards,const V
         a.ownerImmunity=15;
     }
     if(origin)a.position=*origin;
+    // ObjFIB::SetInitialPosition 8079e934 -> 807a890c..8930: a forward
+    // throw starts at the kart's position, not the trailing object's position.
+    // Keeping a rear tether origin lets the first terrain sweep hit geometry
+    // behind the kart, especially while stopped/turning around in Battle.
+    if(kind==ItemKind::FakeBox&&!backwards)a.position=racers_[player].position;
     if(kind==ItemKind::RedShell||kind==ItemKind::BlueShell)launchShell(a,player);
+    if(kind==ItemKind::BlueShell)events_.push_back({ItemEffect::BlueLaunch,uint8_t(player)});
     a.previous=a.position;
     // ObjBanana/Bomb/FIB::SetInitialPosition (8079ac34): a forward throw whooshes.
     if(trapItem(kind)&&!backwards)sound(ItemSoundCue::Throw,a);
@@ -164,7 +172,7 @@ void RaceItems::updateScattered(ItemActor& a,ItemWorldQuery query){
     a.floorTypes=surface.floorTypes;
     traceLanding(a,surface);
     if(surface.kill||surface.cannon){a.active=false;return;}
-    a.position+=surface.correction;
+    a.position+=surface.correction+surface.floorMotion;
     if(length(surface.floorNormal)>.1f){
         const auto n=normalized(surface.floorNormal);
         if(!a.settled)sound(ItemSoundCue::Land,a);
@@ -310,7 +318,7 @@ void RaceItems::updateActor(ItemActor& a,ItemWorldQuery query){
             }
             a.position+=a.velocity;a.yaw=std::atan2(a.velocity.x,a.velocity.z);
             if(query){
-                const auto surface=groundContact(query,a);a.position+=surface.correction;a.floorTypes=surface.floorTypes;
+                const auto surface=groundContact(query,a);a.position+=surface.correction+surface.floorMotion;a.floorTypes=surface.floorTypes;
                 traceLanding(a,surface);
                 if(surface.kill||surface.cannon){a.active=false;return;}
                 if(length(surface.floorNormal)>.1f){
@@ -440,7 +448,7 @@ void RaceItems::actorKartContact(ItemActor& a,unsigned player){
     if(a.kind==ItemKind::Mushroom||a.kind==ItemKind::Star){
         if(a.scattered&&a.scale<HeldContactMinimumScale)return;
         if(a.kind==ItemKind::Mushroom){
-            karts_->activateMushroom(player);events_.push_back({ItemEffect::Mushroom,uint8_t(player)});
+            karts_->activateMushroom(player);events_.push_back({ItemEffect::Mushroom,uint8_t(player)});++mushroomUses_[player];
             hud_[player].ink=hud_[player].inkDelay=0;
         }else if(karts_->activateStar(player)){
             hud_[player].ink=hud_[player].inkDelay=0;inkReadyFrame_[player]=0;events_.push_back({ItemEffect::Cure,uint8_t(player)});
@@ -468,7 +476,7 @@ void RaceItems::actorKartContact(ItemActor& a,unsigned player){
         if(blastItem(a.kind))explode(a);
         else if(a.guidance.pending!=5){a.active=false;sound(ItemSoundCue::Hit,a);events_.push_back({ItemEffect::Break,uint8_t(owner),uint16_t(a.kind),a.position,-1,a.scale});}
     }
-    if(action>=0)strike(player,action,owner,away);
+    if(action>=0)strike(player,action,owner,away,false,a.kind);
 }
 void RaceItems::heldKartContacts(unsigned player){
     // Tethered items of other racers: the same handlers, never against their holder or a
@@ -490,7 +498,7 @@ void RaceItems::heldKartContacts(unsigned player){
             const Vec3 away=normalized(r.position-state.positions[slot],racers_[owner].forward);
             contactSounds(kind,player);
             destroyHeld(owner,slot); // A Bob-omb detonates where it trailed; its blast hits.
-            if(action>=0)strike(player,action,owner,away);
+            if(action>=0)strike(player,action,owner,away,false,kind);
         }
     }
 }

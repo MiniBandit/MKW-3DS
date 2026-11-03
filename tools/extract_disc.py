@@ -53,6 +53,8 @@ def main():
  a=argparse.ArgumentParser();a.add_argument('disc',type=Path);a.add_argument('output',type=Path);a.add_argument('--list-only',action='store_true')
  # One named file only (the release builder takes rel/StaticR.rel, read as data by the menu cookers).
  a.add_argument('--file');a.add_argument('--to',type=Path)
+ # The partition's main.dol (read as data: default Mii records, runtime tables).
+ a.add_argument('--dol',action='store_true')
  # Whole folders instead of the race selection (menus, movies, sound), with their own receipt.
  a.add_argument('--prefix',action='append');args=a.parse_args();d=Disc(args.disc)
  h=d.read(0,0x100)
@@ -79,6 +81,11 @@ def main():
   name=stack[-1][0]+name
   if info>>24:stack.append((name+'/',size));continue
   files.append({'name':name,'offset':offset*4,'size':size})
+ if args.dol:
+  if not args.to:raise ValueError('--dol needs --to')
+  dol_offset=U32(boot,0x420)*4;header=p.read(dol_offset,0x100)
+  size=max(U32(header,i*4)+U32(header,0x90+i*4) for i in range(18) if U32(header,0x90+i*4))
+  b=p.read(dol_offset,size);args.to.parent.mkdir(parents=True,exist_ok=True);args.to.write_bytes(b);print('main.dol',len(b),hashlib.sha256(b).hexdigest());return
  if args.file:
   f=next((f for f in files if f['name']==args.file),None)
   if f is None or not args.to:raise ValueError('--file needs --to and a file on this disc')

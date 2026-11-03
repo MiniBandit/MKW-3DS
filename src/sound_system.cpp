@@ -332,7 +332,7 @@ public:
   std::array<ndspWaveBuf, MaxBufs> buf{}; std::array<ndspAdpcmData, MaxBufs> ctx{};
   int bufCount = 0; int lastBuf = -1;
   // manual (bridge) loop
-  const u8* bridge = nullptr; u32 bridgeSamples = 0; const u8* body = nullptr; u32 bodySamples = 0; ndspAdpcmData bodyCtx{};
+  const u8* bridge = nullptr; u32 bridgeSamples = 0; const u8* body = nullptr; u32 bodySamples = 0; ndspAdpcmData bodyCtx{}, bridgeCtx{};
   // stream
   StreamFeed* feed = nullptr; int feedChannel = 0; IoFeed* ownFeed = nullptr;
   f32 rate = -1, left = -1, right = -1, lpf = -1;
@@ -348,8 +348,10 @@ public:
  };
  std::vector<PcmLoop> pcmLoops;
  s16* pcmLoopPool = nullptr; u32 pcmLoopUsed = 0;
- // All seven matching waves in the retail archive occupy 10,112 bytes.
- static constexpr u32 PcmLoopPoolBytes = 16384;
+ // Fourteen retail references share eight distinct short oscillators;
+ // their exact first-pass + loop PCM uses 16,928 bytes after content dedup.
+ // Lazy bounded pool: do not make the full sound bank resident.
+ static constexpr u32 PcmLoopPoolBytes = 24576;
  u32 underruns = 0;
 
  NdspHardware() { bridgePool = static_cast<u8*>(linearAlloc(BridgePoolBytes)); }
@@ -434,8 +436,8 @@ public:
    return;
   }
   if (const s16* pcm = shortLoopPcm(w, channel)) {
-   // SE_RC_GOAL's original oscillator is a 43-sample loop. Its old
-   // bridge/body queue emptied several times within one DSP frame.
+   // Short retail oscillators include GOAL (43 samples) and LAP (340).
+   // High notes exhaust the old bridge/body queue within DSP frames.
    // Keep its exact decoded samples, loop length, rate and sequence pitch.
    setupChannel(v, 1, nullptr, w.rate);
    c.mode = Chan::Wave; c.pendingStart = true;
@@ -470,6 +472,7 @@ public:
    c.body = at(bodyStart); c.bodySamples = end - bodyStart;
    c.bodyCtx = br ? ndspAdpcmData{br->bodyPs, br->bodyYn1, br->bodyYn2} : ndspAdpcmData{data[bodyStart / 14 * 8], wc.loopParam.yn1, wc.loopParam.yn2};
    c.bridge = br ? bridgeData(br) : nullptr; c.bridgeSamples = br ? br->samples : 0;
+   c.bridgeCtx = loopCtx; // each bridge starts at the authored loop decoder history
    refillManual(v);
    return;
   }
@@ -483,7 +486,7 @@ public:
   for (int i = 0; i < c.bufCount; ++i) if (c.buf[i].status == NDSP_WBUF_QUEUED || c.buf[i].status == NDSP_WBUF_PLAYING) ++queued;
   // Keep at least two loop iterations queued (bridge + body pairs).
   while (queued + 2 <= MaxBufs && queued < 4) {
-   if (c.bridge && c.bridgeSamples) { if (!queue(v, c.bridge, c.bridgeSamples, false, nullptr)) break; ++queued; }
+   if (c.bridge && c.bridgeSamples) { if (!queue(v, c.bridge, c.bridgeSamples, false, &c.bridgeCtx)) break; ++queued; }
    if (!queue(v, c.body, c.bodySamples, false, &c.bodyCtx)) break; ++queued;
   }
  }
@@ -533,7 +536,10 @@ public:
    return true;
   }
   for (int i = 0; i < c.bufCount; ++i) if (c.buf[i].looping && c.buf[i].status != NDSP_WBUF_FREE) return false;
-  return c.lastBuf < 0 || c.buf[c.lastBuf].status == NDSP_WBUF_DONE || !ndspChnIsPlaying(v);
+  // The DSP's channel-playing bit is sampled asynchronously. It can still
+  // be false with a valid queued buffer (or while resume is being applied).
+  // Only the terminal wave buffer proves that this one-shot has drained.
+  return c.lastBuf < 0 || c.buf[c.lastBuf].status == NDSP_WBUF_DONE;
  }
  void commit() override {
   for (int v = 0; v < VoiceMax; ++v) {
@@ -569,6 +575,8 @@ struct SoundSystem::Impl {
  std::array<u32, SoundSystem::TrackedSlots> slotPosted{};
  u32 postSeq = 0;
  std::atomic<u32> attachedBits{0}, handledSeq{0};
+ std::atomic<u32> ledCues{0};
+ std::atomic<u32> warningUntilMs{0};u32 warningNoteSerial=0;
  u32 runSeq = 0;
  SoundLayer* layer = nullptr; std::atomic<SoundLayer*> pendingLayer{nullptr}; std::atomic<bool> layerChanged{false};
  // ---- residency
@@ -692,7 +700,7 @@ struct SoundSystem::Impl {
  LightLock streamLock; std::vector<IoFeed*> feeds;
  // ---- stats
  std::atomic<u32> statFrames{0}; f32 audioMs = 0, audioPeak = 0;
- f32 audioClock = 0, lastGameFrameMs = 0, acc = 0; u32 lastDspFrame = 0;
+ f32 audioClock = 0, basicAcc = 0, acc = 0; u32 lastDspFrame = 0;
  LightLock statLock; Stats published{};
  std::atomic<int> reserveRequest{-1}; std::atomic<int> reservedChannel{-1}; std::atomic<int> releaseRequest{-1};
 
@@ -708,7 +716,7 @@ struct SoundSystem::Impl {
   lf->fileId = id;
   if (f->mainSize) {
    lf->main.resize(f->mainSize);
-   if (std::fseek(brsar, long(f->mainOffset), SEEK_SET) || std::fread(lf->main.data(), 1, f->mainSize, brsar) != f->mainSize) return false;
+   if (!readChunked(lf->main.data(), f->mainOffset, f->mainSize)) return false;
   }
   std::vector<u8> mask;
   LightLock_Lock(&fileLock); mask = files[id].mask; LightLock_Unlock(&fileLock);
@@ -805,7 +813,7 @@ struct SoundSystem::Impl {
  // Large scene reads in pieces, keeping stream refills prompt in between.
  bool readChunked(void* dst, u32 offset, u32 size) {
   std::clearerr(brsar);
-  constexpr u32 Piece = 64 * 1024;
+  constexpr u32 Piece = 16 * 1024;
   u8* out = static_cast<u8*>(dst);
   for (u32 done = 0; done < size;) {
    const u32 n = std::min(Piece, size - done);
@@ -867,6 +875,14 @@ struct SoundSystem::Impl {
   Handle temp{};
   switch (c.type) {
   case SoundCommand::Start: engine.startSound(h ? *h : temp, c.id); break;
+  case SoundCommand::StartMusic:
+   // One queue item owns both retirement and replacement. A detached or
+   // fading old menu handle cannot leave a second BGM on this player.
+   if (const auto* entry=archive.sound(c.id)) {
+    engine.stopPlayer(entry->playerId,0);
+    engine.startSound(h ? *h : temp,c.id);
+   }
+   break;
   case SoundCommand::Hold: if (h) engine.holdSound(*h, c.id); break;
   case SoundCommand::Stop: if (h) engine.stop(*h, c.frames); break;
   case SoundCommand::Pause: if (h) engine.pause(*h, c.value != 0, c.frames); break;
@@ -893,8 +909,9 @@ struct SoundSystem::Impl {
  }
  void gameFrame(bool fromGame) {
   if (layer && fromGame) layer->gameFrame(engine);
-  engine.updateGameFrame(fromGame);
-  lastGameFrameMs = audioClock;
+  // Main-thread frames refresh actors/HoldSound only. BasicSound fades and
+  // stream automation keep their own real-time cadence during save/load.
+  if (fromGame) engine.updateHoldFrame();
  }
  void audioLoop() {
   lastDspFrame = ndspGetFrameCount();
@@ -942,12 +959,22 @@ struct SoundSystem::Impl {
    const u32 frame = ndspGetFrameCount();
    u32 elapsed = frame - lastDspFrame; lastDspFrame = frame;
    if (elapsed > 40) elapsed = 40; // after a long stall do not burst through seconds of sequence
-   acc += elapsed * DspFrameMs; audioClock += elapsed * DspFrameMs;
-   // A stalled game (synchronous race load) still needs fades to progress:
-   // after 50 ms without a game frame, advance BasicSound at 60 Hz.
-   if (audioClock - lastGameFrameMs > 50.0f) while (audioClock - lastGameFrameMs > 16.667f) { const f32 keep = lastGameFrameMs + 16.667f; gameFrame(false); lastGameFrameMs = keep; }
-   while (acc >= f32(SoundFrameMs)) { engine.updateSoundFrame(); acc -= SoundFrameMs; }
+   audioClock += elapsed * DspFrameMs;
+   // Interleave the original BasicSound (60 Hz) and SoundThread (3 ms)
+   // updates. Never freeze automation for the first 50 ms of a save, and
+   // never replay game-frame automation when the main thread resumes.
+   acc += elapsed * DspFrameMs;
+   while (acc >= f32(SoundFrameMs)) {
+    basicAcc += SoundFrameMs;
+    if (basicAcc >= 1000.f/60.f) {
+     engine.updateGameFrame(false); basicAcc -= 1000.f/60.f;
+    }
+    engine.updateSoundFrame(); acc -= SoundFrameMs;
+   }
    hw->commit();
+   if(const u32 cues=engine.takeLedCues())ledCues.fetch_or(cues,std::memory_order_release);
+   const u32 notes=engine.warningNoteSerial();
+   if(notes!=warningNoteSerial){warningNoteSerial=notes;warningUntilMs.store(u32(osGetTime())+100u,std::memory_order_release);}
    // Slot states for the main thread: bits first, then the sequence they cover.
    u32 bits = 0;
    for (int i = 1; i < SoundSystem::TrackedSlots; ++i) if (engine.attached(slots[i])) bits |= 1u << i;
@@ -1053,13 +1080,13 @@ bool SoundSystem::start() {
  int core = n3ds ? 2 : 1;
  if (!n3ds) { u32 limit = 0; APT_GetAppCpuTimeLimit(&limit); if (limit < 30) APT_SetAppCpuTimeLimit(30); }
  s->audioThread = threadCreate(&Impl::audioEntry, s, 32 * 1024, 0x18, core, false);
- if (s->audioThread) s->ioThread = threadCreate(&Impl::ioEntry, s, 32 * 1024, 0x19, core, false);
+ if (s->audioThread) s->ioThread = threadCreate(&Impl::ioEntry, s, 32 * 1024, 0x18, core, false);
  if (!s->audioThread || !s->ioThread) {
   s->quit.store(true);
   if (s->audioThread) { LightEvent_Signal(&s->frameEvent); threadJoin(s->audioThread, U64_MAX); threadFree(s->audioThread); s->audioThread = nullptr; }
   s->quit.store(false); core = 0;
-  s->audioThread = threadCreate(&Impl::audioEntry, s, 32 * 1024, std::max<s32>(0x18, mainPriority - 1), 0, false);
-  s->ioThread = threadCreate(&Impl::ioEntry, s, 32 * 1024, std::min<s32>(0x3F, mainPriority + 1), 0, false);
+  s->audioThread = threadCreate(&Impl::audioEntry, s, 32 * 1024, 0x18, 0, false);
+  s->ioThread = threadCreate(&Impl::ioEntry, s, 32 * 1024, 0x18, 0, false);
  }
  if (!s->audioThread || !s->ioThread) {
   // Either fallback thread may have started on its own. Join it before
@@ -1175,8 +1202,14 @@ void SoundSystem::post(const SoundCommand& command) {
  if (!impl_) return;
  SoundCommand c = command;
  c.seq = ++impl_->postSeq;
- if (c.slot < TrackedSlots && (c.type == SoundCommand::Start || c.type == SoundCommand::Hold || c.type == SoundCommand::Prepare)) impl_->slotPosted[c.slot] = c.seq;
+ if (c.slot < TrackedSlots && (c.type == SoundCommand::Start || c.type == SoundCommand::StartMusic || c.type == SoundCommand::Hold || c.type == SoundCommand::Prepare)) impl_->slotPosted[c.slot] = c.seq;
  if (!impl_->commands.push(c) && c.slot < TrackedSlots && impl_->slotPosted[c.slot] == c.seq) impl_->slotPosted[c.slot] = 0;
+}
+std::uint32_t SoundSystem::takeLedCues(){return impl_?impl_->ledCues.exchange(0,std::memory_order_acq_rel):0;}
+bool SoundSystem::warningLedPulse() const {
+ if(!available()||!impl_)return false;
+ const u32 until=impl_->warningUntilMs.load(std::memory_order_acquire);
+ const u32 left=until-u32(osGetTime());return until&&left>0&&left<=100;
 }
 bool SoundSystem::slotAttached(std::uint16_t slot) const {
  if (!impl_ || slot == 0 || slot >= TrackedSlots) return false;

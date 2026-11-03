@@ -4,7 +4,7 @@
 Reads the user's retail data/extracted/sound/revo_kart.brsar and the 111
 sound/strm/*.brstm streams (extracted from the local disc by
 tools/extract_disc.py machinery) and writes, into the private overlay
-build/audio (packaged by tools/package_sd.py):
+build/audio (packaged by tools/resource_manifest.py):
   audio/sound.arc     sound/file/bank/group/player tables, per-wave RWAR
                       entries and per-sound wave reach (tools/audio_reach.py),
                       little endian, read by mkw::snd::Archive
@@ -236,7 +236,7 @@ def main():
     (ROOT / 'include/mkw/sound_ids.hpp').write_text('\n'.join(lines) + '\n')
 
     group_sizes = {g['name'] or str(g['id']): {'main': g['size'], 'waves': g['waveDataSize']} for g in r.groups}
-    manifest = {'version': 1, 'source': brsar_path.relative_to(ROOT).as_posix(), 'sourceSha256': digest(brsar_path),
+    manifest = {'version': 1, 'source': str(brsar_path.relative_to(ROOT)), 'sourceSha256': digest(brsar_path),
                 'sounds': len(r.sounds), 'files': len(files), 'groups': len(groups), 'banks': len(r.banks),
                 'players': [p['name'] for p in r.players], 'playerInfo': pi, 'waves': wave_report,
                 'arcSha256': hashlib.sha256(blob).hexdigest(), 'loopBridges': len(bridges), 'reachPool': len(pool), 'streams': streams, 'groupSizes': group_sizes}

@@ -30,9 +30,12 @@ void RaceChaseCamera::calc(const K::Kart::KartObject& kart){
  Vector3f targetPos=kart.pos();
  hopPosY_+=HOP_POS_INTERP_RATE*(kart.move()->hopPosY()-hopPosY_);
  targetPos.y-=hopPosY_;
- calcForward(FORWARD_INTERP_RATE,kart);
- calcDriftOffset(kart);
- calcCamera(HORIZ_POS_INTERP_RATE,VERT_POS_INTERP_RATE,FAST_VERT_POS_INTERP_RATE,kart,targetPos);
+ const bool bullet=kart.status().onBit(K::Kart::eStatus::Bullet);
+ // Killer already steers its body smoothly. Keep the camera behind that
+ // turn instead of adding the ordinary kart's second orbit lag.
+ calcForward(bullet?1.f:FORWARD_INTERP_RATE,kart);
+ if(bullet)driftYaw_=0;else calcDriftOffset(kart);
+ calcCamera(bullet?1.f:HORIZ_POS_INTERP_RATE,VERT_POS_INTERP_RATE,FAST_VERT_POS_INTERP_RATE,kart,targetPos);
 }
 
 void RaceChaseCamera::calcForward(float t,const K::Kart::KartObject& kart){

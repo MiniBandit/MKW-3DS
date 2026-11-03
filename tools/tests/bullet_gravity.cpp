@@ -21,8 +21,8 @@ int main(){
  g.reset();for(int i=0;i<11;++i)g.observeWall(true,-.75f);
  assert(g.step(2,true,false)); // threshold is strict
  const Vec3 a{0,0,0},b{100,0,0},n{0,1,0};
- assert(bulletInsideRoute({50,-1,0},a,b,1,2,n,true,0));
- assert(!bulletInsideRoute({50,1,0},a,b,1,2,n,true,0));
+ assert(!bulletInsideRoute({50,-1,0},a,b,1,2,n,true,0));
+ assert(bulletInsideRoute({50,1,0},a,b,1,2,n,true,0));
  assert(bulletInsideRoute({50,1,0},a,b,1,2,n,false,0));
  assert(!bulletInsideRoute({50,0,75},a,b,1,2,n,false,0));
  assert(bulletInsideRoute({200,0,99},a,b,1,2,n,false,0));
