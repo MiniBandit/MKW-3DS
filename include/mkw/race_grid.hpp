@@ -66,7 +66,7 @@ public:
     CpuAi& ai(){return ai_;}
 private:
     void forwardBumps();
-    struct Driver {BulletGravity bulletGravity{};CpuSpeedState speedPolicy{};float nativeSpeed=70,desiredSpeed=70;unsigned segment=EnemyRoute::Invalid,bulletSegment=EnemyRoute::Invalid,stuck=0,reverse=0,recoveries=0,routeTicks=0,pinnedTicks=0;Vec3 last{},pinnedAt{};float bulletTurn=.03f;bool respawning=false,bullet=false;};
+    struct Driver {BulletGravity bulletGravity{};CpuSpeedState speedPolicy{};float nativeSpeed=70,desiredSpeed=70;unsigned segment=EnemyRoute::Invalid,bulletSegment=EnemyRoute::Invalid,stuck=0,reverse=0,recoveries=0,routeTicks=0;Vec3 last{};float bulletTurn=.03f;bool respawning=false,bullet=false;};
     EnemyRoute route_,bulletRoute_;
     CpuAi ai_;
     std::array<Driver,Capacity> drivers_{};
