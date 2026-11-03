@@ -2,6 +2,7 @@
 #include <cassert>
 #include <cmath>
 #include <cstdio>
+#include <initializer_list>
 int main(){
  for(int direction:{0,1})for(int period:{180,2000,-2000})for(int initial:{0,-50,90}){
   mkw::InsekiMotion full,half,sparse;

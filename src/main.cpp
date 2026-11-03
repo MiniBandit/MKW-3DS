@@ -137,10 +137,8 @@
 // homebrew 96 MB, so it cannot show an Old 3DS shortage.
 extern "C" u32 __ctru_linear_heap_size=32u<<20;
 // libctru carves the main thread's stack from the start of that heap (initSystem), 32 KiB
-// by default. main's frame alone is about 26 KiB, so the menu loop's callbacks overran it
-// into unmapped memory below 0x08000000; 64 KiB costs 32 KiB of ordinary heap.
-// main() alone reserves about 39 KB (its locals, inlined helpers); 64 KB left
-// too little below it and a startup snprintf overflowed the stack.
+// by default. main's frame alone is about 39 KiB, so the menu loop's callbacks overran
+// 64 KiB into unmapped memory below 0x08000000; 128 KiB costs 96 KiB of ordinary heap.
 extern "C" u32 __stacksize__=128u<<10;
 
 namespace K = Kinoko;

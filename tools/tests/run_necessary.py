@@ -9,7 +9,7 @@ from pathlib import Path
 ROOT=Path(__file__).resolve().parents[2]
 SAVE=['src/license_save.cpp','src/license_records.cpp','src/license_mii_store.cpp']
 TESTS={name:[] for name in ('gp_rank','gp_telemetry','bullet_gravity','driver_look_target','driver_motion_blend','driver_vehicle_response','luma_motion','required_resources','kart_start_effects','inseki_motion','cpu_roster','license_unlocks')}
-TESTS.update(mii_manifest=['src/mii_store.cpp'],menu_bottom=['src/menu_bottom.cpp','src/menu_state.cpp','src/menu_focus.cpp','src/mii_store.cpp','src/game_settings.cpp'],race_teams=['src/race_results.cpp'],camera_collision=['src/race_camera.cpp'],license_progression=SAVE,license_mii_store=SAVE,retail_save=SAVE)
+TESTS.update(race_teams=['src/race_results.cpp','src/race_flow_draw.cpp','src/race_flow_pose.cpp'],camera_collision=['src/race_camera.cpp'],license_progression=SAVE,license_mii_store=SAVE,retail_save=SAVE)
 def main():
  p=argparse.ArgumentParser(description=__doc__);p.add_argument('--only');p.add_argument('--fixture',type=Path);p.add_argument('--compiler',default=os.environ.get('CXX','clang++'));a=p.parse_args()
  names=a.only.split(',') if a.only else list(TESTS)

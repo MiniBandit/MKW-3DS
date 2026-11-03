@@ -464,6 +464,9 @@ def stage_compile(jobs):
 SD_OUTPUT=ROOT/'build/release/sd-card'
 
 def stage_package(version,cci,keep_stage,embed_assets=False):
+    # Optional: the 3DS's own Mii resource, placed beside this builder, goes on the
+    # SD card. Without it the game asks the console for its copy.
+    if (ROOT/'CFL_Res.dat').is_file():run([sys.executable,'tools/stage_native_mii_resource.py','CFL_Res.dat'])
     run([sys.executable,'tools/package_sd.py','--no-zip'])
     import package_cia
     # The CIA reads the game files from the SD card unless asked to carry them

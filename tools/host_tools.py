@@ -21,7 +21,7 @@ def compiler():
   found=shutil.which(name)
   if found:return found
  hint=('install the Xcode Command Line Tools (xcode-select --install)' if sys.platform=='darwin' else
-       'install a C++ compiler (devkitPro\'s MSYS2: pacman -S mingw-w64-ucrt-x86_64-gcc)' if os.name=='nt' else
+       'install one in a terminal (winget install MartinStorsjo.LLVM-MinGW.UCRT), then open a new window' if os.name=='nt' else
        'install g++ or clang++')
  raise SystemExit('No C++ compiler for this computer: '+hint)
 def build(kind):

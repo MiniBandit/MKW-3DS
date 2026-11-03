@@ -1,164 +1,90 @@
-# Mario Kart Wii 3DS Redux
+# Mario Kart Wii 3DS
 
-A native Nintendo 3DS port of Mario Kart Wii, based on dudewhat's original
-port and MiniBandit's continuation.
+A native Nintendo 3DS port of Mario Kart Wii: **dudewhat**'s original port,
+continued by **MiniBandit**, with **Epic**'s Redux merged in as the game.
+
+This repository contains **no Nintendo game files**. It builds an installable
+CIA on your own computer from your own Mario Kart Wii disc.
+
+It isn't an emulator. The game runs natively on the 3DS: kart physics come from
+[Kinoko](https://github.com/vabold/Kinoko), a recreation of Mario Kart Wii's
+physics, and rendering, audio and menus are written for the 3DS hardware.
 
 ## Features
 
-- Grand Prix with 50cc, 100cc, 150cc and Mirror classes, cup progression, unlocks and award ceremonies.
-- Time Trials with saved records, solo and team VS, and Balloon Battle and Coin Runners.
-- Character and vehicle selection, including unlockable vehicles and native 3DS Mii drivers.
-- Four license slots with saved identities, rules, records and presentation settings.
-- Dual-screen menus, race results and maps, with restored model materials, animations, particles and audio.
-- Optional dynamic shadows.
-- Notification LED effects for items, race events and drifting, with mode and brightness settings.
-- Distance-based opponent detail and adaptive animation updates for demanding scenes.
+- **Grand Prix** in 50cc, 100cc, 150cc and Mirror, with cup progression, unlocks, award ceremonies and the staff credits
+- **Time Trials** with saved records, **solo and team VS**, **Balloon Battle and Coin Runners** on all ten arenas
+- **All characters and vehicles**, including the unlockables and your own **3DS Miis as drivers**
+- **Four licenses** with saved identities, rules, records and settings
+- **Two-screen menus**, race results and maps, with the Wii's materials, animations, particles and audio restored
+- **Dynamic shadows** and **notification LED** effects, set per license
+- Distance-based opponent detail, for demanding courses
 
-See [CHANGELOG.md](CHANGELOG.md) for the full cumulative change list.
-Online play is not included. Performance varies by hardware and course.
-Target 60; running in the 40–60 range.
+See [CHANGELOG.md](CHANGELOG.md) for the full list. Online play is not included yet.
 
 ## What you need
 
-- Your own **Mario Kart Wii USA** disc image, game ID **RMCE01**, in ISO or WBFS format; convert RVZ or NKit images to a supported format first.
-- Your own native 3DS Mii resource file, **CFL_Res.dat**, obtained separately.
-- devkitARM and libctru, plus picasso, 3dsxtool and tex3ds.
-- Python 3, Node.js, npm, Git, ffmpeg and a host C/C++ compiler for offline utilities.
-- The converter dependencies and revisions listed in [dependencies.json](dependencies.json) and [vendor/sources.lock.json](vendor/sources.lock.json).
-- makerom and bannertool for CIA work, plus a banner model generated from your disc; the icon, logo PNGs and banner sound are included.
-- A separate working directory for extracted files, converted resources and compiler outputs, with room for both the disc and its intermediates.
-
-Patched Kinoko, Citro3D and CFL source is included. Acquire the remaining
-converter dependencies yourself and apply the relevant files in `patches/`.
-The repository includes eight MK7 marker images inherited from the original
-project and the supplied HOME icon and logo; other game assets, native Mii system resources, generated game
-headers, saves and compiled packages are not supplied.
+- **Mario Kart Wii (USA)**, game ID `RMCE01`, dumped as `.iso` or `.wbfs`.
+  Convert RVZ or NKit dumps to ISO in Dolphin first.
+- About **30 GB** of free space and an internet connection
+- [devkitPro](https://devkitpro.org/wiki/Getting_Started) with the 3DS tools (`3ds-dev`)
+- [Python 3.11–3.14](https://www.python.org/downloads/) and [Node.js LTS](https://nodejs.org) (Python 3.15 is not supported yet)
+- [Git](https://git-scm.com)
+- A C++ compiler for your computer, for two small helper programs:
+  - macOS: Xcode command line tools (`xcode-select --install`)
+  - Windows: `winget install MartinStorsjo.LLVM-MinGW.UCRT`, then open a new window
 
 ## Building
 
-Building is **manual**. There is no build-all script, dependency downloader,
-Makefile, CI build or automatic CIA generator. Banner-only tools are the
-explicit exception; their current status is documented in [HOME-BANNER.md](docs/HOME-BANNER.md). The steps below describe the
-order; the linked references provide the conversion stages, source list and
-compiler settings. They are intended for developers comfortable with the
-3DS toolchain, not as a one-command build recipe.
+**macOS:** double-click `Build MKW CIA.command`, drag your disc image into the
+window and press Return.
 
-The current manual procedure has not received a complete fresh-disc build
-verification after the automated drivers were removed.
+**Windows:** double-click `Build MKW CIA.bat`, drag your disc image into the
+window and press Enter.
 
-### 1. Prepare the tools
+**This version needs a new build.** Its converted game files changed, so build
+it **in a new, empty folder** (not your old builder folder).
 
-Install the SDK and utilities listed above, and obtain the external
-converter checkouts at their pinned revisions. Populate `vendor/gclib`
-before installing the Python requirements, since it is an editable local
-dependency. Set up a Python environment and install the listed packages:
+The first build takes a few hours. Your CIA is saved to
+`build/release/mkw-3ds.cia` and the game files to `build/release/sd-card/3ds`.
+If a build stops partway, run it again: finished steps are skipped. If it fails,
+share `build-cia-log.txt` when asking for help.
 
-```sh
-python3 -m venv .venv
-. .venv/bin/activate
-python3 -m pip install -r requirements.txt
-npm ci --no-audit --no-fund
-```
+**Mii faces:** license portraits and Mii drivers use the 3DS's Mii resource. The
+game asks your console for its own copy. If yours doesn't show them, put your
+console's `CFL_Res.dat` beside the builder before building.
 
-Use the Windows activation command if working in a Windows shell. Paths in
-the examples below are placeholders and must be replaced with your own.
+## Installing
 
-### 2. Extract your disc and convert the resources
+You need a 3DS with custom firmware ([3ds.hacks.guide](https://3ds.hacks.guide)).
 
-Inspect the disc inventory, then extract the files needed by each stage:
+1. Copy `build/release/sd-card/3ds` to the **root of your SD card** (about 3 GB; the game reads its files from here).
+2. Install `mkw-3ds.cia` with FBI. It's small, because the game files are on the card.
+3. For sound, run DSP1 once to dump your sound firmware.
 
-```sh
-python3 tools/extract_disc.py /external/RMCE01.iso /external/extracted --list-only
-python3 tools/extract_disc.py /external/RMCE01.iso /external/extracted --prefix Scene/
-```
+Performance varies by console and course: New 3DS aims for 60 FPS and runs in
+the 40–60 range.
 
-Follow the [resource-stage reference](docs/MANUAL-RESOURCE-STAGES.md) and
-[manual resource instructions](docs/MANUAL-BUILD.md#2-extract-and-convert-resources-one-stage-at-a-time)
-for courses, characters, vehicles, menus, movies, audio and effects. Each
-resource family is a separate operation; there is no full-course or
-full-roster scheduler.
+To keep the game files inside the CIA instead, build with `--embed-assets`
+(several GB, and some consoles fail to install CIAs that large).
 
-For example, bundle one exporter, export one BRRES model, then convert it:
+**Please don't share your built files**: they contain Nintendo's game files.
+Share this builder instead.
 
-```sh
-node tools/bundle_cooker.mjs tools/export_brres.ts
-node build/export_brres.mjs /external/source.brres /external/exported ModelName
-python3 tools/cook_model.py /external/exported /external/cooked --prefix model_name
-```
+## Quick updates (no rebuilding)
 
-Some converters retain the original `data/`, `assets/`, `build/` and
-`sd-card/` path conventions; inspect their inputs before running them and
-keep generated content out of the published source tree. A Wii disc does
-not supply the native 3DS `CFL_Res.dat` file.
+Once you've built this version and copied the SD folder, updates are a small
+**update CIA** (about 3 MB, no game files) installed in one of these ways:
 
-### 3. Prepare archives and generated headers
+| | |
+|---|---|
+| **FBI**: Remote Install → Scan QR Code | <img src="docs/fbi-update-qr.png" width="160"> |
+| **Universal-Updater**: Settings → Add store → scan this, then install *Mario Kart Wii 3DS (update)* | <img src="docs/universal-updater-qr.png" width="160"> |
+| **Manually**: download `MKW-3DS-Update.cia` from the [latest release](../../releases/latest) and install it with FBI | |
 
-Create the runtime file map, review its paths and pack the resources explicitly:
-
-```sh
-python3 tools/resource_manifest.py > /external/runtime-files.json
-python3 tools/pack_race_assets.py /external/runtime-files.json /external/race.pak --exclude-menu /external/menu.pak
-```
-
-Prepare `menu.pak` first with `pack_menu_assets.py`; apply the LOD and Mii
-archive overlays separately. Keep metadata read outside the archives at its
-required loose path. See [archive preparation](docs/MANUAL-BUILD.md#3-organize-existing-runtime-files-and-create-archives-explicitly).
-
-Produce the 66 external headers declared in
-[config/generated-inputs.json](config/generated-inputs.json), then provide
-their directory as a compiler include path. The approved Bowser's Castle
-visibility policy is already included in `include/mkw/castle_regions.hpp`;
-a normal build does not need a browser bake.
-
-### 4. Compile the libraries and game
-
-Prepare the shader headers with picasso, compile the bundled Citro3D and
-CFL sources, and archive those objects. Then compile the game translation
-units listed in [MANUAL-PROGRAM-SOURCES.txt](docs/MANUAL-PROGRAM-SOURCES.txt).
-
-Use the exact architecture flags, include paths and linker wrappers in
-[the compilation instructions](docs/MANUAL-BUILD.md#5-compile-libraries-then-compile-each-program-source-yourself)
-and [library flags](docs/MANUAL-LIBRARY-FLAGS.json). Application sources use
-GNU C++23; Kinoko sources additionally use LTO. Do not enable fast-math or
-`MKW_FRAME_CAPTURE` for a normal release.
-
-After linking the ELF, create the homebrew executable:
-
-```sh
-3dsxtool /external/mkw-3ds.elf /external/mkw-3ds.3dsx
-```
-
-### 5. Package a CIA, if needed
-
-Follow [HOME banner preparation](docs/HOME-BANNER.md) for the included artwork
-and the explicit extraction, scene and CGFX conversion stages. The approved
-banner audio is included; see that document for current verification limits. Prepare the SMDH and banner with bannertool. Copy
-[the RSF template](tools/release/mkw-3ds.rsf) to your working directory and
-remove its RomFs block for an external-SD build. Then invoke makerom with
-your compiled ELF and prepared HOME assets:
-
-```sh
-makerom -f cia -target t -exefslogo -elf /external/mkw-3ds.elf -rsf /external/external-sd.rsf -icon /external/icon.icn -banner /external/banner.bnr -ver 148 -DAPP_REMASTER=0 -o /external/MKW-3DS-v0.9.4.cia
-```
-
-Version 0.9.4 uses title version 148. Check the resulting Ticket/TMD version
-and contents; some makerom builds have a version-macro collision described
-in [the packaging notes](docs/MANUAL-BUILD.md#6-create-home-assets-and-cia-manually).
-
-## Installing and running
-
-Place the converted runtime files under `sd:/3ds/mkw-3ds/`, including
-`menu.pak`, `race.pak` and the loose files required by the resource map.
-
-- **Homebrew:** place `mkw-3ds.3dsx` in that directory and launch it with the Homebrew Launcher.
-- **CIA:** install the CIA with your console's title installer and retain the runtime resources on the SD card.
-- **Emulator:** launch the 3DSX in Azahar with its emulated SD directory pointing to the staged resource tree and the required system data configured.
-
-On hardware, dump your DSP firmware with DSP1 if it is not already available.
-Do not copy an emulator-only DSP stub to a console.
-When updating, preserve `rksys.dat`, its backup, `license-options-*.dat`,
-`last-license.txt` and `mii-*.3dsmii`. Game resources and personal system data
-are not part of the source release.
+An update is not the game: without a build from your own disc it can't run. If
+an update ever needs newer game files, the game says so on start-up: download
+the latest builder, build again and copy the SD folder again.
 
 ## Controls
 
@@ -171,37 +97,31 @@ are not part of the source release.
 | Y / D-pad Up | Trick / bike wheelie |
 | X / ZL | Look behind |
 | L | Use item |
-| D-pad / ZR| Boost panel trick |
+| D-pad / ZR | Boost panel trick |
 | START | Pause |
 | SELECT | Toggle the speedometer |
-| Touch screen | Switch the bottom-screen map view |
+| Touch screen | Menus: tap a button. Races: switch the lower-screen map view |
 
-Dynamic shadows and LED options are in License Settings. 
+Dynamic shadows and LED options are in License Settings.
 
 ## Contributing
 
-Include the hardware or emulator used, the game mode, course and steps to
-reproduce a problem. Distinguish build checks from gameplay testing. Keep
-game assets, generated files, saves and native system resources out of
-source changes, and preserve third-party license notices.
+Bug reports and suggestions go in [Issues](../../issues). Please say which
+console and version you used, the mode and course, and the steps to reproduce.
+Keep game assets, saves and system files out of pull requests.
 
 ## Credits
 
-- **dudewhat** - original Mario Kart Wii 3DS port.
-- **MiniBandit** - the continuation this project builds on.
-- **Epic** - Redux development and integration.
+- **dudewhat**: the original Mario Kart Wii 3DS port
+- **MiniBandit**: the continuation and the builder
+- **Epic (Epic0522)**: Redux, the game and interface this project now uses
 - **DarthMDev**: Old 3DS drawing performance fix, race sound fixes and menu cadence
-- **Codiak540**: Old 3DS performance testing and optimisation research (course-object detail distance, particle limit, performance log idea)
-- **janedoemk3ds**: Old 3DS performance research with Codiak540 (lighter models, visibility culling, faster course drawing; PR #40 in repo mkw-3ds)
-- **vabold / Kinoko** - Mario Kart Wii physics.
-- **noclip.website** - BRRES model parsing.
-- **LagoLunatic / gclib** - disc and texture utilities.
-- **devkitPro, libctru and Citro3D** - Nintendo 3DS development and graphics libraries.
-- **CFL contributors** - native Mii rendering support.
-- **ogws and mkw decompilation projects** - original-behavior references.
-- **Project CTR / makerom and bannertool contributors** - packaging tools.
+- **Codiak540**: Old 3DS performance testing and optimisation research
+- **janedoemk3ds**: Old 3DS performance research with Codiak540
+- **vabold / Kinoko**: Mario Kart Wii physics
+- **noclip.website**: BRRES model parsing
+- **LagoLunatic / gclib**: disc and texture utilities
+- **devkitPro, libctru and Citro3D**: Nintendo 3DS development and graphics libraries
+- **CFL contributors**: native Mii rendering
 
-See [LICENSE](LICENSE), [NOTICE](NOTICE) and [licenses/](licenses/) for
-attribution and licensing, including unresolved original-port and CFL license
-scopes; the root MIT text does not cover the whole snapshot. Mario Kart Wii is copyright Nintendo; this is
-an unofficial fan project and is not affiliated with Nintendo.
+See [NOTICE](NOTICE) for licence details.
