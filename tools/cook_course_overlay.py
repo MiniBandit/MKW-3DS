@@ -97,6 +97,7 @@ def main():
     p.add_argument('--banks-only',action='store_true',help="update animation banks for object meshes already present in the overlay")
     a=p.parse_args()
     if not (ROOT/'build/export_brres.mjs').is_file():raise FileNotFoundError('Prepare the individual BRRES exporter manually; see docs/MANUAL-BUILD.md')
+    results={}
     for c in courses():
         if a.ids is not None and c['id'] not in a.ids:continue
         if a.banks_only:
@@ -109,5 +110,11 @@ def main():
             old.unlink(missing_ok=True)
         changed=overlay_course(c,a.output)
         print(c['id'],c['name'],' '.join(changed) or 'unchanged',flush=True)
+        results[c['id']]=changed
+    # Meshes matching the shared tree are dropped, so a fresh build can end with
+    # an empty overlay: the receipt is what says this step has run.
+    if not a.banks_only:
+        a.output.mkdir(parents=True,exist_ok=True)
+        (a.output/'overlay-receipt.json').write_text(json.dumps(results,indent=2)+'\n')
 
 if __name__=='__main__':main()

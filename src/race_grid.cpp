@@ -306,6 +306,8 @@ void RaceGrid::beforeStep(uint16_t bulletPlayers){
                 if(d.reverse){--d.reverse;buttons=2;aiStick=0;}
                 if(d.recoveries>=3){kart->collide()->activateOob(false,nullptr,true,false);d.recoveries=0;d.reverse=0;}
                 if(speed>20.f&&!d.reverse)d.recoveries=0;
+                // Pressing along a wall keeps its speed up: go by distance covered too.
+                if(++d.pinnedTicks>=600){d.pinnedTicks=0;if(length(pos-d.pinnedAt)<1000.f)kart->collide()->activateOob(false,nullptr,true,false);d.pinnedAt=pos;}
             }else if(!respawning&&manager->stage()==System::RaceManager::Stage::Countdown&&manager->getCountdownTimer()<24)buttons=1;
             // Trick input from the retail AITrickHandler (CPU) / AIEngine command.
             const auto trick=racing&&!d.reverse?System::Trick(std::min<uint8_t>(command.trick,4)):System::Trick::None;

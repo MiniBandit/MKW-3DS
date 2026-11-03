@@ -73,7 +73,7 @@ COOK_STEPS=[
  ('course lighting',['{py}','tools/lighting/recook_courses.py','--jobs','{jobs}','--no-pack'],[]),
  ('course lighting tables',['{py}','tools/cook_course_lighting.py'],['include/mkw/course_lighting.hpp']),
  ('course bloom tables',['{py}','tools/cook_course_bloom.py'],['include/mkw/course_bloom.hpp']),
- ('course material overlay',['{py}','tools/cook_course_overlay.py','--ids',*COURSE_OVERLAY_IDS],['build/course-materials/models']),
+ ('course material overlay',['{py}','tools/cook_course_overlay.py','--ids',*COURSE_OVERLAY_IDS],['build/course-materials/overlay-receipt.json']),
  ('drivers',['{py}','tools/cook_roster.py','{disc}',SD],[SD+'/models/roster.json']),
  ('karts and bikes',['{py}','tools/cook_garage.py','{disc}',SD],[SD+'/models/garage.json']),
  ('full roster',['{py}','tools/cook_full_roster.py','--jobs','{jobs}'],['build/roster']),
