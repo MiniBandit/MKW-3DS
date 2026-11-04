@@ -447,10 +447,15 @@ int main() {
     using MenuStage=mkw::MenuProfile::Stage;
     uint64_t raceLoadStart=0;
     // QA: race load stage timing with file-open counts.
+    // Largest single allocation that would succeed now (load reports, test frames).
+    auto largestHeapBlock=[]{
+        for(size_t size=8u<<20;size>=16u<<10;size-=16u<<10){void* volatile block=std::malloc(size);if(block){std::free(block);return size;}}
+        return size_t(0);
+    };
     uint64_t stageTick=0;unsigned stageOpens=0;unsigned long long stageOpenTicks=0;
     auto stage=[&](const char* name){
         const auto now=svcGetSystemTick();const unsigned opens=mkw::fileOpens.load();const auto openTicks=mkw::fileOpenTicks.load();
-        if(stageTick&&menuProfile->enabled()){char text[200];snprintf(text,sizeof text,"load %s %.1f ms, %u opens (%.1f ms opening) heap_free=%lu linear_free=%lu",name,double(now-stageTick)*1000.0/SYSCLOCK_ARM11,opens-stageOpens,double(openTicks-stageOpenTicks)*1000.0/SYSCLOCK_ARM11,(unsigned long)mkw::heapSpaceFree(),(unsigned long)linearSpaceFree());menuProfile->event(text);report(text);}
+        if(stageTick&&menuProfile->enabled()){char text[240];snprintf(text,sizeof text,"load %s %.1f ms, %u opens (%.1f ms opening) heap_free=%lu largest=%lu linear_free=%lu",name,double(now-stageTick)*1000.0/SYSCLOCK_ARM11,opens-stageOpens,double(openTicks-stageOpenTicks)*1000.0/SYSCLOCK_ARM11,(unsigned long)mkw::heapSpaceFree(),(unsigned long)largestHeapBlock(),(unsigned long)linearSpaceFree());menuProfile->event(text);report(text);}
         stageTick=now;stageOpens=opens;stageOpenTicks=openTicks;
     };
     auto finishAutoplay=[&](){
@@ -3303,8 +3308,7 @@ int main() {
         if(frames==2)report("graphics second frame submitted");
         // QA: free ordinary heap and its largest block in the first frames.
         if(kQa&&frames<=3){
-            size_t largest=0;for(size_t size=8u<<20;size>=16u<<10;size-=16u<<10){void* volatile block=std::malloc(size);if(block){std::free(block);largest=size;break;}}
-            LOGF("frame %u heap_free=%lu largest=%lu linear_free=%lu",frames,(unsigned long)mkw::heapSpaceFree(),(unsigned long)largest,(unsigned long)linearSpaceFree());
+            LOGF("frame %u heap_free=%lu largest=%lu linear_free=%lu",frames,(unsigned long)mkw::heapSpaceFree(),(unsigned long)largestHeapBlock(),(unsigned long)linearSpaceFree());
         }
         if(garageTest&&frames%fixtureFrames==0){rollingChoices+=fixtureRolling;animationPass&=fixtureRolling;}
         // QA (menu autoplay): sample the course preview for review.

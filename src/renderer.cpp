@@ -83,6 +83,26 @@ bool readFile(const char* path,std::vector<uint8_t>& out) {
     std::fclose(f);return ok;
 }
 bool readExact(FILE* f,void* p,size_t size) { return std::fread(p,1,size,f)==size; }
+// One packed asset, held only while it is decoded. On Old 3DS a big course's
+// meshes read into the small ordinary heap split it until a 131 KiB read failed
+// with megabytes nominally free, which ends the game. LINEAR has room while the
+// scenery loads and these buffers are freed before the next one is needed.
+class PackedAsset {
+public:
+    PackedAsset()=default;PackedAsset(const PackedAsset&)=delete;PackedAsset& operator=(const PackedAsset&)=delete;
+    ~PackedAsset(){if(linear_)linearFree(data_);else std::free(data_);}
+    bool read(const char* path){
+        const long bytes=pack::size(path);if(bytes<=0)return false;
+        if(renderQuality().reduced&&bytes>=(16<<10)){data_=static_cast<uint8_t*>(linearAlloc(size_t(bytes)));linear_=data_!=nullptr;}
+        if(!data_)data_=static_cast<uint8_t*>(std::malloc(size_t(bytes)));
+        if(!data_)return false;
+        size_=size_t(bytes);return pack::readInto(path,data_,size_);
+    }
+    const uint8_t* data()const{return data_;}
+    size_t size()const{return size_;}
+private:
+    uint8_t* data_=nullptr;size_t size_=0;bool linear_=false;
+};
 // A 3D screen: New 3DS or New 3DS XL. Old models never draw a second eye; the
 // New 2DS XL reports New 3DS but has no parallax barrier. On a 3D screen,
 // also the console's stereo display settings (config block 0x50005), which
@@ -129,12 +149,14 @@ C3D_Tex* Texture::sampledGpu(const MaterialSampler* s,unsigned unit){
     return &view;
 }
 bool Texture::load(const char* path) {
+    if(PackedAsset packed;packed.read(path))return loadMemory(packed.data(),packed.size());
     std::vector<uint8_t> file;
-    return (pack::read(path,file)||readFile(path,file))&&loadMemory(file.data(),file.size());
+    return readFile(path,file)&&loadMemory(file.data(),file.size());
 }
 bool Texture::loadVram(const char* path) {
+    if(PackedAsset packed;packed.read(path))return loadMemory(packed.data(),packed.size(),true);
     std::vector<uint8_t> file;
-    return (pack::read(path,file)||readFile(path,file))&&loadMemory(file.data(),file.size(),true);
+    return readFile(path,file)&&loadMemory(file.data(),file.size(),true);
 }
 bool Texture::loadMemory(const void* data,size_t size,bool vram) {
     reset();
@@ -322,13 +344,13 @@ bool Model::load(const char* path,bool dynamicLighting) {
     // coalesces the header/submesh/name reads into few FS requests.
     struct File {
         FILE* f=nullptr;char buffer[32*1024];
-        std::vector<uint8_t> packed;size_t offset=0;
+        PackedAsset packed;bool fromPack=false;size_t offset=0;
         explicit File(const char* path){
-            if(pack::read(path,packed))return;
+            fromPack=packed.read(path);if(fromPack)return;
             f=std::fopen(path,"rb");if(f)std::setvbuf(f,buffer,_IOFBF,sizeof buffer);
         }
         ~File(){if(f)std::fclose(f);}
-        bool open()const{return f||!packed.empty();}
+        bool open()const{return f||fromPack;}
         bool read(void* p,size_t size){
             if(f)return std::fread(p,1,size,f)==size;
             if(size>packed.size()-offset)return false;

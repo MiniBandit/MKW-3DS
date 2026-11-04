@@ -75,7 +75,7 @@ bool RacerVisuals::load(){
         // Old 3DS: an animated racer costs about 1.9 MiB (its bank, meshes and
         // textures), eleven do not fit. Keep room for the race sound loaded next;
         // past that a racer is its low-detail models, about 0.1 MiB, not animated.
-        constexpr u32 LowOnlyBelow=6u<<20;
+        constexpr u32 LowOnlyBelow=8u<<20;
         r->lowOnly=renderQuality().reduced&&linearSpaceFree()<LowOnlyBelow;
         if(!r->load(unsigned(player.character),unsigned(player.vehicle),config.teams?RaceTeam(player.team):RaceTeam::None,&failure,r->lowOnly)){
             if(auto* log=std::fopen("sdmc:/3ds/mkw-3ds/opponent-load-error.txt","w")){
