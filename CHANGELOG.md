@@ -1,6 +1,6 @@
 # Changelog
 
-# Redux merge
+# 0.7.0: Redux merge
 
 Epic's Mario Kart Wii 3DS Redux is now the game, by her permission, on top of this project's builder and quick updates. Every player must build again in a new, empty folder.
 
