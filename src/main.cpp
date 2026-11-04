@@ -1195,7 +1195,7 @@ int main() {
     }
     auto applySelection=[&](){
         // QA: race a given driver, vehicle choice and course, ignoring what is unlocked.
-        if(kQa)if(FILE* forced=std::fopen("sdmc:/3ds/mkw-3ds/qa-selection.txt","r")){unsigned driver=0,vehicle=0,course=0;const int fields=std::fscanf(forced,"%u %u %u",&driver,&vehicle,&course);if(fields>=2){menu.selection.driver=driver;menu.selection.vehicle=vehicle;}if(fields==3)menu.selection.course=course;std::fclose(forced);}
+        if(kQa)if(FILE* forced=std::fopen("sdmc:/3ds/mkw-3ds/qa-selection.txt","r")){unsigned driver=0,vehicle=0,course=0;const int fields=std::fscanf(forced,"%u %u %u",&driver,&vehicle,&course);if(fields>=2){menu.selection.driver=driver;menu.selection.vehicle=vehicle;}if(fields==3){menu.selection.course=course;menu.selection.battleStage=course%10;}std::fclose(forced);}
         selectedRoster=menu.cpuRoster;battleMode=menu.selection.mode==mkw::UiMode::Battle;coinRunnersMode=battleMode&&menu.selection.coinRunners;timeTrial=menu.selection.mode==mkw::UiMode::TimeTrials;activeLicense=menu.selection.license;activeRecords=licenseSaves[activeLicense].records;if(timeTrial)loadBestTimes();courseChoice=battleMode?32+menu.selection.battleStage:menu.selection.course;driverChoice=menu.selection.driver;vehicleChoice=menu.selection.vehicle;automaticDrift=menu.selection.automatic;
         selectedRaceMode=timeTrial?2:menu.selection.mode==mkw::UiMode::GrandPrix?0:menu.selection.mode==mkw::UiMode::Battle?3:1;
         const bool vs=menu.selection.mode==mkw::UiMode::VS;
@@ -1377,7 +1377,9 @@ int main() {
         size_t size=0;const void* kmp=K::System::ResourceManager::Instance()->getFile("course.kmp",&size,K::System::ArchiveId::Course);
         if(intro.load(kmp,size)){
             mkw::IntroMeshClearance visibleScenery;
-            if(Courses[courseChoice].id==K::Course::Dry_Dry_Ruins){
+            // Its temporary copy of every triangle does not fit the Old 3DS heap; the
+            // collision check below still keeps the camera clear there.
+            if(Courses[courseChoice].id==K::Course::Dry_Dry_Ruins&&!mkw::renderQuality().reduced){
                 for(const auto& model:track)for(const auto& sub:model->submeshes){
                     if(!mkw::playerShadow::receives(sub.flags))continue;
                     for(unsigned i=sub.first;i+2<sub.first+sub.count;i+=3)

@@ -1,5 +1,14 @@
 # Changelog
 
+# Redux merge
+
+Epic's Mario Kart Wii 3DS Redux is now the game, by her permission, on top of this project's builder and quick updates. Every player must build again in a new, empty folder.
+
+- Builder: rebuilt around Redux's converted files; the CIA is small and the game reads its files from the SD card (`--embed-assets` keeps them in the CIA).
+- Builder: a fresh build no longer stops at the course material overlay; devkitPro is found on any drive; folder paths with non-English letters, out-of-date devkitPro and synced folders are explained; failed movie frames are retried; Python package errors are shown; long steps report that they are still running; a click no longer freezes a Windows console; Linux instructions.
+- Old 3DS: opponents use low-detail models when memory runs short, so races load instead of crashing; big file reads no longer split the heap; a 128 KiB main stack replaces the one that overflowed at start-up.
+- Staff credits still play without the console's Mii resource.
+
 Changes retained on top of the existing port, grouped by feature; withdrawn experiments, packaging-only revisions and unfinished investigations are excluded.
 
 # Interface and menus

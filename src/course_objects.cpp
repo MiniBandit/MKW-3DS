@@ -202,7 +202,9 @@ bool ObjectAssets::load(int course){
             auto texture=std::make_shared<Texture>();
             // Leave ordinary heap headroom for racers, menus and live effects.
             const size_t heapBytes=envGetHeapSize(),usedBytes=mallinfo().uordblks;
-            const size_t budget=heapBytes>usedBytes+(8u<<20)?heapBytes-usedBytes-(8u<<20):0;
+            size_t budget=heapBytes>usedBytes+(8u<<20)?heapBytes-usedBytes-(8u<<20):0;
+            // Old 3DS never has that headroom: five of the hundred phases, about 650 KiB.
+            if(renderQuality().reduced)budget=std::max(budget,size_t(5*131072));
             if(!m->firePhases->open("textures/firebar-indirect.ftan",budget)||
                !C3D_TexInit(&texture->gpu,256,256,GPU_LA8)){ok=false;break;}
             texture->ready=true;
