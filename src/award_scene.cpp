@@ -131,6 +131,7 @@ AwardSceneResult runAwardPodium(Renderer& renderer,const AwardResults& results,v
  PresentationCadence presentation;presentation.setTicksPerSlot(2);
  while(aptMainLoop()){
   hidScanInput();bool advance=(hidKeysDown()&(KEY_A|KEY_B|KEY_START))!=0;
+  if(awardAutoAdvance&&tick%240==239)advance=true;
   const auto now=svcGetSystemTick();pending+=std::min(0.1,double(now-previous)/SYSCLOCK_ARM11)*60.;previous=now;
   // Handle edges once per display refresh; simulation may owe zero or several ticks.
   // AwardFade::HandleClick (80621408..24) accepts a skip after tick70,

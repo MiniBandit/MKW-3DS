@@ -27,5 +27,7 @@ inline bool hasAwardPodium(const AwardResults& results){return awardOutcome(resu
 inline bool hasAwardScene(const AwardResults& results){const auto outcome=awardOutcome(results);return outcome!=AwardOutcome::None;}
 // Caller has drained race jobs and destroyed the race child scene. This loop
 // owns ceremony resources until it returns; the driving phase owns a new ceremony simulation.
+// Test builds: press through the ceremony and credits unattended.
+inline bool awardAutoAdvance=false;
 AwardSceneResult runAwardPodium(Renderer&,const AwardResults&,void (*report)(const char*),std::uint64_t transitionStart=0,Kinoko::EGG::SceneManager* scenes=nullptr);
 }

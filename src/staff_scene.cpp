@@ -30,8 +30,13 @@ constexpr float Unit=240.f/456;
 const char* message(unsigned id){for(const auto& m:StaffMessages)if(m.id==id)return m.text;return "";}
 struct Photo {
  Texture image;std::unique_ptr<Model> body,head;MiiAppearance identity{};bool full=false;
+ // The player's Mii in the closing photo is optional: without the console's
+ // Mii resource the photo still shows, and the credits still finish.
  bool load(const NativeMii& native,bool variant){
   if(!image.load(StaffPhotoPaths[variant]))return false;
+  loadMii(native);return true;
+ }
+ bool loadMii(const NativeMii& native){
   if(!decodeMiiAppearance(native,identity))return false;
   const auto& source=StaffPhotoBodies[identity.female?1:0];
   body=std::make_unique<Model>();if(!body->load(source.model))return false;
@@ -188,7 +193,7 @@ AwardSceneResult runStaff(Renderer& renderer,const AwardResults& source,const Na
  }
  results.teams=false;
  {LoadingScope loading;black(renderer);
-  if(!session.font.load("textures/staff_font.t3x")||!session.photo.load(identity,variant)){report("FAIL staff photo/native Mii resources");return AwardSceneResult::Failed;}
+  if(!session.font.load("textures/staff_font.t3x")||!session.photo.load(identity,variant)){report("FAIL staff font or photo");return AwardSceneResult::Failed;}
   session.cast=std::make_shared<Cast>(results);
   if(loader.start())loader.submit(session.cast,AssetPriority::Urgent);else session.cast->run();
   if(sound.start()){const uint32_t groups[]={snd::id::group::GRP_CMN,snd::id::group::GRP_ENDING_A};sound.loadScene(groups,2);}
@@ -210,7 +215,7 @@ AwardSceneResult runStaff(Renderer& renderer,const AwardResults& source,const Na
  unsigned shot=16,shotFrame=0,phase=0,tick=0;bool shotEntered=false;std::uint64_t start=svcGetSystemTick();
  PresentationCadence cadence;cadence.setTicksPerSlot(2);unsigned lastTick=0;auto creditDraw=std::make_unique<CreditDraw>();
  while(aptMainLoop()){
-  hidScanInput();const auto down=hidKeysDown();const unsigned wanted=unsigned(double(svcGetSystemTick()-start)*60/SYSCLOCK_ARM11);
+  hidScanInput();const auto down=hidKeysDown()|(awardAutoAdvance&&tick%600==599?u32(KEY_A):0u);const unsigned wanted=unsigned(double(svcGetSystemTick()-start)*60/SYSCLOCK_ARM11);
   // Keep simulation deterministic when a display frame takes longer. During
   // an actual blocking transition reset the wall clock below.
   while(lastTick<wanted&&lastTick<tick+6){++lastTick;

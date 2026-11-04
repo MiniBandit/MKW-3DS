@@ -434,6 +434,7 @@ int main() {
     using Profile=mkw::RuntimeProfile;
     auto autopilot=std::make_unique<mkw::MenuAutopilot>();
     const bool autoplay=kQa&&!qaMode&&autopilot->open("sdmc:/3ds/mkw-3ds/menu-autoplay.txt");
+    mkw::awardAutoAdvance=autoplay;
     if(kQa){qaTopPixels.resize(400*240*3);qaBottomPixels.resize(320*240*3);}
     // race-capture.txt holds the sampling interval in simulation steps (default 20);
     // a second nonzero number also captures every presented frame from the
@@ -588,7 +589,14 @@ int main() {
             previewScenes.currentScene()->heap()->enableAllocation();
             previewScenes.destroyCurrentSceneNoIncoming(false);
         }
-        const auto outcome=mkw::runAwardPodium(renderer,preview,report,previewStart,&previewScenes);
+        mkw::awardAutoAdvance=kQa;
+        auto outcome=mkw::runAwardPodium(renderer,preview,report,previewStart,&previewScenes);
+        // QA: the staff credits as well, when staff-preview.txt exists.
+        if(kQa&&outcome==mkw::AwardSceneResult::Complete&&std::remove("sdmc:/3ds/mkw-3ds/staff-preview.txt")==0){
+            LOGF("award preview complete, staff next");
+            outcome=mkw::runStaff(renderer,preview,mkw::NativeMii{},false,report,previewScenes);
+        }
+        LOGF("preview outcome %d",int(outcome));
         // A title preview owns its temporary root; restore all singleton services
         // before the normal first race creates its own root. AwardPhysicsScene
         // has already retired its child on return from runAwardPodium.

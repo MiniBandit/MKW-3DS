@@ -17,7 +17,8 @@ namespace mkw {
 //                    (race:N and auto:N also end when the player finishes)
 //   in a race:  A    press A once (skips a result board once it stops counting)
 //               wN   wait N presented frames
-//               next / quit  wait for the end-of-race menu, choose that option
+//               next / quit  press through the result boards to the end-of-race
+//                            menu and choose that option
 //   end              finish successfully
 // A file containing tokens replaces the default VS script.
 class MenuAutopilot {
@@ -79,7 +80,7 @@ public:
   const std::string* token=current();if(!token)return;
   // Once an end-of-race option is chosen the race is being left: the
   // following tokens belong to the menus, until the next race begins.
-  if(leaving_){if(token->compare(0,5,"race:")&&token->compare(0,5,"auto:")){held=0;return;}leaving_=false;}
+  if(leaving_){if(finished||(token->compare(0,5,"race:")&&token->compare(0,5,"auto:"))){held=0;return;}leaving_=false;}
   if(!token->compare(0,5,"race:")||!token->compare(0,5,"auto:")){
    if(!racing_){racing_=true;raceStart_=simulationFrames;++races_;raceWait_=0;}
    route_=!token->compare(0,5,"auto:");
@@ -96,7 +97,8 @@ public:
   }
   if((*token)[0]=='w'){if(++wait_>=unsigned(std::atoi(token->c_str()+1))){wait_=0;++cursor_;}return;}
   if(*token=="next"||*token=="quit"){
-   if(!endMenu){if(++raceWait_>12000)fail("end-of-race menu did not appear");return;}
+   // The result boards before it take A, once they stop counting.
+   if(!endMenu){held=0;if(++raceWait_>12000)fail("end-of-race menu did not appear");else if(raceWait_%120==0)down=KEY_A;return;}
    raceWait_=0;if(++gap_<8)return;gap_=0;
    const unsigned wanted=*token=="quit"?1:0;
    if(endCursor!=wanted){down=KEY_DDOWN;return;}

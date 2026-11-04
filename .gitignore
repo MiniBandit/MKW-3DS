@@ -83,3 +83,4 @@ CFL_Res.dat
 
 # Current maintainer-supplied banner audio.
 !/tools/release/artwork/banneraudio.wav
+/old-0.6.0-build/
