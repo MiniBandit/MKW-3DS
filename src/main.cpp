@@ -1675,11 +1675,11 @@ int main() {
             push=vec(offset);return hit;
         };
         if(const auto* camera=K::Render::KartCamera::Instance()){
-            in.lookBack=camera->lookingBack();in.rearEye=vec(camera->rearPosition());in.rearPivot=vec(camera->rearTarget());
+            in.lookBack=camera->lookingBack();
         }
         in.kartPos=vec(kart->pos());in.kartForward=vec(kart->move()->smoothedForward());
         in.cameraDistY=kart->cameraDistY();in.targetPosY=params.targetPosY;in.cameraFov=params.fov;in.boostFov=boostFov;
-        in.bullet=status.onBit(K::Kart::eStatus::Bullet);in.inCannon=status.onBit(K::Kart::eStatus::InCannon);
+        in.bullet=status.onBit(K::Kart::eStatus::Bullet);
         in.cameraPosY=params.posY;in.cameraDistance=params.dist;
         in.stage=unsigned(race->stage());in.previewActive=intro.active();
         in.beforeRespawn=status.onBit(K::Kart::eStatus::BeforeRespawn);in.inRespawn=status.onBit(K::Kart::eStatus::InRespawn);
@@ -1697,7 +1697,7 @@ int main() {
         if(!bcp||!startPan.load(bcp,size)){bcp=resources->getFile("start_camera.bcp",&size,K::System::ArchiveId::Core);if(!bcp||!startPan.load(bcp,size))startPan.defaults();}
         auto* kart=K::Kart::KartObjectManager::Instance()->object(0);
         K::EGG::Vector3f startPos,startAngles;K::System::RaceManager::Instance()->findKartStartPoint(startPos,startAngles,0);
-        chaseCamera.init(*kart);boostFov=0;fillCameraInput(cameraInput);
+        chaseCamera.setup(*kart);chaseCamera.init(*kart);boostFov=0;cameraInput=mkw::RaceCameraInput{};fillCameraInput(cameraInput);
         cameraDirector->reset(startPan,vec(startPos),vec(startAngles),cameraInput);
         flow={};flow.preview=intro.active();
         results.reset();resultsInput={};resultsReported=false;flowUi.unloadResults();
@@ -2644,13 +2644,14 @@ int main() {
     mkw::AnimationBudget animationBudget;
     // The presented camera of the current step: drawn each frame and handed to the NW4R
     // effects as their process camera after each step.
-    auto presentationCamera=[&](mkw::Vec3& eye,mkw::Vec3& target){
+    auto presentationCamera=[&](mkw::Vec3& eye,mkw::Vec3& target,mkw::Vec3& up){
+        up={0,1,0};
         if(effectsTest&&frames<60){eye={-15800,2700,49500};target={-15900,1200,51000};return;}
         if(intro.active()){
             const auto offset=introClearance.offset(intro.frame());
             eye=intro.eye()+offset;target=intro.target()+introClearance.targetOffset(intro.frame());return;
         }
-        if(fullRace){const auto v=cameraDirector->view();eye=v.eye+cameraShake.offset(v.eye,v.target);target=v.target;return;}
+        if(fullRace){const auto v=cameraDirector->view();eye=v.eye+cameraShake.offset(v.eye,v.target);target=v.target;up=v.up;return;}
         auto* camera=K::Render::KartCamera::Instance();auto* cameraKart=K::Kart::KartObjectManager::Instance()->object(0);
         eye=vec(camera->position());target=vec(camera->target());
         target.y+=cameraKart->param()->camera().targetPosY-cameraKart->cameraDistY();
@@ -3182,10 +3183,9 @@ int main() {
                         K::Render::KartCamera::Instance()->onRespawn();
                         chaseCamera.init(*kart);
                     }
-                    chaseCamera.calc(*kart);
                     fillCameraInput(cameraInput);
                     if(battleMode)cameraInput.finished=battleTicks>=balloonBattle.durationTicks();
-                    cameraDirector->step(cameraInput);
+                    chaseCamera.update(*kart,*cameraDirector,cameraInput);
                     mkw::simprof::add(mkw::simprof::PortCamera,cameraStart);
                     // Race-flow events for presentation subscribers (audio).
                     const unsigned stage=unsigned(race->stage());
@@ -3851,7 +3851,7 @@ int main() {
                     mkw::simprof::add(mkw::simprof::PresKartFx,kartFxStart);
                     {MKW_SIM_SCOPE(PresParticles);if(fullRace){creatureEffects.step(raceEffects);blooperScreenEffects.step(raceEffects,raceItems->hud(0).ink,raceGrid.rank(),raceGrid.count());}
                     raceEffects.step();}
-                    {mkw::Vec3 eye,target;presentationCamera(eye,target);raceEffects.setCamera(eye,target,{0,1,0});
+                    {mkw::Vec3 eye,target,up;presentationCamera(eye,target,up);raceEffects.setCamera(eye,target,up);
                      // The clip manager (0x80783344) after the camera: each racer's sphere on
                      // the presented camera, full vertical fovy, the top screen's aspect.
                      if(fullRace){
@@ -3927,7 +3927,7 @@ int main() {
                 const unsigned steps=physicsSteps>retailFogSteps?physicsSteps-retailFogSteps:0;retailFogSteps=physicsSteps;
                 stepRetailFog(effectsTest&&frames<60?mkw::Vec3{-15800,2700,49500}:intro.active()?intro.eye():fullRace?raceView.eye:vec(camera->position()),steps);
             }
-            {mkw::Vec3 eye,target;presentationCamera(eye,target);
+            {mkw::Vec3 eye,target,up;presentationCamera(eye,target,up);
              // Stereo (docs/STEREO_3D.md): Mario Kart 7's race camera on every race
              // shot, intro and replays included. Its reference plane keeps a fixed
              // view depth, a set fraction of the kart's depth along the chase
@@ -3938,7 +3938,7 @@ int main() {
                  renderer.setStereoSubject(mkw::stereo::Race,dot(vec(cameraKart->pos())-chase,mkw::normalized(look-chase)));
              }else if(renderer.stereoCapable())renderer.setStereoSubject(mkw::stereo::Race,dot(vec(cameraKart->pos())-eye,mkw::normalized(target-eye)));
              renderer.setDualScreenIntro(fullRace&&intro.active());
-             renderer.begin(eye,target,{0,1,0},selectedMirror);}
+             renderer.begin(eye,target,up,selectedMirror);}
             profiler->mark(Profile::Wait);
             unsigned castleScene=mkw::castleRegion::Both;
             if(fullRace&&int(Courses[courseChoice].id)==12&&!intro.active()&&!results.active()&&
