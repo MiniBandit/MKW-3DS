@@ -63,7 +63,7 @@ def main():
    prefix=f'course_{course:02d}_battle_feedback'
    cooked=cook(subset,out,prefix,256,texture_prefix=f'course_{course:02d}',encoded_textures={f'course_{course:02d}_{i:03d}'for i in range(len(data['textures']))},course_geometry=True)
    dest=out/listname;dest.write_text(''.join(n+'\n'for n in parts+[p['name']for p in cooked]))
-   records.append({'course':course,'source':str(source.relative_to(ROOT)),'sourceSha256':hashlib.sha256(source.read_bytes()).hexdigest(),'materials':sorted(selected),'oldDrawsDisabled':patches,'newTriangles':sum(p['triangles']for p in cooked),'all_other_old_mesh_bytes_unchanged':True,'textures_unchanged':True,'overheadScreen':'4 faces/8triangles, logo+dot TEV and300-frame nonlinear SRT0; no EFB'if course==35 else None})
+   records.append({'course':course,'source':source.relative_to(ROOT).as_posix(),'sourceSha256':hashlib.sha256(source.read_bytes()).hexdigest(),'materials':sorted(selected),'oldDrawsDisabled':patches,'newTriangles':sum(p['triangles']for p in cooked),'all_other_old_mesh_bytes_unchanged':True,'textures_unchanged':True,'overheadScreen':'4 faces/8triangles, logo+dot TEV and300-frame nonlinear SRT0; no EFB'if course==35 else None})
  files=[]
  for p in sorted((out/'models').glob('*')):
   if p.suffix=='.gmdl' or p.name in ['course_34.list','course_35.list']:files.append({'path':p.relative_to(out).as_posix(),'bytes':p.stat().st_size,'sha256':hashlib.sha256(p.read_bytes()).hexdigest()})

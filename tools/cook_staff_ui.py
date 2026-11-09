@@ -99,7 +99,7 @@ def main():
  (ROOT/'include/mkw/staff_ui_data.hpp').write_text('\n'.join(header)+'\n')
 
  receipt=dict(version=1,relSha256=digest(args.retail_rel),base=hex(BASE),demo=first,movie=second,
-  controls=controls,font=path,photos=photos,bodies=bodies,sources={str(p.relative_to(ROOT)):digest(p) for p in sorted(set(sources))},
+  controls=controls,font=path,photos=photos,bodies=bodies,sources={p.relative_to(ROOT).as_posix():digest(p) for p in sorted(set(sources))},
   status='source resources only; runtime/timing/photo placement and target validation still required')
  (out/'models/staff-ui.json').write_text(json.dumps(receipt,indent=2)+'\n')
  print('Prepared 11 demo and 17 movie credit records, 6 original controllers, original glyphs, both photos and both photo Mii bodies.',flush=True)

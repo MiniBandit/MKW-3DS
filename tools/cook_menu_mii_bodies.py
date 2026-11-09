@@ -88,7 +88,7 @@ def main():
                   'headTransform': {'scale': head_scale, 'translation': [head_x, -head_y, 0],
                                     'rotation': [0, -1.5707963705062866, 3.1415927410125732]},
                   'stem': stem, 'size': stem[0], 'outfit': stem[1], 'sex': stem[-1],
-                  'source': str(source.relative_to(ROOT)), 'sourceSha256': source_hash,
+                  'source': source.relative_to(ROOT).as_posix(), 'sourceSha256': source_hash,
                   'model': parts[0], 'materialRoles': roles, 'animation': animation, 'faceJoint': head,
                   'animationSha256': sha(bank)}
         records.append(record)

@@ -10,7 +10,7 @@ def cook():
  header=ROOT/'include/mkw/menu_assets.hpp';text=header.read_text()
  if '"locked_choice",' not in text:header.write_text(text.replace('#include <mkw/menu_name_glyphs.hpp>',row+'#include <mkw/menu_name_glyphs.hpp>'))
  manifest=ROOT/'sd-card/3ds/mkw-3ds/models/menu-ui.json';data=json.loads(manifest.read_text())
- r['source']=str(source.relative_to(ROOT));r['source_sha256']=hashlib.sha256(source.read_bytes()).hexdigest()
+ r['source']=source.relative_to(ROOT).as_posix();r['source_sha256']=hashlib.sha256(source.read_bytes()).hexdigest()
  data['sprites']['locked_choice']=r;data['sourceHashes'][r['source']]=r['source_sha256']
  manifest.write_text(json.dumps(data,indent=2)+'\n')
 if __name__=='__main__':cook()

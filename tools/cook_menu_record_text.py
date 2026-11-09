@@ -16,7 +16,7 @@ def cook(output=None):
  labels=[(f'class_{i}',f'{cc} Trophy: ')for i,cc in enumerate(['50cc','100cc','150cc','Mirror'])]+[('rank',' Rank: '),('none','--'),('best','Best Time')]
  raw=font_strings(font,[t for _,t in labels]+['-']);footer_raw=font_strings(font,[t for k,t in labels if k!='best'],full_ink=True);rows=[];files=[];sources={}
  sha=lambda p:hashlib.sha256(p.read_bytes()).hexdigest()
- def source(p):sources[str(p.relative_to(ROOT))]=sha(p)
+ def source(p):sources[p.relative_to(ROOT).as_posix()]=sha(p)
  source(font)
  def add(image,key,text='',style=0):
   r=cook_image_sprite(image,'ui_menu_record_'+key,out);p=out/r['path']

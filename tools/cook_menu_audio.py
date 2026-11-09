@@ -106,7 +106,7 @@ def main():
     record={**sound,**locations,**info, 'path':'movies/title_bgm.wav','sha256':digest_file(destination)}
     names=['SEQ_O_SELECT','SEQ_O_SELECT_CH','SEQ_O_OPTION_CH','SE_UI_PAGE_NEXT','SE_UI_PAGE_PREV','SE_UI_BTN_IN','SE_UI_BTN_OK']
     deferred=[archive.sound(name) for name in names]
-    manifest=dict(version=1,source=str(path.relative_to(ROOT)),sourceSha256=digest_file(path),waves=[record],sequencesNotImplemented=deferred)
+    manifest=dict(version=1,source=path.relative_to(ROOT).as_posix(),sourceSha256=digest_file(path),waves=[record],sequencesNotImplemented=deferred)
     (OUT/'models/menu-audio.json').write_text(json.dumps(manifest,indent=2)+'\n')
     (ROOT/'include/mkw/menu_audio_assets.hpp').write_text('#pragma once\nnamespace mkw {\ninline constexpr const char* UiTitleMusicPath="movies/title_bgm.wav";\ninline constexpr unsigned UiTitleMusicLoopSample=%u;\ninline constexpr float UiTitleMusicVolume=%.9ff;\n}\n'%(info['loopStartSample'],sound['volume']/127))
     print(json.dumps(manifest,indent=2))

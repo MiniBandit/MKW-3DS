@@ -118,8 +118,8 @@ def clips(path):
             duration, loop, tracks = animation(source)
             result.append({'control': path.stem, 'group': group, 'name': text(data, strings + name),
                 'next': text(data, strings + next_name), 'reverse': bool(reverse), 'rate': rate,
-                'duration': duration, 'loop': loop, 'layout': str(layout.relative_to(ROOT)),
-                'source': str(source.relative_to(ROOT)), 'panes': panes,
+                'duration': duration, 'loop': loop, 'layout': layout.relative_to(ROOT).as_posix(),
+                'source': source.relative_to(ROOT).as_posix(), 'panes': panes,
                 'tracks': [track for track in tracks if not panes or track['element'] in members[panes]]})
     return result
 
@@ -187,7 +187,7 @@ def main():
     rel = ROOT / 'build/itembox-retail.rel'
     if hashlib.sha256(rel.read_bytes()).hexdigest() != EXPECTED_HASH:
         raise ValueError('Page timing requires the audited original RMCU executable')
-    sources[str(rel.relative_to(ROOT))] = EXPECTED_HASH
+    sources[rel.relative_to(ROOT).as_posix()] = EXPECTED_HASH
     controller_paths = [path for archive in ['Title', 'MenuSingle'] for path in sorted((UI / archive).rglob('*.brctr'))]
     controller_paths += [UI / 'MenuOther' / part / 'ctrl' / (name + '.brctr') for part, name in [('button', 'LicenseManagementButton'), ('control', 'LicenseManagement'), ('control','Record'), ('button','NextRecordButton')]]
     controller_paths += [UI / 'Channel/button/ctrl/OptionTopButton.brctr']
@@ -198,7 +198,7 @@ def main():
     for path in controller_paths:
         if path.name.startswith('._'):
             continue
-        sources[str(path.relative_to(ROOT))] = hashlib.sha256(path.read_bytes()).hexdigest()
+        sources[path.relative_to(ROOT).as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
         for variant in controller(path):
             variants[path.stem, variant['name']] = variant
         for clip in clips(path):
@@ -255,7 +255,7 @@ def main():
                 'animations': list(animations.values())}
     receipt = ROOT / 'sd-card/3ds/mkw-3ds/models/menu-animations.json'
     receipt.write_text(json.dumps(manifest, indent=2) + '\n')
-    print(json.dumps({'controls': len(variants), 'sources': len(sources), **counts, 'header': str(output.relative_to(ROOT))}))
+    print(json.dumps({'controls': len(variants), 'sources': len(sources), **counts, 'header': output.relative_to(ROOT).as_posix()}))
 
 
 if __name__ == '__main__':

@@ -19,7 +19,7 @@ def main():
     args=parser.parse_args();out=args.output.resolve();out.mkdir(parents=True,exist_ok=True)
     sources=sorted((ROOT/'assets/courses').glob('*/coin.brres'))
     if len(sources)!=10:raise ValueError('Expected all ten original arena coin archives')
-    hashes={str(p.relative_to(ROOT)):digest(p) for p in sources}
+    hashes={p.relative_to(ROOT).as_posix():digest(p) for p in sources}
     if len(set(hashes.values()))!=1:raise ValueError('Arena coin archives differ; inspect before sharing assets')
     jobs=[('coin','battle_coin'),('coin-shadow','battle_coin_shadow'),
           ('pile_coin','battle_coin_pile'),('pile_coin-shadow','battle_coin_pile_shadow')]
@@ -34,10 +34,10 @@ def main():
         if len(parts)!=1:raise ValueError('Expected one mesh for '+model)
         target=out/'models'/(name+'.gmdl')
         shutil.copyfile(out/'models'/(parts[0]['name']+'.gmdl'),target)
-        rows.append({'sourceModel':model,'model':str(target.relative_to(out)),'sha256':digest(target),
+        rows.append({'sourceModel':model,'model':target.relative_to(out).as_posix(),'sha256':digest(target),
                      'triangles':parts[0]['triangles']})
     if any(digest(ROOT/p)!=sha for p,sha in hashes.items()):raise ValueError('Original resource changed during cook')
-    files=[{'path':str(p.relative_to(out)),'sha256':digest(p),'bytes':p.stat().st_size}
+    files=[{'path':p.relative_to(out).as_posix(),'sha256':digest(p),'bytes':p.stat().st_size}
            for directory in ('models','textures') for p in sorted((out/directory).iterdir())
            if p.suffix in ('.gmdl','.t3x') and not (p.suffix=='.gmdl' and p.stem.endswith('_000'))]
     (out/'receipt.json').write_text(json.dumps({'sources':hashes,'models':rows,'files':files},indent=2)+'\n')

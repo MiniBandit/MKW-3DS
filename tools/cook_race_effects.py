@@ -706,7 +706,7 @@ def cook(root, output, course_only=False, balloon_only=False, coin_only=False, c
                     queue.extend(n for n in records[name].references() if n not in records and n not in queue)
             elif hashes != reference:
                 raise ValueError('Battle coin archives differ: ' + course['key'])
-            coin_sources.append({'path': str(path.relative_to(root)), 'sha256': hashes[0], 'breft_sha256': hashes[1]})
+            coin_sources.append({'path': path.relative_to(root).as_posix(), 'sha256': hashes[0], 'breft_sha256': hashes[1]})
         if len(coin_sources) != 10: raise ValueError('Expected all ten original coin archives')
     texture_cache = {}
     # Course-only reentry must not expand the legacy aggregate resident bank.

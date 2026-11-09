@@ -17,7 +17,7 @@ def main():
     assert hashlib.sha256(source.read_bytes()).hexdigest()==before
     # Exclude the duplicate numbered model, but retain every texture in the
     # GMDL table: Model::load loads the entire table, including entry000.
-    files=[{'path':str(f.relative_to(out)),'sha256':hashlib.sha256(f.read_bytes()).hexdigest(),'bytes':f.stat().st_size} for folder in ('models','textures') for f in sorted((out/folder).iterdir()) if f.suffix in ('.gmdl','.dobj','.t3x') and not (folder=='models' and f.stem.endswith('_000'))]
-    (out/'receipt.json').write_text(json.dumps({'source':str(source.relative_to(ROOT)),'sourceSha256':before,'bank':info,'files':files,'purpose':'UI-local held-coin stacks, archive coin / model pile_coin, SRT0 selected by column count minus1'},indent=2)+'\n')
+    files=[{'path':f.relative_to(out).as_posix(),'sha256':hashlib.sha256(f.read_bytes()).hexdigest(),'bytes':f.stat().st_size} for folder in ('models','textures') for f in sorted((out/folder).iterdir()) if f.suffix in ('.gmdl','.dobj','.t3x') and not (folder=='models' and f.stem.endswith('_000'))]
+    (out/'receipt.json').write_text(json.dumps({'source':source.relative_to(ROOT).as_posix(),'sourceSha256':before,'bank':info,'files':files,'purpose':'UI-local held-coin stacks, archive coin / model pile_coin, SRT0 selected by column count minus1'},indent=2)+'\n')
     print('Staged original HUD coin stack with nonlinear SRT0 bank:',out)
 if __name__=='__main__':main()

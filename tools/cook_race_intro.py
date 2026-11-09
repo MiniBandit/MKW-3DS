@@ -75,7 +75,7 @@ def main():
         h.append(f'inline constexpr FlowControl {prefix}Control{{{f(v["x"])},{f(v["y"])},{f(v["sx"])},{f(v["sy"])},{f(v["delay"])}}};')
     h.append('}')
     (ROOT/'include/mkw/race_intro_layout.hpp').write_text('\n'.join(h)+'\n')
-    receipt={'version':1,'sourceCall':'RMCU 80833778: course/cup labels and message arguments','sources':{str(p.relative_to(ROOT)):digest(p) for p in sources},'templates':race,'courseMessageIds':ids,'controls':controls,'layouts':layouts,'font':info,'textures':{p:{'bytes':(out/p).stat().st_size,'sha256':digest(out/p)} for p in paths},'runtime':'Only font and current cup/mode icon resident during preview; target appearance not tested'}
+    receipt={'version':1,'sourceCall':'RMCU 80833778: course/cup labels and message arguments','sources':{p.relative_to(ROOT).as_posix():digest(p) for p in sources},'templates':race,'courseMessageIds':ids,'controls':controls,'layouts':layouts,'font':info,'textures':{p:{'bytes':(out/p).stat().st_size,'sha256':digest(out/p)} for p in paths},'runtime':'Only font and current cup/mode icon resident during preview; target appearance not tested'}
     (out/'receipt.json').write_text(json.dumps(receipt,indent=2)+'\n')
     print(json.dumps({'glyphs':len(glyphs),'fontAtlas':[atlas.width,atlas.height],'icons':len(icon_names),'courses':len(course_names),'packaged':False}))
 if __name__=='__main__':main()

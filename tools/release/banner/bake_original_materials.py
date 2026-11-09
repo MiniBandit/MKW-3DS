@@ -234,7 +234,7 @@ scene=dict(recipe=recipe,meshes=meshes,bakeFrame=BAKE_FRAME,camera=CAMERA.tolist
 (OUT/'baked_scene.json').write_text(json.dumps(scene,separators=(',',':'))+'\n')
 summary={k:v for k,v in scene.items() if k not in ('meshes','recipe')}
 summary['atlases']=[{k:m[k] for k in ('key','triangles','atlas','atlasSize','materials')} for m in meshes]
-summary['sources']={str(p.relative_to(WORK)):hashlib.sha256(p.read_bytes()).hexdigest()
+summary['sources']={p.relative_to(WORK).as_posix():hashlib.sha256(p.read_bytes()).hexdigest()
                     for p in (WORK/'source/menu_lighting').iterdir() if p.is_file()}
 summary['reference']='reference/original-menu-corrected-bumper.png'
 (OUT/'BAKE_RECEIPT.json').write_text(json.dumps(summary,indent=2)+'\n')

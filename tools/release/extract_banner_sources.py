@@ -49,7 +49,7 @@ def main():
                         '--file', source, '--to', str(archive)], check=True)
         subprocess.run([sys.executable, str(ROOT/'tools/unpack_szs.py'),
                         str(archive), str(output/'unpacked'/name)], check=True)
-        receipt['sources'][source] = {'archive': str(archive.relative_to(output)),
+        receipt['sources'][source] = {'archive': archive.relative_to(output).as_posix(),
                                      'sha256': hashlib.sha256(archive.read_bytes()).hexdigest()}
     (output/'banner-source-receipt.json').write_text(json.dumps(receipt, indent=2)+'\n')
     print('Extracted original banner model, animation, assembly and lighting inputs.')

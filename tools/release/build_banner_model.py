@@ -70,7 +70,7 @@ def main():
         for name in ['default.blight','default.blmap']:
             shutil.copyfile(unique(unpacked/'menu-lighting',name),lighting/name)
         inputs = [driver,kart,*common.rglob('*.bin'),*common.rglob('*.bsp'),*lighting.iterdir()]
-        (work/'banner-model-inputs.json').write_text(json.dumps({str(p.relative_to(work)):hashlib.sha256(p.read_bytes()).hexdigest() for p in inputs},indent=2)+'\n')
+        (work/'banner-model-inputs.json').write_text(json.dumps({p.relative_to(work).as_posix():hashlib.sha256(p.read_bytes()).hexdigest() for p in inputs},indent=2)+'\n')
     elif args.stage == 'scene':
         sys.path.insert(0,str(ROOT/'tools'))
         from cook_course_lighting import parse_blight, parse_blmap, header

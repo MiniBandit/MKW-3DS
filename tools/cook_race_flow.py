@@ -89,7 +89,7 @@ def cook_wipe(out, manifest, header):
     record = cook_image_sprite(wipe_mask(layout, tpl), 'flow_wipe', out)
     manifest['wipe'] = {'texture': record, 'frames': duration, 'scaleT': srt[4], 'translateT': translate,
                         'alphaEquation': '1 - textureAlpha',
-                        'sources': {str(p.relative_to(ROOT)): digest(p) for p in (layout, anim, tpl)}}
+                        'sources': {p.relative_to(ROOT).as_posix(): digest(p) for p in (layout, anim, tpl)}}
     header += [
         '// game_image/wipe.brlyt pane "Normal" (832x456, colour 0 black) with',
         '// ij_wipe_a clamped; wipe_Normal.brlan translates the texture T axis.',
@@ -533,7 +533,7 @@ def cook_results(out, manifest, header):
             v = source_variants[variant]
             header.append(f'    {{{f(v["x"])},{f(v["y"])},{f(v["sx"])},{f(v["sy"])},{f(v["delay"])}}},')
         header.append('}};')
-    manifest['results'] = {'textures': textures, 'sources': {str(p.relative_to(ROOT)): digest(p) for p in sources}}
+    manifest['results'] = {'textures': textures, 'sources': {p.relative_to(ROOT).as_posix(): digest(p) for p in sources}}
 
 
 def main():

@@ -15,10 +15,10 @@ def main():
     args=parser.parse_args();out=args.output.resolve();out.mkdir(parents=True,exist_ok=True)
     source_hashes={};files=[]
     def source(p):
-        key=str(p.relative_to(ROOT));sha=hashlib.sha256(p.read_bytes()).hexdigest()
+        key=p.relative_to(ROOT).as_posix();sha=hashlib.sha256(p.read_bytes()).hexdigest()
         if key in source_hashes and source_hashes[key]!=sha:raise ValueError('Source changed: '+key)
         source_hashes[key]=sha
-    def record(p):files.append({'path':str(p.relative_to(out)),'bytes':p.stat().st_size,'sha256':hashlib.sha256(p.read_bytes()).hexdigest()})
+    def record(p):files.append({'path':p.relative_to(out).as_posix(),'bytes':p.stat().st_size,'sha256':hashlib.sha256(p.read_bytes()).hexdigest()})
     def sprite(p,name):
         source(p);r=cook_image_sprite(decode_tpl(p),name,out);record(out/r['path']);return r
     def art(r):return '{'+','.join([json.dumps(r['path'])]+[f'{r[k]:.9f}f' for k in ('width','height','u','v')])+'}'

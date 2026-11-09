@@ -12,7 +12,7 @@ def main():
     parser.add_argument('--output',type=Path,default=ROOT/'build/battle-hud-motion')
     out=parser.parse_args().output.resolve();out.mkdir(parents=True,exist_ok=True)
     root=ROOT/'assets/race-ui/Race/game_image';sources={};files=[]
-    def source(path):sources[str(path.relative_to(ROOT))]=hashlib.sha256(path.read_bytes()).hexdigest();return path
+    def source(path):sources[path.relative_to(ROOT).as_posix()]=hashlib.sha256(path.read_bytes()).hexdigest();return path
     def value(tracks,name,kind,target,default,frame):
         return sample(tracks[name,kind,target],frame) if (name,kind,target) in tracks else default
     def rgba(values):return '0x'+''.join(f'{max(0,min(255,round(v))):02x}' for v in values)+'u'

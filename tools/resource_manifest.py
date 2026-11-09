@@ -503,4 +503,4 @@ import sys
 # fallback for anything not packed.
 for archive in ('menu.pak','race.pak'):
  if (assets/archive).is_file():files[assets/archive]=Path(archive)
-print(json.dumps({str(rel):str(src) for src,rel in files.items()},indent=2))
+print(json.dumps({rel.as_posix():str(src) for src,rel in files.items()},indent=2))

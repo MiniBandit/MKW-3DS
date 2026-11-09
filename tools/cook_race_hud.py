@@ -162,7 +162,7 @@ def cook_hud(root, output, manifest, sprite, image_sprite, digest):
         if label.encode("utf-16be")+b"\0\0" not in messages:
             raise ValueError("Countdown text missing from source BMG: " + label)
         record = image_sprite(glyphs[label], "hud_"+name, output)
-        record.update(source=str(font.relative_to(root)), source_sha256=digest(font), text=label)
+        record.update(source=font.relative_to(root).as_posix(), source_sha256=digest(font), text=label)
         extras[name] = record
 
     # The Blooper overlay lives in REFT/REFF, not the UI archive. Preserve its
@@ -179,7 +179,7 @@ def cook_hud(root, output, manifest, sprite, image_sprite, digest):
                        io.BytesIO(reft[offset+32+size:offset+32+size+psize]),
                        ImageFormat(fmt),PaletteFormat(pf),count,w,h).convert("RGBA")
     record = image_sprite(ink,"hud_ink",output)
-    record.update(source=str(reft_path.relative_to(root)), source_sha256=digest(reft_path), sourceTexture="gessoSumi2I4")
+    record.update(source=reft_path.relative_to(root).as_posix(), source_sha256=digest(reft_path), sourceTexture="gessoSumi2I4")
     extras["ink"] = record
     for name, file in [('chase_base','tt_chase_icon.tpl'),('chase_light','tt_chase_icon_light.tpl')]:
         extras[name] = sprite(ui/'timg'/file,'hud_'+name,output)
@@ -256,8 +256,8 @@ def cook_hud(root, output, manifest, sprite, image_sprite, digest):
     manifest["hudLayout"] = {"sourceCanvas":[832,456],"targetCanvas":[400,240],"uniformScale":scale,
                              "adaptation":"Uniform vertical scale; retain source left/right corner offsets at 5:3.",
                              "rectangles":rects,"countdownFrames":frames,
-                             "sources":[{"path":str(p.relative_to(root)),"sha256":digest(p)} for p in evidence]}
-    manifest["blooperPresentation"] = {"effect":ink_effect["name"], "definitionSource":str(reff_path.relative_to(root)),
+                             "sources":[{"path":p.relative_to(root).as_posix(),"sha256":digest(p)} for p in evidence]}
+    manifest["blooperPresentation"] = {"effect":ink_effect["name"], "definitionSource":reff_path.relative_to(root).as_posix(),
                                        "definitionSha256":digest(reff_path),"halfExtent":ink_effect["size"],
                                        "cameraTranslation":ink_effect["translate"],"frames":ink_frames,
                                        "limitations":["Central source splat only; additional randomized droplet emitters and indirect UV distortion are not implemented.",

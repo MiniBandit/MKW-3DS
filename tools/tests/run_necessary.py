@@ -22,7 +22,7 @@ def main():
   r=subprocess.run(cmd,capture_output=True,text=True)
   if not r.returncode:r=subprocess.run([str(exe),*([str(a.fixture.resolve())] if name=='retail_save' else [])],capture_output=True,text=True)
   (out/(name+'.log')).write_text(r.stdout+r.stderr)
-  row={'name':name,'passed':r.returncode==0,'exit':r.returncode,'inputs':{str(q.relative_to(ROOT)):hashlib.sha256(q.read_bytes()).hexdigest() for q in inputs}}
+  row={'name':name,'passed':r.returncode==0,'exit':r.returncode,'inputs':{q.relative_to(ROOT).as_posix():hashlib.sha256(q.read_bytes()).hexdigest() for q in inputs}}
   results.append(row);print(name,'PASS' if row['passed'] else 'FAIL',flush=True)
  (out/'receipt.json').write_text(json.dumps(results,indent=2)+'\n')
  raise SystemExit(not all(r['passed'] for r in results))

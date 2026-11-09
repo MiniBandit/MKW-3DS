@@ -80,4 +80,4 @@ def cook_awards(root, out, manifest, header):
     header.append('inline constexpr FlowAwardMessage FlowAwardMessages[]={' + ','.join(
         '{' + str(i) + ',' + json.dumps(text, ensure_ascii=True) + '}' for i, text in labels.items()) + '};')
     manifest['awards'] = {'textures': textures, 'controls': [x[0] for x in layouts],
-                          'sources': {str(p.relative_to(root)): digest(p) for p in sorted(set(sources))}}
+                          'sources': {p.relative_to(root).as_posix(): digest(p) for p in sorted(set(sources))}}

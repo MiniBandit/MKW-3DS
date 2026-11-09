@@ -72,7 +72,7 @@ def main():
     header += ['inline constexpr const char* BattleResultTextures[]={'+','.join(json.dumps(t) for t in textures)+'};','}','']
     output=ROOT/'include/mkw/battle_result_assets.hpp';output.write_text('\n'.join(header))
     path=out/texture
-    receipt={'sources':{str(p.relative_to(ROOT)):hashlib.sha256(p.read_bytes()).hexdigest() for p in sources},'files':[{'path':t,'bytes':(out/t).stat().st_size,'sha256':hashlib.sha256((out/t).read_bytes()).hexdigest()} for t in textures],
+    receipt={'sources':{p.relative_to(ROOT).as_posix():hashlib.sha256(p.read_bytes()).hexdigest() for p in sources},'files':[{'path':t,'bytes':(out/t).stat().st_size,'sha256':hashlib.sha256((out/t).read_bytes()).hexdigest()} for t in textures],
       'messages':{hex(i):m[i] for i in ids},'columns':columns,'headerSha256':hashlib.sha256(output.read_bytes()).hexdigest()}
     (out/'receipt.json').write_text(json.dumps(receipt,indent=2)+'\n');print('Staged original Battle result font/controls:',path)
 if __name__=='__main__':main()

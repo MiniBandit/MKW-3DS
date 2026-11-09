@@ -18,7 +18,7 @@ OUT=ROOT/'sd-card/3ds/mkw-3ds'
 UI=ROOT/'assets/menu-ui/MenuSingle'
 records={}; evidence={}; panel_records={}; pane_records={}; node_records={}; movie_records=[]; glow_records=[]; focus_records=[]; panel_layer_records={}; border_records=[]; border_slices=[]; runtime_palette=[]
 def source(p):
- key=str(p.relative_to(ROOT))
+ key=p.relative_to(ROOT).as_posix()
  if key not in evidence:evidence[key]=digest(p)
 def save(name,img,p=None):
  native_width,native_height=img.size
@@ -31,7 +31,7 @@ def save(name,img,p=None):
   with Image.open(target) as previous:
    cached=previous.size==tuple(padded) and previous.crop((0,0,width,height)).convert('RGBA').tobytes()==img.convert('RGBA').tobytes()
  r={'name':'ui_'+name,'path':'textures/ui_'+name+'.t3x','width':width,'height':height,'padded':padded,'u':width/padded[0],'v':height/padded[1]} if cached else cook_image_sprite(img,'ui_'+name,OUT)
- if p:source(p);r.update(source=str(p.relative_to(ROOT)),source_sha256=evidence[str(p.relative_to(ROOT))])
+ if p:source(p);r.update(source=p.relative_to(ROOT).as_posix(),source_sha256=evidence[p.relative_to(ROOT).as_posix()])
  if (native_width,native_height)!=(width,height):r.update(width=native_width,height=native_height,rasterWidth=width,rasterHeight=height)
  if name=='background':
   # One source row before/after content, filled periodically through POT padding.
@@ -122,7 +122,7 @@ def bake_border_loop(key,p,control,bindings,animations,animation_groups,render_a
    image.paste(images[entry['frame']].crop((l-1,t-1,r+1,b+1)),(px-1,py-1))
    border_slices.append(dict(frame=entry['frame'],key=atlas_key,rect=[rect[0]+l,rect[1]+t,r-l,b-t],uv=[px/w,py/h,(px+crop.width)/w,(py+crop.height)/h]))
   save(atlas_key,image,p)
- border_records.append(dict(key=key,control=control.stem,frames=period,duration=duration,rate=rate,center=[rect[0]+cx,rect[1]+cy,cw,ch],firstSlice=first_slice,sliceCount=len(border_slices)-first_slice,source=str(animations[index].relative_to(ROOT)),frameHashes=[hashlib.sha256(image.tobytes()).hexdigest() for image in images]))
+ border_records.append(dict(key=key,control=control.stem,frames=period,duration=duration,rate=rate,center=[rect[0]+cx,rect[1]+cy,cw,ch],firstSlice=first_slice,sliceCount=len(border_slices)-first_slice,source=animations[index].relative_to(ROOT).as_posix(),frameHashes=[hashlib.sha256(image.tobytes()).hexdigest() for image in images]))
 
 def bake_panel(name,resource,states=('free','select'),exclude=(),bounds=None,overrides=None,hidden=(),group_states=None):
  p=ROOT/'assets/menu-ui'/resource
@@ -328,7 +328,7 @@ def cook_movies():
     r=save(key+'_'+str(frame),im.resize(target,Image.Resampling.LANCZOS,box=box),path)
     r.update(movieFrame=frame_index,sourceCrop=list(box))
     if frame==0:records[key]=r
-  movie_records.append(dict(source=str(path.relative_to(ROOT)),fps=movie.fps,frames=movie.count,sampleFrames=[i*movie.count//16 for i in range(16)],regions=[dict(key=k,crop=list(b)) for k,b,t in regions],sector_h0_verified=True))
+  movie_records.append(dict(source=path.relative_to(ROOT).as_posix(),fps=movie.fps,frames=movie.count,sampleFrames=[i*movie.count//16 for i in range(16)],regions=[dict(key=k,crop=list(b)) for k,b,t in regions],sector_h0_verified=True))
 
 def cook_strap():
  from gclib.yaz0_yay0 import Yaz0
@@ -351,7 +351,7 @@ def main():
  # The values come from the original REL, not hand-picked UI colours.
  from verify_menu_retail import BASE,EXPECTED_HASH
  rel=ROOT/'build/itembox-retail.rel';source(rel)
- if evidence[str(rel.relative_to(ROOT))]!=EXPECTED_HASH:raise ValueError('Menu palette requires the audited RMCU REL')
+ if evidence[rel.relative_to(ROOT).as_posix()]!=EXPECTED_HASH:raise ValueError('Menu palette requires the audited RMCU REL')
  raw=rel.read_bytes()
  runtime_palette=[[list(struct.unpack_from('>4h',raw,0x8088fd18-BASE+slot*24+i*8)) for i in range(3)] for slot in range(6)]
  # Source audit retains every UI layout/controller/animation, including deferred pages.
@@ -528,7 +528,7 @@ def main():
  for archive in ['Title_U','MenuSingle_U','Present_U']:
   for p in sorted((ROOT/'assets/menu-ui'/archive/'message').glob('*.bmg')):
    if p.name.startswith('._'):continue
-   source(p);message_sources[str(p.relative_to(ROOT))]=messages(p)
+   source(p);message_sources[p.relative_to(ROOT).as_posix()]=messages(p)
    if message_font_indices(p)!={1}:raise ValueError('This localized menu font mapping requires BMG font index 1: '+str(p))
  menu_messages=message_sources['assets/menu-ui/MenuSingle_U/message/Menu.bmg']
  help_ids={'UiHelpMain':[0x7e4,0x7e5,0x7e8,0x7ea],'UiHelpMainMulti':[0x7e5,0x7e6,0x7e7],'UiHelpWfc':[0x7e8,0x7e9],'UiHelpMode':[0xbea,0xbeb,0xbec,0xbee],'UiHelpEngineClasses':[0xbf4,0xbf5,0xbf6,0xbf7],'UiHelpDrift':[0xd16,0xd17],'UiHelpVSMode':[0xd8c,0xd8b]}
@@ -720,7 +720,7 @@ def main():
  controller_paths += [ROOT/'assets/race-ui/Race/button/ctrl'/(name+'.brctr') for name in ['PauseMenuVS','PauseMenuGrandPrix','PauseMenuTimeAttack','PauseMenuBT']]
  for p in controller_paths:
   if p.name.startswith('._'):continue
-  source(p);data=controllers(p);ctr.setdefault(p.stem,{}).update(data);alphas.setdefault(p.stem,{}).update(controller_alphas(p));qualified_controllers[str(p.relative_to(ROOT))]=data
+  source(p);data=controllers(p);ctr.setdefault(p.stem,{}).update(data);alphas.setdefault(p.stem,{}).update(controller_alphas(p));qualified_controllers[p.relative_to(ROOT).as_posix()]=data
  manifest={'version':2,'canvas':{'width':608,'height':456,'artBleedWidth':832,'aspectAdjustScale':[608/832,1.0],'displayAspect':'16:9','target':'400x225 centered on top LCD; lower LCD unused'},'sprites':records,'maps':maps,'sourceHashes':evidence,'archiveInventory':inventory,'controllers':ctr,'controllerAlphas':alphas,'controllerSources':qualified_controllers,'messageSources':message_sources,'helpMessageIds':help_ids,'runtimePalette':{'source':'build/itembox-retail.rel','tableAddress':'0x8088fd18','slots':runtime_palette,'borderPane':'fuchi_pattern','basePane':'color_base'},'textStyles':text_styles,'driverStats':driver_stats,'vehicleStats':vehicle_stats,'panels':panel_records,'panes':pane_records,'paneNodes':node_records,'movies':movie_records,'glows':glow_records,'focusSprites':focus_records,'panelTails':list(panel_layer_records.values()),'borderLoops':border_records,'borderSlices':border_slices,'selectionScale60Hz':scales,'limitations':['This menu inventory uses 16 source samples across each retail loop for host previews and fallback. Full-rate streamed movies are cooked and receipted separately.','Offline pane rasterization supports 2D affine transforms and authored TEV arithmetic; live 3D preview objects are rendered separately.','Original font glyphs and spacing are retained; per-page dynamic text effects are runtime responsibilities.']}
  (OUT/'models/menu-ui.json').write_text(json.dumps(manifest,indent=2)+'\n')
  notice_header=['#pragma once','namespace mkw {','struct UiUnlockText {unsigned condition,bit;const char* title;const char* body;const char* kind;int retailId;};','inline constexpr UiUnlockText UiUnlockTexts[]={']

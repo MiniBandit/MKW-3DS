@@ -82,7 +82,7 @@ def main():
             for i in range(6):
                 im,_=bake(a.output/f'default-{i}',statue_material=material)
                 target=folder/f'default-{i}.png';im.save(target)
-                images.append(dict(index=i,image=str(target.relative_to(a.output)),sha256=hashlib.sha256(target.read_bytes()).hexdigest()))
+                images.append(dict(index=i,image=target.relative_to(a.output).as_posix(),sha256=hashlib.sha256(target.read_bytes()).hexdigest()))
             report['statues'].append(dict(course=course.name,images=images,
                 sourceHashes={n:hashlib.sha256((course/n).read_bytes()).hexdigest() for n in ['course.bmm','course.btiMat','course.btiEnv']},
                 policy='offline front-view material and reflection; race-view reflections are intentionally fixed'))

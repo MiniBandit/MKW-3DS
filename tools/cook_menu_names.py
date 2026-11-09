@@ -28,6 +28,6 @@ def cook():
   lines.append('{'+','.join([json.dumps(f'name_glyph_{r["code"]:04x}'),json.dumps(r['path']),*(f'{r[k]:.8f}f' for k in ('width','height','u','v')),json.dumps(chr(r['code'])), '0','0',str(r['padded'][0]*r['padded'][1]*4)])+'},')
  (ROOT/'include/mkw/menu_name_glyphs.hpp').write_text('\n'.join(lines)+'\n')
  (ROOT/'include/mkw/license_name_characters.hpp').write_text('#pragma once\n#include <algorithm>\n#include <cstdint>\n#include <iterator>\nnamespace mkw {\ninline constexpr std::uint16_t LicenseNameCharacters[]={'+','.join(str(r['code']) for r in records)+'};\ninline bool licenseNameCharacter(std::uint16_t c){return std::binary_search(std::begin(LicenseNameCharacters),std::end(LicenseNameCharacters),c);}\n}\n')
- (out/'models/menu-name-glyphs.json').write_text(json.dumps({'source':str(font.relative_to(ROOT)),'source_sha256':hashlib.sha256(data).hexdigest(),'glyphs':records},indent=2)+'\n')
+ (out/'models/menu-name-glyphs.json').write_text(json.dumps({'source':font.relative_to(ROOT).as_posix(),'source_sha256':hashlib.sha256(data).hexdigest(),'glyphs':records},indent=2)+'\n')
  print(f'{len(records)} original glyphs cooked; loaded individually by visible names')
 if __name__=='__main__':cook()

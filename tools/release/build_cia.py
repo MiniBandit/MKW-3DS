@@ -233,7 +233,8 @@ def stage_tools():
         if not need.exists():raise SystemExit(f'Missing {need}: install devkitPro 3ds-dev (https://devkitpro.org/wiki/Getting_Started)')
     # The bundled Citro3D needs a current libctru (CTR_ALIGN, #62).
     if b'CTR_ALIGN' not in (dkp/'libctru/include/3ds/types.h').read_bytes():
-        raise SystemExit('devkitPro is out of date: update it (devkitPro MSYS2 or a terminal: dkp-pacman -Syu), then run the builder again.')
+        raise SystemExit('devkitPro is out of date. Update it (in the devkitPro MSYS2 window or a terminal: dkp-pacman -Syu), then run the builder again. '
+                         'If that is not available, uninstall devkitPro and install the current version: https://devkitpro.org/wiki/Getting_Started')
     # Some of the Windows build tools can't open a path with non-English letters (#89).
     if os.name=='nt' and not str(ROOT).isascii():
         raise SystemExit(f'The builder folder\'s path has letters the build tools can\'t read ({ROOT}). Move the '

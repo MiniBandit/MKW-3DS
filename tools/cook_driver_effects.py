@@ -19,7 +19,7 @@ def cook(output,jobs=6):
         b=bank.read_bytes()
         if b[:4]!=b'DSKM' or int.from_bytes(b[4:8],'little') not in (5,6,7,8):raise ValueError('Missing original effect root: '+stem)
         metadata=json.loads(result.stdout)
-        return {'path':bank.relative_to(output).as_posix(),'source':str(source.relative_to(ROOT)),'sourceSha256':sha(source),'sha256':sha(bank),'bytes':len(b),'rootSlot':int.from_bytes(b[28:32],'little',signed=True),'paletteCount':metadata['palette'],'formatVersion':int.from_bytes(b[4:8],'little')}
+        return {'path':bank.relative_to(output).as_posix(),'source':source.relative_to(ROOT).as_posix(),'sourceSha256':sha(source),'sha256':sha(bank),'bytes':len(b),'rootSlot':int.from_bytes(b[28:32],'little',signed=True),'paletteCount':metadata['palette'],'formatVersion':int.from_bytes(b[4:8],'little')}
     with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as pool:files=list(pool.map(one,choices))
     receipt={'version':1,'garageSha256':sha(garage),'exporterSha256':sha(ROOT/'tools/export_driver.ts'),'files':files}
     (output/'receipt.json').write_text(json.dumps(receipt,indent=2)+'\n')
