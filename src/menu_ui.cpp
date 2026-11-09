@@ -1264,7 +1264,7 @@ static void composeMenuImpl(const MenuState& s,const UiRaceView& race,std::vecto
  }
  case UiPage::Ghost:{
   // The disc's staff ghosts for this course (the expert one once the staff
-  // ghost is beaten), the license's own ghost, then solo. Replays are deferred.
+  // ghost is beaten), the license's own ghost, then solo. Y watches a ghost's replay.
   c.timeTrialBest();
   const unsigned course=std::min(s.selection.course,31u);
   for(unsigned slot=0;slot<4;++slot){
@@ -1279,7 +1279,7 @@ static void composeMenuImpl(const MenuState& s,const UiRaceView& race,std::vecto
    std::snprintf(label,sizeof label,"%s %u:%02u.%03u",slot==2?"Your Ghost":slot?"Expert Staff Ghost":"Staff Ghost",ms/60000,ms/1000%60,ms%1000);
    const auto key=c.buttonState("ghost",slot);c.glyphText(label,key.c_str(),p);
   }
-  c.chrome("Time Trials");break;
+  c.chrome("Time Trials",s.cursor<3?"A: Race this ghost   Y: Watch replay":"");break;
  }
  case UiPage::DriftHelp:{
   c.group(UiMenuRole::Shade);c.panel("confirm_back",control("RaceConfirmBack","BlackBack"));

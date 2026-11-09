@@ -220,6 +220,9 @@ public:
     // Every KartMove::activateMushroom the items cause, per racer, whichever
     // item it came from (the Time Trials ghost recorder times them).
     static inline std::array<uint32_t,12> mushroomActivations{};
+    // Watch Replay: player 0 is a ghost, so Kinoko's KartItem keeps its Triple
+    // Mushroom and fires it from the ghost's inputs.
+    static inline bool ghostOwnsItems=false;
     unsigned rank(unsigned player) const;
     uint32_t frame() const { return frame_; }
     BlooperVisual blooperVisual(unsigned player,unsigned weight) const;

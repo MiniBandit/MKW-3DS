@@ -97,7 +97,7 @@ public:
  std::array<std::array<std::uint32_t,32>,4> ownGhostTimes{};
  std::uint32_t ownGhostTime(unsigned course)const{return course<32?ownGhostTimes[std::min(selection.license,3u)][course]:0;}
  // Ghost page choice: 0 alone, 1 staff ghost, 2 expert staff ghost, 3 own ghost.
- unsigned ghostChoice=0;
+ unsigned ghostChoice=0;bool watchGhost=false; // Y on a ghost row: watch its replay
  int selectRaceMiiRequest=-1;unsigned selectedMiiVoice=0;
  void confirmRaceMii(unsigned weight,unsigned character);
  unsigned driverWeight()const{return selection.driver<24?UiCharacters[selection.driver].weight:std::min(selection.miiWeight,2u);}

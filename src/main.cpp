@@ -178,6 +178,8 @@ static bool timeTrial=false;
 // Race/TimeAttack/ghostN/ghostN_comp_NN.rkg; both staff finish times decide
 // the license's beaten flags (RKPD +0x0c/+0x10).
 static unsigned staffGhost=0;
+// Watch Replay: the chosen ghost drives player 0 and nobody races it.
+static bool watchReplay=false;
 static std::vector<K::u8> staffGhostFile;
 static std::array<uint32_t,2> staffGhostTimes{};
 static uint32_t raceGhostTime=0; // finish time of the ghost being raced
@@ -309,9 +311,9 @@ static void configure(K::System::RaceConfig* config,void* context) {
     s.cpuDifficulty=uint8_t(selectedCpu);s.cpuVehicles=uint8_t(selectedCpuVehicles);s.itemMode=uint8_t(selectedItems);
     s.gameMode=static_cast<K::System::RaceConfig::Scenario::GameMode>(selectedRaceMode);
     s.teams=selectedTeams;s.humanTeam=uint8_t(selectedHumanTeam);s.battleType=coinRunnersMode?1:0;
-    if(fullRace){static_cast<mkw::RaceGrid*>(context)->configure(*config,selectedGarageIndex(),timeTrial?(staffGhost?2:1):12,selectedRoster.ready?&selectedRoster.choices:nullptr);for(unsigned i=0;i<s.playerCount;++i)s.players[i].startPosition=selectedStartPositions[i];s.players[0].driftIsAuto=automaticDrift;
+    if(fullRace){static_cast<mkw::RaceGrid*>(context)->configure(*config,selectedGarageIndex(),timeTrial?(staffGhost&&!watchReplay?2:1):12,selectedRoster.ready?&selectedRoster.choices:nullptr);for(unsigned i=0;i<s.playerCount;++i)s.players[i].startPosition=selectedStartPositions[i];s.players[0].driftIsAuto=automaticDrift;
         // RaceConfig::initControllers takes the ghost's racer and inputs from its file.
-        if(staffGhost){config->setGhost(staffGhostFile.data());s.players[1].type=K::System::RaceConfig::Player::Type::Ghost;}
+        if(staffGhost){config->setGhost(staffGhostFile.data());s.players[watchReplay?0:1].type=K::System::RaceConfig::Player::Type::Ghost;}
         return;}
     auto& p=s.players[0];p.type=K::System::RaceConfig::Player::Type::Local;
     const auto& driver=selectedVehicle();
@@ -1544,6 +1546,14 @@ int main() {
         if(staffGhost==3)raceGhostTime=readOwnGhost(activeLicense,courseChoice,&staffGhostFile);
         else if(staffGhost)raceGhostTime=staffGhostTimes[staffGhost-1];
         if(staffGhost&&!raceGhostTime){report("FAIL ghost file: racing alone");staffGhost=0;}
+        // Watch Replay: player 0 takes the ghost's driver, vehicle and drift.
+        watchReplay=false;
+        if(staffGhost&&menu.watchGhost){
+            K::System::RawGhostFile raw(staffGhostFile.data());K::System::GhostFile ghost(raw);
+            for(unsigned c=0;c<mkw::GarageChoices.size();++c)if(mkw::raceGarageChoice(c).character==unsigned(ghost.character())&&mkw::raceGarageChoice(c).vehicle==unsigned(ghost.vehicle())){
+                driverChoice=c/mkw::VehiclesPerDriver;vehicleChoice=c%mkw::VehiclesPerDriver;automaticDrift=ghost.driftIsAuto();watchReplay=true;break;}
+            if(!watchReplay)report("WARN ghost racer not in the garage: racing it instead");
+        }
     };
     // DIAG: the KRKG trace test runs before the menus (no course choice needed).
     if(kQa&&exists("Race/Common.szs")&&exists("sdmc:/3ds/mkw-3ds/trace-test.txt")) {
@@ -2074,7 +2084,7 @@ int main() {
                 if(balloonBattle.replenish(unsigned(racer)))balloonRuntime.replenish(unsigned(racer));
         },nullptr);
         if(!raceGrid.reset()){trackLoadFailed=true;report("FAIL course CPU route: race suspended; choose another map");}
-        raceItems->resetFromCourse(raceGrid.itemCount());
+        mkw::RaceItems::ghostOwnsItems=watchReplay;raceItems->resetFromCourse(raceGrid.itemCount());
         if(battleMode&&!raceGrid.ai().setBattleSources(*raceItems,coinRunnersMode?&coinBattle:nullptr)){
             trackLoadFailed=true;report("FAIL original battle search graph");
         }
@@ -2086,7 +2096,7 @@ int main() {
             if(!balloonRuntime.reset(raceGrid.count(),teams)){trackLoadFailed=true;report("FAIL original balloon models");}
         }
         // A staff ghost is no item racer: Kinoko's KartItem replays its own Triple Mushroom.
-        if(timeTrial){raceItems->reset({},raceGrid.itemCount());raceItems->give(0,mkw::ItemKind::TripleMushroom);}
+        if(timeTrial){raceItems->reset({},raceGrid.itemCount());if(!watchReplay)raceItems->give(0,mkw::ItemKind::TripleMushroom);}
         // DIAG: the grid, items and AI apart from the opponents' graphics (logged as "grid and opponents").
         if(reload)stage("grid, items and AI");
         if(reload){if(!opponents.load()){trackLoadFailed=true;report("FAIL opponent graphics load");}}
@@ -2940,7 +2950,7 @@ int main() {
                     }
                     raceGrid.driveLocal=afterGoal||(autoplay&&autopilot->routeDrive());
                     std::array<mkw::ItemInput,12> inputs{};inputs[0]={bool(held&KEY_L),mkw::circlePadThrowBack(pad.dy),pad.dy > 40};
-                    if(afterGoal)inputs[0]={};
+                    if(afterGoal||watchReplay)inputs[0]={};
                     else if(raceGrid.driveLocal){
                         inputs[0]=raceItems->autoItemInput(0);
                         // The CPU route threads between boxes: QA rolls the item roulette instead
@@ -3031,7 +3041,7 @@ int main() {
                                  in.stick.x,int(st.onBit(St::Hop)),int(move->hopStickX()),int(st.onBit(St::DriftInput)),int(st.onBit(St::AutoDrift)));report(line);}
                 // QA: a fall boundary (variant 0) activation, so the retail SetCamera hold applies.
                 if(autoplay&&lakituRespawnStep&&physicsSteps==lakituRespawnStep){auto* qaCollide=K::Kart::KartObjectManager::Instance()->object(0)->collide();qaCollide->setOobCameraPending(uint16_t(lakituRequest));qaCollide->activateOob(false,nullptr,false,false);}
-                const bool ghostTick=fullRace&&timeTrial&&!replay&&K::System::RaceManager::Instance()->isStageReached(K::System::RaceManager::Stage::Countdown)&&
+                const bool ghostTick=fullRace&&timeTrial&&!replay&&!watchReplay&&K::System::RaceManager::Instance()->isStageReached(K::System::RaceManager::Stage::Countdown)&&
                     !K::System::RaceManager::Instance()->player(0).finished();
                 // Time Trials: the scene stands still while Kinoko's intro is
                 // held. Ghosts are recorded with 172 scene frames between the
@@ -3218,7 +3228,9 @@ int main() {
                             race->endBattle(order);
                         }
                         raceEvents.emit(mkw::RaceEvent::Finish,physicsSteps,int(battleMode?battleRank(0):raceGrid.rank()));results.finish(timeTrial);
-                        if(!qaMode&&!replay&&selectedRaceMode<=2){
+                        // Sync check: a watched ghost must finish on the time in its file.
+                        if(watchReplay){const auto& t=race->player(0).raceTimer();LOGF("watch replay finish course=%u record=%u replay=%u",courseChoice,unsigned(raceGhostTime),unsigned(uint32_t(t.min)*60000u+uint32_t(t.sec)*1000u+uint32_t(t.mil)));}
+                        if(!qaMode&&!replay&&!watchReplay&&selectedRaceMode<=2){
                             // Catalog choice -> original vehicle ID (type * 3 + weight).
                             constexpr unsigned vehicleTypes[]={0,1,2,6,7,8,3,4,5,9,10,11};
                             const unsigned vehicle=vehicleChoice<12?selectedVehicle().vehicle:36;
@@ -3227,7 +3239,7 @@ int main() {
                                 raceSavePending=true;
                             }
                         }
-                        if(timeTrial&&courseChoice<bestTimes.size()){
+                        if(timeTrial&&!watchReplay&&courseChoice<bestTimes.size()){
                             const auto& t=race->player(0).raceTimer();const uint32_t ms=uint32_t(t.min)*60000u+uint32_t(t.sec)*1000u+uint32_t(t.mil);
                             if(ms&&(!bestTimes[courseChoice]||ms<bestTimes[courseChoice])){bestTimes[courseChoice]=ms;licenseSaves[activeLicense].times=bestTimes;menu.licenseBestTimes[activeLicense]=bestTimes;raceSavePending=true;}
                             // Beating the staff ghost's time unlocks the expert staff ghost here.
@@ -3471,7 +3483,7 @@ int main() {
                 // Not Shocked: it lasts the whole shrink; the damage motion follows the strike's action.
                 signals.hit=kart->status().onBit(K::Kart::eStatus::InAction,K::Kart::eStatus::Burnout);
                 signals.finished=fullRace?raceGrid.finished():K::System::RaceManager::Instance()->stage()==K::System::RaceManager::Stage::FinishGlobal;
-                if(fullRace)signals.finishType=mkw::driverFinishType(raceGrid.rank(),K::System::RaceConfig::Instance()->raceScenario().playerCount);
+                if(fullRace)signals.finishType=watchReplay?0:mkw::driverFinishType(raceGrid.rank(),K::System::RaceConfig::Instance()->raceScenario().playerCount);
                 signals.accelerating=kart->status().onBit(K::Kart::eStatus::Accelerate);signals.braking=kart->status().onBit(K::Kart::eStatus::Brake);
                 signals.countdown=unsigned(K::System::RaceManager::Instance()->stage())<=1;
                 if(fullRace){mkw::driverItemSignals(signals,*raceItems,0);driverCollisionLooks[0].apply(signals,driverChoice);}
@@ -3798,11 +3810,11 @@ int main() {
                                 in.bike,status.onBit(St::ChargingSSMT),move->ssmtCharged(),status.onBit(St::StickLeft)?-1:status.onBit(St::StickRight)?1:0,
                                 racer->collisionData(rearL).bFloor,racer->collisionData(rearR).bFloor,
                                 intro.active(),in.beforeRespawn||in.bullet,
-                                K::System::RaceConfig::Instance()->raceScenario().players[i].type==K::System::RaceConfig::Player::Type::Ghost,
+                                (!(watchReplay&&i==0)&&K::System::RaceConfig::Instance()->raceScenario().players[i].type==K::System::RaceConfig::Player::Type::Ghost),
                                 kartFxLod.lod.lod(i));
                             fxLap(sp::FxWheelSpin);
                             brakeEffects.step(raceEffects,i,landingFrame,vec(racer->wheelPos(rearR)),
-                                in.bike,i==0,K::System::RaceConfig::Instance()->raceScenario().players[i].type==K::System::RaceConfig::Player::Type::Ghost,
+                                in.bike,i==0,(!(watchReplay&&i==0)&&K::System::RaceConfig::Instance()->raceScenario().players[i].type==K::System::RaceConfig::Player::Type::Ghost),
                                 status.onBit(St::Brake),status.onBit(St::Accelerate),unsigned(move->driftState()),status.onBit(St::DriftAuto),
                                 racer->speed(),racer->collisionData(rearR).bFloor,intro.active(),in.beforeRespawn||in.bullet,kartFxLod.lod.lod(i));
                             fxLap(sp::FxBrake);

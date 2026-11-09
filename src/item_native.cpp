@@ -422,7 +422,7 @@ void RaceItems::resetFromCourse(unsigned count,uint32_t seed){
     const auto& scenario=K::System::RaceConfig::Instance()->raceScenario();
     loadOdds(odds,oddsSize,itemMode,scenario.gameMode==K::System::RaceConfig::Scenario::GameMode::Battle,scenario.battleType==1);
     if(itemMode==3){boxes_.clear();movers_.clear();lines_.clear();presses_.clear();}
-    for(unsigned i=0;i<count_;++i){K::Item::ItemDirector::Instance()->kartItem(i).clear();(void)K::Item::ItemDirector::Instance()->kartItem(i).takeLossRequests();}
+    for(unsigned i=ghostOwnsItems?1:0;i<count_;++i){K::Item::ItemDirector::Instance()->kartItem(i).clear();(void)K::Item::ItemDirector::Instance()->kartItem(i).takeLossRequests();}
     K::Kart::KartCollide::SetItemCollisionHook(&RaceItems::nativeKartPass,this);
     K::Kart::KartCollide::SetKartBumpHook(&RaceItems::nativeKartBump,this);
     K::Item::ItemDirector::SetCoursePickupHook([](void* context,const K::EGG::Vector3f& position,
@@ -445,7 +445,7 @@ void RaceItems::beforeStepNative(const ItemInput* inputs,unsigned count,bool act
     std::array<ItemRacer,MaxRacers> states;snapshotNative(count,states);
     beforeStep(states.data(),inputs,count,active,bulletNoEndPlayers);
     // Kinoko's own time-trial item controller never holds anything in a race.
-    for(unsigned i=0;i<count_;++i)K::Item::ItemDirector::Instance()->kartItem(i).inventory().clear();
+    for(unsigned i=ghostOwnsItems?1:0;i<count_;++i)K::Item::ItemDirector::Instance()->kartItem(i).inventory().clear();
 }
 void RaceItems::afterStepNative(unsigned count){
     // Retail Item globals read RaceManager +0x20, not the active-item clock.
