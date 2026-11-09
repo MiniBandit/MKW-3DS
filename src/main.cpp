@@ -651,6 +651,7 @@ int main() {
     renderer.drawDistance=!exists("sdmc:/3ds/mkw-3ds/no-draw-distance.txt");
     renderer.spatialCourse=!exists("sdmc:/3ds/mkw-3ds/no-spatial-course.txt");
     mkw::shrinkHudTextures=!exists("sdmc:/3ds/mkw-3ds/no-hud-shrink.txt");
+    mkw::fakeBoxRainbow=!exists("sdmc:/3ds/mkw-3ds/no-fakebox-rainbow.txt");
     renderer.skyLast=!exists("sdmc:/3ds/mkw-3ds/no-sky-last.txt");
     renderer.plainUv=!exists("sdmc:/3ds/mkw-3ds/no-plain-uv.txt");
     renderer.fastVertex=!exists("sdmc:/3ds/mkw-3ds/no-fast-vertex.txt");

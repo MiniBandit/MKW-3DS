@@ -34,7 +34,9 @@ namespace mkw {
 namespace {
 // Retail itembox / itemBoxNise materials (layout generated from the BRRES).
 struct BoxMaterial { Renderer* renderer; const Model* model; const ItemBoxLayout* layout;
-    const std::array<std::array<float,6>,300>* inner; C3D_Mtx transform; unsigned frame; bool sparkle; float environmentBlend,opacity=1.f; };
+    const std::array<std::array<float,6>,300>* inner; C3D_Mtx transform; unsigned frame; bool sparkle; float environmentBlend,opacity=1.f;
+    // itemBoxNise: mat_boxin's lerp weight toward its rainbow layer (GX A0), and the pass that adds that layer.
+    uint8_t rainbow=0; bool rainbowLayer=false; };
 constexpr float ShellWarningDistance=6000.f;
 float boxEnvironmentBlend(Vec3 position,Vec3 viewer){
     const Vec3 delta=position-viewer;
@@ -64,14 +66,22 @@ void bindBox(void* context,std::size_t submesh){
     C3D_TexEnvColor(e0,0xffffffff);C3D_TexEnvSrc(e0,C3D_Alpha,GPU_CONSTANT);C3D_TexEnvFunc(e0,C3D_Alpha,GPU_REPLACE);
     if(submesh==L.inner){
         // mat_boxin: weight*TEXC, environment mapped; GX cull front shows the far inner walls.
-        float srt[6];const auto& f=(*m.inner)[m.frame%m.inner->size()];for(unsigned i=0;i<6;++i)srt[i]=f[i];
+        // itemBoxNise lerps it toward its rainbow layer by A0 (m.rainbow): (1-A0)*TEXC here, then
+        // the rainbow pass adds A0*layer over the same depth.
+        float srt[6];const auto& f=(*m.inner)[m.frame%m.inner->size()];for(unsigned i=0;i<6;++i)srt[i]=m.rainbowLayer?L.rainbowSRT[i]:f[i];
         environment(srt);
-        C3D_TexBind(1,texture(L.innerTexture,GPU_REPEAT));
-        C3D_TexEnvColor(e0,0xff000000u|L.innerWeight*0x010101u);
+        C3D_TexBind(1,m.rainbowLayer?texture(L.rainbowTexture,GPU_CLAMP_TO_EDGE):texture(L.innerTexture,GPU_REPEAT));
+        const uint32_t weight=m.rainbowLayer?m.rainbow:L.innerWeight*(255u-m.rainbow)/255u;
+        C3D_TexEnvColor(e0,0xff000000u|weight*0x010101u);
         C3D_TexEnvSrc(e0,C3D_RGB,GPU_TEXTURE1,GPU_CONSTANT);C3D_TexEnvFunc(e0,C3D_RGB,GPU_MODULATE);
         m.renderer->setMaterialCullNow(GPU_CULL_BACK_CCW);
-        C3D_AlphaBlend(GPU_BLEND_ADD,GPU_BLEND_ADD,GPU_ONE,GPU_ZERO,GPU_ONE,GPU_ZERO);
-        C3D_DepthTest(true,GPU_GEQUAL,GPU_WRITE_ALL);
+        if(m.rainbowLayer){
+            C3D_AlphaBlend(GPU_BLEND_ADD,GPU_BLEND_ADD,GPU_ONE,GPU_ONE,GPU_ZERO,GPU_ONE);
+            C3D_DepthTest(true,GPU_GEQUAL,GPU_WRITE_COLOR);
+        }else{
+            C3D_AlphaBlend(GPU_BLEND_ADD,GPU_BLEND_ADD,GPU_ONE,GPU_ZERO,GPU_ONE,GPU_ZERO);
+            C3D_DepthTest(true,GPU_GEQUAL,GPU_WRITE_ALL);
+        }
     }else if(submesh==L.question){
         // mat_question: lerp(low, high, TEXC), alpha TEXA tested >= reference.
         C3D_TexBind(0,texture(L.questionTexture,GPU_CLAMP_TO_EDGE));
@@ -157,9 +167,16 @@ void bakeBoxEnvironment(Model& model,const ItemBoxLayout& layout){
 void drawBox(Renderer& renderer,const Model& model,const ItemBoxLayout& layout,const std::array<std::array<float,6>,300>& inner,const C3D_Mtx& t,unsigned frame,float sparkle=1.f,float environmentBlend=1.f){
     const float blend=std::clamp(environmentBlend,0.f,1.f);
     BoxMaterial m{&renderer,&model,&layout,&inner,t,frame,false,0.f};
+    if(layout.rainbowTexture>=0&&fakeBoxRainbow){
+        // ItemObjFib (PAL 0x807A7D90): A0 = 255 * (camera distance - 3000) / (6000 - 3000),
+        // clamped and truncated; far fake boxes take the real boxes' rainbow.
+        const Vec3 d=Vec3{t.r[0].w,t.r[1].w,t.r[2].w}-renderer.cameraPosition();
+        m.rainbow=uint8_t(std::clamp(255.f*(std::sqrt(dot(d,d))-3000.f)/3000.f,0.f,255.f));
+    }
     if(blend<1.f)renderer.draw(model,t,false,bindBox,m,innerOnly);
     if(blend>0.f){m.environmentBlend=1.f;m.opacity=blend;renderer.draw(model,t,false,bindBox,m,innerOnly);}
     m.opacity=1.f;
+    if(m.rainbow){m.rainbowLayer=true;m.environmentBlend=blend>0.f?1.f:0.f;renderer.draw(model,t,false,bindBox,m,innerOnly);m.rainbowLayer=false;}
     renderer.clearEnvironmentUv();
     const C3D_Mtx question=questionBillboard(renderer,t);
     renderer.draw(model,question,false,bindBox,m,questionOnly);
