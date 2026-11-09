@@ -256,6 +256,9 @@ private:
     std::vector<ItemBoxPress> presses_;
     struct RoadBox {const Kinoko::Field::ObjectDrivable* road=nullptr;Vec3 local{};uint16_t box=0;float lift=180;};
     std::vector<RoadBox> roadBoxes_;
+    // An s_itembox that landed on a moving object and keeps its offset from it.
+    struct RideBox {const Kinoko::Field::ObjectDrivable* object=nullptr;uint16_t box=0;Vec3 offset{};};
+    std::vector<RideBox> rides_;
     void stepMovers();
     void resolveCourseObjects(ItemActor& actor);
     void resolveHeldCourseObjects(unsigned player);

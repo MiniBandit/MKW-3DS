@@ -252,6 +252,37 @@ void RaceItems::nativeCoursePickup(void* context,Vec3 position,Vec3 velocity,uin
     a.scale=.7f;a.radius=33.f*a.scale;a.terrainRadius=27.f*a.scale;a.ownerImmunity=7;
 }
 namespace {
+// One s_itembox drop step as retail runs it (init RMCP 80829280): CollisionDirector::
+// checkSphereFullPush (0x8078F784) with the box's ride record, which ObjDrivableManager
+// (0x8081BFA0) hands to each drivable near the sphere. A drivable that hits takes the record
+// when the deepest collision entry so far is deeper than the one it holds (ObjectKCL 0x8081AFB4,
+// VolcanoPiece 0x808199A8 -> 0x807BD7D8, from 0). push is the hit's tangentOff.
+struct BoxDrop{bool hit=false;Vec3 push{};const K::Field::ObjectDrivable* ride=nullptr;};
+BoxDrop dropStep(Vec3 at){
+    auto* director=K::Field::CollisionDirector::Instance();
+    const K::Field::KCLTypeMask types=K::Field::KCLTypeMask(0x6cebdfff);
+    const auto p=sourceVec(at);
+    K::Field::CollisionInfo info{};info.reset();K::Field::KCLTypeMask mask=0;
+    director->resetCollisionEntries(&mask);
+    BoxDrop d;float held=0;
+    d.hit=K::Field::CourseColMgr::Instance()->checkSphereFullPush(1.f,ItemBoxRadius,nullptr,p,K::EGG::Vector3f::inf,types,&info,&mask);
+    if(!K::Field::ObjectDrivableDirector::Instance()->objects().empty()){
+        auto* units=K::Field::BoxColManager::Instance();units->search(ItemBoxRadius,p,K::Field::eBoxColFlag::Drivable);
+        while(auto* obj=units->getNextDrivable()){
+            if(!obj->checkSphereFullPush(ItemBoxRadius,p,K::EGG::Vector3f::inf,types,&info,&mask,0))continue;
+            d.hit=true;
+            if(mask)director->findClosestCollisionEntry(&mask,K::Field::KCLTypeMask(0xffffffff));
+            if(const auto* e=director->closestCollisionEntry();e&&e->dist>held){held=e->dist;d.ride=obj;}
+        }
+    }
+    if(d.hit)d.push=nativeVec(info.bbox.min+info.bbox.max);
+    return d;
+}
+// Drivables whose ride slots are the ObjectKCL ones (VolcanoRock 0x808D6868, VolcanoPiece
+// 0x808D5150): the box keeps its offset from the object's position (0x807FEA60, 0x806813D8).
+bool ridesPosition(const K::Field::ObjectDrivable& obj){
+    return obj.id()==K::Field::ObjectId::VolcanoRock||obj.id()==K::Field::ObjectId::VolcanoPiece;
+}
 float roadBoxAngle(const K::Field::ObjectDrivable& road,float z){
     const auto* race=K::System::RaceManager::Instance();
     const unsigned frame=race->isStageReached(K::System::RaceManager::Stage::Race)?race->timer():
@@ -263,6 +294,8 @@ float roadBoxAngle(const K::Field::ObjectDrivable& road,float z){
 }
 void RaceItems::stepMovers(){
     using Status=K::Field::RailInterpolator::Status;
+    // s_itembox on a drivable (calc 8082945c): the object's position plus the landing offset.
+    for(const auto& r:rides_)boxes_[r.box].position=nativeVec(r.object->pos())+r.offset;
     // s_itembox updates its bound road point even while its box is respawning.
     for(const auto& binding:roadBoxes_){
         auto& box=boxes_[binding.box];Vec3 local=binding.local;
@@ -332,7 +365,7 @@ void RaceItems::stepMovers(){
 }
 void RaceItems::resetFromCourse(unsigned count,uint32_t seed){
     std::vector<ItemBox> boxes;const auto* map=K::System::CourseMap::Instance();
-    std::vector<ItemBoxMover> movers;std::vector<ItemBoxLine> lines;std::vector<RoadBox> roadBoxes;
+    std::vector<ItemBoxMover> movers;std::vector<ItemBoxLine> lines;std::vector<RoadBox> roadBoxes;std::vector<RideBox> rides;
     for(unsigned i=0;i<map->getGeoObjCount();++i){const auto* obj=map->getGeoObj(i);if(!(obj->presenceFlag()&1))continue;
         const unsigned id=obj->id();
         if(id==0x65){
@@ -344,6 +377,20 @@ void RaceItems::resetFromCourse(unsigned count,uint32_t seed){
             // s_itembox (RMCP 80829280) drops from its placement in 50-unit
             // steps onto the floor below, then hovers like a regular box. It
             // stays where it landed; retail also rides moving roads with it.
+            {
+                // On Grumble Volcano's rocks and sinking road pieces it lands from its ObjItemBox
+                // position (placement + (0,180 + setting 6,0), 808285b0), moves by -tangentOff
+                // and then rides the object.
+                const int16_t lift=int16_t(obj->setting(6));
+                Vec3 drop=nativeVec(obj->pos())+Vec3{0,ItemBoxHeight+float(lift),0};
+                BoxDrop landed;
+                for(;drop.y>0;drop.y-=50)if((landed=dropStep(drop)).hit)break;
+                if(landed.hit&&landed.ride&&ridesPosition(*landed.ride)){
+                    const ItemBox box=courseItemBox(drop-landed.push,lift,i);
+                    rides.push_back({landed.ride,uint16_t(boxes.size()),box.position-nativeVec(landed.ride->pos())});
+                    boxes.push_back(box);continue;
+                }
+            }
             Vec3 at=nativeVec(obj->pos());
             for(unsigned step=0;step<1000;++step){
                 K::Field::CollisionInfo info{};info.reset();K::Field::KCLTypeMask mask=0;
@@ -412,7 +459,7 @@ void RaceItems::resetFromCourse(unsigned count,uint32_t seed){
     static NativeKarts native;
     setKarts(&native);
     reset(boxes,count,seed);
-    movers_=std::move(movers);lines_=std::move(lines);presses_=std::move(presses);roadBoxes_=std::move(roadBoxes);
+    movers_=std::move(movers);lines_=std::move(lines);presses_=std::move(presses);roadBoxes_=std::move(roadBoxes);rides_=std::move(rides);
     for(const auto& p:presses_)boxes_[p.box].active=false;
     for(const auto& m:movers_)if(m.kind==ItemBoxMover::Kind::Line)boxes_[m.box].active=false;
     size_t kmpSize=0;const void* kmp=K::System::ResourceManager::Instance()->getFile("course.kmp",&kmpSize,K::System::ArchiveId::Course);
