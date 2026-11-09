@@ -300,14 +300,15 @@ void RaceItems::updateHeldItems(unsigned player,ItemWorldQuery query){
     if(state.age<65535)++state.age;
     // The source computes positions using the previous tick's terrain volume,
     // then grows the object and updates its separate contact volume.
+    const Vec3 heldY=heldUp(state.up,racer);
     if(trailing(h.heldKind)){
         const float terrain=prop.terrain*state.scales[0]*racer.scale.y;
         const float oldHop=state.trailing.hop;
-        state.trailing.step(trailingPose(racer,terrain),h.heldCharges);
+        state.trailing.step(trailingPose(racer,heldY,terrain),h.heldCharges);
         for(unsigned slot=0;slot<h.heldCharges;++slot){
             Vec3 position=state.trailing.positions[slot];
             const float slotTerrain=prop.terrain*state.scales[slot]*racer.scale.y;
-            if(slot)position+=racer.up*(slotTerrain-terrain);
+            if(slot)position+=heldY*(slotTerrain-terrain);
             state.trailing.positions[slot]=position;
             const auto surface=query&&!racer.inCannon?query(state.previous[slot],position,slotTerrain):ItemSurface{};
             // Cannon KCL destroys released actors, not items tethered to the
@@ -317,7 +318,7 @@ void RaceItems::updateHeldItems(unsigned player,ItemWorldQuery query){
             state.positions[slot]=state.trailing.positions[slot];
             // 27d9b8/27da58: rear-facing traps, forward-facing shells, spring
             // tilt from hop displacement, and .08 up-vector response.
-            const Vec3 up=heldUp(racer),forward=heldForward(racer,up);
+            const Vec3 up=heldY,forward=heldForward(racer,up);
             Vec3 facing=normalized(forward+state.trailing.backward*2+Vec3{0,-.0007f*state.trailing.hop*(state.trailing.hop-oldHop),0},-forward);
             if(h.heldKind==ItemKind::GreenShell||h.heldKind==ItemKind::RedShell)facing=-facing;
             state.ups[slot]=normalized(lerp(state.ups[slot],up,.08f),up);
@@ -330,13 +331,19 @@ void RaceItems::updateHeldItems(unsigned player,ItemWorldQuery query){
         }
         return;
     }
-    // 27f654: slot orbit and model spin are independent uint16 angles.
-    if(state.angularSpeed<1200)state.angularSpeed+=70;
-    state.angle+=state.angularSpeed;state.spin+=2000;
+    // 27f654: slot orbit and model spin are independent uint16 angles. In an action the ring
+    // stops and its speed resets; a trick slows it to .7.
+    if(racer.inAction)state.angularSpeed=0;
+    else{
+        if(racer.trickRotating)state.angularSpeed=uint16_t(float(state.angularSpeed)*.7f);
+        if(state.angularSpeed<1200)state.angularSpeed+=70;
+        state.angle+=state.angularSpeed;
+    }
+    state.spin+=2000;
     state.radiusX+=.2f*((racer.itemGeometry[1]+30)*racer.scale.z-state.radiusX);
     state.radiusZ+=.2f*((racer.itemGeometry[0]+30)*racer.scale.x-state.radiusZ);
     state.hop=(state.hop+.4f*racer.hop)*.8f;
-    const Vec3 up=heldUp(racer),forward=heldForward(racer,up);
+    const Vec3 up=heldY,forward=heldForward(racer,up);
     const Vec3 right=normalized(cross(up,forward),{1,0,0});
     const Vec3 center=racer.position+forward*(racer.itemGeometry[3]*racer.scale.z)+up*(racer.itemGeometry[2]*racer.scale.y+prop.terrain*state.scales[0]*racer.scale.y+state.hop-racer.hop);
     for(unsigned slot=0;slot<3;++slot)if(h.heldMask&(1u<<slot)){
@@ -447,7 +454,8 @@ void RaceItems::use(unsigned player,bool backwards){
         h.deployed=true;h.heldKind=kind;h.heldCharges=h.charges;h.heldMask=uint8_t((1u<<h.charges)-1);
         h.item=ItemKind::None;h.charges=0;deployments_[player]={};
         auto& state=deployments_[player];
-        if(trailing(kind)){state.trailing.init(trailingPose(racers_[player]));state.positions=state.trailing.positions;}
+        state.up=normalized(racers_[player].up,{0,1,0});heldUp(state.up,racers_[player]);
+        if(trailing(kind)){state.trailing.init(trailingPose(racers_[player],state.up));state.positions=state.trailing.positions;}
         else state.positions.fill(racers_[player].position);
         // TripleTrailPrepare 8078a534 / SpinPrepare 8078b664: SE_ITM_EQUIP for the triples.
         if(!singleHeld(kind))sound(ItemSoundCue::Equip,player,kind,racers_[player].position);

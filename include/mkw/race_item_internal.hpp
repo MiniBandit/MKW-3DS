@@ -24,12 +24,18 @@ inline Vec3 itemMotion(const ItemRacer& r){return r.haveVelocity?r.velocity:norm
 // Held items ride the kart's smoothed ground normal (KartMove +0x38), not its body,
 // so a bike's lean, a wheelie or a trick spin never tips them into the road.
 inline Vec3 heldUp(const ItemRacer& r){return normalized(r.smoothedUp,normalized(r.up,{0,1,0}));}
+// The held items' up axis (Item::PlayerObj +0x64) eases .2 toward the body's up in an action
+// or trick (status 32, 47, 54), else toward KartMove's smoothed up.
+inline Vec3 heldUp(Vec3& up,const ItemRacer& r){
+    up=normalized(up+((r.inAction||r.trickRotating?r.up:r.smoothedUp)-up)*.2f,heldUp(r));
+    return up;
+}
 inline Vec3 heldForward(const ItemRacer& r,Vec3 up){
     const Vec3 forward=normalized(r.forward,{0,0,1});
     return normalized(forward-up*dot(forward,up),forward);
 }
-inline TrailingItemPose trailingPose(const ItemRacer& r,float terrainRadius=40){
-    const Vec3 up=heldUp(r),forward=heldForward(r,up);
+inline TrailingItemPose trailingPose(const ItemRacer& r,Vec3 up,float terrainRadius=40){
+    const Vec3 forward=heldForward(r,up);
     return {r.position+forward*(r.itemGeometry[3]*r.scale.z),forward,up,r.scale,
         r.itemGeometry[0]*(r.bike?.8f:.9f)+40,r.itemGeometry[2]*r.scale.y+terrainRadius,
         r.speed,r.speedRatio,r.hop,dot(r.haveVelocity?r.velocity:r.forward*r.speed,r.forward)>0,!r.grounded};
