@@ -334,12 +334,20 @@ bool ObjectBank::makeRigid(Model& model){
     rigidParts_=std::move(parts);
     return true;
 }
-bool ObjectBank::gpuSkin(Model& model) const {
+bool ObjectBank::gpuSkin(Model& model,bool lit) const {
     if(morphing()||!vertices_||vertices_!=model.vertexCount||matrices_>Renderer::MaxSkinBones)return false;
+    // Lit: bone-local normals stay and the palette index gets its own attribute (as the racers').
+    if(lit&&!model.skinBoneIndices){
+        model.skinBoneIndices=static_cast<float*>(linearAlloc(vertices_*sizeof(float)));
+        if(!model.skinBoneIndices)return false;
+    }
     for(unsigned i=0;i<vertices_;++i){
         const auto& v=source_[i];
-        model.vertices[i].position={v.p[0],v.p[1],v.p[2]};model.vertices[i].normal={float(v.matrix*3),0,0};
+        model.vertices[i].position={v.p[0],v.p[1],v.p[2]};
+        if(lit){model.vertices[i].normal={v.n[0],v.n[1],v.n[2]};model.skinBoneIndices[i]=float(v.matrix*3);}
+        else model.vertices[i].normal={float(v.matrix*3),0,0};
     }
+    if(lit)flushGpuData(model.skinBoneIndices,vertices_*sizeof(float));
     flushGpuData(model.vertices,vertices_*sizeof(Vertex));
     return true;
 }

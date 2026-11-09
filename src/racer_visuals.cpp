@@ -86,6 +86,12 @@ bool RacerVisuals::load(){
      for(unsigned i=1;i<config.playerCount&&i<=11;++i){const auto& player=config.players[i];
       VehicleVisualAssets::bankPaths(unsigned(player.character),unsigned(player.vehicle),config.teams?RaceTeam(player.team):RaceTeam::None,diag::unlitBanks,banks);}
      DriverAnimation::keepOnly(banks);}
+    // The course's G3D lights are in view space: the Wii lights a racer from
+    // the camera's side. Opponents keep baked light (no per-vertex cost), now
+    // as the chase camera sees them: from behind, looking 12 degrees down,
+    // instead of from the front.
+    static const float RearView[3][3]={{-1,0,0},{0,.9781476f,.2079117f},{0,.2079117f,-.9781476f}};
+    struct BakeView {BakeView(){Model::setBakeView(diag::rearBake?RearView:nullptr);}~BakeView(){Model::setBakeView(nullptr);}} bakeViewScope;
     for(unsigned i=1;i<config.playerCount&&i<=11;++i){
         auto r=std::make_unique<Impl::Racer>();const auto& player=config.players[i];
         std::string failure;

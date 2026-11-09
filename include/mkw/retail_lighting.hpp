@@ -93,6 +93,8 @@ bool retailLightTextureDynamic(const CourseLighting& course,unsigned which);
 // Same GX ambient/diffuse equation evaluated at a fixed, model-space reference.
 std::array<float,4> viewLightFactor(const CourseLighting* course,uint32_t lighting,uint32_t ambient,Vec3 normal,const float view[3][3]);
 std::array<float,4> staticLightFactor(const CourseLighting* course,uint32_t lighting,uint32_t ambient,Vec3 normal);
+// True when the submesh's G3D light adds a diffuse term (enabled, coloured, a diffuse function).
+bool diffuseLit(const CourseLighting* course,uint32_t lighting);
 bool normalEnvironment(uint32_t lighting,uint32_t mode,uint32_t constant);
 // GX fog factor for a fog type at normalized eye depth ze ((z-start)/(end-start)).
 float retailFogFactor(unsigned type,float ze);

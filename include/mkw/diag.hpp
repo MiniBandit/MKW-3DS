@@ -70,6 +70,11 @@ inline bool menuFast=true,menuCheck=false;
 // Opponents load compact .dsku driver banks when race.pak has them. A/B:
 // no-unlit-banks.txt.
 inline bool unlitBanks=true;
+// Released items, other racers' items and course objects (not crowds) take
+// their G3D light in the vertex shader, from the camera's side, instead of
+// the load-time bake. A/B: no-live-light.txt. Opponents are baked as seen
+// from behind instead of from the front. A/B: no-rear-bake.txt.
+inline bool liveLight=true,rearBake=true;
 // Pause keeps the racers and course object graphics loaded when the pause
 // menu's textures still fit, so resuming needs no reload. A/B: no-pause-keep.txt.
 inline bool pauseKeep=true;
