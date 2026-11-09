@@ -308,7 +308,7 @@ bool DriverAnimation::load(const char* path,const Model& model){
     }
     if(cursor!=size){reset();{driverBankFailure="bank format";return false;}}
     for(unsigned i=0;i<model.submeshes.size();++i)baseTextures_[i]=model.submeshes[i].texture;
-    handleDrive_=find("handle_drive");dash_=find("dash");shake_=find("shake");
+    handleDrive_=find("handle_drive");dash_=find("dash");shake_=find("shake");throw_=find("throw");
     path_=path;size_=size;
     return ready=true;
 }

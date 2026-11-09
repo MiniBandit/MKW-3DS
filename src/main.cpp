@@ -1940,8 +1940,9 @@ int main() {
     std::array<std::unique_ptr<mkw::DriverAnimation>,9> accessoryAnimations;
     struct PartClock {int clip=-1;unsigned start=0;};
     PartClock bodyClock;std::array<PartClock,9> accessoryClocks;
-    auto partClip=[](mkw::DriverAnimation* bank,const K::Kart::KartObject& kart,bool handle){
+    auto partClip=[&driverPose](mkw::DriverAnimation* bank,const K::Kart::KartObject& kart,bool handle){
         if(!bank)return -1;
+        if(!handle&&bank->throwClip(driverPose.clipName)>=0)return bank->throwClip(driverPose.clipName);
         bool airborne=kart.status().offBit(K::Kart::eStatus::TouchingGround),tricking=kart.status().onBit(K::Kart::eStatus::InATrick);
         const char* name=handle&&bank->find("handle_drive")>=0?"handle_drive":tricking&&bank->find("sjump")>=0?"sjump":tricking&&bank->find("jump2")>=0?"jump2":airborne&&bank->find("jump")>=0?"jump":kart.status().onBit(K::Kart::eStatus::Boost)&&bank->find("dash")>=0?"dash":"shake";
         return bank->find(name);

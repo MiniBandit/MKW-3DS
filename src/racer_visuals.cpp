@@ -191,7 +191,7 @@ void RacerVisuals::step(unsigned tick,const RaceItems& items,bool drawNext,std::
         }
         auto advance=[&](DriverAnimation* bank,Impl::Racer::Clock& clock,bool handle){
             if(!bank)return;
-            const int clip=handle&&bank->handleDriveClip()>=0?bank->handleDriveClip():!std::strcmp(r->pose.clipName,"dash")&&bank->dashClip()>=0?bank->dashClip():bank->shakeClip();
+            const int clip=handle&&bank->handleDriveClip()>=0?bank->handleDriveClip():bank->throwClip(r->pose.clipName)>=0?bank->throwClip(r->pose.clipName):!std::strcmp(r->pose.clipName,"dash")&&bank->dashClip()>=0?bank->dashClip():bank->shakeClip();
             if(clip>=0&&clock.clip!=clip){clock.clip=clip;clock.start=tick;}
         };
         advance(r->bodyAnimation.get(),r->bodyClock,false);
@@ -224,7 +224,7 @@ void RacerVisuals::Impl::prepareRacer(unsigned i){
     auto animate=[&](DriverAnimation* bank,Model& model,Racer::Clock& clock,bool handle,const C3D_Mtx& matrix){
         if(tiny(model,matrix))return false;
         if(!bank)return view.visible(model,matrix);
-        const int c=handle&&bank->handleDriveClip()>=0?bank->handleDriveClip():!std::strcmp(r->pose.clipName,"dash")&&bank->dashClip()>=0?bank->dashClip():bank->shakeClip();
+        const int c=handle&&bank->handleDriveClip()>=0?bank->handleDriveClip():bank->throwClip(r->pose.clipName)>=0?bank->throwClip(r->pose.clipName):!std::strcmp(r->pose.clipName,"dash")&&bank->dashClip()>=0?bank->dashClip():bank->shakeClip();
         if(c<0)return true;
         if(c!=clock.clip){clock.clip=c;clock.start=tick;}
         float f=handle?r->vehicle.driveFrame()*(bank->duration(c)-1)/30.f:float(tick-clock.start);
