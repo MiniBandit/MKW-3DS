@@ -60,6 +60,7 @@ struct Submesh { uint32_t first,count; int32_t texture; uint32_t flags; int32_t 
 static_assert(offsetof(Submesh,menuReflection)==56&&sizeof(Submesh)==92,"GMDL v5 submesh stride");
 struct CourseLighting;
 struct RetailFog;
+struct RetailLight;
 struct MaterialSampler {float lodBias=0;uint8_t minFilter=0,magFilter=0,valid=0,reserved=0;};
 static_assert(sizeof(MaterialSampler)==8);
 class Texture {
@@ -341,6 +342,10 @@ public:
     // The course table outlives the renderer's use; nullptr turns it off.
     void setRetailLighting(const CourseLighting* course,bool fixedLightTextures=false);
     bool retailLightingReady(const CourseLighting* course) const {return retail_==course;}
+    // Light zones (RacerLightZone): lit racer submeshes drawn until the next
+    // call use this light and ambient instead of light set k and ambient 0.
+    // nullptr returns to the course's light sets.
+    void setRacerLight(const RetailLight* light,uint32_t ambient=0);
     // Current course fog object (RetailFogState::value), once per frame.
     void setRetailFog(const RetailFog& fog);
     float fov() const { return fov_; }
@@ -782,6 +787,12 @@ private:
     // Retail course lighting (renderer_retail.cpp).
     const CourseLighting* retail_=nullptr;
     bool retailLightViewReady_[16]{};
+    // Current racer light (setRacerLight): drawing side.
+    bool racerLightOn_=false,racerLightViewReady_=false;
+    float racerLightDirection_[3]{};
+    uint32_t racerLightColor_=0,racerAmbient_=0;
+    uint8_t racerLightSpace_=0;
+    Vec3 racerLightView_{};
     Vec3 retailLightView_[16]{};
     C3D_Tex retailTexture_[2]{},fixedRetailTexture_[2]{},retailFogRamp_{};
     // Pipelined frames: the other frame's light textures, and whether each
@@ -804,6 +815,7 @@ private:
     void retailBeginFrame();
     void retailShutdown();
     void retailFogNow(const RetailFog& fog);
+    void racerLightNow(bool on,const float direction[3],uint32_t color,uint8_t space,uint32_t ambient);
     // Light uniforms of one submesh; false leaves the legacy path to the caller.
     bool retailLight(const Submesh& s);
     // Combiners/textures of a retail submesh after the generic setup; returns

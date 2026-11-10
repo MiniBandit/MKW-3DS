@@ -100,7 +100,7 @@ void Renderer::retailBeginFrame(){
     C3D_FVUnifSet(GPU_VERTEX_SHADER,lightDirLoc_,0,0,1,LegacyCeiling);
     C3D_FVUnifSet(GPU_VERTEX_SHADER,lightFnLoc_,1,0,0,0);
     C3D_BoolUnifSet(GPU_VERTEX_SHADER,retailBoolLoc_,false);
-    retailLightDirty_=retailFogBound_=retailTextureDirty_=false;
+    retailLightDirty_=retailFogBound_=retailTextureDirty_=false;racerLightViewReady_=false;
     if(!retail_){C3D_FVUnifSet(GPU_VERTEX_SHADER,fogParamLoc_,0,0,0,0);return;}
     // EGG::LightObject::CalcView for this frame's camera.
     std::fill(std::begin(retailLightViewReady_),std::end(retailLightViewReady_),false);
@@ -198,6 +198,12 @@ void Renderer::retailBeginFrame(){
                   (bias*float(FogRampWidth-1)+0.5f)/float(FogRampWidth));
 }
 
+void Renderer::racerLightNow(bool on,const float direction[3],uint32_t color,uint8_t space,uint32_t ambient){
+    racerLightOn_=on;racerLightViewReady_=false;
+    for(unsigned i=0;i<3;++i)racerLightDirection_[i]=direction[i];
+    racerLightColor_=color;racerLightSpace_=space;racerAmbient_=ambient;
+}
+
 bool Renderer::retailLight(const Submesh& s){
     if(!retail_||!(s.lighting&retail::Retail))return false;
     const unsigned channel=(s.lighting&retail::ChannelMask)>>retail::ChannelShift;
@@ -208,24 +214,33 @@ bool Renderer::retailLight(const Submesh& s){
     }
     const unsigned set=(s.lighting&retail::LightSetMask)>>retail::LightSetShift;
     const bool alphaLit=s.lighting&retail::AlphaLit;
+    // A racer's kart and driver use its own light set (RacerLightZone).
+    RetailLight zone;
+    if(racerLightOn_){
+        zone=retail_->lights[0];zone.flags=0x641;zone.space=racerLightSpace_;zone.color=racerLightColor_;
+        for(unsigned i=0;i<3;++i)zone.direction[i]=racerLightDirection_[i];
+    }
+    const uint32_t ambient0=racerLightOn_?racerAmbient_:retail_->ambient[0];
     // G3DState::LoadResMatChan: ambient = 0.5 + ambient0*material/255 (u8).
     float ambient[4];
     for(unsigned i=0;i<4;++i)
-        ambient[i]=float(unsigned(0.5f+float((retail_->ambient[0]>>(24-8*i))&255)*float((s.ambient>>(24-8*i))&255)*(1.f/255.f)))/255.f;
+        ambient[i]=float(unsigned(0.5f+float((ambient0>>(24-8*i))&255)*float((s.ambient>>(24-8*i))&255)*(1.f/255.f)))/255.f;
     if(!alphaLit)ambient[3]=1.f;
-    if(!retailLightViewReady_[set]){
+    bool& viewReady=racerLightOn_?racerLightViewReady_:retailLightViewReady_[set];
+    Vec3& view=racerLightOn_?racerLightView_:retailLightView_[set];
+    if(!viewReady){
         float rows[3][3];
         for(unsigned r=0;r<3;++r)for(unsigned c=0;c<3;++c)rows[r][c]=view_.r[r].c[3-c];
-        retailLightView_[set]=retailLightViewDirection(retail_->lights[set],rows);
-        retailLightViewReady_[set]=true;
+        view=retailLightViewDirection(racerLightOn_?zone:retail_->lights[set],rows);
+        viewReady=true;
     }
-    const RetailLight& light=retail_->lights[set];
+    const RetailLight& light=racerLightOn_?zone:retail_->lights[set];
     // G3D light: enabled with the GX flag; colour/alpha only when flagged.
     const bool on=(light.flags&0x41)==0x41;
     const float diffuse[4]={on&&(light.flags&0x200)?unit(light.color,0):0.f,on&&(light.flags&0x200)?unit(light.color,1):0.f,
                             on&&(light.flags&0x200)?unit(light.color,2):0.f,alphaLit&&on&&(light.flags&0x400)?unit(light.color,3):0.f};
     // Directional light at -1e10*direction: L points back toward the light.
-    const Vec3 toward=-retailLightView_[set];
+    const Vec3 toward=-view;
     const unsigned fn=(s.lighting&retail::DiffuseMask)>>retail::DiffuseShift;
     const float function[3][3]={{0,1,0},{1,0,-2},{1,0,0}}; // none, sign, clamp
     const float* f=function[fn<3?fn:2];

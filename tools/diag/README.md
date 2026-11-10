@@ -135,6 +135,8 @@ side as on the Wii. `no-rear-bake.txt` bakes the opponents' light as seen from
 the front, as before, instead of from behind (no cost either way).
 `live-opponents.txt` lights the opponents in the vertex shader like the local
 racer (full driver banks, lit GPU skinning; LOD models stay baked).
+`no-light-zones.txt` keeps every racer on BLIGHT light 0 and ambient 0 instead of
+the light zone under it (KCL bits 8-10; lit racers only).
 `no-opp-pres-thin.txt` presents opponents not drawn up close every tick
 instead of once per drawn frame; `no-kartfx-lod-thin.txt` steps LOD racers'
 kart effects every tick instead of every 4th.

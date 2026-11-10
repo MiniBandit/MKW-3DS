@@ -78,6 +78,9 @@ inline bool liveLight=true,rearBake=true;
 // Opponents lit in the vertex shader like the local racer (full banks, lit
 // GPU skinning; LOD models stay baked). Off by default. A/B: live-opponents.txt.
 inline bool liveOpponents=false;
+// Light zones: racers take BLIGHT light and ambient k from the floor's KCL
+// bits 8-10 (RacerLightZone). A/B: no-light-zones.txt.
+inline bool lightZones=true;
 // Pause keeps the racers and course object graphics loaded when the pause
 // menu's textures still fit, so resuming needs no reload. A/B: no-pause-keep.txt.
 inline bool pauseKeep=true;

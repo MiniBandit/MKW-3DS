@@ -4,6 +4,7 @@
 #include <3ds.h>
 #include <malloc.h>
 #include <mkw/diag.hpp>
+#include <mkw/retail_lighting.hpp>
 #include <mkw/racer_lod.hpp>
 #include <mkw/vehicle_lod_layout.hpp>
 #include <mkw/race_items.hpp>
@@ -334,6 +335,9 @@ void RacerVisuals::Impl::drawPrepared(Renderer& renderer,unsigned i){
     if(!r||!out.draw)return;
     {
         renderer.additiveColor=out.additive;
+        // Light zones (only lit models use it: live-opponents.txt).
+        const auto* zone=racerLightZones::zone(i+1);const auto* zoneCourse=racerLightZones::course();
+        if(zone&&zoneCourse){const auto light=zone->light(*zoneCourse);renderer.setRacerLight(&light,zone->ambientColor());}
         if(out.bodyVisible){if(out.lod==1)drawSkinned(r->bodyAnimation.get(),*r->body,out.body);else renderer.draw(*(out.lod>=3?r->bodyLodRear:r->bodyLod),out.body);}
         if(out.lowHandleVisible)renderer.draw(*(out.lod>=3?r->handleLodRear:r->handleLod),out.lowHandle);
         if(out.driverVisible){if(out.lod==1)drawSkinned(r->animation.get(),*r->driver,out.seated);else renderer.draw(*r->driverLod,out.seated);}
@@ -341,6 +345,7 @@ void RacerVisuals::Impl::drawPrepared(Renderer& renderer,unsigned i){
         for(unsigned w=0;w<out.wheels;++w)if(out.wheelVisible[w])renderer.draw(*r->wheels[r->vehicle.modelIndex(w)],out.wheel[w]);
         for(unsigned e=0;e<out.extras;++e){const auto& x=out.extra[e];if(x.visible)drawSkinned(r->extraAnimation[x.part].get(),*r->extras[x.part],x.matrix);}
         renderer.additiveColor=0;
+        if(zone&&zoneCourse)renderer.setRacerLight(nullptr);
     }
 }
 }

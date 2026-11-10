@@ -563,6 +563,7 @@ void KartMove::calcRespawnStart() {
     Item::ItemDirector::Instance()->kartItem(param()->playerIdx()).clear();
 
     status().resetBit(eStatus::TriggerRespawn).setBit(eStatus::InRespawn);
+    collide()->resetLightIndex(); // retail USA 0x8057e340 (light index 0)
 
     // RMCU 8057322c..80573324: offline Balloon Battle, empty count and
     // the first respawn tick. The callback also checks the race stage.
