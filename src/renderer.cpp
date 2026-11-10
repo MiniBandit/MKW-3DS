@@ -3,6 +3,7 @@
 #include "mkw/road_sampler_policy.hpp"
 #include "mkw/course_phase_ranges.hpp"
 #include "mkw/rainbow_shadow.hpp"
+#include "mkw/course_opaque_order.hpp"
 #include "mkw/renderer.hpp"
 #include "mkw/sim_profile.hpp"
 #include "mkw/diag.hpp"
@@ -129,7 +130,7 @@ C3D_Tex* Texture::sampledGpu(const MaterialSampler* s,unsigned unit){
     C3D_TexSetFilter(&view,s->magFilter?GPU_LINEAR:GPU_NEAREST,
                     s->minFilter&1?GPU_LINEAR:GPU_NEAREST);
     C3D_TexSetFilterMipmap(&view,s->minFilter>=4?GPU_LINEAR:GPU_NEAREST);
-    C3D_TexSetLodBias(&view,s->lodBias);
+    C3D_TexSetLodBias(&view,s->lodBias+renderQuality().lodBias);
     // GX NEAR/LINEAR have no mip sampling, even when another material shares
     // this texture and needs its chain. The allocation always retains it.
     if(!renderQuality().mipmaps||s->minFilter<2)view.minLevel=view.maxLevel=0;
@@ -184,7 +185,7 @@ bool Texture::loadMemory(const void* data,size_t size,bool vram,int halveLarge) 
     // sample one bounded mip level instead of the hardware's two-level
     // interpolation path. HW09 LOD0 removes the physical-console corruption;
     // this isolates inter-level filtering without discarding mip reduction.
-    if(gpu.maxLevel)C3D_TexSetFilterMipmap(&gpu,GPU_NEAREST);
+    if(gpu.maxLevel){C3D_TexSetFilterMipmap(&gpu,GPU_NEAREST);if(renderQuality().lodBias!=0.f)C3D_TexSetLodBias(&gpu,renderQuality().lodBias);}
     C3D_TexSetWrap(&gpu,GPU_REPEAT,GPU_REPEAT);
     ready=true; return true;
 }
@@ -514,6 +515,7 @@ return false;}
     for(size_t i=0;i<size_t(vertexCount)*sizeof(Vertex);++i)sourceVertexHash=(sourceVertexHash^reinterpret_cast<const uint8_t*>(vertices)[i])*16777619u;
     coursePhase::apply(*this,path);
     rainbowShadow::apply(*this,path);
+    opaqueOrder::apply(*this,path);
     roadSamplerPolicy=roadSampling::apply(*this,path);
     // Pokey's 128px face/body atlas has a retail +2 mip bias. On the
     // smaller 3DS viewport this merges the dark eye rim into the pale face

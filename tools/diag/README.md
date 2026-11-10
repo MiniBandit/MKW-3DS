@@ -159,6 +159,9 @@ baked shadow maps) in LINEAR; without it their ETC1 goes to VRAM as ETC1A4.
 textures left in LINEAR track+sky=… unit1=… objects=…`, count/KB).
 `stereo-slider.txt` (a number from 0 to 1) pins the 3D slider for comparable
 runs.
+`lod-bias.txt` (a number from -2 to 0, default 0) is added to the LOD of every
+mip-mapped texture: negative values sample sharper levels (`runtime.log`:
+`texture lod bias N`).
 `no-menu-pipeline.txt` draws menus immediately on the main thread (CPU work,
 then the GPU, one after the other) instead of through the render thread.
 The Settings page's options are in `settings.dat`, not in the license:

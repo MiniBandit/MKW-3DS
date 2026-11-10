@@ -46,6 +46,7 @@ enum : uint32_t {
     CoplanarLayer=1u<<23, // source translucent course decal sharing an earlier surface
     RaisedRoadLayer=1u<<25, // authored raised road detail; PICA slope/depth precision guard
     AuthoredOpaqueBlend=1u<<26, // source DrawOpa blend layer; order only, no depth bias
+    AuthoredOpaqueOrder=1u<<30, // source DrawOpa blend with depth write: opaque pass, authored order
     Fog=1u<<1,             // material fog index 0 (G3D fog 0)
     ChannelShift=2,        // 0 unlit (raster = vertex/register colour), 1 GX lit, 2 GX lit + light textures
     ChannelMask=3u<<2,

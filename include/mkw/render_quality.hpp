@@ -18,6 +18,9 @@ struct RenderQuality {
     // Textures of 256x256 texels or more load from their first mip level
     // (Texture::loadMemory): Old 3DS, or Texture Quality: Low.
     bool halfLargeTextures=false;
+    // Added to every mip-mapped texture's LOD (negative: sharper levels).
+    // DIAG: lod-bias.txt holds a value from -2 to 0.
+    float lodBias=0;
     unsigned halvedTextures=0; // QA: textures loaded at half size (Texture Quality: Low).
     // Objects whose bounding sphere spans less than this radius/distance
     // ratio (about 4 px of the 240 px screen at the race FOV) are not drawn.

@@ -478,6 +478,7 @@ static void drawCourseLayer(mkw::Renderer& renderer,const mkw::Model& model,
     renderer.draw(model,transform,false,nullptr,context,[](void* data,std::size_t i){
         const auto& c=*static_cast<const Context*>(data);
         const auto& sub=c.model->submeshes[i];
+        if(sub.lighting&mkw::retail::AuthoredOpaqueOrder)return !c.transparent; // course_opaque_order.hpp
         const bool authoredEarly=sub.lighting&(mkw::retail::AuthoredOpaqueBlend|(1u<<27));
         if(authoredEarly)return c.transparent&&c.roadOverlay;
         const bool overlay=sub.lighting&(mkw::retail::CoplanarLayer|mkw::retail::RaisedRoadLayer);
@@ -652,6 +653,11 @@ int main() {
     renderer.spatialCourse=!exists("sdmc:/3ds/mkw-3ds/no-spatial-course.txt");
     mkw::shrinkHudTextures=!exists("sdmc:/3ds/mkw-3ds/no-hud-shrink.txt");
     renderer.skyLast=!exists("sdmc:/3ds/mkw-3ds/no-sky-last.txt");
+    // lod-bias.txt: a LOD bias from -2 to 0 for every mip-mapped texture (default 0).
+    if(kQa)if(FILE* f=fopen("sdmc:/3ds/mkw-3ds/lod-bias.txt","r")){
+        float bias=0;if(fscanf(f,"%f",&bias)==1&&bias==bias)mkw::renderQuality().lodBias=std::clamp(bias,-2.f,0.f);
+        fclose(f);LOGF("texture lod bias %.2f",double(mkw::renderQuality().lodBias));
+    }
     renderer.plainUv=!exists("sdmc:/3ds/mkw-3ds/no-plain-uv.txt");
     renderer.fastVertex=!exists("sdmc:/3ds/mkw-3ds/no-fast-vertex.txt");
     renderer.unitOneEtc1a4=!exists("sdmc:/3ds/mkw-3ds/no-unit1-vram.txt");
