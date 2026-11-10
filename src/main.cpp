@@ -472,13 +472,17 @@ static int startupFailure(const char* message){
 // actors: Koopa Cape's tunnel must cover morays, and Coconut Mall's glass
 // floor must composite over the submerged palm trunks like the scenery.
 // Context is copied by Renderer.
+// The opaque layer may be drawn in two submesh ranges [from,to): see
+// firstOpaqueOrdered.
 static void drawCourseLayer(mkw::Renderer& renderer,const mkw::Model& model,
-                            const C3D_Mtx& transform,int course,bool transparent,bool roadOverlay=false){
+                            const C3D_Mtx& transform,int course,bool transparent,bool roadOverlay=false,
+                            std::size_t from=0,std::size_t to=SIZE_MAX){
     (void)course; // Every course uses the same authored DrawOpa/DrawXlu split.
-    struct Context {const mkw::Model* model;bool transparent,roadOverlay;};
-    const Context context{&model,transparent,roadOverlay};
+    struct Context {const mkw::Model* model;bool transparent,roadOverlay;std::size_t from,to;};
+    const Context context{&model,transparent,roadOverlay,from,to};
     renderer.draw(model,transform,false,nullptr,context,[](void* data,std::size_t i){
         const auto& c=*static_cast<const Context*>(data);
+        if(i<c.from||i>=c.to)return false;
         const auto& sub=c.model->submeshes[i];
         if(sub.lighting&mkw::retail::AuthoredOpaqueOrder)return !c.transparent; // course_opaque_order.hpp
         const bool authoredEarly=sub.lighting&(mkw::retail::AuthoredOpaqueBlend|(1u<<27));
@@ -486,6 +490,15 @@ static void drawCourseLayer(mkw::Renderer& renderer,const mkw::Model& model,
         const bool overlay=sub.lighting&(mkw::retail::CoplanarLayer|mkw::retail::RaisedRoadLayer);
         return bool(sub.flags&2)==c.transparent&&(!c.transparent||overlay==c.roadOverlay);
     });
+}
+
+// The first course submesh drawn blended in the opaque layer
+// (course_opaque_order.hpp), SIZE_MAX if none. Its blend needs the sky
+// behind it, so with the sky drawn last the opaque layer stops there for it.
+static std::size_t firstOpaqueOrdered(const mkw::Model& model){
+    for(std::size_t i=0;i<model.submeshes.size();++i)
+        if(model.submeshes[i].lighting&mkw::retail::AuthoredOpaqueOrder)return i;
+    return SIZE_MAX;
 }
 
 int main() {
@@ -4070,10 +4083,13 @@ int main() {
             };
             if(!skyLast)drawSky();
             renderer.diagPass(mkw::diag::PassCourse);
-            for(auto& model:track)drawCourseLayer(renderer,*model,transform,int(Courses[courseChoice].id),false);
+            for(auto& model:track)drawCourseLayer(renderer,*model,transform,int(Courses[courseChoice].id),false,false,0,skyLast?firstOpaqueOrdered(*model):SIZE_MAX);
             // Sky last: after the track's opaque surfaces, before anything that
-            // blends or skips depth writes (road decals, glass, objects).
-            if(skyLast){renderer.setSkyBehind(true);drawSky();renderer.setSkyBehind(false);renderer.diagPass(mkw::diag::PassCourse);}
+            // blends or skips depth writes (road decals, glass, objects), and
+            // before the opaque layer's first blended submesh and those after it.
+            if(skyLast){renderer.setSkyBehind(true);drawSky();renderer.setSkyBehind(false);renderer.diagPass(mkw::diag::PassCourse);
+                for(auto& model:track)if(const std::size_t first=firstOpaqueOrdered(*model);first!=SIZE_MAX)
+                    drawCourseLayer(renderer,*model,transform,int(Courses[courseChoice].id),false,false,first);}
             // Authored road decals belong below every racer shadow. Drawing
             // them in the late glass/light pass painted over both shadow types.
             // Coconut's coplanar glass is also the whitening layer above the
