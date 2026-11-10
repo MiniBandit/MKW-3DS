@@ -715,6 +715,25 @@ void RaceHud::drawWorld(Renderer& renderer,const RaceItems& items,Vec3 viewer,un
         }
     }
 }
+// KartKiller hands KartEffect its model's "body" joint matrix for rk_killer
+// (USA 0x805b05d4 -> 0x8055b6fc "body" -> 0x806a4a90). The joint rolls and bobs
+// with the wait clip; palette 0 of item_15.dskm is that joint in model space.
+bool RaceHud::bulletBody(unsigned racer,unsigned tick,Vec3& origin,Vec3& x,Vec3& y,Vec3& z){
+    if(racer>=impl_->bulletUp.size()||!impl_->models[15]||!impl_->animations[15])return false;
+    auto& animation=*impl_->animations[15];
+    const int clip=animation.find("wait");
+    const unsigned step=renderQuality().animationStep,poseTick=step?tick/step*step:tick;
+    const float* body=animation.pose(clip<0?0:clip,float(poseTick),poseTick);
+    if(!body)return false;
+    auto* kart=Kinoko::Kart::KartObjectManager::Instance()->object(racer);
+    const auto& m=kart->pose();const auto& p=kart->pos();
+    const Vec3 right{m[0,0],m[1,0],m[2,0]},up{m[0,1],m[1,1],m[2,1]},forward{m[0,2],m[1,2],m[2,2]};
+    const Vec3 smoothed=dot(impl_->bulletUp[racer],impl_->bulletUp[racer])>.25f?impl_->bulletUp[racer]:up;
+    const auto toWorld=[&](unsigned c){return right*body[c]+up*body[4+c]+forward*body[8+c];};
+    origin=bulletVisualPosition({p.x,p.y,p.z},smoothed,kart->bsp().initialYPos)+toWorld(3);
+    x=toWorld(0);y=toWorld(1);z=toWorld(2);
+    return true;
+}
 bool RaceHud::notificationWarning(bool& lit)const{
     lit=impl_->warningMotion.lightFrame<10.f;
     return impl_->warning>=0&&impl_->warningAudible;

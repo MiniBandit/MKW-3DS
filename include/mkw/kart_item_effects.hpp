@@ -64,6 +64,8 @@ struct KartFxInput {
     float scale=1;        // +0x72c getScale
     float initialY=0;     // +0x74 bsp().initialYPos
     float bulletOffset=0; // the Bullet model's centre along up (KartKiller matrix)
+    // The matrix KartKiller passes for rk_killer: its model's animated "body" joint.
+    bool hasBulletBody=false;Vec3 bulletBody[4]{}; // origin, x, y, z
     // Status 63 Star, 79 Mega, 91 Bullet, 71 Shocked, 4 BeforeRespawn.
     bool star=false,mega=false,bullet=false,shocked=false,beforeRespawn=false;
     bool hasRainbowEntry=false; // Original course entry dependency.
@@ -472,8 +474,9 @@ private:
             // The Bullet object creates rk_killer and sets its matrix (0x805b05e8 ->
             // 0x806a4aa4), which records the height over the kart.
             const Vec3 centre=in.position+in.up*in.bulletOffset;
-            bulletHeight_=centre.y-in.position.y;
-            const EffectFrame f=frame(centre,in.forward,in.up,-in.right);
+            const EffectFrame f=in.hasBulletBody?frame(in.bulletBody[0],in.bulletBody[1],in.bulletBody[2],in.bulletBody[3]):
+                frame(centre,in.forward,in.up,-in.right);
+            bulletHeight_=f.origin.y-in.position.y;
             sink.create(KartFx::Killer,f);sink.setFrame(KartFx::Killer,f);
             bolts(in,sink);powHit(in,sink);powWave(in,sink);powReduce(in,sink);powUp(in,sink);
         }
