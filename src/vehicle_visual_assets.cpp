@@ -5,7 +5,7 @@
 #include <mkw/asset_pack.hpp>
 
 namespace mkw {
-bool VehicleVisualAssets::load(unsigned character,unsigned vehicle,RaceTeam team,std::string* failure,bool unlitBanks){
+bool VehicleVisualAssets::load(unsigned character,unsigned vehicle,RaceTeam team,std::string* failure,bool unlitBanks,bool live){
  VehicleVisualAssets next;
  if(failure)*failure="vehicle selection";
  for(const auto& entry:GarageChoices)
@@ -19,7 +19,7 @@ bool VehicleVisualAssets::load(unsigned character,unsigned vehicle,RaceTeam team
  };
  auto model=[&](const char* part,std::unique_ptr<Model>& destination){
   const auto name=path(part,"gmdl");if(failure)*failure=name;
-  auto asset=std::make_unique<Model>();if(!asset->load(name.c_str()))return false;
+  auto asset=std::make_unique<Model>();if(!asset->load(name.c_str(),live))return false;
   destination=std::move(asset);return true;
  };
  auto bank=[&](const char* part,Model& mesh,std::unique_ptr<DriverAnimation>& destination){

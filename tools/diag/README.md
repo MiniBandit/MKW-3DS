@@ -127,6 +127,13 @@ loader, worker) about once a second and `ceremony watchdog ...` when the main
 thread stops coming round a loop for 3 s or more; `award-load-times.jsonl` gets
 `board` when the result board shows (a GP finished 4th or lower has no
 `podium` and waits there for A).
+`no-live-light.txt` goes back to light baked into the vertices at load for
+released items, other racers' items and course objects (crowds stay baked);
+by default their G3D light is computed in the vertex shader, from the camera's
+side as on the Wii. `no-rear-bake.txt` bakes the opponents' light as seen from
+the front, as before, instead of from behind (no cost either way).
+`live-opponents.txt` lights the opponents in the vertex shader like the local
+racer (full driver banks, lit GPU skinning; LOD models stay baked).
 `no-opp-pres-thin.txt` presents opponents not drawn up close every tick
 instead of once per drawn frame; `no-kartfx-lod-thin.txt` steps LOD racers'
 kart effects every tick instead of every 4th.

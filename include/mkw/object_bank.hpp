@@ -59,7 +59,8 @@ public:
     // GPU skinning: rewrite the shared model to bone-local positions with
     // 3 * bone index in normal.x (Renderer::setSkinPalette draws it). Only for
     // unlit models (their normals never reach a pixel) with few bones.
-    bool gpuSkin(Model& model) const;
+    // lit: normals stay bone-local and the index goes to Model::skinBoneIndices.
+    bool gpuSkin(Model& model,bool lit=false) const;
     const std::vector<std::vector<RigidPart>>& rigidParts() const {return rigidParts_;}
     bool rigid() const {return !rigidParts_.empty();}
     // CPU skinning into a per-instance copy of the model's vertex buffer.

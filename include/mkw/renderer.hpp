@@ -134,10 +134,20 @@ public:
     std::vector<std::vector<SkinVisibilityBlock>> skinVisibility;
     void enableSkinCulling(unsigned bones);
     bool fixedLighting=false,staticLightingBaked=false;
+    // Baked, except submeshes a G3D light shades: those keep their vertex
+    // colours and normals and take the light in the vertex shader, from the
+    // camera's side as on the Wii (the lights are in view space).
+    bool liveDiffuse=false;
+    const CourseLighting* bakedCourse=nullptr;
     uint32_t sourceVertexHash=0;
     float* staticEnvironment2=nullptr;
     static void setLightingCourse(const CourseLighting* course);
-    void bakeStaticLighting(const CourseLighting* course);
+    void bakeStaticLighting(const CourseLighting* course,bool keepLiveDiffuse=false);
+    // Bakes what a liveDiffuse load left for the shader (models whose skinning drops normals).
+    void finishStaticLighting();
+    // World-to-view rotation rows the bake evaluates view-space lights with
+    // (this thread's loads; nullptr: identity, a camera facing the model's front).
+    static void setBakeView(const float (*rows)[3]);
     void bakeStaticLighting();
     // Compatibility helper; load-time static baking already covers ordinary models.
     void freezeLighting(const float* palette=nullptr,unsigned stride=21);
@@ -146,7 +156,7 @@ public:
     bool dynamicLightTextures=false;
     bool nativeMiiLighting=false;
     ~Model();
-    bool load(const char* path,bool dynamicLighting=false);
+    bool load(const char* path,bool dynamicLighting=false,bool liveDiffuse=false);
 };
 struct Instance { Model* model=nullptr; C3D_Mtx transform; };
 // One run of a submesh's triangles that all follow palette matrix `matrix`.

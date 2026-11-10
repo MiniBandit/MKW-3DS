@@ -1,5 +1,6 @@
 #include <mkw/race_chase_warning.hpp>
 #include <mkw/render_quality.hpp>
+#include <mkw/diag.hpp>
 #include <mkw/hud_feedback.hpp>
 #include <mkw/race_hud.hpp>
 #include <mkw/battle_hud_assets.hpp>
@@ -592,7 +593,10 @@ void RaceHud::drawWorld(Renderer& renderer,const RaceItems& items,Vec3 viewer,un
         if(!(actor.active&&unsigned(actor.kind)<21&&dot(actor.position-viewer,actor.position-viewer)<22000.f*22000.f))return true;
         const bool blast=(actor.kind==ItemKind::Bobomb||actor.kind==ItemKind::BlueShell)&&actor.explosion;
         const bool fullFake=actor.kind==ItemKind::FakeBox&&fullBoxDetail(actor.visualPosition(),viewer);
-        auto& model=blast?impl_->bombCore:impl_->staticModels[unsigned(actor.kind)];if(!model)return true;
+        // The Wii lights items from the camera's side (view-space G3D lights):
+        // released items use the live-lit copy the local racer's held ones do.
+        const bool live=diag::liveLight&&actor.kind!=ItemKind::FakeBox&&impl_->models[unsigned(actor.kind)];
+        auto& model=blast?impl_->bombCore:live?impl_->models[unsigned(actor.kind)]:impl_->staticModels[unsigned(actor.kind)];if(!model)return true;
         Vertex* originalVertices=model->vertices;
         if(blast&&impl_->bombFrames)model->vertices=impl_->bombFrames+std::min(unsigned(actor.age),impl_->bombFrameCount-1)*model->vertexCount;
         const Vec3 position=actor.visualPosition();
@@ -656,7 +660,7 @@ void RaceHud::drawWorld(Renderer& renderer,const RaceItems& items,Vec3 viewer,un
             const auto& p=kart->pos();
             const Vec3 position=bulletVisualPosition({p.x,p.y,p.z},impl_->bulletUp[i],kart->bsp().initialYPos);
             auto t=body;t.r[0].w=position.x;t.r[1].w=position.y;t.r[2].w=position.z;
-            renderer.draw(*(i==0?impl_->models[15]:impl_->staticModels[15]),t);
+            renderer.draw(*(i==0||diag::liveLight?impl_->models[15]:impl_->staticModels[15]),t);
         }
         if(effect.cloud&&impl_->models[14]&&impl_->animations[14]){
             const auto& cloud=impl_->clouds[i];
@@ -675,11 +679,11 @@ void RaceHud::drawWorld(Renderer& renderer,const RaceItems& items,Vec3 viewer,un
             // The original eyes and bolt have separate local bones. Bind this
             // cloud's CHR0 palette, then clear it before the next world item.
             if(animation.gpuSkinned())renderer.setSkinPalette(animation.palette(),animation.matrixCount(),21);
-            renderer.draw(*(i==0?impl_->models[14]:impl_->staticModels[14]),t);
+            renderer.draw(*(i==0||diag::liveLight?impl_->models[14]:impl_->staticModels[14]),t);
             renderer.setSkinPalette(nullptr,0,12);renderer.setOverrides(nullptr,0);
         }
         unsigned orbitModel=effect.heldKind==ItemKind::TripleGreenShell?0:effect.heldKind==ItemKind::TripleRedShell?1:effect.heldKind==ItemKind::TripleBanana?2:unsigned(effect.heldKind);
-        auto& heldModel=i==0?impl_->models[orbitModel]:impl_->staticModels[orbitModel];
+        auto& heldModel=i==0||(diag::liveLight&&orbitModel!=unsigned(ItemKind::FakeBox))?impl_->models[orbitModel]:impl_->staticModels[orbitModel];
         if(orbit&&heldModel)for(unsigned n=0;n<3;++n)if(effect.heldMask&(1u<<n)){
             const Vec3 position=items.heldItemPosition(i,n);
             // A trailing shell holds still; triples carry their orbit spin in heldItemVisual.

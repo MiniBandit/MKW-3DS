@@ -60,7 +60,7 @@ std::unique_ptr<Model> cloneModel(const Model& source){
     copy->submeshes=source.submeshes;copy->textures=source.textures;
     copy->samplers=source.samplers;
     copy->staticLightingBaked=source.staticLightingBaked;copy->sourceVertexHash=source.sourceVertexHash;
-    copy->fixedLighting=source.fixedLighting;
+    copy->fixedLighting=source.fixedLighting;copy->liveDiffuse=source.liveDiffuse;copy->bakedCourse=source.bakedCourse;
     if(source.staticEnvironment2){
         const size_t bytes=size_t(source.vertexCount)*2*sizeof(float);
         copy->staticEnvironment2=static_cast<float*>(linearAlloc(bytes));if(!copy->staticEnvironment2)return nullptr;
@@ -135,7 +135,9 @@ bool ObjectAssets::load(int course){
         if(course>=32&&course<=41&&!std::strcmp(resource,"coin"))continue;
         auto m=std::make_unique<ObjModel>();m->resource=resource;m->name=name;m->model=std::make_unique<Model>();
         char file[128];std::snprintf(file,sizeof file,"models/%s.gmdl",mesh);
-        if(!m->model->load(file)){std::snprintf(objectLoadFailure,sizeof objectLoadFailure,"model %s",file);ok=false;break;}
+        // Crowds and shadow volumes keep the whole bake (many vertices; no lit surface).
+        const bool liveLight=diag::liveLight&&std::strncmp(resource,"group_",6)&&std::strncmp(resource,"monte_",6)&&!endsWith(name,"-shadow");
+        if(!m->model->load(file,false,liveLight)){std::snprintf(objectLoadFailure,sizeof objectLoadFailure,"model %s",file);ok=false;break;}
         if((course==18&&!std::strcmp(resource,"WLscreenGC")&&!std::strcmp(name,"WLscreenGC"))||
            (course==6&&!std::strcmp(resource,"dkmonitor")&&!std::strcmp(name,"dkmonitor"))||
            (course==35&&!std::strcmp(resource,"fks_screen_wii")&&!std::strcmp(name,"fks_screen_wii"))){
@@ -178,8 +180,8 @@ bool ObjectAssets::load(int course){
                         m->litNormals|=(s.lighting&retail::PrimaryEnvironment)||((s.lighting&retail::Retail)&&((s.lighting&retail::ChannelMask)>>retail::ChannelShift)!=0);
                     // Unlit objects never read skinned normals: skin on the GPU
                     // (one shared mesh, any pose per instance), else positions only.
-                    if(!animatedShadow&&!m->litNormals&&m->bank->gpuSkin(*m->model)){m->gpuSkin=true;m->cpuSkin=false;m->model->enableSkinCulling(m->bank->matrixCount());}
-                    else if(!m->litNormals)m->bank->shareSkinnedPositions();
+                    if(!animatedShadow&&!m->litNormals&&m->bank->gpuSkin(*m->model,m->model->liveDiffuse)){m->gpuSkin=true;m->cpuSkin=false;m->model->enableSkinCulling(m->bank->matrixCount());}
+                    else if(!m->litNormals){m->model->finishStaticLighting();m->bank->shareSkinnedPositions();}
                     else m->bank->shareSkinnedVertices();
                     if(m->cpuSkin){
                         // One mandatory pose buffer must exist before preview labels

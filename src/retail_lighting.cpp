@@ -38,6 +38,13 @@ std::array<float,4> viewLightFactor(const CourseLighting* course,uint32_t word,u
     return out;
 }
 
+bool diffuseLit(const CourseLighting* course,uint32_t word){
+    if(!course||!(word&retail::Retail)||!(word&retail::ChannelMask)||!(word&retail::DiffuseMask))return false;
+    const auto& l=course->lights[(word&retail::LightSetMask)>>retail::LightSetShift];
+    if((l.flags&0x41)!=0x41)return false;
+    return ((l.flags&0x200)&&(l.color>>8))||((word&retail::AlphaLit)&&(l.flags&0x400)&&(l.color&255));
+}
+
 std::array<float,4> staticLightFactor(const CourseLighting* course,uint32_t word,uint32_t material,Vec3 n){
     const float identity[3][3]={{1,0,0},{0,1,0},{0,0,1}};
     return viewLightFactor(course,word,material,n,identity);

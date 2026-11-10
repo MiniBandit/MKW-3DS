@@ -324,12 +324,36 @@ void Model::enableSkinCulling(unsigned bones){
         }
     }
 }
-namespace {thread_local const CourseLighting* lightingCourse=nullptr;}
+namespace {thread_local const CourseLighting* lightingCourse=nullptr;thread_local const float (*bakeView)[3]=nullptr;}
+void Model::setBakeView(const float (*rows)[3]){bakeView=rows;}
 void Model::setLightingCourse(const CourseLighting* course){lightingCourse=course;}
 void Model::bakeStaticLighting(){bakeStaticLighting(lightingCourse);}
-void Model::bakeStaticLighting(const CourseLighting* course){
+void Model::finishStaticLighting(){
+    if(!liveDiffuse)return;
+    std::vector<uint8_t> done(vertexCount,0);
+    for(auto& sub:submeshes){
+        if(sub.lighting&retail::StaticLighting)continue;
+        for(unsigned j=sub.first;j<sub.first+sub.count;++j){const unsigned i=indices[j];if(done[i])continue;done[i]=1;
+            auto& v=vertices[i];const auto light=staticLightFactor(bakedCourse,sub.lighting,sub.ambient,normalized(v.normal));
+            for(unsigned c=0;c<4;++c)v.color[c]=uint8_t(std::clamp(std::lround(v.color[c]*light[c]),0l,255l));
+        }
+        sub.lighting|=retail::StaticLighting;
+    }
+    liveDiffuse=false;
+    flushGpuData(vertices,vertexCount*sizeof(Vertex));
+}
+void Model::bakeStaticLighting(const CourseLighting* course,bool keepLiveDiffuse){
     if(staticLightingBaked)return;
     std::vector<uint8_t> done(vertexCount,0);
+    // 1: a submesh the shader lights uses the vertex; 2: a baked one does.
+    if(keepLiveDiffuse){
+        bool any=false,shared=false;
+        for(const auto& sub:submeshes){const uint8_t tag=diffuseLit(course,sub.lighting)?1:2;any|=tag==1;
+            for(unsigned j=sub.first;j<sub.first+sub.count;++j){auto& d=done[indices[j]];shared|=d&&d!=tag;d=tag;}}
+        keepLiveDiffuse=any&&!shared;
+        std::fill(done.begin(),done.end(),0);
+    }
+    const float identityView[3][3]={{1,0,0},{0,1,0},{0,0,1}};const float (*view)[3]=bakeView?bakeView:identityView;
     bool third=false;for(const auto& sub:submeshes)third|=sub.menuReflection==8;
     if(third){
         staticEnvironment2=static_cast<float*>(linearAlloc(size_t(vertexCount)*2*sizeof(float)));
@@ -338,21 +362,23 @@ void Model::bakeStaticLighting(const CourseLighting* course){
     }
     for(auto& sub:submeshes){
         const bool env=normalEnvironment(sub.lighting,sub.menuReflection,sub.reflectionConstant)||((sub.flags&(1u<<25))&&((sub.flags>>12)&3)==3);
+        const bool live=keepLiveDiffuse&&diffuseLit(course,sub.lighting);
         for(unsigned j=sub.first;j<sub.first+sub.count;++j){const unsigned i=indices[j];if(done[i])continue;done[i]=1;
             auto& v=vertices[i];const Vec3 n=normalized(v.normal);
-            const auto light=staticLightFactor(course,sub.lighting,sub.ambient,n);
-            for(unsigned c=0;c<4;++c)v.color[c]=uint8_t(std::clamp(std::lround(v.color[c]*light[c]),0l,255l));
+            if(!live){const Vec3 seen{view[0][0]*n.x+view[0][1]*n.y+view[0][2]*n.z,view[1][0]*n.x+view[1][1]*n.y+view[1][2]*n.z,view[2][0]*n.x+view[2][1]*n.y+view[2][2]*n.z};
+            const auto light=viewLightFactor(course,sub.lighting,sub.ambient,seen,view);
+            for(unsigned c=0;c<4;++c)v.color[c]=uint8_t(std::clamp(std::lround(v.color[c]*light[c]),0l,255l));}
             if(env){const float u=.5f-.5f*n.x,w=.5f+.5f*(.948683298f*n.y+.316227766f*n.z);
                 if(sub.menuReflection==8){const auto* t=sub.reflectionUv;staticEnvironment2[2*i]=t[0]*u-t[1]*w+t[1]+t[2];staticEnvironment2[2*i+1]=-t[3]*u+t[4]*w+1.f-t[4]-t[5];}
                 else if(sub.lighting&retail::PrimaryEnvironment){const auto* t=sub.reflectionUv;v.uv[0]=t[0]*u-t[1]*w+t[1]+t[2];v.uv[1]=-t[3]*u+t[4]*w+1.f-t[4]-t[5];}
                 else {v.uv1[0]=u;v.uv1[1]=w;}
             }
         }
-        sub.lighting|=retail::StaticLighting;
+        if(!live)sub.lighting|=retail::StaticLighting;
         if(env)sub.lighting|=retail::FixedEnvironment;
     }
     if(skinBoneIndices)for(unsigned i=0;i<vertexCount;++i)vertices[i].normal={skinBoneIndices[i],0,0};
-    staticLightingBaked=true;
+    staticLightingBaked=true;liveDiffuse=keepLiveDiffuse;bakedCourse=course;
     flushGpuData(vertices,vertexCount*sizeof(Vertex));
     if(staticEnvironment2)flushGpuData(staticEnvironment2,size_t(vertexCount)*2*sizeof(float));
 }
@@ -395,7 +421,7 @@ void Model::freezeLighting(const float* palette,unsigned stride){
     flushGpuData(vertices,vertexCount*sizeof(Vertex));
 }
 Model::~Model() { if(staticEnvironment2)linearFree(staticEnvironment2); for(auto* p:regionIndices)if(p)linearFree(p);if(contactIndices)linearFree(contactIndices);if(vertices)linearFree(vertices);if(indices)linearFree(indices);if(skinBoneIndices)linearFree(skinBoneIndices); }
-bool Model::load(const char* path,bool dynamicLighting) {
+bool Model::load(const char* path,bool dynamicLighting,bool liveDiffuse) {
     // Menu models come from the open menu.pak (one seek+read). Others stream
     // large payloads straight into LINEAR memory; a 32 KiB stdio buffer
     // coalesces the header/submesh/name reads into few FS requests.
@@ -538,7 +564,7 @@ return false;}
         if(std::strstr(path,"obj07_flagb1__"))for(auto& sub:submeshes){
             sub.lighting=519;sub.ambient=0xa3a3a3ff;
         }
-        bakeStaticLighting(lightingCourse);if(!staticLightingBaked)return false;
+        bakeStaticLighting(lightingCourse,liveDiffuse&&!std::strstr(path,"obj07_flagb1__"));if(!staticLightingBaked)return false;
         // bombCore has a custom third-texture binder, so no generic reflection
         // mode allocates its UV2. Static shaders still require that attribute.
         // Original glowWhite3s uses an identity SRT at all 56 frames.
@@ -1262,7 +1288,7 @@ void Renderer::drawNow(const Model& model,const Vertex* vertices,const C3D_Mtx& 
     else uploadProjection(projectionLoc_,projection_);
     C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER,modelViewLoc_,&mv);
     C3D_BoolUnifSet(GPU_VERTEX_SHADER,staticLightingLoc_,model.staticLightingBaked);
-    if(!model.fixedLighting&&!model.staticLightingBaked)normalMatrixNow(mv);
+    if((!model.fixedLighting&&!model.staticLightingBaked)||model.liveDiffuse)normalMatrixNow(mv);
     auto* attr=C3D_GetAttrInfo();AttrInfo_Init(attr);
     AttrInfo_AddLoader(attr,0,GPU_FLOAT,3);AttrInfo_AddLoader(attr,1,GPU_FLOAT,3);AttrInfo_AddLoader(attr,2,GPU_FLOAT,4);AttrInfo_AddLoader(attr,3,GPU_UNSIGNED_BYTE,4);
     auto* buf=C3D_GetBufInfo();BufInfo_Init(buf);BufInfo_Add(buf,vertices,sizeof(Vertex),4,0x3210);
@@ -1272,7 +1298,7 @@ void Renderer::drawNow(const Model& model,const Vertex* vertices,const C3D_Mtx& 
         const int slot=AttrInfo_AddLoader(attr,5,GPU_FLOAT,2);
         BufInfo_Add(buf,model.staticEnvironment2,2*sizeof(float),1,unsigned(slot));
     }
-    const bool litSkin=skinPalette_&&model.skinBoneIndices&&!model.fixedLighting&&!model.staticLightingBaked;
+    const bool litSkin=skinPalette_&&model.skinBoneIndices&&!model.fixedLighting&&(!model.staticLightingBaked||model.liveDiffuse);
     if(litSkin){AttrInfo_AddLoader(attr,4,GPU_FLOAT,1);BufInfo_Add(buf,model.skinBoneIndices,sizeof(float),1,4);}
     C3D_BoolUnifSet(GPU_VERTEX_SHADER,skinnedNormalsLoc_,litSkin);
     if(skinPalette_){
@@ -1996,7 +2022,7 @@ void Renderer::drawNow(const Model& model,const Vertex* vertices,const C3D_Mtx& 
                 C3D_Mtx partView;Mtx_Multiply(&partView,&mv,&bone); // view*object already computed once above
                 C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER,modelViewLoc_,&partView);
                 if(retailEnvironment||menuEnvironment)this->retailEnvironment(partView);
-                else if(retail&&!model.fixedLighting&&!model.staticLightingBaked)normalMatrixNow(partView);
+                else if(retail&&((!model.fixedLighting&&!model.staticLightingBaked)||model.liveDiffuse))normalMatrixNow(partView);
                 if(environment){
                     for(unsigned row=0;row<3;++row)C3D_FVUnifSet(GPU_VERTEX_SHADER,envRowLoc_[row],m[12+row*3],m[13+row*3],m[14+row*3],0);
                     C3D_FVUnifSet(GPU_VERTEX_SHADER,envParamLoc_,std::cos(rigid_->environmentYaw),std::sin(rigid_->environmentYaw),1,0);
