@@ -128,7 +128,7 @@ function lighting(material:any){
  let mode=0,secondaryMap=-1,secondaryCoord=0,primaryCoord=stages[0]?.texCoordId??0,primaryMap=stages[0]?.texMap??0;
  let vertexColor:number[]|undefined,vertexTint:number[]|undefined,colorLerp=false,environmentMetal=false,constantLerp=false,primaryTextureName:string|undefined;
  let constantRegister=-1,vertexColorRegister=-1,additiveRegister=-1,additiveFactor=[0,0,0],unlit=false;
- let reflection:any=null,textureAlphaAdd=false,skyScreenBlend=false,skyRasterAdd=false,dotMatrixScreen=false;
+ let reflection:any=null,textureAlphaAdd=false,skyScreenBlend=false,skyRasterAdd=false,dotMatrixScreen=false,environmentPrimary=false;
  // Raster remap applied after the course light bake (colour*scale+offset), and
  // whether that bake applies: equations that never read the raster colour skip it.
  let raster:{scale:number[],offset:number[]}|undefined,bake=true;
@@ -404,6 +404,12 @@ function lighting(material:any){
   mode=2;constant=material.colorRegisters[1];constantRegister=1;secondaryMap=stages[1].texMap;secondaryCoord=stages[1].texCoordId;
  }else if(stages.length===2&&eq(stages[0],[15,14,8,15])&&eq(stages[1],[8,15,15,0])&&stages[0].konstColorSel<=7){
   mode=3;const k=(8-stages[0].konstColorSel)/8;constant={r:k,g:k,b:k,a:1};secondaryMap=stages[0].texMap;secondaryCoord=stages[0].texCoordId;primaryMap=stages[1].texMap;primaryCoord=stages[1].texCoordId;
+  // Dash panels: k*arrows + rainbow, the rainbow through GX EnvCamera. Its
+  // SRT0 scroll then cycles the whole panel through the rainbow; mapped by the
+  // face UV instead it only slid diagonal stripes. Courses bake the EnvCamera
+  // lookup from the normal (sampleUV) as the static course bake does.
+  environmentPrimary=courseMaterials&&!objectMaterials&&material.gxMaterial.texGens[primaryCoord]?.source===GX.TexGenSrc.NRM&&material.texSrts[primaryCoord]?.mapMode===1;
+  if(environmentPrimary&&stages.some((s:any)=>s.indTexMatrix!==0))approximated.add(material.name+' (indirect bump omitted)');
  }else if(material.name==='tico_tx'&&stages.length===2&&scaled(stages[0],[15,8,10,15],0)&&
           stages[1].colorInA===6&&stages[1].colorInB===14&&stages[1].colorInC===8&&stages[1].colorInD===0&&
           stages[1].colorOp===0&&stages[1].colorBias===2&&stages[1].colorScale===1&&stages[1].konstColorSel===30){
@@ -853,7 +859,7 @@ function lighting(material:any){
  // equation matching above would pick e.g. a shell's specular map.
  if(firstSampler){primaryMap=0;primaryCoord=0;primaryTextureName=undefined;}
  const packed=([constant.r,constant.g,constant.b,constant.a].reduce((v,c,i)=>v|(Math.round(Math.max(0,Math.min(1,c))*255)<<(8*i)),0))>>>0;
- return {mode,secondaryMap,secondaryCoord,primaryMap,primaryCoord,primaryTextureName,constant:packed,scale,firstScale,vertexColor,vertexTint,colorLerp,environmentMetal,constantLerp,constantRegister,vertexColorRegister,additiveRegister,additiveFactor,unlit,raster,bake,reflection,textureAlphaAdd,skyScreenBlend,skyRasterAdd,dotMatrixScreen};
+ return {mode,secondaryMap,secondaryCoord,primaryMap,primaryCoord,primaryTextureName,constant:packed,scale,firstScale,vertexColor,vertexTint,colorLerp,environmentMetal,constantLerp,constantRegister,vertexColorRegister,additiveRegister,additiveFactor,unlit,raster,bake,reflection,textureAlphaAdd,skyScreenBlend,skyRasterAdd,dotMatrixScreen,environmentPrimary};
 }
 // Course and sky material colour and texture animation (MKW_COURSE_MATERIALS:
 // course_model and vrcorn_model). Retail Field::CourseModel attaches every
@@ -1151,6 +1157,12 @@ for(const model of archive.mdl0){
     // Object reflection maps (EnvCamera texgen from normals): a static
     // sphere-map lookup from the model-space normal, not a constant texel.
     if(objectMaterials&&gen&&gen.source===GX.TexGenSrc.NRM&&material.texSrts[coord]?.mapMode===1)return [0.5+0.5*n[0],0.5+0.5*n[1]];
+    if(light.environmentPrimary&&unit===0){
+     // GX EnvCamera (s=0.5+0.5x, t=0.5-0.5y of the view normal) for the race
+     // camera's usual pitch (src/renderer.cpp bakeStaticLighting), then the SRT.
+     const s=0.5+0.5*n[0],t=0.5-0.5*(0.948683298*n[1]+0.316227766*n[2]),m=initialMatrices[0];
+     return [m[0]*s+m[4]*t+m[12],1-(m[1]*s+m[5]*t+m[13])];
+    }
     if(light.reflection?.mode===20&&gen?.source===GX.TexGenSrc.POS){
      const m=material.texSrts[coord].srtMtx;
      return [m[0]*pos[0]+m[4]*pos[1]+m[8]*pos[2]+m[12],1-(m[1]*pos[0]+m[5]*pos[1]+m[9]*pos[2]+m[13])];
