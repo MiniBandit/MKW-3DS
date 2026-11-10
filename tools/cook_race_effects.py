@@ -73,9 +73,10 @@ OPPONENT_DRIVING_ROOTS = ['rk_miniTurboS', 'rk_driftSpark1L_Spark01S', 'rk_drift
                          'rk_driftSpark1LB_Spark01S', 'rk_driftSpark1RB_Spark01S', 'rk_driftSpark1CB_Spark01S']
 # KartEffect smoke and dust (names from StaticR's KartEffect tables, RMCU 0x8038e24a..):
 # start-dash rear-wheel layers (rk_start0/1/2; S for other racers), the start burnout,
-# drift tyre smoke, off-road dust and landing puffs.
+# drift tyre smoke, off-road dust and landing puffs, and the exhaust's idle rk_gasSmoke
+# (one per pipe, USA 0x8068cfb4).
 SMOKE_ROOTS = ['rk_wheelSpin0', 'rk_wheelSpin1', 'rk_wheelSpin2', 'rk_wheelSpinS', 'rk_start0', 'rk_start1', 'rk_start2', 'rk_startS', 'rk_startMiss', 'rk_startMissS',
-               'rk_driftSmoke', 'rk_brakeSmk', 'rk_dirtSmokeA', 'rk_jumpSmoke', 'rk_jumpSmokeS', 'rk_jumpSmokeMini', 'rk_jumpSmokeMiniS',
+               'rk_driftSmoke', 'rk_brakeSmk', 'rk_gasSmoke', 'rk_dirtSmokeA', 'rk_jumpSmoke', 'rk_jumpSmokeS', 'rk_jumpSmokeMini', 'rk_jumpSmokeMiniS',
                'rk_jumpSmokeBikeL', 'rk_jumpSmokeBikeLMini', 'rk_jumpSmokeBikeS', 'rk_jumpSmokeBikeL_S', 'rk_jumpSmokeBikeS_S']
 # Per-course road materials select these instead of making them globally resident.
 SURFACE_ROOTS = ['rk_weed', 'rk_mud', 'rk_snowHDirt', 'rk_snowRoad0', 'rk_snowRoad1', 'rk_flower', 'rk_stone', 'rk_stoneTile', 'rk_stoneVolc']

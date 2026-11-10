@@ -21,7 +21,7 @@ struct EffectTexture { char name[32]; uint16_t width,height,paddedWidth,paddedHe
 // Steps at the 60 Hz simulation rate; presentation only.
 class RaceEffects {
 public:
-    static constexpr unsigned SlotCount=1983;
+    static constexpr unsigned SlotCount=2031;
     RaceEffects();
     ~RaceEffects();
     bool load(const char* path);

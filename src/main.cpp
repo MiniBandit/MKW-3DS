@@ -1888,6 +1888,7 @@ int main() {
     auto& remoteSmoke=*remoteSmokeStorage;
     mkw::KartLandingEffects landingEffects;
     mkw::KartBrakeEffects brakeEffects;
+    mkw::KartGasSmoke gasSmoke;
     mkw::KartWheelSpinEffects wheelSpinEffects;
     mkw::OpponentDrivingEffects opponentDrivingEffects;
     mkw::BikeDriftEffects bikeDriftEffects;
@@ -3834,6 +3835,9 @@ int main() {
                                 status.onBit(St::Brake),status.onBit(St::Accelerate),unsigned(move->driftState()),status.onBit(St::DriftAuto),
                                 racer->speed(),racer->collisionData(rearR).bFloor,intro.active(),in.beforeRespawn||in.bullet,kartFxLod.lod.lod(i));
                             fxLap(sp::FxBrake);
+                            gasSmoke.step(raceEffects,i,landingFrame,unsigned(K::System::RaceConfig::Instance()->raceScenario().players[i].vehicle),i==0,
+                                (!(watchReplay&&i==0)&&K::System::RaceConfig::Instance()->raceScenario().players[i].type==K::System::RaceConfig::Player::Type::Ghost),
+                                mkw::length(in.velocity),in.baseSpeed,in.hasSea,in.seaHeight,in.inAction,intro.active(),in.beforeRespawn||in.bullet,kartFxLod.lod.lod(i));
                             if(i){
                                 const bool bike=racer->isBike();const unsigned wheels=racer->tireCount();
                                 const unsigned l=bike?1:wheels-2,r=wheels-1;
