@@ -1664,6 +1664,13 @@ void Renderer::drawNow(const Model& model,const Vertex* vertices,const C3D_Mtx& 
                 C3D_TexEnvFunc(e0,C3D_RGB,GPU_MODULATE);C3D_TexEnvScale(e0,C3D_RGB,GPU_TEVSCALE_1);
                 C3D_TexEnvSrc(e1,C3D_RGB,GPU_TEXTURE0,GPU_PRIMARY_COLOR,GPU_PREVIOUS);
                 C3D_TexEnvFunc(e1,C3D_RGB,GPU_MULTIPLY_ADD);C3D_TexEnvScale(e1,C3D_RGB,GPU_TEVSCALE_2);
+            }else if(s.menuReflection==16&&(s.reflectionAdd&1)){
+                // Rainbow Road StarPiece_far: clamp(4*(raster*(1-raster) + T0*raster)).
+                C3D_TexEnvSrc(e0,C3D_RGB,GPU_PRIMARY_COLOR,GPU_PRIMARY_COLOR);
+                C3D_TexEnvOpRgb(e0,GPU_TEVOP_RGB_SRC_COLOR,GPU_TEVOP_RGB_ONE_MINUS_SRC_COLOR);
+                C3D_TexEnvFunc(e0,C3D_RGB,GPU_MODULATE);C3D_TexEnvScale(e0,C3D_RGB,GPU_TEVSCALE_1);
+                C3D_TexEnvSrc(e1,C3D_RGB,GPU_TEXTURE0,GPU_PRIMARY_COLOR,GPU_PREVIOUS);
+                C3D_TexEnvFunc(e1,C3D_RGB,GPU_MULTIPLY_ADD);C3D_TexEnvScale(e1,C3D_RGB,GPU_TEVSCALE_4);
             }else if(s.menuReflection==16){
                 // StarPiece: 2*(clamp(4*T0*raster) + raster*konst).
                 C3D_TexEnvSrc(e0,C3D_RGB,GPU_TEXTURE0,GPU_PRIMARY_COLOR);

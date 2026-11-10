@@ -102,6 +102,10 @@ inline bool shrinkHudTextures=false;
 // Fake Item Boxes take the real boxes' rainbow with distance, as retail does
 // (one more draw per far fake box). A/B: no-fakebox-rainbow.txt.
 inline bool fakeBoxRainbow=true;
+// Fake Item Box sparkle dot groups keep their own noise offsets, as retail's
+// indirect stage does (two more draws per near fake box either way).
+// A/B: no-fakebox-sparkle.txt draws every group at the shared offset.
+inline bool fakeBoxSparkle=true;
 // Per-submesh material animation for one draw: affine rows (a b tx / c d ty)
 // for both texture coordinates, texture/TEV-constant overrides, an RGBA
 // multiplier on the vertex colour and an additive colour (0xAABBGGRR).

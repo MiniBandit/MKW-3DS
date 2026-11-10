@@ -37,7 +37,9 @@ namespace {
 struct BoxMaterial { Renderer* renderer; const Model* model; const ItemBoxLayout* layout;
     const std::array<std::array<float,6>,300>* inner; C3D_Mtx transform; unsigned frame; bool sparkle; float environmentBlend,opacity=1.f;
     // itemBoxNise: mat_boxin's lerp weight toward its rainbow layer (GX A0), and the pass that adds that layer.
-    uint8_t rainbow=0; bool rainbowLayer=false; };
+    uint8_t rainbow=0; bool rainbowLayer=false;
+    // The sparkle dot group drawn (layout.sparkleGroups: one pass per group).
+    uint8_t group=0; };
 constexpr float ShellWarningDistance=6000.f;
 float boxEnvironmentBlend(Vec3 position,Vec3 viewer){
     const Vec3 delta=position-viewer;
@@ -110,12 +112,19 @@ void bindBox(void* context,std::size_t submesh){
             // lights up most of the mask instead of only its narrow peaks.
             // Clamping the first subtraction is safe: negative values cannot
             // survive the following subtraction of 1/2.
-            environment(L.noiseSRT);
+            // With sparkle groups (Fake Item Box, after TPO), GX's indirect
+            // stage shifts each mask dot's noise lookup by that dot's
+            // intensity: each group is its own pass with its own noise offset,
+            // its dots in one channel of the RGB8 mask.
+            float noise[6];for(unsigned i=0;i<6;++i)noise[i]=L.noiseSRT[i];
+            if(L.sparkleGroups&&fakeBoxSparkle){noise[2]+=L.sparkleOffset[m.group][0];noise[5]+=L.sparkleOffset[m.group][1];}
+            environment(noise);
             C3D_TexBind(0,texture(L.mask,GPU_REPEAT));C3D_TexBind(1,texture(L.noise,GPU_REPEAT));
             C3D_TexEnvColor(e0,0xffbfbfbf);
             C3D_TexEnvSrc(e0,C3D_RGB,GPU_TEXTURE1,GPU_CONSTANT);C3D_TexEnvFunc(e0,C3D_RGB,GPU_MODULATE);
             C3D_TexEnvSrc(e1,C3D_RGB,GPU_PREVIOUS,GPU_TEXTURE0);
-            C3D_TexEnvOpRgb(e1,GPU_TEVOP_RGB_SRC_COLOR,GPU_TEVOP_RGB_ONE_MINUS_SRC_COLOR);
+            constexpr GPU_TEVOP_RGB inverseMask[]={GPU_TEVOP_RGB_ONE_MINUS_SRC_R,GPU_TEVOP_RGB_ONE_MINUS_SRC_G,GPU_TEVOP_RGB_ONE_MINUS_SRC_B};
+            C3D_TexEnvOpRgb(e1,GPU_TEVOP_RGB_SRC_COLOR,L.sparkleGroups?inverseMask[m.group%3]:GPU_TEVOP_RGB_ONE_MINUS_SRC_COLOR);
             C3D_TexEnvFunc(e1,C3D_RGB,GPU_SUBTRACT);
             auto* e2=C3D_GetTexEnv(2);
             C3D_TexEnvColor(e2,0xff808080);
@@ -186,7 +195,11 @@ void drawBox(Renderer& renderer,const Model& model,const ItemBoxLayout& layout,c
         if(weight<=0.f)return;
         m.environmentBlend=environment;m.opacity=weight;m.sparkle=false;
         renderer.draw(model,t,false,bindBox,m,outerOnly);
-        if(sparkle>0.f){m.sparkle=true;m.opacity=weight*sparkle;renderer.draw(model,t,false,bindBox,m,outerOnly);}
+        if(sparkle>0.f){
+            m.sparkle=true;m.opacity=weight*sparkle;
+            for(m.group=0;m.group<std::max(1u,layout.sparkleGroups);++m.group)renderer.draw(model,t,false,bindBox,m,outerOnly);
+            m.group=0;
+        }
     };
     outer(0.f,1.f-blend);outer(1.f,blend);
     renderer.clearEnvironmentUv();renderer.setUvOffset(0,0);
