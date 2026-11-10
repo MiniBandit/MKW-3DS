@@ -3944,6 +3944,10 @@ int main() {
                  renderer.setStereoSubject(mkw::stereo::Race,dot(vec(cameraKart->pos())-chase,mkw::normalized(look-chase)));
              }else if(renderer.stereoCapable())renderer.setStereoSubject(mkw::stereo::Race,dot(vec(cameraKart->pos())-eye,mkw::normalized(target-eye)));
              renderer.setDualScreenIntro(fullRace&&intro.active());
+             // DIAG pass timing drops one pass from some frames (course, sky...):
+             // never from a QA capture, or the capture shows the clear colour there.
+             if(raceCapture&&captureLive&&((physicsSteps-captureBase)/raceCaptureEvery!=raceCaptured||(raceCaptureLeave&&results.phase()>=mkw::RaceFlowPhase::Chosen)))
+                 mkw::diag::passState.skip=mkw::diag::passState.probe=mkw::diag::PassNone;
              renderer.begin(eye,target,{0,1,0},selectedMirror);}
             profiler->mark(Profile::Wait);
             unsigned castleScene=mkw::castleRegion::Both;
