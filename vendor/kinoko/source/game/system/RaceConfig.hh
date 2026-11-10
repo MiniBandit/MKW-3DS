@@ -77,7 +77,7 @@ public:
     void init();
     void initRace();
     void initControllers();
-    void initGhost();
+    void initGhost(size_t index = 0);
 
     [[nodiscard]] const Scenario &raceScenario() const {
         return m_raceScenario;
@@ -87,8 +87,10 @@ public:
         return m_raceScenario;
     }
 
-    void setGhost(const u8 *rkg) {
-        m_ghost = rkg;
+    // MKW-3DS: index 1 is a ghost raced in Time Trials beside player zero.
+    void setGhost(const u8 *rkg, size_t index = 0) {
+        ASSERT(index < m_ghosts.size());
+        m_ghosts[index] = rkg;
     }
 
     // A scene-owned configuration is consumed by the next initRace only.
@@ -118,7 +120,7 @@ private:
 
     Scenario m_raceScenario;
     bool m_explicitNextScenario = false;
-    RawGhostFile m_ghost;
+    std::array<RawGhostFile, 2> m_ghosts;
 
     static RaceConfig *s_instance; ///< @addr{0x809BD728}
     static InitCallback s_onInitCallback;

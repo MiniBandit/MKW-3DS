@@ -36,8 +36,7 @@ void RaceConfig::initControllers() {
     for (size_t i = 0; i < m_raceScenario.playerCount; ++i) {
         switch (m_raceScenario.players[i].type) {
         case Player::Type::Ghost:
-            ASSERT(i == 0); // The trace/replay source has one ghost stream.
-            initGhost();
+            initGhost(i);
             break;
         case Player::Type::Local:
         case Player::Type::CPU:
@@ -53,16 +52,20 @@ void RaceConfig::initControllers() {
 /// @addr{0x8052EEF0}
 /// @brief Initializes the ghost.
 /// @details This is normally scoped within RaceConfig::Scenario, but Kinoko doesn't support menus.
-void RaceConfig::initGhost() {
-    GhostFile ghost(m_ghost);
+void RaceConfig::initGhost(size_t index) {
+    ASSERT(index < m_ghosts.size());
+    GhostFile ghost(m_ghosts[index]);
 
-    m_raceScenario.course = ghost.course();
-    Player &player = m_raceScenario.players[0];
+    // A replay sets the course; a ghost raced in Time Trials keeps the chosen one.
+    if (index == 0) {
+        m_raceScenario.course = ghost.course();
+    }
+    Player &player = m_raceScenario.players[index];
     player.character = ghost.character();
     player.vehicle = ghost.vehicle();
     player.driftIsAuto = ghost.driftIsAuto();
 
-    KPadDirector::Instance()->setGhostPad(ghost.inputs(), ghost.driftIsAuto());
+    KPadDirector::Instance()->setGhostPad(ghost.inputs(), ghost.driftIsAuto(), index);
 }
 
 /// @addr{0x8052FE58}
@@ -113,7 +116,7 @@ RaceConfig *RaceConfig::s_instance = nullptr; ///< @addr{0x809BD728}
 /** @brief Host-agnostic way of initializing RaceConfig.
     The type of the first player *must* be set to either Local or Ghost.
 
-    - If the type is Ghost, m_ghost must be set to a decompressed ghost file.
+    - If the type is Ghost, m_ghosts[index] must be set to a ghost file.
 
     - If the type is Local, the race scenario's course and the first player's character, vehicle,
     and driftIsAuto must be set.
