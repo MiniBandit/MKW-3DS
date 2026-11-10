@@ -9,7 +9,7 @@ namespace mkw::lan {
 constexpr uint32_t Magic=0x314E4B4D; // "MKN1"
 constexpr uint16_t Version=1;
 constexpr uint16_t DefaultPort=41750;
-enum class Type:uint8_t {Hello=1,Welcome=2,Ready=3,Go=4,Frame=5,Bye=6};
+enum class Type:uint8_t {Hello=1,Welcome=2,Ready=3,Go=4,Frame=5,Bye=6,Join=7,Room=8};
 
 #pragma pack(push,1)
 struct Header {uint32_t magic;uint16_t version;Type type;uint8_t sender;uint32_t session,sequence;};
@@ -26,17 +26,29 @@ struct Go {Header h;};
 // flags: 1 use item, 2 throw backwards, 4 throw forwards.
 struct Frame {Header h;uint32_t tick;uint16_t buttons;int8_t stickX,stickY;uint8_t trick,flags;uint16_t reserved;
               float pos[3],fullRot[4],mainRot[4],extVel[3],intVel[3];};
+// Online (through the relay server, tools/server): console -> server, repeated
+// until answered and every few seconds while waiting, keeping the route open.
+// The build fingerprint is tools/build_id.py's; the server checks it.
+struct Join {Header h;char room[8];char version[12];char build[16];};
+// Server -> console: which side this console plays, or why it can't join.
+enum class RoomStatus:uint8_t {Ok=0,Full=1,UnknownBuild=2,BadRequest=3};
+struct Room {Header h;uint8_t host;RoomStatus status;char message[46];};
 #pragma pack(pop)
-static_assert(sizeof(Header)==16&&sizeof(Hello)==19&&sizeof(Welcome)==24&&sizeof(Frame)==96);
+static_assert(sizeof(Join)==52&&sizeof(Room)==64&&sizeof(Header)==16&&sizeof(Hello)==19&&sizeof(Welcome)==24&&sizeof(Frame)==96);
 
-enum class Role:uint8_t {None,Host,Join};
+enum class Role:uint8_t {None,Host,Join,Online};
 
 class Session {
 public:
-    // Reads sdmc:/3ds/mkw-3ds/lan.txt ("host [port]" or "join <ip> [port] [localport]").
+    // Reads sdmc:/3ds/mkw-3ds/lan.txt: "host [port]", "join <ip> [port] [localport]"
+    // or "online <server> [room] [port]" (internet play through the relay server).
     // False when the file is absent: the game plays offline as usual.
     bool configure();
     bool active() const{return role_!=Role::None;}
+    bool online() const{return relay_;}
+    // Online: the room both players type in. Empty until set (the game asks).
+    const char* room() const{return room_;}
+    void setRoom(const char* room);
     Role role() const{return role_;}
     // Opens the socket. False (with reason()) if the network is unavailable.
     bool open();
@@ -46,6 +58,8 @@ public:
     // Call repeatedly (each call polls once); done() reports success.
     void handshakeStep(unsigned localGarage,bool autoDrift,unsigned course,unsigned engineClass,bool mirror);
     bool handshakeDone() const{return welcomed_;}
+    // Online: the server refused this console (failed() and reason() say why).
+    bool failed() const{return failed_;}
     unsigned raceCourse() const{return course_;}
     unsigned raceEngineClass() const{return engineClass_;}
     bool raceMirror() const{return mirror_;}
@@ -68,6 +82,7 @@ private:
     Header header(Type type);
     void receive(const uint8_t* data,size_t size,uint32_t address,uint16_t port);
     void note(const char* format,...);
+    void sendJoin();
     char events_[8][64]{};unsigned eventHead_=0,eventCount_=0,helloCount_=0;bool firstHello_=false;
     Role role_=Role::None;
     int socket_=-1;uint32_t* socBuffer_=nullptr;
@@ -76,6 +91,7 @@ private:
     bool peerKnown_=false,welcomed_=false,peerReady_=false,goSeen_=false,hasFrame_=false;
     unsigned course_=0,engineClass_=2,peerGarage_=0,hostGarage_=0,goRepeats_=0,pollCount_=0;bool mirror_=false,autoDrift_=false,peerAutoDrift_=false;
     uint32_t silentPolls_=0;
+    bool relay_=false,roomJoined_=false,failed_=false;char room_[9]{};char server_[64]{};unsigned joinCount_=0;char failure_[48]{};
     Frame latest_{};
     const char* reason_="";
 };

@@ -9,12 +9,16 @@
 #include <cstdlib>
 #include <cstring>
 #include <malloc.h>
+#include <algorithm>
 #include <cstdarg>
+#include <cctype>
+#include <netdb.h>
+#include "content_version.hpp" // build/: MKW_VERSION, MKW_BUILD_ID
 
 namespace mkw::lan {
 namespace {
 constexpr size_t SocBufferSize=0x20000; // libctru's minimum page-aligned pool; small for Old 3DS
-constexpr unsigned HelloEvery=20,ReadyEvery=10,GoRepeats=6;
+constexpr unsigned HelloEvery=20,ReadyEvery=10,GoRepeats=6,JoinEvery=30,KeepAliveEvery=120;
 }
 Session& session(){static Session value;return value;}
 namespace {
@@ -41,6 +45,14 @@ bool Session::configure(){
         if(!localPort_)localPort_=DefaultPort;
         return true;
     }
+    if(fields>=2&&!std::strcmp(mode,"online")){
+        // online <server> [room] [port]: the room is asked for when missing.
+        role_=Role::Online;relay_=true;std::snprintf(server_,sizeof server_,"%s",ip);
+        peerPort_=DefaultPort;localPort_=0;
+        f=std::fopen("sdmc:/3ds/mkw-3ds/lan.txt","r");
+        if(f){char room[16]{};if(std::fscanf(f,"%*s %*s %15s %u",room,&port)>=1){setRoom(room);if(port)peerPort_=uint16_t(port);}std::fclose(f);}
+        return true;
+    }
     if(fields>=2&&!std::strcmp(mode,"join")){
         in_addr address{};if(!inet_aton(ip,&address)){reason_="lan.txt: bad address";return false;}
         role_=Role::Join;peerAddress_=address.s_addr;peerPort_=uint16_t(fields>=3?port:DefaultPort);
@@ -48,6 +60,12 @@ bool Session::configure(){
         return true;
     }
     reason_="lan.txt: expected 'host' or 'join <ip>'";return false;
+}
+
+void Session::setRoom(const char* room){
+    // Room codes are up to 8 letters or digits, upper case.
+    unsigned n=0;for(const char* c=room;*c&&n<8;++c)if(std::isalnum(static_cast<unsigned char>(*c)))room_[n++]=char(std::toupper(static_cast<unsigned char>(*c)));
+    room_[n]=0;
 }
 
 bool Session::open(){
@@ -58,11 +76,20 @@ bool Session::open(){
     socket_=::socket(AF_INET,SOCK_DGRAM,0);
     if(socket_<0){close();reason_="could not open a network socket";return false;}
     fcntl(socket_,F_SETFL,fcntl(socket_,F_GETFL,0)|O_NONBLOCK);
+    if(relay_){
+        // The server by address or by name.
+        in_addr address{};
+        if(inet_aton(server_,&address))peerAddress_=address.s_addr;
+        else if(hostent* host=gethostbyname(server_);host&&host->h_addrtype==AF_INET&&host->h_addr_list[0])std::memcpy(&peerAddress_,host->h_addr_list[0],4);
+        else{close();reason_="could not find the online server";return false;}
+        peerKnown_=true;
+    }
     sockaddr_in local{};local.sin_family=AF_INET;local.sin_port=htons(localPort_);local.sin_addr.s_addr=INADDR_ANY;
     if(bind(socket_,reinterpret_cast<sockaddr*>(&local),sizeof local)<0){close();reason_="the network port is in use";return false;}
     session_=role_==Role::Host?(uint32_t(svcGetSystemTick())|1u):0;
     char ip[16];note("> Wi-Fi ready. This console: %s:%u",dotted(uint32_t(gethostid()),ip),unsigned(localPort_));
-    if(role_==Role::Host)note("> Waiting for a player to join...");
+    if(relay_)note("> Contacting the server %s (%s)",server_,dotted(peerAddress_,ip));
+    else if(role_==Role::Host)note("> Waiting for a player to join...");
     else note("> Calling the host at %s:%u",dotted(peerAddress_,ip),unsigned(peerPort_));
     return true;
 }
@@ -98,7 +125,18 @@ void Session::poll(){
 void Session::receive(const uint8_t* data,size_t size,uint32_t address,uint16_t port){
     if(size<sizeof(Header))return;
     Header h;std::memcpy(&h,data,sizeof h);
-    if(h.magic!=Magic||h.version!=Version||h.sender==(role_==Role::Host?0:1))return;
+    if(h.magic!=Magic||h.version!=Version)return;
+    if(h.type==Type::Room){
+        // From the server: which side this console plays, or why not.
+        if(!relay_||roomJoined_||size<sizeof(Room)||address!=peerAddress_)return;
+        Room r;std::memcpy(&r,data,sizeof r);r.message[sizeof r.message-1]=0;
+        if(r.status!=RoomStatus::Ok){failed_=true;std::snprintf(failure_,sizeof failure_,"%s",r.message);reason_=failure_;note("> The server said: %s",r.message);return;}
+        roomJoined_=true;role_=r.host?Role::Host:Role::Join;
+        if(role_==Role::Host){session_=uint32_t(svcGetSystemTick())|1u;note("> In room %s. Waiting for the other player...",room_);}
+        else note("> In room %s. The other player is there: joining",room_);
+        return;
+    }
+    if(h.sender==(role_==Role::Host?0:1))return;
     // Only the host accepts a new peer, and only from a Hello.
     if(role_==Role::Host&&h.type==Type::Hello&&!welcomed_){peerAddress_=address;peerPort_=port;peerKnown_=true;}
     if(!peerKnown_||address!=peerAddress_||port!=peerPort_)return;
@@ -136,8 +174,25 @@ void Session::receive(const uint8_t* data,size_t size,uint32_t address,uint16_t 
     }
 }
 
+void Session::sendJoin(){
+    Join join{header(Type::Join),{},{},{}};std::memcpy(join.room,room_,sizeof join.room);
+    std::snprintf(join.version,sizeof join.version,"%s",MKW_VERSION);
+    std::memcpy(join.build,MKW_BUILD_ID,std::min(sizeof join.build,std::strlen(MKW_BUILD_ID)));
+    send(&join,sizeof join);
+}
+
 void Session::handshakeStep(unsigned localGarage,bool autoDrift,unsigned course,unsigned engineClass,bool mirror){
     autoDrift_=autoDrift;
+    if(relay_&&!roomJoined_){
+        if(pollCount_%JoinEvery==0){
+            sendJoin();if(++joinCount_%10==0)note("> Still waiting for the server... (%u s)",joinCount_*JoinEvery/60);
+        }
+        poll();return;
+    }
+    // Online and waiting as host: refresh the room so routers keep the route open.
+    if(relay_&&role_==Role::Host&&!welcomed_&&pollCount_%KeepAliveEvery==0){
+        sendJoin();
+    }
     if(role_==Role::Host){hostGarage_=localGarage;course_=course;engineClass_=engineClass;mirror_=mirror;}
     else if(!welcomed_&&pollCount_%HelloEvery==0){
         Hello hello{header(Type::Hello),uint16_t(localGarage),uint8_t(autoDrift)};send(&hello,sizeof hello);

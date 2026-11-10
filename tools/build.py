@@ -137,6 +137,10 @@ def main():
             "no quotes or backslashes"
         )
     version_stamp += '#define MKW_WHATS_NEW "' + "\\n".join(news) + '"\n'
+    # Online play: which source this game was built from (tools/build_id.py);
+    # the server accepts only the fingerprints listed as allowed.
+    from build_id import build_id
+    version_stamp += f'#define MKW_BUILD_ID "{build_id(ROOT)}"\n'
     # The GitHub update build (MKW_QUICK_UPDATE=1, .github/workflows/update-cia.yml).
     quick_update = "1" if os.environ.get("MKW_QUICK_UPDATE") == "1" else "0"
     version_stamp += f"#define MKW_QUICK_UPDATE {quick_update}\n"

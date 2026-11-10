@@ -404,7 +404,7 @@ int main() {
     const bool embedded=assets.mounted&&contentMatches("romfs:");
     const char* assetRoot=embedded?"romfs:/":DATA;
     report(embedded?"assets: embedded RomFS":"assets: external SD package");
-    if(mkw::lan::session().configure())report(mkw::lan::session().role()==mkw::lan::Role::Host?"LAN: host (lan.txt)":"LAN: join (lan.txt)");
+    if(mkw::lan::session().configure())report(mkw::lan::session().online()?"LAN: online (lan.txt)":mkw::lan::session().role()==mkw::lan::Role::Host?"LAN: host (lan.txt)":"LAN: join (lan.txt)");
     else if(*mkw::lan::session().reason())report(mkw::lan::session().reason());
     report("version " MKW_VERSION);
 #ifndef MKW_EXTERNAL_ASSETS
@@ -1215,23 +1215,37 @@ int main() {
         // LAN play: agree on the course and swap drivers before loading (lan.txt).
         lanRace=false;
         auto& lan=mkw::lan::session();
-        if(lan.active()&&vs&&!selectedTeams){
+        if(lan.active()&&vs&&!selectedTeams&&lan.online()&&!*lan.room()){
+            // Online: both players type the same room code.
+            SwkbdState keyboard;char room[16]{};
+            swkbdInit(&keyboard,SWKBD_TYPE_QWERTY,2,8);swkbdSetHintText(&keyboard,"Room code (both players type the same)");
+            swkbdSetValidation(&keyboard,SWKBD_NOTEMPTY_NOTBLANK,0,0);
+            if(swkbdInputText(&keyboard,room,sizeof room)==SWKBD_BUTTON_CONFIRM)lan.setRoom(room);
+        }
+        if(lan.active()&&vs&&!selectedTeams&&(!lan.online()||*lan.room())){
             if(!lan.open())LOGF("LAN: %s",lan.reason());
             else{
                 lan.resetRace();
-                LOGF("LAN: %s, waiting for the other console",lan.role()==mkw::lan::Role::Host?"hosting":"joining");
+                LOGF("LAN: %s, waiting for the other console",lan.online()?"online":lan.role()==mkw::lan::Role::Host?"hosting":"joining");
                 {
                     // The connection screen: a terminal of what the link is doing,
                     // then a handshake once both consoles agree on the race.
                     mkw::LanTerminal terminal(renderer);char step[64];
                     terminal.add("MKW 3DS - LAN PLAY",true);
-                    terminal.add(lan.role()==mkw::lan::Role::Host?"Hosting a race on this Wi-Fi network.":"Joining a race on this Wi-Fi network.",true);
+                    if(lan.online()){char line[64];std::snprintf(line,sizeof line,"Online race in room %s.",lan.room());terminal.add(line,true);}
+                    else terminal.add(lan.role()==mkw::lan::Role::Host?"Hosting a race on this Wi-Fi network.":"Joining a race on this Wi-Fi network.",true);
                     terminal.add("Press B to cancel and race offline.",true);terminal.add("");
-                    while(!lan.handshakeDone()&&aptMainLoop()){
+                    while(!lan.handshakeDone()&&!lan.failed()&&aptMainLoop()){
                         hidScanInput();if(hidKeysDown()&KEY_B)break;
                         lan.handshakeStep(selectedGarageIndex(),automaticDrift,courseChoice,selectedEngineClass,selectedMirror);
                         while(lan.takeEvent(step,sizeof step))terminal.add(step);
                         terminal.frame();
+                    }
+                    if(lan.failed()){
+                        // Refused (e.g. another build): show why until B, then race offline.
+                        while(lan.takeEvent(step,sizeof step))terminal.add(step);
+                        terminal.add("Press B to race offline.",true);
+                        while(aptMainLoop()){hidScanInput();if(hidKeysDown()&KEY_B)break;terminal.frame();}
                     }
                     if(lan.handshakeDone()){
                         while(lan.takeEvent(step,sizeof step))terminal.add(step);
@@ -1244,7 +1258,7 @@ int main() {
                     lanRace=true;lanHost=lan.role()==mkw::lan::Role::Host;
                     courseChoice=lan.raceCourse();selectedEngineClass=std::min(lan.raceEngineClass(),2u);selectedMirror=lan.raceMirror();
                     lanRoster=selectedRoster.choices;lanRoster[1]=lan.peerGarage();
-                    LOGF("LAN: race course=%u other driver garage=%u",courseChoice,lan.peerGarage());
+                    LOGF("LAN: race course=%u other driver garage=%u as %s",courseChoice,lan.peerGarage(),lanHost?"host":"player");
                 }
             }
         }
