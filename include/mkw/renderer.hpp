@@ -106,6 +106,8 @@ inline bool fakeBoxRainbow=true;
 // indirect stage does (two more draws per near fake box either way).
 // A/B: no-fakebox-sparkle.txt draws every group at the shared offset.
 inline bool fakeBoxSparkle=true;
+// The same for real Item Boxes (A/B: no-itembox-sparkle.txt).
+inline bool itemBoxSparkle=true;
 // Per-submesh material animation for one draw: affine rows (a b tx / c d ty)
 // for both texture coordinates, texture/TEV-constant overrides, an RGBA
 // multiplier on the vertex colour and an additive colour (0xAABBGGRR).

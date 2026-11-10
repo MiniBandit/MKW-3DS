@@ -117,7 +117,7 @@ void bindBox(void* context,std::size_t submesh){
             // intensity: each group is its own pass with its own noise offset,
             // its dots in one channel of the RGB8 mask.
             float noise[6];for(unsigned i=0;i<6;++i)noise[i]=L.noiseSRT[i];
-            if(L.sparkleGroups&&fakeBoxSparkle){noise[2]+=L.sparkleOffset[m.group][0];noise[5]+=L.sparkleOffset[m.group][1];}
+            if(L.sparkleGroups&&(m.layout==&FakeBoxMaterials?fakeBoxSparkle:itemBoxSparkle)){noise[2]+=L.sparkleOffset[m.group][0];noise[5]+=L.sparkleOffset[m.group][1];}
             environment(noise);
             C3D_TexBind(0,texture(L.mask,GPU_REPEAT));C3D_TexBind(1,texture(L.noise,GPU_REPEAT));
             C3D_TexEnvColor(e0,0xffbfbfbf);
