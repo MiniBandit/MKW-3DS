@@ -140,5 +140,6 @@ Keep game assets, saves and system files out of pull requests.
 - **LagoLunatic / gclib**: disc and texture utilities
 - **devkitPro, libctru and Citro3D**: Nintendo 3DS development and graphics libraries
 - **CFL contributors**: native Mii rendering
+- **Font Awesome** (CC BY 4.0): the LAN play handshake icon
 
 See [NOTICE](NOTICE) for licence details.

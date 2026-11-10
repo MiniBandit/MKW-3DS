@@ -1,0 +1,9 @@
+The LAN play handshake icon (tools/art/handshake-fontawesome6.svg, converted to
+include/mkw/lan_handshake_icon.hpp by tools/make_lan_icon.py) is the "handshake"
+icon from Font Awesome Free 6.7.2 by Fonticons, Inc. (https://fontawesome.com).
+
+Font Awesome Free icons are licensed under the Creative Commons Attribution 4.0
+International License (CC BY 4.0): https://creativecommons.org/licenses/by/4.0/
+Font Awesome Free license summary: https://fontawesome.com/license/free
+
+Changes: drawn white and scaled to 160x128 pixels.

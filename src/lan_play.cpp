@@ -9,6 +9,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <malloc.h>
+#include <cstdarg>
 
 namespace mkw::lan {
 namespace {
@@ -16,6 +17,20 @@ constexpr size_t SocBufferSize=0x20000; // libctru's minimum page-aligned pool; 
 constexpr unsigned HelloEvery=20,ReadyEvery=10,GoRepeats=6;
 }
 Session& session(){static Session value;return value;}
+namespace {
+const char* dotted(uint32_t address,char* out){
+    in_addr a{};a.s_addr=address;std::snprintf(out,16,"%s",inet_ntoa(a));return out;
+}
+}
+void Session::note(const char* format,...){
+    char* line=events_[(eventHead_+eventCount_)%8];
+    va_list args;va_start(args,format);std::vsnprintf(line,64,format,args);va_end(args);
+    if(eventCount_<8)++eventCount_;else eventHead_=(eventHead_+1)%8;
+}
+bool Session::takeEvent(char* out,size_t size){
+    if(!eventCount_)return false;
+    std::snprintf(out,size,"%s",events_[eventHead_]);eventHead_=(eventHead_+1)%8;--eventCount_;return true;
+}
 
 bool Session::configure(){
     FILE* f=std::fopen("sdmc:/3ds/mkw-3ds/lan.txt","r");if(!f)return false;
@@ -46,6 +61,9 @@ bool Session::open(){
     sockaddr_in local{};local.sin_family=AF_INET;local.sin_port=htons(localPort_);local.sin_addr.s_addr=INADDR_ANY;
     if(bind(socket_,reinterpret_cast<sockaddr*>(&local),sizeof local)<0){close();reason_="the network port is in use";return false;}
     session_=role_==Role::Host?(uint32_t(svcGetSystemTick())|1u):0;
+    char ip[16];note("> Wi-Fi ready. This console: %s:%u",dotted(uint32_t(gethostid()),ip),unsigned(localPort_));
+    if(role_==Role::Host)note("> Waiting for a player to join...");
+    else note("> Calling the host at %s:%u",dotted(peerAddress_,ip),unsigned(peerPort_));
     return true;
 }
 
@@ -90,13 +108,16 @@ void Session::receive(const uint8_t* data,size_t size,uint32_t address,uint16_t 
     case Type::Hello:{
         if(role_!=Role::Host||size<sizeof(Hello))return;
         Hello hello;std::memcpy(&hello,data,sizeof hello);peerGarage_=hello.garage;peerAutoDrift_=hello.autoDrift!=0;
+        if(!welcomed_){char ip[16];note("> Player found at %s",dotted(address,ip));note("> Sending the race details");}
         Welcome w{header(Type::Welcome),uint8_t(course_),uint8_t(engineClass_),uint8_t(mirror_),uint8_t(autoDrift_),uint16_t(hostGarage_),uint16_t(peerGarage_)};
         send(&w,sizeof w);welcomed_=true;break;
     }
     case Type::Welcome:{
         if(role_!=Role::Join||size<sizeof(Welcome))return;
         Welcome w;std::memcpy(&w,data,sizeof w);
-        session_=w.h.session;course_=w.course;engineClass_=w.engineClass;mirror_=w.mirror!=0;peerGarage_=w.hostGarage;peerAutoDrift_=w.hostAutoDrift!=0;welcomed_=true;break;
+        session_=w.h.session;course_=w.course;engineClass_=w.engineClass;mirror_=w.mirror!=0;peerGarage_=w.hostGarage;peerAutoDrift_=w.hostAutoDrift!=0;
+        if(!welcomed_){char ip[16];note("> The host answered from %s",dotted(address,ip));note("> Race details received");}
+        welcomed_=true;break;
     }
     case Type::Ready:
         peerReady_=true;
@@ -118,7 +139,10 @@ void Session::receive(const uint8_t* data,size_t size,uint32_t address,uint16_t 
 void Session::handshakeStep(unsigned localGarage,bool autoDrift,unsigned course,unsigned engineClass,bool mirror){
     autoDrift_=autoDrift;
     if(role_==Role::Host){hostGarage_=localGarage;course_=course;engineClass_=engineClass;mirror_=mirror;}
-    else if(!welcomed_&&pollCount_%HelloEvery==0){Hello hello{header(Type::Hello),uint16_t(localGarage),uint8_t(autoDrift)};send(&hello,sizeof hello);}
+    else if(!welcomed_&&pollCount_%HelloEvery==0){
+        Hello hello{header(Type::Hello),uint16_t(localGarage),uint8_t(autoDrift)};send(&hello,sizeof hello);
+        if(++helloCount_%9==0)note("> Still calling... (%u s)",helloCount_*HelloEvery/60);
+    }
     poll();
 }
 

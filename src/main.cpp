@@ -1221,16 +1221,26 @@ int main() {
                 lan.resetRace();
                 LOGF("LAN: %s, waiting for the other console",lan.role()==mkw::lan::Role::Host?"hosting":"joining");
                 {
-                    mkw::LoadingScope loading;
+                    // The connection screen: a terminal of what the link is doing,
+                    // then a handshake once both consoles agree on the race.
+                    mkw::LanTerminal terminal(renderer);char step[64];
+                    terminal.add("MKW 3DS - LAN PLAY",true);
+                    terminal.add(lan.role()==mkw::lan::Role::Host?"Hosting a race on this Wi-Fi network.":"Joining a race on this Wi-Fi network.",true);
+                    terminal.add("Press B to cancel and race offline.",true);terminal.add("");
                     while(!lan.handshakeDone()&&aptMainLoop()){
                         hidScanInput();if(hidKeysDown()&KEY_B)break;
                         lan.handshakeStep(selectedGarageIndex(),automaticDrift,courseChoice,selectedEngineClass,selectedMirror);
-                        svcSleepThread(16666667);
+                        while(lan.takeEvent(step,sizeof step))terminal.add(step);
+                        terminal.frame();
+                    }
+                    if(lan.handshakeDone()){
+                        while(lan.takeEvent(step,sizeof step))terminal.add(step);
+                        terminal.add("> Handshake complete. Connected!",true);
+                        // Each side repeats its messages until answered, so nothing is lost while this plays.
+                        for(unsigned f=0;f<120&&aptMainLoop();++f)terminal.frame(f/60.f);
                     }
                 }
                 if(lan.handshakeDone()){
-                    // Both consoles agree: shake on it. Each side repeats its messages until answered, so nothing is lost while this plays.
-                    mkw::playLanHandshake(renderer);
                     lanRace=true;lanHost=lan.role()==mkw::lan::Role::Host;
                     courseChoice=lan.raceCourse();selectedEngineClass=std::min(lan.raceEngineClass(),2u);selectedMirror=lan.raceMirror();
                     lanRoster=selectedRoster.choices;lanRoster[1]=lan.peerGarage();

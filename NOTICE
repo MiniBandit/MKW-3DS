@@ -16,6 +16,8 @@ Bundled and external components
 -------------------------------
 Kinoko, noclip.website and gclib: MIT; see licenses/.
 Citro3D: zlib; see licenses/ and vendor/citro3d/.
+LAN play handshake icon: Font Awesome Free 6 "handshake" by Fonticons, Inc.,
+CC BY 4.0; see licenses/fontawesome-free-icons.txt.
 ogws and mkw decompilation references: CC0; see licenses/.
 CFL Mii rendering source: jamesrhg/cfl-mii, revision and local hashes in
 vendor/sources.lock.json; no explicit license was found in the bundled

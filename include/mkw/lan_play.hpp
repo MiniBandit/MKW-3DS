@@ -60,11 +60,15 @@ public:
     bool peerFrame(Frame& out) const{if(!hasFrame_)return false;out=latest_;return true;}
     uint32_t framesSinceHeard() const{return silentPolls_;}
     const char* reason() const{return reason_;}
+    // Human-readable steps for the connection screen, oldest first.
+    bool takeEvent(char* out,size_t size);
     void resetRace();
 private:
     void send(const void* data,size_t size);
     Header header(Type type);
     void receive(const uint8_t* data,size_t size,uint32_t address,uint16_t port);
+    void note(const char* format,...);
+    char events_[8][64]{};unsigned eventHead_=0,eventCount_=0,helloCount_=0;bool firstHello_=false;
     Role role_=Role::None;
     int socket_=-1;uint32_t* socBuffer_=nullptr;
     uint32_t peerAddress_=0;uint16_t peerPort_=DefaultPort,localPort_=DefaultPort;
