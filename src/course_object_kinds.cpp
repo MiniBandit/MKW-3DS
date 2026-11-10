@@ -515,6 +515,56 @@ void drawParasol(ObjectDraw& d,Visual& v){
     const auto m=liveMatrix(p);d.submit(v.main.model,m,a);
     if(v.shadow.model){a.clip=clip(v.shadow,name);d.shadow(v.shadow.model,m,a);}
 }
+// Coconut Mall's escalator Pianta (escalator_group: USA ctor 0x807f3c00, calc
+// 0x807f4028, clips wait/turn/point_to 0x807f50ec). Settings 2 and 4 are the
+// escalators' reversal times in seconds. Around each one, by the race timer, it
+// eases back to its placed heading over 14 frames from 240 before, waits 50
+// after, then plays turn (a quarter turn over frames 10-24, sides alternating;
+// setting 1 > 0 turns the first one the other way) and points until the next.
+// moverState: clip (0 wait, 1 turn, 2 point_to); frames: its frame;
+// lastState: the ease-back is done (+0xcc); speed: heading change in radians.
+void stepEscalatorPianta(Visual& v,int time){
+    constexpr float Quarter=1.5707963705062866f;
+    const bool flag=int16_t(v.geo->setting(1))>0;
+    const int events[2]={int(v.geo->setting(2))*60,int(v.geo->setting(4))*60};
+    const float turnSide[2]={flag?-1.f:1.f,flag?1.f:-1.f},backSide[2]={turnSide[1],turnSide[0]};
+    const int current=v.moverState;const float frame=float(v.frames);
+    const auto ease=[&](float x){return Quarter*std::clamp(x,0.f,14.f)/14.f;};
+    int next=2;
+    for(unsigned k=0;k<2;++k){
+        const int e=events[k];
+        if(time<e-240){next=2;break;}
+        if(time<e){
+            next=0;
+            if(current==2)v.lastState=0;
+            else if(!v.lastState){const float a=ease(14-frame);if(a==0)v.lastState=1;v.speed=backSide[k]*a;}
+            else v.speed=0;
+            break;
+        }
+        if(time<=e+50){next=0;v.speed=0;break;}
+        if(time<e+290){
+            if(current==2)next=2;
+            else if(current==0)next=1;
+            else if(current==1&&frame>=24)next=2;
+            else{next=1;const float a=ease(frame-10);if(a!=0)v.speed=turnSide[k]*a;}
+            break;
+        }
+    }
+    if(next!=current){v.moverState=next;v.frames=0;return;}
+    const char* names[]={"wait","turn","point_to"};
+    const unsigned length=v.main.model&&v.main.model->bank?v.main.model->bank->clipFrames(clip(v.main,names[next])):0;
+    v.frames=length&&next!=1?(v.frames+1)%length:std::min(v.frames+1,length?length-1:0u);
+}
+void drawEscalatorPianta(ObjectDraw& d,Visual& v){
+    if(!v.railStarted){v.railStarted=true;v.moverState=0;v.frames=0;v.lastState=0;v.speed=0;v.lastTick=d.tick;}
+    const int time=int(K::System::RaceManager::Instance()->timer());
+    for(unsigned n=0;n<8&&v.lastTick!=d.tick;++n,++v.lastTick)stepEscalatorPianta(v,time);
+    v.lastTick=d.tick;
+    C3D_Mtx m=liveMatrix(*v.object);Mtx_RotateY(&m,v.speed,true);
+    Anim a;a.clip=v.clips[v.moverState];a.frame=float(v.frames);
+    d.submit(v.main.model,m,a);
+    if(v.shadow.model)d.shadow(v.shadow.model,m);
+}
 // Cataquack state/clock are simulation-owned; setting 0 selects body colour.
 void drawPoihana(ObjectDraw& d,Visual& v){
     const auto& p=*static_cast<const K::Field::ObjectPoihana*>(v.object);
@@ -1005,7 +1055,7 @@ bool hidden(const Visual& v,int course){
     // boxes are race items. Coconut Mall keeps its validated palm/escalator path.
     static const char* names[]={"itembox","pocha","pochaYogan","pochaMori","f_itembox","s_itembox","sin_itembox","w_itembox"};
     for(const char* n:names)if(named(v,n))return true;
-    if(course==5&&(named(v,"PalmTree")||named(v,"escalator")||named(v,"escalator_group")))return true;
+    if(course==5&&(named(v,"PalmTree")||named(v,"escalator")))return true;
     return false;
 }
 }
@@ -1224,6 +1274,9 @@ bool classifyObject(Visual& v,const ObjectAssets& assets,int course){
         v.rate=.9f;
     }else if(id==ObjectId::BeltCrossing){
         v.rate=1.25f;
+    }else if(named(v,"escalator_group")&&live){
+        v.present=drawEscalatorPianta;v.low={};
+        v.clips[0]=clip(v.main,"wait");v.clips[1]=clip(v.main,"turn");v.clips[2]=clip(v.main,"point_to");
     }else if(named(v,"monte_a")||named(v,"mare_a")||named(v,"mare_b")){
         // These archives name their idle CHR0 "wait", not the model name.
         // Leaving clip=-1 displayed the bind pose even though the bank loaded.
