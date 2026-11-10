@@ -62,7 +62,7 @@ WATER_ROOTS = ['rk_wave', 'rk_awa', 'rk_spinWaterHalf', 'rk_spinWaterHalfS',
 # KartEffect power-ups (docs/POWERUPS_SOURCE.md), S variants for other racers.
 POWERUP_ROOTS = ['rk_star', 'rk_starS', 'rk_killerS', 'rk_killer1TS', 'rk_thunder', 'rk_thunderS',
                  'rk_kaminariGumo', 'rk_kaminariGumoS', 'rk_thunderBiri', 'rk_kyodai', 'rk_kyodaiS',
-                 'rk_pow', 'rk_powS', 'rk_pow1', 'rk_pow1S', 'rk_powUp']
+                 'rk_pow', 'rk_powS', 'rk_pow1', 'rk_pow1S', 'rk_powUp', 'rk_powReduce', 'rk_powReduceS']
 # KartEffect slipstream (RMCU 0x8068abbc, 0x806972c0): drafting and the boost, S variants
 # for other racers (docs/VFX_RESEARCH.md "Slipstream").
 SLIPSTREAM_ROOTS = ['rk_slipStreamPre', 'rk_slipStreamPreS', 'rk_slipStream', 'rk_slipStreamS']
