@@ -454,6 +454,15 @@ void RaceItems::afterStepNative(unsigned count){
     for(unsigned i=0;i<std::min(count,MaxRacers);++i)
         states[i].inkCleaningBoost=kart(i)->move()->takeFloorInkClear()||states[i].inkCleaningBoost;
     afterStep(states.data(),count,nativeSurface);
+    // Watch Replay: Kinoko's KartItem holds the ghost's Triple Mushroom, so the item
+    // window, the mushroom pop and the boost burst read its count from there.
+    if(ghostOwnsItems&&count_){
+        const auto& held=K::Item::ItemDirector::Instance()->kartItem(0).inventory();
+        const uint8_t left=held.id()==K::Item::ItemId::NONE?0:uint8_t(std::clamp(held.currentCount(),0,3));
+        auto& h=hud_[0];
+        if(left<h.charges){++mushroomUses_[0];events_.push_back({ItemEffect::Mushroom,0});}
+        h.item=left?ItemKind::TripleMushroom:ItemKind::None;h.charges=left;
+    }
 }
 #else
 void RaceItems::stepMovers(){}

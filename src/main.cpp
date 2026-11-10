@@ -3373,7 +3373,7 @@ int main() {
                         LOGF("hb shadow_rects bounded=%u full=%u empty=%u mean_bounded_px=%.0f",sr.bounded,sr.full,sr.empty,sr.bounded?double(sr.area)/sr.bounded:0.0);}}
                     mkw::LakituInput jugem;
                     jugem.kart=kart;jugem.stage=stage;jugem.timer=race->timer();jugem.lap=raceGrid.lap();jugem.lapCount=3;
-                    jugem.introHeld=intro.active();jugem.finished=raceGrid.finished();jugem.cameraForward=view.target-view.eye;
+                    jugem.introHeld=intro.active();jugem.finished=raceGrid.finished();jugem.goal=!watchReplay;jugem.cameraForward=view.target-view.eye;
                     {MKW_SIM_SCOPE(PortLakitu);lakitu.step(jugem);}
                     {
                         const auto audioStart=mkw::simprof::now();
