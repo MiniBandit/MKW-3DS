@@ -1,0 +1,4 @@
+# Build fingerprints this server accepts, one per line (tools/build_id.py prints
+# the fingerprint of the source tree you build from). '#' starts a comment.
+# Copy this file to allowed-builds.txt on the server.
+40922473215760c4  # 0.8.0 online test (online-lan branch)
