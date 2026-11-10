@@ -105,14 +105,18 @@ def bake_border_loop(key,p,control,bindings,animations,animation_groups,render_a
    for left in range(l,r,step):
     small=(left,t,min(r,left+step),b)
     crops.append(dict(frame=frame,box=small,image=image.crop(small)))
+ # At most 512x512 RGBA8 (1 MB) per atlas: menu textures load into LINEAR
+ # beside the caches, and a 2-4 MB block was often not contiguous there (VS
+ # page held ~5 s retrying ui_border_vs_select_underlay_0, 512x1024).
+ BorderAtlas=512
  # Pack padded thin strips, rather than allocating a full button per frame.
  # A neighboring source texel protects bilinear samples at atlas boundaries.
  atlases=[];atlas=[];x=y=row_h=used_w=0
  for crop in sorted(crops,key=lambda c:(-c['image'].height,-c['image'].width)):
   w,h=crop['image'].width+2,crop['image'].height+2
-  if w>1024 or h>1024:raise ValueError('Border strip exceeds native texture size')
-  if x+w>1024:x=0;y+=row_h;row_h=0
-  if y+h>1024:
+  if w>BorderAtlas or h>BorderAtlas:raise ValueError('Border strip exceeds the atlas size')
+  if x+w>BorderAtlas:x=0;y+=row_h;row_h=0
+  if y+h>BorderAtlas:
    atlases.append((atlas,used_w,y+row_h));atlas=[];x=y=row_h=used_w=0
   crop['atlasXY']=(x+1,y+1);atlas.append(crop);x+=w;used_w=max(used_w,x);row_h=max(row_h,h)
  if atlas:atlases.append((atlas,used_w,y+row_h))
