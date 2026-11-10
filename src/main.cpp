@@ -668,6 +668,7 @@ int main() {
     renderer.spatialCourse=!exists("sdmc:/3ds/mkw-3ds/no-spatial-course.txt");
     mkw::shrinkHudTextures=!exists("sdmc:/3ds/mkw-3ds/no-hud-shrink.txt");
     mkw::fakeBoxRainbow=!exists("sdmc:/3ds/mkw-3ds/no-fakebox-rainbow.txt");
+    mkw::fakeBoxSparkle=!exists("sdmc:/3ds/mkw-3ds/no-fakebox-sparkle.txt");
     renderer.skyLast=!exists("sdmc:/3ds/mkw-3ds/no-sky-last.txt");
     // lod-bias.txt: a LOD bias from -2 to 0 for every mip-mapped texture (default 0).
     if(kQa)if(FILE* f=fopen("sdmc:/3ds/mkw-3ds/lod-bias.txt","r")){

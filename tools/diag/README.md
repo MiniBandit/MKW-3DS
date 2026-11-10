@@ -65,7 +65,8 @@ to the HOME Menu (about 100 minutes).
 Create an empty file in `sd:/3ds/mkw-3ds/` to turn one change off:
 `no-pipeline.txt`, `no-bloom-merge.txt`, `no-bottom-cover.txt`,
 `no-shadow-rect.txt`, `no-player-vram.txt`, `no-draw-distance.txt`,
-`no-spatial-course.txt`, `no-hud-shrink.txt`, `no-sky-last.txt` (Rainbow
+`no-spatial-course.txt`, `no-hud-shrink.txt`, `no-fakebox-rainbow.txt`,
+`no-fakebox-sparkle.txt` (Fake Item Box sparkle groups share one noise offset), `no-sky-last.txt` (Rainbow
 Road always draws its sky first), `no-load-cache.txt`, `no-plain-uv.txt`,
 `no-fast-vertex.txt` (model draws without environment maps, projected
 textures, light textures or shadow passes go back to the vertex shader's
