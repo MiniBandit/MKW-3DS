@@ -2401,6 +2401,7 @@ int main() {
                          renderer.bloomEnabled?"On":"Off",q.racerLod?"Low":"Full");report(line);mkw::renderQuality().halvedTextures=0;}
             mkw::pack::cacheReads(true);
             resetRaceSystems(true);mkw::pack::cacheReads(false);if(trackLoadFailed)return false;stage("grid and opponents");
+            if(!courseObjects.loadFirePhases()){report("FAIL fire phases");return false;}
             if(fullRace){
                 startIntro();
                 if(intro.active()&&!flowUi.loadIntro(introInfo())){report("FAIL required preview labels");return false;}

@@ -13,6 +13,9 @@ public:
     ~CourseObjects();
     bool loadCoconut();
     bool loadCourse(int courseId);
+    // Old 3DS: open the fire bar phase stream once the opponents are loaded, so its
+    // heap budget sees what they took (a first race has no kept banks yet).
+    bool loadFirePhases();
     // The race scene was (re)created: re-link placements to new objects.
     void invalidate();
     // Simulation event, before prepare: restart this racer's authored lava splash.
