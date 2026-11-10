@@ -77,9 +77,17 @@ bool RacerVisuals::load(){
         // past that a racer is its low-detail models, about 0.1 MiB, not animated.
         constexpr u32 LowOnlyBelow=8u<<20;
         r->lowOnly=renderQuality().reduced&&linearSpaceFree()<LowOnlyBelow;
-        if(!r->load(unsigned(player.character),unsigned(player.vehicle),config.teams?RaceTeam(player.team):RaceTeam::None,&failure,r->lowOnly)){
+        const unsigned long startLinear=static_cast<unsigned long>(linearSpaceFree());
+        bool loaded=r->load(unsigned(player.character),unsigned(player.vehicle),config.teams?RaceTeam(player.team):RaceTeam::None,&failure,r->lowOnly);
+        // A full racer that runs out of memory part-way is retried as its
+        // low-detail models rather than failing the whole race (#121).
+        if(!loaded&&!r->lowOnly){
+            r=std::make_unique<Impl::Racer>();r->lowOnly=true;
+            loaded=r->load(unsigned(player.character),unsigned(player.vehicle),config.teams?RaceTeam(player.team):RaceTeam::None,&failure,true);
+        }
+        if(!loaded){
             if(auto* log=std::fopen("sdmc:/3ds/mkw-3ds/opponent-load-error.txt","w")){
-                std::fprintf(log,"slot=%u character=%u vehicle=%u team=%u\nasset=%s\nlinear=%lu\n",i,unsigned(player.character),unsigned(player.vehicle),unsigned(player.team),failure.c_str(),static_cast<unsigned long>(linearSpaceFree()));
+                std::fprintf(log,"slot=%u character=%u vehicle=%u team=%u low=%d start_linear=%lu\nasset=%s\nlinear=%lu\n",i,unsigned(player.character),unsigned(player.vehicle),unsigned(player.team),int(r->lowOnly),startLinear,failure.c_str(),static_cast<unsigned long>(linearSpaceFree()));
                 std::fclose(log);
             }
             reset();return false;
