@@ -87,6 +87,7 @@
 #include <mkw/opponent_effects.hpp>
 #include <mkw/bike_drift_effects.hpp>
 #include <mkw/bike_scrape_effects.hpp>
+#include <mkw/effect_slot_map.hpp>
 #include <mkw/menu_ui.hpp>
 #include <mkw/ghost_record.hpp>
 #include <ctime>

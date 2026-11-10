@@ -5,7 +5,7 @@ namespace mkw {
 // from the race's player count, not from the item user's position.
 class BlooperScreenEffects {
 public:
-    static constexpr unsigned FirstSlot=752;
+    static constexpr unsigned FirstSlot=784; // 784..788, between the moles and opponent effects (effect_slot_map.hpp)
     static_assert(FirstSlot+5<=RaceEffects::SlotCount);
     bool bind(RaceEffects& effects){
         const char* names[]={"rk_gessoA_1P","rk_gessoB_1P","rk_gessoA0_1P","rk_gessoB0_1P","rk_gessoC0_1P"};
