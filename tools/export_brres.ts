@@ -688,6 +688,26 @@ function lighting(material:any){
   reflection={mode:16,constant:([k.r,k.g,k.b,1].reduce((n,c,i)=>n|(Math.round(c*255)<<(8*i)),0))>>>0,add:0,uv:[1,0,0,0,1,0]};
   unsupported.delete(material.name);
  }
+ // Rainbow Road course stars, the same mode: StarPiece1 is the equation above,
+ // clamp(2*clamp(4*T*R)+2*K*R), with its EnvCamera map baked from the normal
+ // like the dash panels. StarPiece_far is one stage, clamp(4*(R*(1-R)+T*R)):
+ // mode 16 with add bit 0.
+ if(courseMaterials&&!objectMaterials&&stages.length===2&&scaled(stages[0],[15,8,10,15],2)&&
+    scaled(stages[1],[15,10,14,0],1)&&stages[1].texMap===255&&stages[0].texMap<material.samplers.length&&
+    material.gxMaterial.texGens[stages[0].texCoordId]?.source===GX.TexGenSrc.NRM&&
+    material.texSrts[stages[0].texCoordId]?.mapMode===1){
+  const k=konst(stages[1].konstColorSel);
+  primaryMap=stages[0].texMap;primaryCoord=stages[0].texCoordId;environmentPrimary=true;
+  secondaryMap=-1;mode=0;scale=0;firstScale=0;vertexColor=undefined;vertexTint=undefined;raster=undefined;
+  reflection={mode:16,constant:([k.r,k.g,k.b,1].reduce((n,c,i)=>n|(Math.round(c*255)<<(8*i)),0))>>>0,add:0,uv:[1,0,0,0,1,0]};
+  unsupported.delete(material.name);
+ }
+ if(courseMaterials&&!objectMaterials&&stages.length===1&&scaled(stages[0],[10,8,10,15],2)&&stages[0].texMap<material.samplers.length){
+  primaryMap=stages[0].texMap;primaryCoord=stages[0].texCoordId;
+  secondaryMap=-1;mode=0;scale=0;firstScale=0;vertexColor=undefined;vertexTint=undefined;raster=undefined;
+  reflection={mode:16,constant:0,add:1,uv:[1,0,0,0,1,0]};
+  unsupported.delete(material.name);
+ }
  // World items retain their own GX registers and reflection-alpha source.
  // Their C2 / raster-alpha equations differ from the garage's C1 / konst mask.
  // Moonview toll display: CC.ONE=12, not the dormant konst selector.
