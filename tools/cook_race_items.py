@@ -271,9 +271,9 @@ def main():
             manifest["items"][str(ident)] = cook_world(common / (source + ".brres"), model, "item_" + str(ident), clip, args.output)
         manifest["itemBox"] = cook_world(ROOT / "assets/luigi/itembox.brres", "itembox", "item_box", None, args.output)
         manifest["bombCore"] = cook_world(common / "bombCore.brres", "bombCore", "bomb_core", "bombCore", args.output)
-        # Fake Item Box sparkle groups (an RGB8 mask). The real box keeps one
-        # sparkle pass; adding "itembox": sparkle_levels("item_box", ...) gives it groups too.
-        sparkle = {"itemBoxNise": sparkle_levels("item_3", "itemBoxNise", args.output)}
+        # Item Box and Fake Item Box sparkle groups (RGB8 masks).
+        sparkle = {"itembox": sparkle_levels("item_box", "itembox", args.output),
+                   "itemBoxNise": sparkle_levels("item_3", "itemBoxNise", args.output)}
         subprocess.run(["node", str(ROOT / "build/export_item_box_uv.mjs"),
                         str(ROOT / "assets/luigi/itembox.brres"),
                         str(ROOT / "include/mkw/item_box_uv.hpp"),
