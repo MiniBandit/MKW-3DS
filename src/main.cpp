@@ -478,6 +478,7 @@ static void drawCourseLayer(mkw::Renderer& renderer,const mkw::Model& model,
     renderer.draw(model,transform,false,nullptr,context,[](void* data,std::size_t i){
         const auto& c=*static_cast<const Context*>(data);
         const auto& sub=c.model->submeshes[i];
+        if(sub.lighting&mkw::retail::AuthoredOpaqueOrder)return !c.transparent; // course_opaque_order.hpp
         const bool authoredEarly=sub.lighting&(mkw::retail::AuthoredOpaqueBlend|(1u<<27));
         if(authoredEarly)return c.transparent&&c.roadOverlay;
         const bool overlay=sub.lighting&(mkw::retail::CoplanarLayer|mkw::retail::RaisedRoadLayer);

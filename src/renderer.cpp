@@ -3,6 +3,7 @@
 #include "mkw/road_sampler_policy.hpp"
 #include "mkw/course_phase_ranges.hpp"
 #include "mkw/rainbow_shadow.hpp"
+#include "mkw/course_opaque_order.hpp"
 #include "mkw/renderer.hpp"
 #include "mkw/sim_profile.hpp"
 #include "mkw/diag.hpp"
@@ -514,6 +515,7 @@ return false;}
     for(size_t i=0;i<size_t(vertexCount)*sizeof(Vertex);++i)sourceVertexHash=(sourceVertexHash^reinterpret_cast<const uint8_t*>(vertices)[i])*16777619u;
     coursePhase::apply(*this,path);
     rainbowShadow::apply(*this,path);
+    opaqueOrder::apply(*this,path);
     roadSamplerPolicy=roadSampling::apply(*this,path);
     // Pokey's 128px face/body atlas has a retail +2 mip bias. On the
     // smaller 3DS viewport this merges the dark eye rim into the pale face
