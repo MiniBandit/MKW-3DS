@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import {readPoseMetadata,PoseEvaluator} from './brres_pose.js';
 import {attachments} from './driver_attachments.js';
 import path from 'node:path';
-import { parse, ByteCodeOp, bindCHR0Animator, bindSRT0Animator } from '../vendor/noclip/src/rres/brres.js';
+import { parse, ByteCodeOp, bindCHR0Animator, bindSRT0Animator, bindCLR0Animator } from '../vendor/noclip/src/rres/brres.js';
 import {retailLighting} from './retail_lighting.js';
 import ArrayBufferSlice from '../vendor/noclip/src/ArrayBufferSlice.js';
 import * as GX from '../vendor/noclip/src/gx/gx_enum.js';
@@ -128,7 +128,7 @@ function lighting(material:any){
  let mode=0,secondaryMap=-1,secondaryCoord=0,primaryCoord=stages[0]?.texCoordId??0,primaryMap=stages[0]?.texMap??0;
  let vertexColor:number[]|undefined,vertexTint:number[]|undefined,colorLerp=false,environmentMetal=false,constantLerp=false,primaryTextureName:string|undefined;
  let constantRegister=-1,vertexColorRegister=-1,additiveRegister=-1,additiveFactor=[0,0,0],unlit=false;
- let reflection:any=null,textureAlphaAdd=false,skyScreenBlend=false,skyRasterAdd=false,dotMatrixScreen=false;
+ let reflection:any=null,textureAlphaAdd=false,skyScreenBlend=false,skyRasterAdd=false,dotMatrixScreen=false,environmentPrimary=false;
  // Raster remap applied after the course light bake (colour*scale+offset), and
  // whether that bake applies: equations that never read the raster colour skip it.
  let raster:{scale:number[],offset:number[]}|undefined,bake=true;
@@ -404,6 +404,12 @@ function lighting(material:any){
   mode=2;constant=material.colorRegisters[1];constantRegister=1;secondaryMap=stages[1].texMap;secondaryCoord=stages[1].texCoordId;
  }else if(stages.length===2&&eq(stages[0],[15,14,8,15])&&eq(stages[1],[8,15,15,0])&&stages[0].konstColorSel<=7){
   mode=3;const k=(8-stages[0].konstColorSel)/8;constant={r:k,g:k,b:k,a:1};secondaryMap=stages[0].texMap;secondaryCoord=stages[0].texCoordId;primaryMap=stages[1].texMap;primaryCoord=stages[1].texCoordId;
+  // Dash panels: k*arrows + rainbow, the rainbow through GX EnvCamera. Its
+  // SRT0 scroll then cycles the whole panel through the rainbow; mapped by the
+  // face UV instead it only slid diagonal stripes. Courses bake the EnvCamera
+  // lookup from the normal (sampleUV) as the static course bake does.
+  environmentPrimary=courseMaterials&&!objectMaterials&&material.gxMaterial.texGens[primaryCoord]?.source===GX.TexGenSrc.NRM&&material.texSrts[primaryCoord]?.mapMode===1;
+  if(environmentPrimary&&stages.some((s:any)=>s.indTexMatrix!==0))approximated.add(material.name+' (indirect bump omitted)');
  }else if(material.name==='tico_tx'&&stages.length===2&&scaled(stages[0],[15,8,10,15],0)&&
           stages[1].colorInA===6&&stages[1].colorInB===14&&stages[1].colorInC===8&&stages[1].colorInD===0&&
           stages[1].colorOp===0&&stages[1].colorBias===2&&stages[1].colorScale===1&&stages[1].konstColorSel===30){
@@ -853,7 +859,102 @@ function lighting(material:any){
  // equation matching above would pick e.g. a shell's specular map.
  if(firstSampler){primaryMap=0;primaryCoord=0;primaryTextureName=undefined;}
  const packed=([constant.r,constant.g,constant.b,constant.a].reduce((v,c,i)=>v|(Math.round(Math.max(0,Math.min(1,c))*255)<<(8*i)),0))>>>0;
- return {mode,secondaryMap,secondaryCoord,primaryMap,primaryCoord,primaryTextureName,constant:packed,scale,firstScale,vertexColor,vertexTint,colorLerp,environmentMetal,constantLerp,constantRegister,vertexColorRegister,additiveRegister,additiveFactor,unlit,raster,bake,reflection,textureAlphaAdd,skyScreenBlend,skyRasterAdd,dotMatrixScreen};
+ return {mode,secondaryMap,secondaryCoord,primaryMap,primaryCoord,primaryTextureName,constant:packed,scale,firstScale,vertexColor,vertexTint,colorLerp,environmentMetal,constantLerp,constantRegister,vertexColorRegister,additiveRegister,additiveFactor,unlit,raster,bake,reflection,textureAlphaAdd,skyScreenBlend,skyRasterAdd,dotMatrixScreen,environmentPrimary};
+}
+// Course and sky material colour and texture animation (MKW_COURSE_MATERIALS:
+// course_model and vrcorn_model). Retail Field::CourseModel attaches every
+// CLR0/PAT0 clip of the archive at frame 0, rate 1, each with its own loop
+// flag. Each shape gets sampled per-frame tracks (clr, pat), which
+// tools/cook_model.py writes as a GMDL MAN1 block. SRT0 stays on uvVelocity
+// and uvSamples (UVM1). Course objects keep their own animation banks.
+const courseAnimation=courseMaterials&&!objectMaterials;
+const animationLimits=new Set<string>(),animationCache=new Map<string,any>();
+// lighting() of a material copy, leaving the receipt sets as they were.
+function translateCopy(material:any){
+ const saved=[new Set(unsupported),new Set(approximated),new Map(constantTextures)] as const;
+ const light=lighting(material);
+ unsupported.clear();saved[0].forEach(x=>unsupported.add(x));approximated.clear();saved[1].forEach(x=>approximated.add(x));
+ constantTextures.clear();saved[2].forEach((v,k)=>constantTextures.set(k,v));
+ return light;
+}
+// PAT0: per frame the texture-table index of the primary and secondary map (-1 keeps it).
+function patTrack(material:any,light:any){
+ const clip=archive.pat0.find((c:any)=>c.matAnimations.some((m:any)=>m.materialName===material.name));if(!clip)return undefined;
+ const anim=clip.matAnimations.find((m:any)=>m.materialName===material.name);
+ const maps=[light.primaryTextureName?-1:light.primaryMap,light.secondaryMap];
+ anim.texAnimations.forEach((t:any,map:number)=>{if(t?.texIndexValid&&!maps.includes(map))animationLimits.add(`PAT0 ${clip.name}: ${material.name} map ${map} is not drawn by its runtime material`);});
+ const tracks=maps.map(map=>map>=0?anim.texAnimations[map]:undefined);
+ if(!tracks.some((t:any)=>t?.texIndexValid))return undefined;
+ const last=Math.max(clip.duration,...tracks.filter((t:any)=>t?.texIndexValid).flatMap((t:any)=>t.animationTrack.map((k:any)=>Math.ceil(k.frame))));
+ const frames=clip.loopMode===1?Math.max(1,clip.duration):last+1;
+ // The last key at or before the frame (nw4r ResAnmTexPat).
+ const pick=(t:any,frame:number)=>{
+  if(!t?.texIndexValid)return -1;
+  let key=t.animationTrack[0];for(const next of t.animationTrack){if(next.frame>frame)break;key=next;}
+  const index=textures.findIndex((x:any)=>x.name===clip.texNames[key.texIndex]);
+  if(index<0)animationLimits.add(`PAT0 ${clip.name}: ${material.name} texture ${clip.texNames[key.texIndex]} is missing`);
+  return index;
+ };
+ const data:number[]=[];for(let f=0;f<frames;f++)data.push(pick(tracks[0],f),pick(tracks[1],f));
+ return {clip:clip.name,frames,loop:clip.loopMode===1?1:0,data};
+}
+// CLR0: re-translate the material with each frame's registers (C0..C2, K0..K3)
+// and keep the differences the runtime can draw: the TEV constant, an unlit
+// uniform vertex colour (baked at its per-channel peak, the track a tint <= 1),
+// or an equal shift of both colour-lerp ends (an added colour). Register
+// alphas go to tools/cook_model.py, which owns the alpha equation.
+function clrTrack(material:any){
+ const clip=archive.clr0.find((c:any)=>c.matAnimations.some((m:any)=>m.materialName===material.name));if(!clip)return undefined;
+ const controller=new AnimationController();const bound:[number,any][]=[];
+ for(let c=0;c<11;c++){
+  const animator=bindCLR0Animator(controller,clip,material.name,c);if(!animator)continue;
+  if(c<4){animationLimits.add(`CLR0 ${clip.name}: ${material.name} material/ambient register ${c} is not animated`);continue;}
+  bound.push([c,animator]);
+ }
+ if(!bound.length)return undefined;
+ const frames=clip.loopMode===1?Math.max(1,clip.duration):clip.duration+1;
+ const shape=(l:any)=>JSON.stringify({...l,constant:0,vertexColor:0,raster:0});
+ const base=translateCopy(material),baseShape=shape(base);
+ const results:any[]=[],registers:any[]=[];
+ const copy=(c:any)=>({r:c.r,g:c.g,b:c.b,a:c.a});
+ for(let f=0;f<frames;f++){
+  controller.setTimeInFrames(f);
+  const clone={...material,colorRegisters:material.colorRegisters.map(copy),colorConstants:material.colorConstants.map(copy)};
+  for(const [c,animator] of bound){
+   if(c<7)animator.calcColor(clone.colorRegisters[c-3],material.colorRegisters[c-3]);
+   else animator.calcColor(clone.colorConstants[c-7],material.colorConstants[c-7]);
+  }
+  const light=translateCopy(clone);
+  if(shape(light)!==baseShape){animationLimits.add(`CLR0 ${clip.name}: ${material.name} changes its runtime material`);return undefined;}
+  results.push(light);registers.push({colorRegisters:clone.colorRegisters,colorConstants:clone.colorConstants});
+ }
+ const out:any={clip:clip.name,frames,loop:clip.loopMode===1?1:0};
+ const unpack=(c:number)=>[0,1,2,3].map(i=>((c>>>(8*i))&255)/255);
+ const pack=(v:number[])=>v.reduce((n,c,i)=>n|(Math.round(Math.max(0,Math.min(1,c))*255)<<(8*i)),0)>>>0;
+ const scaleSame=results.every(l=>(!l.raster&&!base.raster)||(l.raster&&base.raster&&[0,1,2].every(i=>Math.abs(l.raster.scale[i]-base.raster.scale[i])<1e-6)));
+ const shift=results.map(l=>l.raster&&base.raster?[0,1,2].map(i=>l.raster.offset[i]-base.raster.offset[i]):[0,0,0]);
+ const sameColor=(l:any)=>JSON.stringify(l.vertexColor)===JSON.stringify(base.vertexColor);
+ if(!scaleSame){animationLimits.add(`CLR0 ${clip.name}: ${material.name} scales its baked raster colour`);return undefined;}
+ if(shift.some(d=>d.some(x=>Math.abs(x)>1e-6))){
+  // INTERPOLATE(vertex, constant, texture): moving both ends by d adds d.
+  const exact=base.colorLerp&&base.mode===0&&results.every((l,f)=>sameColor(l)&&shift[f].every((d,i)=>d>=-1e-6&&Math.abs(unpack(l.constant)[i]-unpack(base.constant)[i]-d)<=1.5/255));
+  if(!exact){animationLimits.add(`CLR0 ${clip.name}: ${material.name} moves its baked raster colour`);return undefined;}
+  out.add=shift.map(d=>pack([...d,0]));
+ }else{
+  if(results.some(l=>l.constant>>>0!==base.constant>>>0))out.constant=results.map(l=>l.constant>>>0);
+  if(results.some(l=>!sameColor(l))){
+   if(!base.vertexColor||results.some(l=>!l.vertexColor)||base.raster?.offset.some((x:number)=>x)){animationLimits.add(`CLR0 ${clip.name}: ${material.name} vertex colour has no runtime track`);return undefined;}
+   const clamp=(v:number)=>Math.max(0,Math.min(1,v));
+   out.vertexColor=[0,1,2].map(i=>Math.max(...results.map(l=>clamp(l.vertexColor[i]))));
+   out.tint=results.map(l=>[0,1,2].map(i=>out.vertexColor[i]>0?clamp(l.vertexColor[i])/out.vertexColor[i]:1));
+  }
+ }
+ const alphas=(r:any)=>JSON.stringify([r.colorRegisters.map((c:any)=>c.a),r.colorConstants.map(copy)]);
+ if(registers.some(r=>alphas(r)!==alphas(material)))out.alpha=registers;
+ if(out.constant||out.tint||out.add||out.alpha)return out;
+ // A fallback translation reads none of the animated registers.
+ if(unsupported.has(material.name))animationLimits.add(`CLR0 ${clip.name}: ${material.name} is a fallback material, its animated registers are not drawn`);
+ return undefined;
 }
 const bankShapes:BankShape[]=[];
 for(const model of archive.mdl0){
@@ -984,6 +1085,18 @@ for(const model of archive.mdl0){
    }
    frozenUv.delete(material.name);
   }
+  // Course and sky CLR0/PAT0 tracks (per material: its shapes share them).
+  let clr:any,pat:any;
+  if(courseAnimation){
+   const key=model.name+'/'+op.matId;
+   if(!animationCache.has(key)){
+    const c=clrTrack(material);
+    if(c?.constant&&retail?.constant!==undefined){animationLimits.add(`CLR0 ${c.clip}: ${material.name} constant is the light-texture register`);delete c.constant;}
+    animationCache.set(key,{clr:c&&(c.constant||c.tint||c.add||c.alpha)?c:undefined,pat:patTrack(material,light)});
+   }
+   ({clr,pat}=animationCache.get(key));
+   if(clr?.vertexColor)light.vertexColor=clr.vertexColor;
+  }
   let waterIndirect:any=undefined;
   if(light.reflection?.mode===11){
    const gx=material.gxMaterial,stage=gx.tevStages[0],ind=gx.indTexStages[stage.indTexStage];
@@ -1044,6 +1157,12 @@ for(const model of archive.mdl0){
     // Object reflection maps (EnvCamera texgen from normals): a static
     // sphere-map lookup from the model-space normal, not a constant texel.
     if(objectMaterials&&gen&&gen.source===GX.TexGenSrc.NRM&&material.texSrts[coord]?.mapMode===1)return [0.5+0.5*n[0],0.5+0.5*n[1]];
+    if(light.environmentPrimary&&unit===0){
+     // GX EnvCamera (s=0.5+0.5x, t=0.5-0.5y of the view normal) for the race
+     // camera's usual pitch (src/renderer.cpp bakeStaticLighting), then the SRT.
+     const s=0.5+0.5*n[0],t=0.5-0.5*(0.948683298*n[1]+0.316227766*n[2]),m=initialMatrices[0];
+     return [m[0]*s+m[4]*t+m[12],1-(m[1]*s+m[5]*t+m[13])];
+    }
     if(light.reflection?.mode===20&&gen?.source===GX.TexGenSrc.POS){
      const m=material.texSrts[coord].srtMtx;
      return [m[0]*pos[0]+m[4]*pos[1]+m[8]*pos[2]+m[12],1-(m[1]*pos[0]+m[5]*pos[1]+m[9]*pos[2]+m[13])];
@@ -1062,7 +1181,8 @@ for(const model of archive.mdl0){
    if(light.raster)for(let c=0;c<3;c++)color[c]=Math.round(Math.max(0,Math.min(255,color[c]*light.raster.scale[c]+light.raster.offset[c]*255)));
    vertices.push([...p,...n,...sampleUV(light.primaryCoord,0),...sampleUV(light.secondaryCoord,1),...color]);
   }
-  shapes.push({name:shape.name,material:material.name,sourceMaterial:material,constantTextures:constantTextures.get(material.name),primaryMap:light.primaryMap,secondaryMap:light.secondaryMap,texture,secondary,constant:light.constant,lightingMode:light.mode,uvVelocity,animationFrames,uvSamples,uvLoop:animClip?.loopMode===1,flags,vertices,tevStages:material.gxMaterial.tevStages.length,reflection:light.reflection,waterIndirect,textureAlphaAdd:light.textureAlphaAdd,skyScreenBlend:light.skyScreenBlend,skyRasterAdd:light.skyRasterAdd,dotMatrixScreen:light.dotMatrixScreen,retail:retail?{word:retail.word,ambient:retail.ambient,add:retail.add}:null});
+  shapes.push({name:shape.name,material:material.name,sourceMaterial:material,constantTextures:constantTextures.get(material.name),primaryMap:light.primaryMap,secondaryMap:light.secondaryMap,texture,secondary,constant:light.constant,lightingMode:light.mode,uvVelocity,animationFrames,uvSamples,uvLoop:animClip?.loopMode===1,flags,vertices,tevStages:material.gxMaterial.tevStages.length,reflection:light.reflection,waterIndirect,textureAlphaAdd:light.textureAlphaAdd,skyScreenBlend:light.skyScreenBlend,skyRasterAdd:light.skyRasterAdd,dotMatrixScreen:light.dotMatrixScreen,retail:retail?{word:retail.word,ambient:retail.ambient,add:retail.add}:null,
+   ...(clr?{clr}:{}),...(pat?{pat}:{})});
   if(objectBank&&sampleFrame===sampleFrames[0]){
    const alphaStage=material.gxMaterial.tevStages.find((s:any)=>[s.alphaInA,s.alphaInB,s.alphaInC,s.alphaInD].some((v:number)=>v>=1&&v<=3));
    const alphaRegister=alphaStage?[alphaStage.alphaInA,alphaStage.alphaInB,alphaStage.alphaInC,alphaStage.alphaInD].find((v:number)=>v>=1&&v<=3):-1;
@@ -1078,5 +1198,5 @@ for(const model of archive.mdl0){
  }
  if(objectBank&&process.argv[4])fs.writeFileSync(path.join(out,'bank.json'),JSON.stringify(writeObjectBank(objectBank,archive,poseMetadata,model,bankShapes)));
 }
-fs.writeFileSync(path.join(out,'model.json'),JSON.stringify({textures,models,lighting:retailEnabled?'retail':null,limitations:[...Array.from(retailLimitations),process.argv[5]?`Source CHR0 ${process.argv[5]} sampled at frame ${process.argv[6]??0}`:'Static bind pose','Linear source SRT0 animation; no fog or indirect texture distortion',...Array.from(unsupported,n=>'Fallback material: '+n),...Array.from(approximated,n=>'Approximated material: '+n),...Array.from(frozenUv,n=>'Nonlinear SRT0 frozen at authored frame zero: '+n)]}));
+fs.writeFileSync(path.join(out,'model.json'),JSON.stringify({textures,models,lighting:retailEnabled?'retail':null,limitations:[...Array.from(retailLimitations),process.argv[5]?`Source CHR0 ${process.argv[5]} sampled at frame ${process.argv[6]??0}`:'Static bind pose','Linear source SRT0 animation; no fog or indirect texture distortion',...Array.from(unsupported,n=>'Fallback material: '+n),...Array.from(approximated,n=>'Approximated material: '+n),...Array.from(frozenUv,n=>'Nonlinear SRT0 frozen at authored frame zero: '+n),...Array.from(animationLimits)]}));
 console.log(JSON.stringify({animations:archive.chr0.map(a=>a.name),nodes:archive.mdl0.map(m=>({model:m.name,nodes:m.nodes.map(n=>({name:n.name,t:[n.forwardBindPose[12],n.forwardBindPose[13],n.forwardBindPose[14]]}))})),models:models.map(m=>({name:m.name,triangles:m.shapes.reduce((n,s)=>n+s.vertices.length/3,0)})),textures:textures.length}));

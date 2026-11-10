@@ -102,6 +102,14 @@ inline bool shrinkHudTextures=false;
 // Fake Item Boxes take the real boxes' rainbow with distance, as retail does
 // (one more draw per far fake box). A/B: no-fakebox-rainbow.txt.
 inline bool fakeBoxRainbow=true;
+// Per-submesh material animation for one draw: affine rows (a b tx / c d ty)
+// for both texture coordinates, texture/TEV-constant overrides, an RGBA
+// multiplier on the vertex colour and an additive colour (0xAABBGGRR).
+// Alpha: tint[3] is the submesh's whole alpha (ObjectBank::markRegisterAlpha).
+struct SubmeshOverride {
+    enum : uint32_t { Constant=1, Tint=2, Alpha=4, Add=8, Uv=16, Texture=32 };
+    float uv[12]; float tint[4]; int32_t texture[2]; uint32_t constant,add,flags;
+};
 class Model {
 public:
     bool roadSamplerPolicy=false; // executable-only static-road sampler ranges
@@ -118,6 +126,17 @@ public:
     std::vector<WaterIndirectField> waterIndirect;
     struct UvTrack {uint32_t frames=0,loop=0;std::vector<float> samples;};
     std::vector<UvTrack> uvTracks;
+    // GMDL MAN1 (tools/cook_model.py): course and sky CLR0/PAT0 tracks, which
+    // retail Field::CourseModel plays from frame 0, sorted by submesh. kind 2
+    // PAT (int16 primary/secondary texture per frame, -1 keeps), 3 CLR (TEV
+    // constant, tint RGBA8, added colour per frame; flags: SubmeshOverride
+    // Constant/Tint/Add). Renderer::drawNow evaluates them into
+    // materialOverrides once per animation frame (materialFrame).
+    struct MaterialTrack {uint32_t submesh;uint16_t kind,flags;uint32_t frames,loop,offset;};
+    std::vector<MaterialTrack> materialTracks;
+    std::vector<uint32_t> materialData;
+    mutable std::vector<SubmeshOverride> materialOverrides;
+    mutable uint32_t materialFrame=~0u;
     Vec3 minimum{},maximum{};
     // Opt-in for immutable geometry only; dynamic skinning must never use stale bounds.
     std::vector<SubmeshVisibility> visibility;
@@ -167,14 +186,6 @@ struct RigidPart { uint32_t first,count,matrix; Bounds bounds{}; };
 // environment-mapped parts derive UV1 on the GPU from that normal matrix.
 // `matrices` is the palette's matrix count (0: the highest part index + 1).
 struct RigidPose { const std::vector<std::vector<RigidPart>>* parts=nullptr; const float* palette=nullptr; float environmentYaw=0; unsigned stride=21,matrices=0; };
-// Per-submesh material animation for one draw: affine rows (a b tx / c d ty)
-// for both texture coordinates, texture/TEV-constant overrides, an RGBA
-// multiplier on the vertex colour and an additive colour (0xAABBGGRR).
-// Alpha: tint[3] is the submesh's whole alpha (ObjectBank::markRegisterAlpha).
-struct SubmeshOverride {
-    enum : uint32_t { Constant=1, Tint=2, Alpha=4, Add=8, Uv=16, Texture=32 };
-    float uv[12]; float tint[4]; int32_t texture[2]; uint32_t constant,add,flags;
-};
 class Scene {
 public:
     Vec3 spawn{},spawnRotation{};

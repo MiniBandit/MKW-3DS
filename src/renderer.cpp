@@ -510,7 +510,32 @@ return false;}
     }
     while(!f.atEnd()){
         uint32_t header[2];
-        if(!f.read(header,sizeof header)||!header[1]||header[1]>submeshes.size())return false;
+        if(!f.read(header,sizeof header)||!header[1])return false;
+        if(!std::memcmp(header,"MAN1",4)){
+            // Course and sky CLR0/PAT0 tracks (tools/cook_model.py): per track
+            // (submesh, kind | flags<<8, frames, loop), then its frames' records.
+            if(!materialTracks.empty()||header[1]>2*submeshes.size())return false;
+            materialTracks.reserve(header[1]);
+            for(uint32_t n=0;n<header[1];++n){
+                uint32_t t[4];if(!f.read(t,sizeof t))return false;
+                const uint32_t kind=t[1]&255,flags=t[1]>>8,frames=t[2];
+                if(t[0]>=submeshes.size()||(!materialTracks.empty()&&materialTracks.back().submesh>t[0])||(kind!=2&&kind!=3)||
+                   (kind==2?flags!=0:(!flags||(flags&~uint32_t(SubmeshOverride::Constant|SubmeshOverride::Tint|SubmeshOverride::Add))))||
+                   !frames||frames>65535||t[3]>1)return false;
+                const size_t words=size_t(frames)*(kind==2?1:3),offset=materialData.size();
+                materialData.resize(offset+words);
+                if(!f.read(materialData.data()+offset,words*4))return false;
+                if(kind==2)for(size_t k=0;k<words;++k){
+                    const int32_t p=int16_t(materialData[offset+k]&0xffff),q=int16_t(materialData[offset+k]>>16);
+                    if(p< -1||q< -1||p>=int32_t(textures.size())||q>=int32_t(textures.size()))return false;
+                    if(q>=0)textures[q]->unitOne=true;
+                }
+                materialTracks.push_back({t[0],uint16_t(kind),uint16_t(flags),frames,t[3],uint32_t(offset)});
+            }
+            materialOverrides.resize(submeshes.size());
+            continue;
+        }
+        if(header[1]>submeshes.size())return false;
         if(!std::memcmp(header,"SMP1",4)){
             if(!samplers.empty()||header[1]!=submeshes.size())return false;
             samplers.resize(header[1]);
@@ -1223,6 +1248,27 @@ void Renderer::uvPlainNow(bool allowed){
         !on(environmentPrimaryLoc_)&&!on(projectedWaterLoc_)&&!on(retailBoolLoc_)&&!on(shadowCaptureLoc_);
     C3D_BoolUnifSet(GPU_VERTEX_SHADER,fastPathLoc_,fast);
 }
+// Model::materialTracks at animation frame `frame` into materialOverrides,
+// once per frame: each track loops or holds its last frame by its own flag.
+static void evaluateMaterialTracks(const Model& model,uint32_t frame){
+    model.materialFrame=frame;
+    uint32_t submesh=~0u;
+    for(const auto& t:model.materialTracks){
+        auto& o=model.materialOverrides[t.submesh];
+        if(t.submesh!=submesh){submesh=t.submesh;o.flags=0;o.texture[0]=o.texture[1]=-1;o.tint[0]=o.tint[1]=o.tint[2]=o.tint[3]=1;}
+        const uint32_t index=t.loop?frame%t.frames:std::min(frame,t.frames-1);
+        if(t.kind==2){
+            const uint32_t w=model.materialData[t.offset+index];
+            o.texture[0]=int16_t(w&0xffff);o.texture[1]=int16_t(w>>16);
+            if(o.texture[0]>=0||o.texture[1]>=0)o.flags|=SubmeshOverride::Texture;
+        }else{
+            const uint32_t* w=model.materialData.data()+t.offset+size_t(index)*3;
+            if(t.flags&SubmeshOverride::Constant){o.constant=w[0];o.flags|=SubmeshOverride::Constant;}
+            if(t.flags&SubmeshOverride::Tint){for(unsigned k=0;k<4;++k)o.tint[k]=float((w[1]>>(8*k))&255)*(1.f/255.f);o.flags|=SubmeshOverride::Tint;}
+            if(t.flags&SubmeshOverride::Add){o.add=w[2];o.flags|=SubmeshOverride::Add;}
+        }
+    }
+}
 void Renderer::resetMaterialUniforms(){
     if(uvDirty_){
         C3D_FVUnifSet(GPU_VERTEX_SHADER,uvRowLoc_[0],1,0,0,0);C3D_FVUnifSet(GPU_VERTEX_SHADER,uvRowLoc_[1],0,1,0,0);
@@ -1372,6 +1418,11 @@ void Renderer::drawNow(const Model& model,const Vertex* vertices,const C3D_Mtx& 
             if(!ranges.count){++stats_.culledSubmeshes;continue;}
         }else ranges.append({s.first,s.count});
         const SubmeshOverride* o=overrides_&&i<overrideCount_&&overrides_[i].flags?&overrides_[i]:nullptr;
+        // The model's own course/sky material animation (GMDL MAN1), unless the draw overrides it.
+        if(!o&&!model.materialTracks.empty()){
+            if(model.materialFrame!=animationFrame)evaluateMaterialTracks(model,animationFrame);
+            if(model.materialOverrides[i].flags)o=&model.materialOverrides[i];
+        }
         // Reset inherited state before applying this submesh's overrides. The
         // reset clears both uniforms: doing it after UV setup when tint ends
         // also erased the new SRT/mirror matrix (including a Boo at full alpha).
