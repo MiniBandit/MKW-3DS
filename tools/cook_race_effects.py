@@ -640,6 +640,7 @@ def cook(root, output, course_only=False, balloon_only=False, coin_only=False, c
                            ('sand_battle', 'quicksand', ['rk_qsandDossun']),
                            ('desert_course', 'sanbo', ['rk_sanbo']),
                            ('old_peach_gc', 'poihana', ['rk_poihanaExclm']),
+                           ('old_desert_ds', 'FireSnake', ['rk_fireSnake']),
                            ('rainbow_course', 'StarRing', ['rk_StarRing']),
                            ('rainbow_course', 'entry', ['rk_entry']),
                            ('treehouse_course', 'hanachan', ['rk_hanaSmk']),
@@ -660,7 +661,7 @@ def cook(root, output, course_only=False, balloon_only=False, coin_only=False, c
         # original descriptors/curves differ. Keep the battle archive distinct.
         alias = (lambda name: 'W_' + name) if archive == 'truckChimSmkW' else (lambda name: name)
         course_roots[archive] = [alias(name) for name in roots]
-        effect_name = {'DonkyCannon_wii':'dkCannon', 'hanachan':'hana', 'Steam':'steam', 'Alarm':'alarm', 'choropu':'choropuMoko', 'Epropeller':'epropeller', 'VolcanoBall1':'volc', 'FlamePole':'flamePole', 'FlamePole_v':'flamePole', 'FlamePole_v_big':'flamePoleL', 'KoopaFigure64':'koopaFire', 'Block':'block', 'quicksand':'qsandDossun'}.get(archive, archive)
+        effect_name = {'DonkyCannon_wii':'dkCannon', 'hanachan':'hana', 'Steam':'steam', 'Alarm':'alarm', 'choropu':'choropuMoko', 'Epropeller':'epropeller', 'VolcanoBall1':'volc', 'FlamePole':'flamePole', 'FlamePole_v':'flamePole', 'FlamePole_v_big':'flamePoleL', 'KoopaFigure64':'koopaFire', 'Block':'block', 'quicksand':'qsandDossun', 'FireSnake':'fireSnake'}.get(archive, archive)
         path = root / f'assets/courses/{course}/effect/{archive}/rk_{effect_name}.breff'
         source, pixels = path.read_bytes(), path.with_suffix('.breft').read_bytes()
         index, pixel_index = entries(source), entries(pixels)
