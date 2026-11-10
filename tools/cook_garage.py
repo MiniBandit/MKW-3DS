@@ -41,6 +41,12 @@ VEHICLES = {
 # vehicles, then the six unlockable ones.
 VEHICLES_PER_DRIVER = 12
 EXTRA_NAMES = ["handle", "f_sus", "swingarm", "r_sus", "arm_fl", "arm_fr", "arm_rl", "arm_rr", "sus_fr"]
+# The only kart_model.brres CHR0 clips retail binds: its name table at PAL
+# 0x808B58C8 (bound by name, 0x8055DDEC). The bikes' handle_drive is never
+# played (no such string in the game): retail draws each handle in its bind
+# pose at the steered handle matrix, as the menu machine models place it. The
+# Wario Bike's handle_drive also bakes a second handle offset (0,99,82) and tilt.
+RETAIL_KART_CLIPS = ("jump2", "throw", "damage", "sjump", "dash", "jump", "good", "bad", "brake", "shake")
 
 
 def inspect_driver(archive):
@@ -89,6 +95,7 @@ def cook_choice(choice, output, *, source_root=None, export_root=None, models_on
     kart_animations = json.loads(result.stdout)["chr0"]
     if any("nodeNames" not in clip for clip in kart_animations):
         raise ValueError("Rebuild the exporter with CHR0 target inventory support")
+    kart_animations = [clip for clip in kart_animations if clip["name"] in RETAIL_KART_CLIPS]
     part_clips = {}
     for model in kart["nodes"]:
         names = {node["name"] for node in model["nodes"]}
@@ -131,8 +138,6 @@ def cook_choice(choice, output, *, source_root=None, export_root=None, models_on
         command = ["node", str(ROOT / "build/export_brres.mjs"), str(source_file), str(destination), source_model]
         if part == "driver":
             command.extend(["drive", "15"])
-        elif any(clip["name"] == "handle_drive" for clip in part_clips.get(source_model, [])):
-            command.extend(["handle_drive", "15"])
         subprocess.run(command, check=True, stdout=subprocess.DEVNULL,
                        env={**os.environ, 'MKW_RACE_MATERIALS': '1'})
         exported = json.loads((destination / 'model.json').read_text())

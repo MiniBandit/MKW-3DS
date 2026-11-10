@@ -73,20 +73,30 @@ struct StartPanParam {
 };
 
 // One 60 Hz tick of race-camera inputs, sampled after the simulation step.
+// RaceChaseCamera::update fills the chase fields between the director's phases.
 struct RaceCameraInput {
  // Retail RaceCamera forward state (+0x19c): eye and target position (kart
  // position less the smoothed hop), from the presentation chase camera.
  Vec3 chaseEye,chasePivot;
- Vec3 rearEye,rearPivot;
- bool lookBack=false,bullet=false,inCannon=false;
+ Vec3 chaseBackEye;            // backward state (+0x268) eye: the look-behind view
+ Vec3 lookBackTarget;          // RaceCamera +0xc4: the look-behind target offset
+ bool lookBack=false,bullet=false;
  Vec3 kartPos,kartForward;     // KartMove smoothed forward (+0x80)
  float cameraDistY=0,targetPosY=0,cameraFov=60,boostFov=0;
  float cameraPosY=0,cameraDistance=0; // original character camera parameters
  unsigned stage=0;             // Kinoko RaceManager::Stage
+ int course=-1;                // RaceConfig course id (+0xb68)
  bool previewActive=false;     // KMP course preview owns the screen
  bool beforeRespawn=false,inRespawn=false,finished=false;
  unsigned battleWipeSerial=0; // KartMove zero-balloon type0 wipe request
  int respawnTimer=0;          // KartCollide countdown after its physics tick
+ // While held: the eye's x/z still follow (forward state +0x84 > 0.5 or its wall-hit byte).
+ bool holdFollow=false;
+ bool explosion=false;         // flag 1 (0x805A4DEC): the target drops 10 a frame to -50
+ // OverZipper, velocity y < 0 and RaceCamera +0x118 for the half-pipe target (0x805A2CFC).
+ bool halfPipe=false,falling=false;float halfPipeEase=0;
+ // 0x805A40D0 in the chase view: the up vector's target and rate.
+ Vec3 upTarget{0,1,0};float upRate=.1f;
  uint16_t oobRequest=0;        // KartCollide::oobCameraRequest
  // Camera AREA lookup (KMP::Manager::FindAREA, type 0): current id or -1.
  int (*findArea)(void* context,int current,Vec3 position)=nullptr;void* areaContext=nullptr;
@@ -96,7 +106,8 @@ struct RaceCameraInput {
  void* collisionContext=nullptr;
 };
 
-struct RaceCameraView {Vec3 eye,target;float fov=60;};
+// up / side: the camera's up (RaceCamera +0x7c) and side axes (0x805A40D0).
+struct RaceCameraView {Vec3 eye,target;float fov=60;Vec3 up{0,1,0},side{1,0,0};};
 
 // Presentation race-camera director. Chooses the eye, target and FOV each tick
 // from retail RaceCamera::Update (PAL 0x805A21D0): the start pan (OpeningPan,
@@ -112,7 +123,14 @@ public:
  // RaceCamera::Init with the BCP start pan (0x805A2034); the player's start
  // position/angles (degrees) as RaceManager::findKartStartPoint returns them.
  void reset(const StartPanParam& pan,Vec3 startPos,Vec3 startAngles,const RaceCameraInput& first);
- void step(const RaceCameraInput& in);
+ // RaceCamera::Update in three phases around the chase states (RaceChaseCamera::update):
+ // respawn / out-of-bounds requests and the target (false while the preview runs),
+ // the held eye, then the shown view, FOV, KMP and start-pan cameras and up vector.
+ bool beginStep(const RaceCameraInput& in);
+ void holdEye(const RaceCameraInput& in);
+ void endStep(const RaceCameraInput& in);
+ void step(const RaceCameraInput& in){if(beginStep(in)){holdEye(in);endStep(in);}}
+ Vec3 target()const{return target_;}  // RaceCamera +0xac
  RaceCameraView view()const{return view_;}
  Mode mode()const;
  uint16_t flags()const{return flags_;}
@@ -142,6 +160,9 @@ private:
   CameraRail rail;
  };
  void computeTarget(const RaceCameraInput& in,bool snap);
+ void resetUp();
+ void calcUp(const RaceCameraInput& in,bool chase,float rate);
+ void clampGbaShyGuyBeach(const RaceCameraInput& in);
  void stepPan(const RaceCameraInput& in);
  void stepAuto(const RaceCameraInput& in);
  void switchCamera(const RaceCameraInput& in,int camera,bool raceEnd);
@@ -154,8 +175,13 @@ private:
  RaceCameraView view_;
  Vec3 eye_,target_;           // RaceCamera +0xa0 / +0xac
  float targetHeight_=100,targetOffset_=0,slopeOffset_=0; // +0x344, +0x108, +0x104
- float forwardPitch_=0,forwardPitchVelocity_=0;bool forwardPitchReady_=false;
- float forwardYaw_=0,forwardYawVelocity_=0,forwardYawExitOffset_=0;bool bulletYawActive_=false,bulletYawExiting_=false;
+ float halfPipeDrop_=0,halfPipeLift_=0;    // +0x10c, +0x110
+ // Port-only Killer view: eased pitch and bearing, and their decaying offsets on exit.
+ float forwardPitch_=0,forwardPitchVelocity_=0,forwardPitchExitOffset_=0;
+ float forwardYaw_=0,forwardYawVelocity_=0,forwardYawExitOffset_=0;bool bulletActive_=false,bulletExiting_=false;
+ // Up vector smoothing (+0x150 smoothed up target, +0x15c last up, +0x168
+ // eased up, +0x174 rate, +0x178 quaternion as w, x, y, z).
+ Vec3 smUp_{0,1,0},prevUp_{0,1,0},upSm_{0,1,0};float upT_=1;std::array<float,4> upQ_{1,0,0,0};
  float riseEye_=0,riseTarget_=0;           // +0x124, +0x128
  uint16_t flags_=0;
  bool wasBeforeRespawn_=false,wasInRespawn_=false;

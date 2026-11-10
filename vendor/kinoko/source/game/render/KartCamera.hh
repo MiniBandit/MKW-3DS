@@ -55,6 +55,7 @@ public:
     void calc();
     // USA8059bd94: local traffic contact lowers the camera temporarily.
     void onTrafficContact() { m_trafficContactFrames = 60; }
+    bool trafficContact() const { return m_trafficContactFrames >= 0; }
     // Retail OnRespawn re-seats both chase directions at the rescued kart.
     void onRespawn() { initPos(); }
 

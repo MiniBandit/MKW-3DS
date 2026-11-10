@@ -99,6 +99,9 @@ public:
 // HUD sprites drawn 2-5x under their texel size sample a halved copy
 // (RaceHud::load). A/B: no-hud-shrink.txt.
 inline bool shrinkHudTextures=false;
+// Fake Item Boxes take the real boxes' rainbow with distance, as retail does
+// (one more draw per far fake box). A/B: no-fakebox-rainbow.txt.
+inline bool fakeBoxRainbow=true;
 class Model {
 public:
     bool roadSamplerPolicy=false; // executable-only static-road sampler ranges
