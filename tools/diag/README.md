@@ -132,6 +132,8 @@ released items, other racers' items and course objects (crowds stay baked);
 by default their G3D light is computed in the vertex shader, from the camera's
 side as on the Wii. `no-rear-bake.txt` bakes the opponents' light as seen from
 the front, as before, instead of from behind (no cost either way).
+`live-opponents.txt` lights the opponents in the vertex shader like the local
+racer (full driver banks, lit GPU skinning; LOD models stay baked).
 `no-opp-pres-thin.txt` presents opponents not drawn up close every tick
 instead of once per drawn frame; `no-kartfx-lod-thin.txt` steps LOD racers'
 kart effects every tick instead of every 4th.

@@ -84,7 +84,7 @@ bool RacerVisuals::load(){
     // lineup doesn't use go now, before its own banks are allocated.
     {std::vector<std::string> banks;
      for(unsigned i=1;i<config.playerCount&&i<=11;++i){const auto& player=config.players[i];
-      VehicleVisualAssets::bankPaths(unsigned(player.character),unsigned(player.vehicle),config.teams?RaceTeam(player.team):RaceTeam::None,diag::unlitBanks,banks);}
+      VehicleVisualAssets::bankPaths(unsigned(player.character),unsigned(player.vehicle),config.teams?RaceTeam(player.team):RaceTeam::None,diag::unlitBanks&&!diag::liveOpponents,banks);}
      DriverAnimation::keepOnly(banks);}
     // The course's G3D lights are in view space: the Wii lights a racer from
     // the camera's side. Opponents keep baked light (no per-vertex cost), now
@@ -95,7 +95,7 @@ bool RacerVisuals::load(){
     for(unsigned i=1;i<config.playerCount&&i<=11;++i){
         auto r=std::make_unique<Impl::Racer>();const auto& player=config.players[i];
         std::string failure;
-        if(!r->load(unsigned(player.character),unsigned(player.vehicle),config.teams?RaceTeam(player.team):RaceTeam::None,&failure,diag::unlitBanks)){
+        if(!r->load(unsigned(player.character),unsigned(player.vehicle),config.teams?RaceTeam(player.team):RaceTeam::None,&failure,diag::unlitBanks&&!diag::liveOpponents,diag::liveOpponents)){
             if(auto* log=std::fopen("sdmc:/3ds/mkw-3ds/opponent-load-error.txt","w")){
                 // Free heap and the largest LINEAR block (a free total says nothing about fragmentation).
                 const struct mallinfo m=mallinfo();const size_t heapTotal=envGetHeapSize();
@@ -108,9 +108,10 @@ bool RacerVisuals::load(){
             reset();return false;
         }
         auto freeze=[](auto& model,auto& bank){if(!model)return;
-            model->freezeLighting(bank&&bank->gpuSkinned()?bank->palette():nullptr);
+            // Live opponents keep normals and the lit palette, as the local racer does.
+            if(!diag::liveOpponents)model->freezeLighting(bank&&bank->gpuSkinned()?bank->palette():nullptr);
             if(bank&&bank->gpuSkinned()){
-                bank->shareDrawVertices(*model);
+                if(!diag::liveOpponents)bank->shareDrawVertices(*model);
                 model->enableSkinCulling(bank->matrixCount());
             }else if(!bank)model->enableStaticCulling();
         };
@@ -122,7 +123,7 @@ bool RacerVisuals::load(){
         if(VehicleLodLayout[r->choice->vehicle].handle){r->handleLod=loadLow("handle_lod");r->handleLodRear=loadLow("handle_lod_rear");}
         freeze(r->driver,r->animation);freeze(r->body,r->bodyAnimation);
         for(unsigned n=0;n<r->extras.size();++n)freeze(r->extras[n],r->extraAnimation[n]);
-        for(auto& wheel:r->wheels)if(wheel){wheel->freezeLighting();wheel->enableStaticCulling();}
+        for(auto& wheel:r->wheels)if(wheel){if(!diag::liveOpponents)wheel->freezeLighting();wheel->enableStaticCulling();}
         if(unsigned(player.character)==23){
             r->luma=std::make_unique<LumaVisual>();
             if(!r->luma->load()){reset();return false;}

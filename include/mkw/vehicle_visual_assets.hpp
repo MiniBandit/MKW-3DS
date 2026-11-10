@@ -21,7 +21,8 @@ struct VehicleVisualAssets {
  // Replacing an already rendered set requires a GPU drain by the caller.
  // unlitBanks (opponents, DIAG): the driver bank comes from its compact .dsku
  // when race.pak has one (tools/pack_unlit_banks.py), else the .dskm.
- bool load(unsigned character,unsigned vehicle,RaceTeam team,std::string* failure=nullptr,bool unlitBanks=false);
+ // live: models keep their normals for shader lighting (no load-time bake).
+ bool load(unsigned character,unsigned vehicle,RaceTeam team,std::string* failure=nullptr,bool unlitBanks=false,bool live=false);
  // The animation bank paths load() would read, for DriverAnimation::keepOnly.
  static void bankPaths(unsigned character,unsigned vehicle,RaceTeam team,bool unlitBanks,std::vector<std::string>& out);
 };

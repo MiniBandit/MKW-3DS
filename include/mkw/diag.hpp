@@ -75,6 +75,9 @@ inline bool unlitBanks=true;
 // the load-time bake. A/B: no-live-light.txt. Opponents are baked as seen
 // from behind instead of from the front. A/B: no-rear-bake.txt.
 inline bool liveLight=true,rearBake=true;
+// Opponents lit in the vertex shader like the local racer (full banks, lit
+// GPU skinning; LOD models stay baked). Off by default. A/B: live-opponents.txt.
+inline bool liveOpponents=false;
 // Pause keeps the racers and course object graphics loaded when the pause
 // menu's textures still fit, so resuming needs no reload. A/B: no-pause-keep.txt.
 inline bool pauseKeep=true;
