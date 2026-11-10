@@ -1,5 +1,12 @@
 # Changelog
 
+# 0.7.1: builder fixes
+
+- Windows: packaging no longer stops at the last step with "Invalid menu movie path".
+- The builder checks for the C++ compiler at the start instead of failing at step 11.
+- Linux instructions: devkitPro's install script for Debian, Ubuntu and ChromeOS; Intel or AMD computers only.
+- The game is unchanged from 0.7.0: a game built with 0.7.0 does not need rebuilding.
+
 # 0.7.0: Redux merge
 
 Epic's Mario Kart Wii 3DS Redux is now the game, by her permission, on top of this project's builder and quick updates. Every player must build again in a new, empty folder.
