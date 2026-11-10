@@ -246,6 +246,10 @@ def stage_tools():
     missing=[m for m in ('numpy','PIL','Crypto') if not __import__('importlib.util').util.find_spec(m)]
     if missing:raise SystemExit(f'Missing Python packages {", ".join(missing)} in {sys.executable}: run "{sys.executable}" -m pip install -r requirements.txt')
     if not shutil.which('node'):raise SystemExit('Missing Node.js (https://nodejs.org), used by the model exporters')
+    # The two small helper programs are compiled for this computer at step 11:
+    # say now if there is no compiler, not hours into the build (#116).
+    from host_tools import compiler
+    compiler()
 
 def stage_sources():
     # Always run: it fetches what is missing and brings a reused builder folder's

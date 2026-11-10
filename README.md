@@ -43,11 +43,21 @@ window and press Return.
 **Windows:** double-click `Build MKW CIA.bat`, drag your disc image into the
 window and press Enter.
 
-**Linux:** install the same tools with your package manager and devkitPro's
-[`dkp-pacman`](https://devkitpro.org/wiki/devkitPro_pacman), then run
-`bash "Build MKW CIA.command"` and type or paste the path to your disc image.
-No Mac or Windows PC? This is the way to go on any computer that can run a
-Linux environment, such as a Chromebook with Linux turned on.
+**Linux** (Intel or AMD computers only, including Chromebooks with Linux turned on):
+install Python, Node.js, Git and `g++` with your package manager, then devkitPro.
+On Debian, Ubuntu and ChromeOS, devkitPro's package manager is installed with
+its own script first:
+
+```bash
+wget https://apt.devkitpro.org/install-devkitpro-pacman
+chmod +x ./install-devkitpro-pacman
+sudo ./install-devkitpro-pacman
+sudo dkp-pacman -S 3ds-dev
+```
+
+Then open a new terminal, go into the builder folder (`cd` to where you
+unzipped it) and run `bash "Build MKW CIA.command"`. Type or paste the path to
+your disc image when asked.
 
 **This version needs a new build.** Its converted game files changed, so build
 it **in a new, empty folder** (not your old builder folder).

@@ -153,7 +153,7 @@ if movie_manifest.get('version')!=1 or len(movie_manifest.get('streams',[]))<17:
 files[assets/'models/menu-movies.json']=Path('models/menu-movies.json')
 for movie in movie_manifest['streams']:
  relative=Path(movie['path']);source_relative=Path(movie['source']);source=ROOT/source_relative
- if relative.parent!=Path('movies') or relative.suffix!='.gmv' or '..' in source_relative.parts or not str(source_relative).startswith('data/extracted/thp/'):raise ValueError('Invalid menu movie path')
+ if relative.parent!=Path('movies') or relative.suffix!='.gmv' or '..' in source_relative.parts or not source_relative.as_posix().startswith('data/extracted/thp/'):raise ValueError('Invalid menu movie path')
  if digest_file(source)!=movie['sourceSha256']:raise ValueError('Menu movie source changed: '+str(source_relative))
  path=assets/relative
  with path.open('rb') as stream:header=stream.read(64)
