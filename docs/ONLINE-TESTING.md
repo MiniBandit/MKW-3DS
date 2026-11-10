@@ -16,6 +16,9 @@ Put a text file named `lan.txt` in `sd:/3ds/mkw-3ds/` containing one line:
 online SERVER_ADDRESS
 ```
 
+To skip typing the room code each time, add it after the address, e.g.
+`online SERVER_ADDRESS MARIO7`. Both players use the same code.
+
 ## Race
 
 1. Both players agree on a **room code** (letters and numbers, up to 8), e.g. `MARIO7`.
