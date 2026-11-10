@@ -16,6 +16,7 @@ namespace Kinoko::Field {class ObjectBase;class RailInterpolator;}
 namespace mkw {
 struct ObjModel {
     std::unique_ptr<FirePhaseStream> firePhases;
+    bool firePending=false; // Old 3DS: phases opened after the opponents (CourseObjects::loadFirePhases)
     int fireTexture=-1,firePhase=-1;
     int budgetClip=-2;float budgetFrame=-1;std::vector<float> budgetPalette;
 

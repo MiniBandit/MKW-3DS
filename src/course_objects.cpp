@@ -119,6 +119,25 @@ Tracks ObjectAssets::tracks(const ObjModel* model,const char* name) const {
 }
 // Which file and step failed in the last ObjectAssets::load (runtime.log).
 char objectLoadFailure[160]="";
+namespace {
+// fireBPlane's 100 phases (13 MB): as many as the heap can spare.
+bool openFirePhases(ObjModel& m){
+    auto stream=std::make_unique<FirePhaseStream>();
+    // Leave ordinary heap headroom for racers, menus and live effects.
+    const size_t heapBytes=envGetHeapSize(),usedBytes=mallinfo().uordblks;
+    const size_t budget=heapBytes>usedBytes+(8u<<20)?heapBytes-usedBytes-(8u<<20):0;
+    // Old 3DS (reduced): at least 10 of the 100 phases (1.3 MB), not none.
+    const size_t phaseBudget=renderQuality().reduced?std::max<size_t>(budget,10u*131072u):budget;
+    auto& texture=*m.model->textures[m.fireTexture];
+    if(!stream->open("textures/firebar-indirect.ftan",phaseBudget)||!stream->read(0,texture.gpu.data,texture.gpu.size)){
+        std::snprintf(objectLoadFailure,sizeof objectLoadFailure,"fire phases (budget %u)",unsigned(phaseBudget));return false;}
+    C3D_TexFlush(&texture.gpu);
+    m.firePhase=0;m.firePending=false;
+    fireCacheBytes.store(stream->bytes());fireCacheStride.store(stream->stride());
+    m.firePhases=std::move(stream);
+    return true;
+}
+}
 bool ObjectAssets::load(int course){
     char path[64];std::snprintf(path,sizeof path,"models/course_%02d_visuals.list",course);
     FILE* list=std::fopen(path,"r");if(!list)return course>=32;
@@ -204,23 +223,19 @@ bool ObjectAssets::load(int course){
 
         }
         if(m->resource=="WLfirebarGC"&&m->name=="fireBPlane"){
-            m->firePhases=std::make_unique<FirePhaseStream>();
             auto texture=std::make_shared<Texture>();
-            // Leave ordinary heap headroom for racers, menus and live effects.
-            const size_t heapBytes=envGetHeapSize(),usedBytes=mallinfo().uordblks;
-            const size_t budget=heapBytes>usedBytes+(8u<<20)?heapBytes-usedBytes-(8u<<20):0;
-            // Old 3DS (reduced): at least 10 of the 100 phases (1.3 MB), not none.
-            const size_t phaseBudget=renderQuality().reduced?std::max<size_t>(budget,10u*131072u):budget;
-            if(!m->firePhases->open("textures/firebar-indirect.ftan",phaseBudget)||
-               !C3D_TexInit(&texture->gpu,256,256,GPU_LA8)){std::snprintf(objectLoadFailure,sizeof objectLoadFailure,"fire phases (budget %u)",unsigned(phaseBudget));ok=false;break;}
+            if(!C3D_TexInit(&texture->gpu,256,256,GPU_LA8)){std::snprintf(objectLoadFailure,sizeof objectLoadFailure,"fire texture");ok=false;break;}
             texture->ready=true;
-            if(!m->firePhases->read(0,texture->gpu.data,texture->gpu.size)){ok=false;break;}
+            std::memset(texture->gpu.data,0,texture->gpu.size);
             C3D_TexSetFilter(&texture->gpu,GPU_LINEAR,GPU_LINEAR);
             C3D_TexSetWrap(&texture->gpu,GPU_CLAMP_TO_EDGE,GPU_CLAMP_TO_EDGE);
-            C3D_TexFlush(&texture->gpu);
-            m->fireTexture=int(m->model->textures.size());m->firePhase=0;
-            fireCacheBytes.store(m->firePhases->bytes());fireCacheStride.store(m->firePhases->stride());
+            m->fireTexture=int(m->model->textures.size());
             m->model->textures.push_back(std::move(texture));
+            m->firePending=true;
+            // New 3DS opens the phases now; Old 3DS waits for the opponents
+            // (loadFirePhases): a cold first race would give the stream the heap
+            // its racers' banks need, and the race sound cache then has no LINEAR.
+            if(!renderQuality().reduced&&!openFirePhases(*m)){ok=false;break;}
         }
         models.push_back(std::move(m));
     }
@@ -377,6 +392,10 @@ bool CourseObjects::loadCoconut(){
         if(obj->id()!=unsigned(K::Field::ObjectId::PalmTree)||!(obj->presenceFlag()&1))continue;
         d.palms.push_back(placementMatrix(*obj));
     }
+    return true;
+}
+bool CourseObjects::loadFirePhases(){
+    for(auto& m:impl_->assets.models)if(m->firePending&&!openFirePhases(*m))return false;
     return true;
 }
 bool CourseObjects::loadCourse(int courseId){
