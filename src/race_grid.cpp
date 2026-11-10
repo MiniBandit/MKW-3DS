@@ -234,6 +234,7 @@ void RaceGrid::beforeStep(uint16_t bulletPlayers){
         auto* local=objects->object(0);
         const Vec3 target=native(local->pos());
         for(unsigned i=1;i<count_;++i){
+            if((remoteMask>>i)&1)continue;
             auto* kart=objects->object(i);
             auto* pad=System::KPadDirector::Instance()->hostController(i);
             const Vec3 pos=native(kart->pos());
@@ -250,7 +251,7 @@ void RaceGrid::beforeStep(uint16_t bulletPlayers){
     for(unsigned j=1;j<count_;++j)leaderCompletion=std::max(leaderCompletion,manager->player(j).raceCompletion());
     // Retail Enemy::AI drives every CPU outside a Bullet (and player zero for QA).
     uint32_t aiMask=0;
-    for(unsigned i=0;i<count_;++i)if(!(bulletPlayers&(1u<<i))&&(i||driveLocal))aiMask|=1u<<i;
+    for(unsigned i=0;i<count_;++i)if(!(bulletPlayers&(1u<<i))&&(i||driveLocal)&&!((remoteMask>>i)&1))aiMask|=1u<<i;
     if(ai_.ready()){
         // CPUs run the retail stuck handler inside CpuAi; the QA autopilot keeps
         // the adapted recovery below.
@@ -258,6 +259,7 @@ void RaceGrid::beforeStep(uint16_t bulletPlayers){
         ai_.step(aiMask,ranks_,laps_,finished_,3);
     }
     for(unsigned i=0;i<count_;++i){
+        if((remoteMask>>i)&1)continue;
         const bool bullet=(bulletPlayers&(1u<<i))!=0;
         auto& d=drivers_[i];
         auto* kart=objects->object(i);

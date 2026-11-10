@@ -277,3 +277,5 @@ src/sound_system.cpp
 src/staff_scene.cpp
 src/vehicle_animation.cpp
 src/vehicle_visual_assets.cpp
+src/lan_play.cpp
+src/lan_handshake.cpp

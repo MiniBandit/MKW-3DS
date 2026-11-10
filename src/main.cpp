@@ -32,6 +32,8 @@
 #include <mkw/vehicle_animation.hpp>
 #include <mkw/luma_visual.hpp>
 #include <mkw/race_grid.hpp>
+#include <mkw/lan_play.hpp>
+#include <mkw/lan_handshake.hpp>
 #include <mkw/balloon_battle.hpp>
 #include <mkw/battle_round_result.hpp>
 #include <mkw/balloon_battle_runtime.hpp>
@@ -218,6 +220,9 @@ static unsigned selectedGarageIndex(){return driverChoice<24?driverChoice*mkw::V
 static const auto& selectedVehicle(){return mkw::raceGarageChoice(selectedGarageIndex());}
 static mkw::CpuRoster selectedRoster;
 static std::array<uint8_t,12> selectedStartPositions{};
+// LAN play (src/lan_play.cpp): a two-player VS race against another console.
+static bool lanRace=false,lanHost=false,lanWaiting=false;static std::array<unsigned,12> lanRoster{};
+static uint16_t lanButtons=0;static int8_t lanStick=0;static uint8_t lanTrick=0,lanItemFlags=0;static uint32_t lanAppliedTick=0;
 static void configure(K::System::RaceConfig* config,void* context) {
     if(replayData){config->setGhost(replayData);config->raceScenario().players[0].type=K::System::RaceConfig::Player::Type::Ghost;return;}
     auto& s=config->raceScenario();s.course=Courses[courseChoice].id;
@@ -225,7 +230,9 @@ static void configure(K::System::RaceConfig* config,void* context) {
     s.cpuDifficulty=uint8_t(selectedCpu);s.cpuVehicles=uint8_t(selectedCpuVehicles);s.itemMode=uint8_t(selectedItems);
     s.gameMode=static_cast<K::System::RaceConfig::Scenario::GameMode>(selectedRaceMode);
     s.teams=selectedTeams;s.humanTeam=uint8_t(selectedHumanTeam);s.battleType=coinRunnersMode?1:0;
-    if(fullRace){static_cast<mkw::RaceGrid*>(context)->configure(*config,selectedGarageIndex(),timeTrial?1:12,selectedRoster.ready?&selectedRoster.choices:nullptr);for(unsigned i=0;i<s.playerCount;++i)s.players[i].startPosition=selectedStartPositions[i];s.players[0].driftIsAuto=automaticDrift;return;}
+    if(fullRace){static_cast<mkw::RaceGrid*>(context)->configure(*config,selectedGarageIndex(),lanRace?2:timeTrial?1:12,lanRace?&lanRoster:selectedRoster.ready?&selectedRoster.choices:nullptr);for(unsigned i=0;i<s.playerCount;++i)s.players[i].startPosition=selectedStartPositions[i];
+        // LAN: both consoles build the same grid, host first.
+        if(lanRace){s.players[0].startPosition=lanHost?1:2;s.players[1].startPosition=lanHost?2:1;s.players[1].driftIsAuto=mkw::lan::session().peerAutoDrift();}s.players[0].driftIsAuto=automaticDrift;return;}
     auto& p=s.players[0];p.type=K::System::RaceConfig::Player::Type::Local;
     const auto& driver=selectedVehicle();
     p.character=static_cast<K::Character>(driver.character);p.vehicle=static_cast<K::Vehicle>(driver.vehicle);p.driftIsAuto=false;
@@ -397,6 +404,8 @@ int main() {
     const bool embedded=assets.mounted&&contentMatches("romfs:");
     const char* assetRoot=embedded?"romfs:/":DATA;
     report(embedded?"assets: embedded RomFS":"assets: external SD package");
+    if(mkw::lan::session().configure())report(mkw::lan::session().role()==mkw::lan::Role::Host?"LAN: host (lan.txt)":"LAN: join (lan.txt)");
+    else if(*mkw::lan::session().reason())report(mkw::lan::session().reason());
     report("version " MKW_VERSION);
 #ifndef MKW_EXTERNAL_ASSETS
     if(!embedded&&!sdContentReady())return 1;
@@ -1203,6 +1212,32 @@ int main() {
         const unsigned cc=vs?menu.selection.vsClass:menu.selection.mode==mkw::UiMode::GrandPrix?unsigned(menu.selection.engineClass):2;
         selectedMirror=cc==3;selectedEngineClass=std::min(cc,2u);
         selectedCpu=battleMode?menu.selection.battleCpu:vs?menu.selection.vsCpu:(selectedRaceMode==0?std::min(selectedEngineClass,2u):1u);selectedCpuVehicles=battleMode?menu.selection.battleVehicles:vs?menu.selection.vsVehicles:0;selectedItems=battleMode?menu.selection.battleItems:vs?menu.selection.vsItems:0;
+        // LAN play: agree on the course and swap drivers before loading (lan.txt).
+        lanRace=false;
+        auto& lan=mkw::lan::session();
+        if(lan.active()&&vs&&!selectedTeams){
+            if(!lan.open())LOGF("LAN: %s",lan.reason());
+            else{
+                lan.resetRace();
+                LOGF("LAN: %s, waiting for the other console",lan.role()==mkw::lan::Role::Host?"hosting":"joining");
+                {
+                    mkw::LoadingScope loading;
+                    while(!lan.handshakeDone()&&aptMainLoop()){
+                        hidScanInput();if(hidKeysDown()&KEY_B)break;
+                        lan.handshakeStep(selectedGarageIndex(),automaticDrift,courseChoice,selectedEngineClass,selectedMirror);
+                        svcSleepThread(16666667);
+                    }
+                }
+                if(lan.handshakeDone()){
+                    // Both consoles agree: shake on it. Each side repeats its messages until answered, so nothing is lost while this plays.
+                    mkw::playLanHandshake(renderer);
+                    lanRace=true;lanHost=lan.role()==mkw::lan::Role::Host;
+                    courseChoice=lan.raceCourse();selectedEngineClass=std::min(lan.raceEngineClass(),2u);selectedMirror=lan.raceMirror();
+                    lanRoster=selectedRoster.choices;lanRoster[1]=lan.peerGarage();
+                    LOGF("LAN: race course=%u other driver garage=%u",courseChoice,lan.peerGarage());
+                }
+            }
+        }
     };
     if(fullRace){if(runMenu()!=mkw::UiAction::StartRace){finishAutoplay();renderer.waitForGpu();menuModels.reset(renderer);menuIcons.reset(renderer);menuRenderer.release();mkw::SoundSystem::instance().stop();mkw::MenuMovieAudio::shutdown();mkw::shutdownLoadingScreen();renderer.shutdown();gfxExit();return 0;}applySelection();menu.raceStarted();raceLoadStart=svcGetSystemTick();}
     bool dataReady=exists("Race/Common.szs")&&courseAvailable(courseChoice);
@@ -1676,6 +1711,7 @@ int main() {
                 if(balloonBattle.replenish(unsigned(racer)))balloonRuntime.replenish(unsigned(racer));
         },nullptr);
         if(!raceGrid.reset()){trackLoadFailed=true;report("FAIL course CPU route: race suspended; choose another map");}
+        raceGrid.remoteMask=lanRace?2u:0u;
         raceItems->resetFromCourse(raceGrid.count());
         if(battleMode&&!raceGrid.ai().setBattleSources(*raceItems,coinRunnersMode?&coinBattle:nullptr)){
             trackLoadFailed=true;report("FAIL original battle search graph");
@@ -1877,6 +1913,8 @@ int main() {
             resetRaceSystems(true);if(trackLoadFailed)return false;stage("grid and opponents");
             if(fullRace){
                 startIntro();
+                // LAN: no course preview; both consoles start the countdown together.
+                if(lanRace)intro.stop();
                 if(intro.active()&&!flowUi.loadIntro(introInfo())){report("FAIL required preview labels");return false;}
                 stage("intro labels");
                 if(finishingMenuCue){
@@ -1905,7 +1943,7 @@ int main() {
             // Execute and retire the first complete render, then its reuse
             // frame while still black. Resource allocation alone does not
             // prime pose uploads, shadow captures or their GPU dependencies.
-            raceWarmupFrames=fullRace?2u:0u;
+            raceWarmupFrames=fullRace?2u:0u;lanWaiting=lanRace;
             if(fullRace)K::System::RaceManager::Instance()->setIntroHeld(true);
             raceResident=fullRace;return true;
         };
@@ -2248,6 +2286,7 @@ int main() {
                     else if(raceTrick==K::System::Trick::Right)raceTrick=K::System::Trick::Left;
                 }
                 controller->setInputsRawStick(buttons,(selectedMirror?-stick:stick)+7,7,raceTrick);
+                lanButtons=uint16_t(buttons);lanStick=int8_t(selectedMirror?-stick:stick);lanTrick=uint8_t(raceTrick);
                 if(fullRace){
                     // After the goal retail hands the player to its AI
                     // (AIEngine PostRaceDriving, USA 0x80728C28): the CPU
@@ -2270,6 +2309,8 @@ int main() {
                         if(!raceGrid.ai().ready()){inputs[i]=raceItems->autoItemInput(i);continue;}
                         const auto& c=raceGrid.ai().itemCommand(i);inputs[i]={c.use,c.backwards,c.forwards};
                     }
+                    lanItemFlags=uint8_t((inputs[0].use?1:0)|(inputs[0].backwards?2:0)|(inputs[0].forwards?4:0));
+                    if(lanRace&&raceGrid.count()>1){mkw::lan::Frame peer;inputs[1]=mkw::lan::session().peerFrame(peer)?mkw::ItemInput{bool(peer.flags&1),bool(peer.flags&2),bool(peer.flags&4)}:mkw::ItemInput{};}
                         if(kQa&&autoplay&&!afterGoal&&raceGrid.driveLocal)for(auto& g:qaGives){
                             if(g.player>=raceGrid.count())continue;
                             // Opponent POW must actually target player zero; do not alter ranks.
@@ -2301,6 +2342,13 @@ int main() {
                     }
                     // Resolve item activation/expiry before choosing this tick's
                     // controller, including CPU Bullet Bills and the handoff back.
+                    if(lanRace&&raceGrid.count()>1){
+                        // The other console's latest inputs drive its kart here between state corrections.
+                        auto& lan=mkw::lan::session();lan.poll();mkw::lan::Frame peer;
+                        auto* remotePad=K::System::KPadDirector::Instance()->hostController(1);
+                        if(lan.peerFrame(peer))remotePad->setInputsRawStick(peer.buttons,unsigned(std::clamp(int(peer.stickX),-7,7)+7),7,K::System::Trick(std::min<unsigned>(peer.trick,4)));
+                        else remotePad->setInputsRawStick(0,7,7,K::System::Trick::None);
+                    }
                     raceGrid.beforeStep(raceItems->bulletPlayers());
                 }
                 if(autoplay&&cpuLogEvery&&fullRace&&physicsSteps%cpuLogEvery==0){
@@ -2320,6 +2368,25 @@ int main() {
                 // QA: a fall boundary (variant 0) activation, so the retail SetCamera hold applies.
                 if(autoplay&&lakituRespawnStep&&physicsSteps==lakituRespawnStep){auto* qaCollide=K::Kart::KartObjectManager::Instance()->object(0)->collide();qaCollide->setOobCameraPending(uint16_t(lakituRequest));qaCollide->activateOob(false,nullptr,false,false);}
                 scenes.calc();
+                if(lanRace&&raceGrid.count()>1){
+                    // LAN: send this tick's kart, then pull the other kart onto the newest state it sent.
+                    auto& lan=mkw::lan::session();auto* objects=K::Kart::KartObjectManager::Instance();
+                    if(auto* mine=objects->object(0)){
+                        const auto* d=mine->dynamics();const auto& p=d->pos();const auto& fr=d->fullRot();const auto& mr=d->mainRot();
+                        const auto& ev=d->extVel();const auto& iv=d->intVel();
+                        const float pos[3]={p.x,p.y,p.z},full[4]={fr.v.x,fr.v.y,fr.v.z,fr.w},main[4]={mr.v.x,mr.v.y,mr.v.z,mr.w};
+                        const float ext[3]={ev.x,ev.y,ev.z},in[3]={iv.x,iv.y,iv.z};
+                        lan.sendFrame(physicsSteps,lanButtons,lanStick,lanTrick,lanItemFlags,pos,full,main,ext,in);
+                    }
+                    mkw::lan::Frame peer;
+                    if(lan.peerFrame(peer)&&peer.tick!=lanAppliedTick)if(auto* other=objects->object(1)){
+                        lanAppliedTick=peer.tick;auto* d=other->dynamics();
+                        d->setPos({peer.pos[0],peer.pos[1],peer.pos[2]});
+                        d->setFullRot(K::EGG::Quatf(peer.fullRot[3],peer.fullRot[0],peer.fullRot[1],peer.fullRot[2]));
+                        d->setMainRot(K::EGG::Quatf(peer.mainRot[3],peer.mainRot[0],peer.mainRot[1],peer.mainRot[2]));
+                        d->setExtVel({peer.extVel[0],peer.extVel[1],peer.extVel[2]});d->setIntVel({peer.intVel[0],peer.intVel[1],peer.intVel[2]});
+                    }
+                }
                 {
                     // The player's driver model after the kart step: its trick animation,
                     // sparkle and sound start together (trick_presentation.hpp).
@@ -3295,9 +3362,10 @@ int main() {
         }else renderer.begin({0,100,500},{0,0,0},{0,1,0});
         if(frames==0)report("graphics first frame submitting");
         renderer.end();profiler->mark(Profile::Submit);profiler->end(physicsSteps,renderer);frames++;
+        if(lanWaiting&&!raceWarmupFrames&&mkw::lan::session().readyStep()){lanWaiting=false;K::System::RaceManager::Instance()->setIntroHeld(intro.active());LOGF("LAN: go");}
         if(raceWarmupFrames){
             renderer.waitForGpu();
-            if(!--raceWarmupFrames)K::System::RaceManager::Instance()->setIntroHeld(intro.active());
+            if(!--raceWarmupFrames)K::System::RaceManager::Instance()->setIntroHeld(intro.active()||lanWaiting);
             renderer.loadingFrame=false;
             accumulator=0;previous=svcGetSystemTick();lastRefresh=C3D_FrameCounter(0);presentation.reset();
         }

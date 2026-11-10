@@ -63,6 +63,9 @@ public:
     static float steeringTo(Vec3 forward,Vec3 offset);
     // QA autopilot: player zero follows the CPU route like the other racers.
     bool driveLocal=false;
+    // Racers driven by another console (LAN play): their controllers are set
+    // from the network, never by the CPU driver.
+    uint32_t remoteMask=0;
     CpuAi& ai(){return ai_;}
 private:
     void forwardBumps();
