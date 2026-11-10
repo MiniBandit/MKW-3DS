@@ -75,7 +75,7 @@ struct DiagPassCommand {static constexpr uint16_t Type=CmdDiagPass;uint8_t pass;
 struct RacerLightCommand {static constexpr uint16_t Type=CmdRacerLight;bool on;uint8_t space;float direction[3];uint32_t color,ambient;};
 struct ShadowUnionCommand {static constexpr uint16_t Type=CmdShadowUnion;bool active;};
 struct SceneRegionCommand {static constexpr uint16_t Type=CmdSceneRegion;unsigned mask;};
-struct BeginCommand {static constexpr uint16_t Type=CmdBegin;C3D_Mtx view,projection;unsigned lightingTick;bool sync,begun,loading,aa;};
+struct BeginCommand {static constexpr uint16_t Type=CmdBegin;C3D_Mtx view,projection;unsigned lightingTick;bool sync,begun,loading;};
 struct EndCommand {static constexpr uint16_t Type=CmdEnd;};
 struct ProjectionCommand {static constexpr uint16_t Type=CmdProjection;C3D_Mtx projection;};
 struct CourseLightingCommand {static constexpr uint16_t Type=CmdCourseLighting;bool enabled;};
@@ -375,7 +375,7 @@ void Renderer::execute(FrameList& list){
         const uint32_t drawsBefore=stats_.drawCalls,trianglesBefore=stats_.triangles;const uint64_t pixelsBefore=stats_.pixels;
         switch(h.type){
         case CmdBegin:{
-            const auto& c=*static_cast<const BeginCommand*>(body);execFrame_=c.lightingTick;execLoadingFrame_=c.loading;execAaWanted_=c.aa;
+            const auto& c=*static_cast<const BeginCommand*>(body);execFrame_=c.lightingTick;execLoadingFrame_=c.loading;
             if(bottomWorldPass_){beginBottomWorldNow(c.view,c.projection);break;}
             if(eye){beginEyeNow(c.view,c.projection);break;}
             beginNow(c.view,c.projection,c.sync,c.begun);
@@ -632,14 +632,12 @@ void Renderer::beginRecorded(){
         localList_->reset();localList_->stereo=frameStereo_;localList_->dualIntro=frameDualScreenIntro_;
         recording_=localList_.get();localRecording_=true;
         auto& c=command<BeginCommand>();c.view=mainView_;c.projection=mainProjection_;c.lightingTick=animationFrame;c.loading=loadingFrame;c.sync=frameSync;c.begun=true;
-        c.aa=aaFrame;aaFrame=false;
         return;
     }
-    if(!recording()){execFrame_=animationFrame;execLoadingFrame_=loadingFrame;execAaWanted_=aaFrame;aaFrame=false;beginNow(mainView_,mainProjection_,frameSync);retired_.clear();return;}
+    if(!recording()){execFrame_=animationFrame;execLoadingFrame_=loadingFrame;beginNow(mainView_,mainProjection_,frameSync);retired_.clear();return;}
     renderMetrics={};
     releaseRetired();
     auto& c=command<BeginCommand>();c.view=mainView_;c.projection=mainProjection_;c.lightingTick=animationFrame;c.loading=loadingFrame;c.sync=frameSync;c.begun=false;
-    c.aa=aaFrame;aaFrame=false;
     recording_->stereo=frameStereo_;recording_->dualIntro=frameDualScreenIntro_;
     recording_->diagSkip=diag::passState.skip;recording_->diagProbe=diag::passState.probe;recording_->diagActive=diag::passState.active;recording_->diagGrid=diag::drawGrid.load(std::memory_order_relaxed);
     writeTarget_.store(recording_,std::memory_order_release);
@@ -712,7 +710,8 @@ void Renderer::markIntroWorldEnd(){
 void Renderer::applyBloom(){
     if(recording()){command<ApplyBloomCommand>();return;}
     if(stadiumFrame_)captureStadiumScreenNow();
-    if(bloomFrame_)applyBloomNow();else if(aaFrame_)resolveSceneNow();
+    if(!bloomFrame_)return;
+    applyBloomNow();
 }
 void Renderer::drawWith(const Model& model,const C3D_Mtx& transform,bool backdrop,MaterialBinder material,const void* context,std::size_t contextSize,ShapeVisible visible){
     if(!recording()){

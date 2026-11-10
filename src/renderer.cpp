@@ -1029,14 +1029,10 @@ void Renderer::beginFrame(){
     // The local SDK permits unbinding all units, including inherited samplers.
     for(int unit=0;unit<3;++unit)C3D_TexBind(unit,nullptr);
     bloomFrame_=!bottomWorldPass_&&bloomRequested_&&initBloom();bloomRequested_=false;
-    // aa2x: mono race frames only (the right eye and the intro's lower pass
-    // replay the frame at 400 wide).
-    aaFrame_=execAaWanted_&&sceneAaReady_&&!eye_&&!bottomWorldPass_&&!execStereo_.active()&&!execDualScreenIntro_&&initBloom();
-    sceneSpan_=aaFrame_?800:400;
     if(!eye_&&!bottomWorldPass_){
-        // A merged bloom composite writes every LCD pixel (applyBloomNow),
-        // as does the aa2x copy. Both eyes replay the frame's bloom request.
-        const auto lcd=(bloomFrame_&&bloomMerge)||aaFrame_?C3D_CLEAR_DEPTH:C3D_CLEAR_ALL;
+        // A merged bloom composite writes every LCD pixel (applyBloomNow).
+        // Both eyes replay the frame's bloom request.
+        const auto lcd=bloomFrame_&&bloomMerge?C3D_CLEAR_DEPTH:C3D_CLEAR_ALL;
         C3D_RenderTargetClear(target_,lcd,0x071326FF,0);
         if(execStereo_.active())C3D_RenderTargetClear(targetRight_,lcd,0x071326FF,0);
         // A race map covers the whole lower LCD opaquely and nothing there
@@ -1053,11 +1049,11 @@ void Renderer::beginFrame(){
     // so the two eyes do not necessarily use matching quad slots.
     if(!eye_&&!bottomWorldPass_)bloomCount_=0;
     if(stadiumFrame_&&!initBloom())stadiumFrame_=false;
-    if(bloomFrame_||stadiumFrame_||aaFrame_){
+    if(bloomFrame_||stadiumFrame_){
         if(!eye_){
             // Memory fills run in queue order, ahead of this frame's command list.
             C3D_RenderTargetClear(sceneTarget_,C3D_CLEAR_ALL,0x071326FF,0);
-            if(bloomFrame_||stadiumFrame_)for(auto* t:bloomTarget_)C3D_RenderTargetClear(t,C3D_CLEAR_COLOR,0,0);
+            for(auto* t:bloomTarget_)C3D_RenderTargetClear(t,C3D_CLEAR_COLOR,0,0);
         }else{
             // The right eye reuses the scene target the left eye's bloom has
             // read: queue the left eye's commands first, then the clear. The
@@ -1066,7 +1062,7 @@ void Renderer::beginFrame(){
             C3D_FrameSplit(GX_CMDLIST_FLUSH);
             C3D_RenderTargetClear(sceneTarget_,C3D_CLEAR_ALL,0x071326FF,0);
         }
-        C3D_FrameDrawOn(sceneTarget_);C3D_SetViewport(0,0,240,sceneSpan_);
+        C3D_FrameDrawOn(sceneTarget_);C3D_SetViewport(0,0,240,400);
     }else C3D_FrameDrawOn(bottomWorldPass_?bottomTarget_:topTarget());
     C3D_BindProgram(&program_);
     sceneDepthMap(projection_);
@@ -2909,31 +2905,20 @@ void Renderer::captureStadiumScreenNow(){
     bloomPass(stadiumTarget_[stadiumRead_^1],stadium::CaptureWidth,stadium::CaptureHeight);
     replace();
     constexpr float cropY=184.f*10.f/19.f;
-    // aa2x: the scene's landscape pixels are k texels wide.
-    const unsigned k=sceneSpan_/400;
-    bloomQuad(sceneTex_,stadium::CaptureWidth*k,stadium::CaptureHeight,
+    bloomQuad(sceneTex_,stadium::CaptureWidth,stadium::CaptureHeight,
               stadium::CaptureWidth,stadium::CaptureHeight,
-              float(stadium::CaptureWidth*k)-float(sceneSpan_)+float(stadium::CaptureX*k),
+              float(stadium::CaptureWidth)-400.f+stadium::CaptureX,
               float(stadium::CaptureHeight)-240.f+cropY);
     C3D_TexBind(0,nullptr);
     stadiumPending_=true; // both eyes still sample the previous complete image
-    if(!bloomFrame_)resolveSceneNow();
-}
-// The scene to the LCD unchanged; at aa2x's 800 wide, each pixel is the mean
-// of its two (bilinear, sampled between them).
-void Renderer::resolveSceneNow(){
-    flushSprites();aaFrame_=false;
-    bloomPass(topTarget(),400,240);
-    C3D_TexEnvBufUpdate(C3D_Both,0);
-    for(unsigned i=0;i<6;++i)C3D_TexEnvInit(C3D_GetTexEnv(i));
-    auto* e=C3D_GetTexEnv(0);C3D_TexEnvSrc(e,C3D_Both,GPU_TEXTURE0);
-    C3D_TexEnvFunc(e,C3D_Both,GPU_REPLACE);
-    C3D_AlphaBlend(GPU_BLEND_ADD,GPU_BLEND_ADD,GPU_ONE,GPU_ZERO,GPU_ONE,GPU_ZERO);
-    bloomQuad(sceneTex_,sceneSpan_,240,400,240,0,0);
-    C3D_TexBind(0,nullptr);
-    C3D_AlphaBlend(GPU_BLEND_ADD,GPU_BLEND_ADD,GPU_SRC_ALPHA,GPU_ONE_MINUS_SRC_ALPHA,GPU_ONE,GPU_ONE_MINUS_SRC_ALPHA);
-    uploadProjection(projectionLoc_,projection_);
-    spriteStateReady_=false;
+    if(!bloomFrame_){
+        bloomPass(topTarget(),400,240);replace();
+        bloomQuad(sceneTex_,400,240,400,240,0,0);
+        C3D_TexBind(0,nullptr);
+        C3D_AlphaBlend(GPU_BLEND_ADD,GPU_BLEND_ADD,GPU_SRC_ALPHA,GPU_ONE_MINUS_SRC_ALPHA,GPU_ONE,GPU_ONE_MINUS_SRC_ALPHA);
+        uploadProjection(projectionLoc_,projection_);
+        spriteStateReady_=false;
+    }
 }
 
 bool Renderer::capturePausedTop(){
@@ -3016,11 +3001,9 @@ bool Renderer::initBloomTargets(){
     if(sceneTarget_)return true;
     if(bloomFailed_)return false;
     // Portrait targets: full 64x128 near and 32x64 far bloom textures.
-    // The scene still occupies its native 240x400 region in 256x512
-    // (aa2x: 240x400 or 240x800 in 256x1024).
-    sceneAaReady_=aa2x&&initSceneAa();
-    bool ok=sceneAaReady_||(C3D_TexInitVRAM(&sceneTex_,256,512,GPU_RGBA8)&&
-        (sceneTarget_=C3D_RenderTargetCreateFromTex(&sceneTex_,GPU_TEXFACE_2D,0,GPU_RB_DEPTH24_STENCIL8))!=nullptr);
+    // The scene still occupies its native 240x400 region in 256x512.
+    bool ok=C3D_TexInitVRAM(&sceneTex_,256,512,GPU_RGBA8)&&
+        (sceneTarget_=C3D_RenderTargetCreateFromTex(&sceneTex_,GPU_TEXFACE_2D,0,GPU_RB_DEPTH24_STENCIL8))!=nullptr;
     for(unsigned i=0;ok&&i<std::size(bloomTex_);++i){
         const unsigned width=i>=2?BloomFarWidth:BloomNearWidth,height=i>=2?BloomFarHeight:BloomNearHeight;
         ok=C3D_TexInitVRAM(&bloomTex_[i],height,width,GPU_RGBA8)&&(bloomTarget_[i]=C3D_RenderTargetCreateFromTex(&bloomTex_[i],GPU_TEXFACE_2D,0,-1))!=nullptr;
@@ -3028,32 +3011,6 @@ bool Renderer::initBloomTargets(){
     if(!ok){freeBloom();bloomFailed_=true;return false;}
     for(auto* t:{&sceneTex_,&bloomTex_[0],&bloomTex_[1],&bloomTex_[2],&bloomTex_[3]}){C3D_TexSetFilter(t,GPU_LINEAR,GPU_LINEAR);C3D_TexSetWrap(t,GPU_CLAMP_TO_EDGE,GPU_CLAMP_TO_EDGE);}
     return true;
-}
-bool Renderer::initSceneAa(){
-    // 800 target rows at the texture's end: target row y is texel row y, as
-    // in the 512-row texture, so every sceneTex_ mapping holds for both. The
-    // texture's first 224 rows are never drawn; depth covers 800 rows only.
-    constexpr unsigned rows=800;
-    if(!C3D_TexInitVRAM(&sceneTex_,256,1024,GPU_RGBA8))return false;
-    const size_t depthSize=C3D_CalcDepthBufSize(256,rows,GPU_RB_DEPTH24_STENCIL8);
-    // The depth buffer in the other VRAM bank if it fits (as citro3d places it).
-    const vramAllocPos bank=reinterpret_cast<uintptr_t>(sceneTex_.data)<OS_VRAM_VADDR+OS_VRAM_SIZE/2?VRAM_ALLOC_A:VRAM_ALLOC_B;
-    void* depth=vramAllocAt(depthSize,vramAllocPos(bank^VRAM_ALLOC_ANY));
-    if(!depth)depth=vramAllocAt(depthSize,bank);
-    if(depth&&!(sceneTarget_=C3D_RenderTargetCreateFromTex(&sceneTex_,GPU_TEXFACE_2D,0,-1))){vramFree(depth);depth=nullptr;}
-    if(!depth){C3D_TexDelete(&sceneTex_);sceneTex_={};return false;}
-    auto& fb=sceneTarget_->frameBuf;
-    C3D_FrameBufAttrib(&fb,256,rows,false);
-    fb.colorBuf=static_cast<u8*>(sceneTex_.data)+size_t(1024-rows)*256*4;
-    C3D_FrameBufDepth(&fb,depth,GPU_RB_DEPTH24_STENCIL8);
-    sceneTarget_->ownsDepth=true;
-    return true;
-}
-bool Renderer::reserveSceneAa(){
-    if(!deviceReady_||!aa2x)return false;
-    if(sceneTarget_)return sceneAaReady_;
-    drain();
-    return initBloomTargets()&&sceneAaReady_;
 }
 bool Renderer::initBloom(){
     static_assert(kBloomVertices>=6*(2*BloomFullQuads+2));
@@ -3074,7 +3031,6 @@ void Renderer::freeBloom(){
     for(auto& t:bloomTex_){if(t.data)C3D_TexDelete(&t);t={};}
     if(sceneTex_.data)C3D_TexDelete(&sceneTex_);
     sceneTex_={};linearFree(bloomVertices_);bloomVertices_=nullptr;
-    sceneAaReady_=aaFrame_=false;
 }
 void Renderer::bloomPass(C3D_RenderTarget* target,unsigned width,unsigned height){
     // Landscape width x height region of a portrait render target.
@@ -3115,13 +3071,13 @@ extern "C" {
 #include "../vendor/citro3d/source/internal.h"
 }
 void Renderer::applyBloomNow(){
-    flushSprites();bloomFrame_=aaFrame_=false;
+    flushSprites();bloomFrame_=false;
     // The commands depend only on these (and on the vertex slots holding the
     // recorded quads): immediate mono frames, no clip rectangle.
     const bool listed=bloomList&&!execPipelined_&&!execStereo_.active()&&!execDualScreenIntro_&&!bloomClipped_&&!bottomPass_;
     if(!listed){bloomListValid_=false;bloomPasses();return;}
     BloomListKey key{bloomSettings_,sceneTex_.data,{bloomTex_[0].data,bloomTex_[1].data,bloomTex_[2].data,bloomTex_[3].data},topTarget(),
-                     bloomVertices_,bloomCount_,renderQuality().bloomBlurRounds,bloomMerge,sceneSpan_};
+                     bloomVertices_,bloomCount_,renderQuality().bloomBlurRounds,bloomMerge};
     // State set before bloom reaches the frame's own commands first, so the
     // recorded commands hold only what the passes set.
     C3Di_UpdateContext();
@@ -3189,9 +3145,7 @@ void Renderer::bloomPasses(){
     auto* e4=C3D_GetTexEnv(4);C3D_TexEnvColor(e4,0x40404040u);
     C3D_TexEnvSrc(e4,C3D_Both,GPU_PREVIOUS,GPU_CONSTANT);C3D_TexEnvFunc(e4,C3D_Both,GPU_MODULATE);
     constexpr float taps[4][2]={{-1,-1},{1,-1},{-1,1},{1,1}};
-    // aa2x: an 800-wide scene doubles the horizontal tap offsets.
-    const float span=float(sceneSpan_/400);
-    for(unsigned i=0;i<4;++i){blend(i>0);bloomQuad(sceneTex_,sceneSpan_,240,BloomNearWidth,BloomNearHeight,taps[i][0]*span,taps[i][1]);}
+    for(unsigned i=0;i<4;++i){blend(i>0);bloomQuad(sceneTex_,400,240,BloomNearWidth,BloomNearHeight,taps[i][0],taps[i][1]);}
     bloomPass(bloomTarget_[0],BloomNearWidth,BloomNearHeight);
     e0=env();C3D_TexEnvColor(e0,pica(bloomThresholdColor(settings)));
     C3D_TexEnvSrc(e0,C3D_Both,GPU_TEXTURE0,GPU_CONSTANT);C3D_TexEnvFunc(e0,C3D_Both,GPU_SUBTRACT);
@@ -3210,7 +3164,7 @@ void Renderer::bloomPasses(){
         C3D_SetScissor(GPU_SCISSOR_NORMAL,unsigned(std::clamp(int(BloomNearHeight)-y1,0,int(BloomNearHeight))),unsigned(std::clamp(int(BloomNearWidth)-x1,0,int(BloomNearWidth))),
             unsigned(std::clamp(int(BloomNearHeight)-y0,0,int(BloomNearHeight))),unsigned(std::clamp(int(BloomNearWidth)-x0,0,int(BloomNearWidth))));
     }
-    bloomQuad(bloomTex_[1],BloomNearWidth,BloomNearHeight,BloomNearWidth,BloomNearHeight,0,0,sceneSpan_,240,&sceneTex_);
+    bloomQuad(bloomTex_[1],BloomNearWidth,BloomNearHeight,BloomNearWidth,BloomNearHeight,0,0,400,240,&sceneTex_);
     if(bloomClipped_)C3D_SetScissor(GPU_SCISSOR_DISABLE,0,0,0,0);
     C3D_TexBind(1,nullptr);
     // EGG keeps a near band (8 taps) and a far band (8 + 16 taps). Reduced
@@ -3267,7 +3221,7 @@ void Renderer::bloomPasses(){
     const GPU_TEVSRC near=merge?GPU_TEXTURE1:GPU_TEXTURE0,far=merge?GPU_TEXTURE2:GPU_TEXTURE1;
     if(!merge){
         e0=env();C3D_TexEnvSrc(e0,C3D_Both,GPU_TEXTURE0);C3D_TexEnvFunc(e0,C3D_Both,GPU_REPLACE);
-        blend(false);bloomQuad(sceneTex_,sceneSpan_,240,400,240,0,0);
+        blend(false);bloomQuad(sceneTex_,400,240,400,240,0,0);
     }
     // Preserve the two authored composite weights and their alpha. Retail
     // output mode 1 uses screen blending: bloom * (1 - scene) + scene.
@@ -3290,7 +3244,7 @@ void Renderer::bloomPasses(){
         C3D_TexEnvFunc(e4,C3D_Both,GPU_MULTIPLY_ADD);
         C3D_TexBind(1,&bloomTex_[1]);C3D_TexBind(2,&bloomTex_[2]);C3D_TexUnit2UseCoord1(true);
         blend(false);
-        bloomQuad(sceneTex_,sceneSpan_,240,400,240,0,0,BloomNearWidth,BloomNearHeight,&bloomTex_[1]);
+        bloomQuad(sceneTex_,400,240,400,240,0,0,BloomNearWidth,BloomNearHeight,&bloomTex_[1]);
         C3D_TexUnit2UseCoord1(false);
     }else{
         C3D_TexBind(1,&bloomTex_[2]);
@@ -3311,7 +3265,7 @@ void Renderer::bloomPasses(){
 }
 void Renderer::endEyeNow(){
     if(stadiumFrame_)captureStadiumScreenNow();
-    if(bloomFrame_)applyBloomNow();else if(aaFrame_)resolveSceneNow();
+    if(bloomFrame_)applyBloomNow();
     flushSprites();
     if(bottomPass_){
         // The bottom screen's quads were written in this pass (it runs once).
@@ -3322,7 +3276,7 @@ void Renderer::endEyeNow(){
 void Renderer::beginBottomNow(){
     if(!bottomTarget_||bottomPass_)return;
     // The top screen is complete: its bloom composite and last sprite run first.
-    if(bloomFrame_)applyBloomNow();else if(aaFrame_)resolveSceneNow();
+    if(bloomFrame_)applyBloomNow();
     flushSprites();
     topSpriteCount_=spriteCount_;
     spriteBase_=text_+kTextVertexLimit;spriteCapacity_=kBottomSpriteCapacity;

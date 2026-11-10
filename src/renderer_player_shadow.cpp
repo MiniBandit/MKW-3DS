@@ -315,10 +315,10 @@ void Renderer::playerShadowNow(const ShadowCaster* casters,unsigned count,const 
  }
  C3D_BoolUnifSet(GPU_VERTEX_SHADER,shadowCaptureLoc_,false);
  // The original scene's depth/stencil stays intact across the auxiliary pass.
- auto* target=bottomWorldPass_?bottomTarget_:(bloomFrame_||stadiumFrame_||aaFrame_)?sceneTarget_:topTarget();
+ auto* target=bottomWorldPass_?bottomTarget_:(bloomFrame_||stadiumFrame_)?sceneTarget_:topTarget();
  C3D_FrameDrawOn(target);
- C3D_SetViewport(0,0,240,bottomWorldPass_?320:sceneSpan_);
- C3D_SetScissor(GPU_SCISSOR_DISABLE,0,0,240,bottomWorldPass_?320:sceneSpan_);
+ C3D_SetViewport(0,0,240,bottomWorldPass_?320:400);
+ C3D_SetScissor(GPU_SCISSOR_DISABLE,0,0,240,bottomWorldPass_?320:400);
  C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER,projectionLoc_,&projection_);
  C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER,modelViewLoc_,&view_);
  C3D_BoolUnifSet(GPU_VERTEX_SHADER,skinnedLoc_,false);C3D_BoolUnifSet(GPU_VERTEX_SHADER,skinnedNormalsLoc_,false);
@@ -510,8 +510,8 @@ void Renderer::playerShadowNow(const ShadowCaster* casters,unsigned count,const 
   // Conservative projection of the whole contact slab, with filter/rounding
   // margin. Tilted PICA viewport is 240 by screenWidth. Near-plane crossings
   // fall back to an unrestricted scissor rather than clipping visible pixels.
-  float x0=240.f,y0=bottomWorldPass_?320.f:float(sceneSpan_),x1=0,y1=0;
-  const float viewportY=bottomWorldPass_?320.f:float(sceneSpan_);bool safe=true;
+  float x0=240.f,y0=bottomWorldPass_?320.f:400.f,x1=0,y1=0;
+  const float viewportY=bottomWorldPass_?320.f:400.f;bool safe=true;
   for(unsigned corner=0;corner<8;++corner){
    const Vec3 v=point+tangent*((corner&1?1.f:-1.f)*width*1.125f)
        +forward*((corner&2?1.f:-1.f)*height*1.125f)+n*(corner&4?40.f:-40.f);
@@ -579,7 +579,7 @@ void Renderer::playerShadowNow(const ShadowCaster* casters,unsigned count,const 
  renderMetrics.contactDraws+=stats_.drawCalls-beforeContactDraws;
  renderMetrics.contactTriangles+=stats_.triangles-beforeContactTriangles;
 #endif
- C3D_SetScissor(GPU_SCISSOR_DISABLE,0,0,240,bottomWorldPass_?320:sceneSpan_);
+ C3D_SetScissor(GPU_SCISSOR_DISABLE,0,0,240,bottomWorldPass_?320:400);
  receiversPrepared=false;contactPass=false;
  // Shade the remaining body projection after the contact union.
  shadowFrustum=ClipFrustum(clipRows);

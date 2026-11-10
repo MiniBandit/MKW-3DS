@@ -681,9 +681,6 @@ int main() {
     renderer.unitOneEtc1a4=!exists("sdmc:/3ds/mkw-3ds/no-unit1-vram.txt");
     renderer.lightTextureSkip=!exists("sdmc:/3ds/mkw-3ds/no-light-blend.txt");
     renderer.bloomList=!exists("sdmc:/3ds/mkw-3ds/no-bloom-list.txt");
-    // aa2x.txt (New 3DS): the race scene renders 800x240 and is halved to the top screen.
-    renderer.aa2x=kQa&&mkw::isNew3ds()&&exists("sdmc:/3ds/mkw-3ds/aa2x.txt");
-    if(renderer.aa2x)report("aa2x on");
     C3D_FastState=!exists("sdmc:/3ds/mkw-3ds/no-c3d-fast.txt");
     mkw::DriverAnimation::sharePose=!exists("sdmc:/3ds/mkw-3ds/no-pose-share.txt");
     mkw::VehicleAnimation::lazyParts=!exists("sdmc:/3ds/mkw-3ds/no-lazy-parts.txt");
@@ -2138,10 +2135,6 @@ int main() {
     // first, so the course's first bloom request (below) still finds its room.
     auto loadBottomScreen=[&](){
         const auto* bloom=mkw::courseBloom(Courses[courseChoice].archive);
-        if(!effectsTest&&renderer.aa2x){
-            const bool aa=renderer.reserveSceneAa();
-            LOGF("aa2x scene target %s vram_free=%lu",aa?"on":"unavailable, off",(unsigned long)vramSpaceFree());
-        }
         if(!effectsTest&&bloom&&bloom->enabled()&&!renderer.reserveBloom()){report("FAIL required bloom targets");return false;}
         if(!effectsTest&&!renderer.configurePlayerShadow(menu.settings.dynamicShadows))report("WARN player shadow target unavailable; native volume retained");
         if(!renderer.configureStadiumScreen(!effectsTest&&(int(Courses[courseChoice].id)==18||int(Courses[courseChoice].id)==6||int(Courses[courseChoice].id)==35))){report("FAIL stadium screen targets");return false;}
@@ -4005,7 +3998,6 @@ int main() {
              // never from a QA capture, or the capture shows the clear colour there.
              if(raceCapture&&captureLive&&((physicsSteps-captureBase)/raceCaptureEvery!=raceCaptured||(raceCaptureLeave&&results.phase()>=mkw::RaceFlowPhase::Chosen)))
                  mkw::diag::passState.skip=mkw::diag::passState.probe=mkw::diag::PassNone;
-             renderer.aaFrame=fullRace&&!effectsTest&&renderer.aa2x;
              renderer.begin(eye,target,up,selectedMirror);}
             profiler->mark(Profile::Wait);
             unsigned castleScene=mkw::castleRegion::Both;

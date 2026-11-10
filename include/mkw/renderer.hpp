@@ -282,16 +282,6 @@ public:
     // for the first requestBloom(). For races that request bloom. False if
     // the targets cannot exist.
     bool reserveBloom();
-    // DIAG aa2x.txt (New 3DS): the race's top-screen scene renders at 800x240
-    // into bloom's scene texture (256x1024, an 800-row target) and is halved
-    // horizontally where bloom composites it, or by one bilinear copy without
-    // bloom. Set before the first race; mono frames only (not stereo or the
-    // two-screen intro). aaFrame asks for it in the next begin() only.
-    bool aa2x=false,aaFrame=false;
-    // Creates the scene target at race load (render thread idle), before the
-    // course takes VRAM. False: aa2x stays off this race.
-    bool reserveSceneAa();
-    bool sceneAaReady() const {return sceneAaReady_;}
     // Pause: copies the race's last upper-screen image (left eye) out of the
     // LCD target before the pause menu draws over it (GPU idle; 512 KB
     // LINEAR). drawPausedTop draws it full screen, in an immediate frame.
@@ -841,7 +831,7 @@ private:
     // vertex slots and counters the passes leave.
     struct BloomListKey {
         const CourseBloom* settings=nullptr;const void* scene=nullptr;const void* bloom[4]{};const C3D_RenderTarget* top=nullptr;
-        const Vertex* vertices=nullptr;unsigned first=0,rounds=0;bool merge=false;unsigned span=400;
+        const Vertex* vertices=nullptr;unsigned first=0,rounds=0;bool merge=false;
         bool operator==(const BloomListKey&) const=default;
     };
     BloomListKey bloomListKey_{};bool bloomListValid_=false;
@@ -865,12 +855,6 @@ private:
     Vertex* bloomVertices_=nullptr;
     unsigned bloomCount_=0;
     bool bloomRequested_=false,bloomFrame_=false,bloomFailed_=false,bloomClipped_=false;
-    // aa2x: sceneTex_ is 256x1024 with an 800-row target; this frame's scene
-    // is 800 wide there (sceneSpan_ landscape pixels) until resolved.
-    bool sceneAaReady_=false,aaFrame_=false,execAaWanted_=false;
-    unsigned sceneSpan_=400;
-    bool initSceneAa();
-    void resolveSceneNow();
     float bloomClip_[4]{};
     const CourseBloom* bloomSettings_=nullptr;
     C3D_Tex white_{};

@@ -172,11 +172,6 @@ runs.
 `lod-bias.txt` (a number from -2 to 0, default 0) is added to the LOD of every
 mip-mapped texture: negative values sample sharper levels (`runtime.log`:
 `texture lod bias N`).
-`aa2x.txt` (New 3DS only, off by default) renders the race's 3D scene at
-800x240 and halves it to the top screen: 2x horizontal anti-aliasing. Off in
-3D (stereo) and during the course intro; menus and the HUD are unchanged. It
-needs about 0.8 MB more VRAM, which the course textures give up
-(`runtime.log`: `aa2x scene target on/unavailable`).
 `no-menu-pipeline.txt` draws menus immediately on the main thread (CPU work,
 then the GPU, one after the other) instead of through the render thread.
 The Settings page's options are in `settings.dat`, not in the license:
