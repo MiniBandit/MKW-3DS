@@ -29,6 +29,8 @@
 #include <mkw/hanachan_joint_assets.hpp>
 #include <game/field/obj/ObjectKoopaFigure.hh>
 #include <game/field/obj/ObjectKoopaFigure64.hh>
+#include <game/field/obj/ObjectPoihana.hh>
+#include <game/field/obj/ObjectFireSnake.hh>
 #include <mkw/cannon_effect_assets.hpp>
 #include <cstring>
 #include <array>
@@ -57,6 +59,10 @@ public:
     static_assert(FlameFirstSlot+2*MaxFlames<=RaceEffects::SlotCount);
     static constexpr unsigned N64StatueFirstSlot=1978,MaxN64Statues=5;
     static_assert(N64StatueFirstSlot+MaxN64Statues<=RaceEffects::SlotCount);
+    static constexpr unsigned PoihanaFirstSlot=2043,MaxPoihanas=16;
+    static_assert(PoihanaFirstSlot+MaxPoihanas<=RaceEffects::SlotCount);
+    static constexpr unsigned FireSnakeFirstSlot=PoihanaFirstSlot+MaxPoihanas,MaxFireSnakes=16;
+    static_assert(FireSnakeFirstSlot+MaxFireSnakes<=RaceEffects::SlotCount);
     bool bind(RaceEffects& effects){
         flameSpecs_[0]=effects.find("rk_flamePole");flameSpecs_[1]=effects.find("rk_flamePoleFoot");flameSpecs_[2]=effects.find("rk_flamePoleL");
         for(unsigned i=0;i<3;++i){flameOffsets_[i]={};if(flameSpecs_[i]>=0){
@@ -88,9 +94,11 @@ public:
         starRing_=effects.find("rk_StarRing");
         hanachanDust_=effects.find("rk_hanaSmk");
         factorySpecs_[0]=effects.find("rk_steam");factorySpecs_[1]=effects.find("rk_alarm");
+        poihanaExclm_=effects.find("rk_poihanaExclm");
+        fireSnake_=effects.find("rk_fireSnake");
         return effects.ready; // Course-specific required roots are validated by the loader.
     }
-    void reset(){flames_={};flameCount_=0;thwomps_={};thwompCount_=0;piles_={};pileCount_=0;chimneys_={};chimneyCount_=0;leaves_={};leafCount_=0;wood_={};woodCount_=0;blocks_={};blockCount_=0;volcano_={};volcanoCount_=0;propellers_={};propellerCount_=0;rocks_={};rockCount_=0;moles_={};moleCount_=0;factory_={};factoryCount_=0;hanachan_={};hanachanCount_=0;count_=0;crabCount_=0;linked_=false;owners_={};crabs_={};cannon_=nullptr;cannonSerial_=0;statues_={};statueCount_=0;n64Statues_={};n64StatueCount_=0;pokeys_={};pokeyCount_=0;}
+    void reset(){flames_={};flameCount_=0;thwomps_={};thwompCount_=0;piles_={};pileCount_=0;chimneys_={};chimneyCount_=0;leaves_={};leafCount_=0;wood_={};woodCount_=0;blocks_={};blockCount_=0;volcano_={};volcanoCount_=0;propellers_={};propellerCount_=0;rocks_={};rockCount_=0;moles_={};moleCount_=0;factory_={};factoryCount_=0;hanachan_={};hanachanCount_=0;count_=0;crabCount_=0;linked_=false;owners_={};crabs_={};cannon_=nullptr;cannonSerial_=0;statues_={};statueCount_=0;n64Statues_={};n64StatueCount_=0;pokeys_={};pokeyCount_=0;poihanas_={};poihanaCount_=0;fireSnakes_={};fireSnakeCount_=0;}
     void step(RaceEffects& effects){
         namespace K=Kinoko;
         if(!linked_){
@@ -159,6 +167,14 @@ public:
                 if(id==K::Field::ObjectId::Hanachan&&
                         !static_cast<const K::Field::ObjectCollidable*>(object)->collision()&&hanachanCount_<hanachan_.size())
                     hanachan_[hanachanCount_++].object=static_cast<const K::Field::ObjectHanachan*>(object);
+                // Each snake's two kids share its id and GOBJ and register
+                // first (their load() runs in its constructor): keep the last.
+                if(id==K::Field::ObjectId::FireSnake||id==K::Field::ObjectId::FireSnakeV){
+                    if(fireSnakeCount_&&fireSnakes_[fireSnakeCount_-1]->mapObj()==object->mapObj())fireSnakes_[fireSnakeCount_-1]=object;
+                    else if(fireSnakeCount_<MaxFireSnakes)fireSnakes_[fireSnakeCount_++]=object;
+                }
+                if(id==K::Field::ObjectId::Poihana&&poihanaCount_<MaxPoihanas)
+                    poihanas_[poihanaCount_++]=static_cast<const K::Field::ObjectPoihana*>(object);
                 if(id==K::Field::ObjectId::Sanbo&&pokeyCount_<pokeys_.size())
                     pokeys_[pokeyCount_++]=static_cast<const K::Field::ObjectSanbo*>(object);
                 if(id==K::Field::ObjectId::Crab){
@@ -386,6 +402,30 @@ public:
             const bool desert=thwomp.mapObj()&&thwomp.mapObj()->id()==0x20c;
             effects.burst(desert?desertImpact_:thwompDust_,frame);
         }
+        // Cataquack lock-on (USA 0x80739d7c): the chase's first phase creates
+        // rk_poihanaExclm (constructor 0x80738968, +0x370) at the object's
+        // position every frame with the find sound; both phases keep it there.
+        for(unsigned i=0;i<poihanaCount_;++i){
+            const auto& quack=*poihanas_[i];
+            if(quack.stateId()!=2)continue;
+            const unsigned slot=PoihanaFirstSlot+i;
+            EffectFrame frame;const auto p=quack.pos();frame.origin={p.x,p.y,p.z};
+            if(quack.actionFrame()<=19)effects.create(slot,poihanaExclm_,frame,0);
+            effects.move(slot,frame);
+        }
+        // Fire Snake heads (constructor USA 0x806e32c4, +0xd4): rk_fireSnake
+        // is created while the snake is out and faded once it is gone, states
+        // 1-4 for Desert Hills (calc 0x806e3804), 1-5 for FireSnake_v
+        // (0x806e50f0); it follows the head. The two kids also construct one
+        // (0x806e2f2c) but nothing ever creates it.
+        for(unsigned i=0;i<fireSnakeCount_;++i){
+            const auto& snake=*static_cast<const K::Field::ObjectFireSnake*>(fireSnakes_[i]);
+            const unsigned state=snake.stateId(),slot=FireSnakeFirstSlot+i;
+            const bool out=snake.id()==K::Field::ObjectId::FireSnakeV?state>=1:state>=1&&state<=4;
+            EffectFrame frame;const auto p=snake.pos();frame.origin={p.x,p.y,p.z};
+            if(out)effects.create(slot,fireSnake_,frame,0);else effects.fade(slot);
+            effects.move(slot,frame);
+        }
         for(unsigned i=0;i<n64StatueCount_;++i){
             const auto& statue=*n64Statues_[i];const auto& pose=statue.transform();
             auto vec=[](const K::EGG::Vector3f& v){return Vec3{v.x,v.y,v.z};};
@@ -545,6 +585,10 @@ private:
     int pokeySand_=-1;
     std::array<const Kinoko::Field::ObjectKoopaFigure64*,MaxN64Statues> n64Statues_{};
     unsigned n64StatueCount_=0;int n64FireSpecs_[2]{-1,-1};
+    std::array<const Kinoko::Field::ObjectPoihana*,MaxPoihanas> poihanas_{};
+    unsigned poihanaCount_=0;int poihanaExclm_=-1;
+    std::array<const Kinoko::Field::ObjectBase*,MaxFireSnakes> fireSnakes_{};
+    unsigned fireSnakeCount_=0;int fireSnake_=-1;
     struct StatueOwner {const Kinoko::Field::ObjectKoopaFigure* object=nullptr;unsigned serial=0;};
     std::array<StatueOwner,4> statues_{};
     unsigned statueCount_=0;

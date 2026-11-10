@@ -3783,6 +3783,7 @@ int main() {
                             in.position=vec(racer->pos());in.right={m[0,0],m[1,0],m[2,0]};in.up={m[0,1],m[1,1],m[2,1]};in.forward={m[0,2],m[1,2],m[2,2]};
                             in.scale=racer->scale().y;in.initialY=racer->bsp().initialYPos;in.bulletOffset=mkw::BulletModelHeight-in.initialY;
                             in.star=status.onBit(St::Star);in.mega=status.onBit(St::Mega);in.bullet=status.onBit(St::Bullet);
+                            in.hasBulletBody=in.bullet&&fullRace&&raceHud.bulletBody(i,physicsSteps,in.bulletBody[0],in.bulletBody[1],in.bulletBody[2],in.bulletBody[3]);
                             in.shocked=status.onBit(St::Shocked);in.beforeRespawn=status.onBit(St::BeforeRespawn);
                             in.hasRainbowEntry=hasRainbowEntry;
                             in.action=int(action->currentAction());in.actionFrame=action->frame();in.powDodged=action->powDodged();in.powPending=action->powPending();

@@ -62,7 +62,7 @@ WATER_ROOTS = ['rk_wave', 'rk_awa', 'rk_spinWaterHalf', 'rk_spinWaterHalfS',
 # KartEffect power-ups (docs/POWERUPS_SOURCE.md), S variants for other racers.
 POWERUP_ROOTS = ['rk_star', 'rk_starS', 'rk_killerS', 'rk_killer1TS', 'rk_thunder', 'rk_thunderS',
                  'rk_kaminariGumo', 'rk_kaminariGumoS', 'rk_thunderBiri', 'rk_kyodai', 'rk_kyodaiS',
-                 'rk_pow', 'rk_powS', 'rk_pow1', 'rk_pow1S', 'rk_powUp']
+                 'rk_pow', 'rk_powS', 'rk_pow1', 'rk_pow1S', 'rk_powUp', 'rk_powReduce', 'rk_powReduceS']
 # KartEffect slipstream (RMCU 0x8068abbc, 0x806972c0): drafting and the boost, S variants
 # for other racers (docs/VFX_RESEARCH.md "Slipstream").
 SLIPSTREAM_ROOTS = ['rk_slipStreamPre', 'rk_slipStreamPreS', 'rk_slipStream', 'rk_slipStreamS']
@@ -639,6 +639,8 @@ def cook(root, output, course_only=False, balloon_only=False, coin_only=False, c
                            ('koopa_course', 'dossun', ['rk_dossun']),
                            ('sand_battle', 'quicksand', ['rk_qsandDossun']),
                            ('desert_course', 'sanbo', ['rk_sanbo']),
+                           ('old_peach_gc', 'poihana', ['rk_poihanaExclm']),
+                           ('old_desert_ds', 'FireSnake', ['rk_fireSnake']),
                            ('rainbow_course', 'StarRing', ['rk_StarRing']),
                            ('rainbow_course', 'entry', ['rk_entry']),
                            ('treehouse_course', 'hanachan', ['rk_hanaSmk']),
@@ -659,7 +661,7 @@ def cook(root, output, course_only=False, balloon_only=False, coin_only=False, c
         # original descriptors/curves differ. Keep the battle archive distinct.
         alias = (lambda name: 'W_' + name) if archive == 'truckChimSmkW' else (lambda name: name)
         course_roots[archive] = [alias(name) for name in roots]
-        effect_name = {'DonkyCannon_wii':'dkCannon', 'hanachan':'hana', 'Steam':'steam', 'Alarm':'alarm', 'choropu':'choropuMoko', 'Epropeller':'epropeller', 'VolcanoBall1':'volc', 'FlamePole':'flamePole', 'FlamePole_v':'flamePole', 'FlamePole_v_big':'flamePoleL', 'KoopaFigure64':'koopaFire', 'Block':'block', 'quicksand':'qsandDossun'}.get(archive, archive)
+        effect_name = {'DonkyCannon_wii':'dkCannon', 'hanachan':'hana', 'Steam':'steam', 'Alarm':'alarm', 'choropu':'choropuMoko', 'Epropeller':'epropeller', 'VolcanoBall1':'volc', 'FlamePole':'flamePole', 'FlamePole_v':'flamePole', 'FlamePole_v_big':'flamePoleL', 'KoopaFigure64':'koopaFire', 'Block':'block', 'quicksand':'qsandDossun', 'FireSnake':'fireSnake'}.get(archive, archive)
         path = root / f'assets/courses/{course}/effect/{archive}/rk_{effect_name}.breff'
         source, pixels = path.read_bytes(), path.with_suffix('.breft').read_bytes()
         index, pixel_index = entries(source), entries(pixels)

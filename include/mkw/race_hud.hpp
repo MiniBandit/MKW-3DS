@@ -42,6 +42,9 @@ public:
     bool chaseWarningAudio(float& pan,float& rate)const;
     bool notificationWarning(bool& lit)const;
     bool notificationCloudLit()const;
+    // The Bullet model's animated "body" joint in world space (origin and axes), at
+    // the pose drawWorld(tick) draws; false without the model or its animation.
+    bool bulletBody(unsigned racer,unsigned tick,Vec3& origin,Vec3& x,Vec3& y,Vec3& z);
     bool speedometer=false; // SELECT toggles it during a race
 private:
     struct Impl;std::unique_ptr<Impl> impl_;
