@@ -103,6 +103,7 @@ public:
     /// The collision director's closest entry changes when another kart runs.
     [[nodiscard]] s8 oobWaterHeightSlot() const { return m_oobWaterHeightSlot; }
     [[nodiscard]] s8 oobLavaHeightSlot() const { return m_oobLavaHeightSlot; }
+    [[nodiscard]] bool rainbowFall() const { return m_rainbowFall; }
     /// Presentation uses the same post-decrement countdown as retail OOB wipe.
     [[nodiscard]] s16 respawnTimer() const { return m_respawnTimer; }
     /// QA and AI recovery callers state the camera request of an activation.
@@ -305,6 +306,7 @@ private:
     u16 m_oobCameraRequest = 0; ///< Port hook: request of the current out-of-bounds.
     // The non-solid sink boundary stays non-solid throughout its rescue wait.
     bool m_sinkholeFall = false;
+    bool m_rainbowFall = false; ///< This fall hit a variant 5 (Rainbow) fall boundary.
     s8 m_oobWaterHeightSlot = -1;
     s8 m_oobLavaHeightSlot = -1;
     /// mkw-3ds: applySomeFloorMoment's world-space inverse inertia tensor for the

@@ -536,9 +536,10 @@ void RaceItems::boxContacts(unsigned player){
 }
 void RaceItems::kartContacts(unsigned player){
     if(!active_||player>=count_)return;
-    const auto& r=racers_[player];
     boxContacts(player);
-    if(r.finished)return;
+    // Retail runs the item pass for every kart, finished or not. Only a Time Trial or
+    // ghost race has no item contact (ItemHolder_checkPlayerCollision, flag 0x809C38BC).
+    if(timeTrial_)return;
     // Actor pool order stands in for the retail entity search order. Forward
     // through the mask's slots: one a contact spawns is found in a rebuilt mask
     // when it lies ahead, as the full scan would.

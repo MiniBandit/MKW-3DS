@@ -104,7 +104,7 @@ inline bool bit(const u32* w, int n) { return (w[n >> 5] >> (n & 31)) & 1; }
 enum Status {
  Accelerate = 0, Brake = 1, DriftInput = 2, BeforeRespawn = 4, GroundStart = 9, AnyWheelCollision = 11, DriftAuto = 28,
  Wheelie = 29, InAction = 32, TriggerRespawn = 33, InCannon = 36, ChargingSSMT = 57, Star = 63, Shocked = 71, InRespawn = 77,
- Mega = 79, Crushed = 80, Bullet = 91,
+ Mega = 79, Crushed = 80, Bullet = 91, Boosting = 20, RampBoosting = 31, WheelieBumped = 66,
 };
 f32 length(Vec3f v) { return std::sqrt(v.x * v.x + v.y * v.y + v.z * v.z); }
 
@@ -236,6 +236,8 @@ struct KartAudio {
  int thunderA = 690, thunderB = 540;  // +0x4c, +0x50: the shock effect counters (Effects::Player::Reset)
  f32 fxSpeed = 0;                     // +0x6e8: |velocity|
  s8 wallFrames = 0, bushFrames = 0, bumpFxFrames = 0;   // +0x7b4, +0x7b7, +0x7b8 (capped 100)
+ int rbwTimer = -1; f32 rbwY = 0;     // +0x64, +0x70: frames since a Rainbow fall (-1 none), its height
+ s16 windFrames = 200;                // +0x998: frames since the wheelie wind was driven
  template <class F> void eachSlot(F f) { for (auto& s : limited) f(s); f(engineSlot); f(driftSlot); f(mtSlot); f(roadSlot); f(goalSlot); }
 };
 
@@ -724,6 +726,8 @@ struct RaceAudioLayer::Impl {
   // KartActor, separately from the driver's delayed fall/respawn voice.
   if (c & cue::WaterSplash) { startLimited(e, k, 0x1a1); voices[index].fellInWater = true; }
   if (c & cue::LavaSplash) startLimited(e, k, 0x1a2);
+  // Effects::Player 0x806AB6B0: a Rainbow fall boundary starts the fall timer, once per fall.
+  if (in.rainbowFall && k.rbwTimer == -1) { k.rbwTimer = 0; k.rbwY = in.position.y; }
   if ((c & cue::CoinGet) && !k.muted) coinSound(e, in.position, 0x1f1, in.local);
   if (in.coinArrival && in.local) coinSound(e, in.position, 0x1f2, true);
   if (c & cue::Boost) playDash(e, k, sid::Dash);
@@ -822,6 +826,26 @@ struct RaceAudioLayer::Impl {
   k.thunderA = std::min(k.thunderA + 1, 690);
   if (shocked && !atB && k.thunderA == 690 && k.thunderB >= index + 71 && k.thunderB < 540) holdLimited(e, k, sid::ThndrState);
   k.thunderB = std::min(k.thunderB + 1, 540);
+  // fn_1_183AE0 (PAL 0x806944C4): a Rainbow fall's timer runs to 36; fn_1_18E4F8
+  // (0x8069E8AC): 35 frames on and 700 below where it fell, SE_CN_RBW_FALL. The
+  // respawn (0x806B2964) clears it; the kart is back on the road by then.
+  if (!k.fxBeforeRespawn) k.rbwTimer = -1;
+  if (k.rbwTimer != -1 && k.rbwTimer <= 35) ++k.rbwTimer;
+  if (k.rbwTimer >= 35 && in.position.y < k.rbwY - 700.0f) startNewLimited(e, k, 0x2f8);
+  // The wheelie's wind (Effects::Player 0x80695BA8 -> fn_1_18A98C 0x8069AD40): only a local
+  // racer, not before a respawn, while wheeling on a vehicle that can, without a boost,
+  // ramp boost, wheelie bump or cannon. fn_1_195A80 holds SE_VCL_SLASH_WIND. After the
+  // last such frame a 10-frame fade holds it for nine more.
+  if (k.local && !k.fxBeforeRespawn) {
+   const u32* w = in.status;
+   const s16 c = k.windFrames;
+   bool hold = c >= 1 && c < 10;
+   k.windFrames = s16(c + 1 > 200 ? 100 : c + 1);
+   if (bit(w, Wheelie) && in.canWheelie && !bit(w, Boosting) && !bit(w, RampBoosting) && !bit(w, WheelieBumped) && !bit(w, InCannon)) {
+    hold = true; k.windFrames = 0;
+   }
+   if (hold) holdLimited(e, k, sid::SlashWind);
+  }
  }
 
  // KartActor::Update (80700d2c).
@@ -1230,7 +1254,7 @@ struct RaceAudioLayer::Impl {
   }
   const bool wheelie=bit(w,Wheelie);
   if ((c & cue::Wheelie)||(wheelie&&!v.wasWheelie)) {                                           // fn_1_354FDC from StartWheelie
-   const int t = bit(w, Wheelie) ? 0xf : 0x10;
+   const int t = in.canWheelie ? 0xf : 0x10;                        // fn_1_81118: VO_*_WLE, else WLE_FAIL
    if (v.pendingType == -1 || voicePriority(v, v.pendingType, t)) { v.pendingType = t; v.pendingDelay = t == 0xf ? 10 : 0x14; }
   }
   v.wasWheelie=wheelie;

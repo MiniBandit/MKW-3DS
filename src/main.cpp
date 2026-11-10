@@ -2074,6 +2074,7 @@ int main() {
                 if(balloonBattle.replenish(unsigned(racer)))balloonRuntime.replenish(unsigned(racer));
         },nullptr);
         if(!raceGrid.reset()){trackLoadFailed=true;report("FAIL course CPU route: race suspended; choose another map");}
+        raceItems->setTimeTrial(timeTrial);
         raceItems->resetFromCourse(raceGrid.itemCount());
         if(battleMode&&!raceGrid.ai().setBattleSources(*raceItems,coinRunnersMode?&coinBattle:nullptr)){
             trackLoadFailed=true;report("FAIL original battle search graph");
@@ -2629,7 +2630,7 @@ int main() {
     // tick on the refresh every 6 s and present that frame with an extra tick.
     auto previous=svcGetSystemTick();double accumulator=0,physicsMs=0,maxPhysics=0;unsigned frames=0,restarts=0;
     u32 lastRefresh=C3D_FrameCounter(0);
-    unsigned physicsSteps=0;
+    unsigned physicsSteps=0;bool lookBehind=false;
     // DIAG (ghost-trace.txt): the ghost kart (player 1) after every physics step,
     // written to ghost-trace.csv when the race ends, to compare with a KRKG.
     const bool ghostTrace=kQa&&exists("sdmc:/3ds/mkw-3ds/ghost-trace.txt");
@@ -2900,8 +2901,8 @@ int main() {
                 if(rampTrick){trick=padTrick();buttons=(buttons&~10u)|(held&KEY_B?2u:0u);}
                 else if(!qaMode&&(held&KEY_Y))trick=padTrick();
             }
-            if(auto* camera=K::Render::KartCamera::Instance())
-                camera->requestLookBack(fullRace&&!qaMode&&!replay&&!raceGrid.finished()&&bool(held&(KEY_X|KEY_ZL)));
+            lookBehind=fullRace&&!qaMode&&!replay&&!raceGrid.finished()&&bool(held&(KEY_X|KEY_ZL));
+            if(auto* camera=K::Render::KartCamera::Instance())camera->requestLookBack(lookBehind);
             // Preserve the Wii input lattice used by ghost records. Stick Y tilts
             // the vehicle in the air (KartMove::calcDive).
             const auto padStick=mkw::circlePadStick(pad.dx,pad.dy);
@@ -3287,12 +3288,7 @@ int main() {
                             LOGF("race end scene_free=%lu heap_used=%lu linear_free=%lu linear_low=%lu",(unsigned long)scenes.currentScene()->heap()->getAllocatableSize(),(unsigned long)mallinfo().uordblks,(unsigned long)linearSpaceFree(),
                                  (unsigned long)std::min(raceLinearLow,size_t(linearSpaceFree())));
                         }
-                        if(events&Flow::EventLeave){
-                            // The race has faded to black (RaceResultsFlow::Leaving).
-                            // Keep full-file CRC/read/backup writes off the finish
-                            // and score-count frames; commit before leaving the race.
-                            raceSound.carryResultMusic();
-                            flushRaceSave();
+                        if(events&Flow::EventLeaving){
                             if(results.finalRace()&&results.chosen()==0){
                                 std::array<uint8_t,12> vehicles{};
                                 const auto& scenario=K::System::RaceConfig::Instance()->raceScenario();
@@ -3306,6 +3302,15 @@ int main() {
                                 // benchmark skips it and goes straight back to the menus.
                                 awardPending=mkw::hasAwardScene(awardResults)&&!benchmark;
                             }
+                            // The Wii fades the results music with the picture; only the ceremony keeps it.
+                            if(!awardPending)raceSound.fadeResultMusic(int(Flow::LeaveFrames));
+                        }
+                        if(events&Flow::EventLeave){
+                            // The race has faded to black (RaceResultsFlow::Leaving).
+                            // Keep full-file CRC/read/backup writes off the finish
+                            // and score-count frames; commit before leaving the race.
+                            raceSound.leaveResults(awardPending);
+                            flushRaceSave();
                             sectionFadeIn=true;
                             vsSet.next=results.chosen()==0&&!results.finalRace();
                             // Diagnostic overlay: save benchmark progress (the next deck index) before
@@ -3475,6 +3480,7 @@ int main() {
                 signals.accelerating=kart->status().onBit(K::Kart::eStatus::Accelerate);signals.braking=kart->status().onBit(K::Kart::eStatus::Brake);
                 signals.countdown=unsigned(K::System::RaceManager::Instance()->stage())<=1;
                 if(fullRace){mkw::driverItemSignals(signals,*raceItems,0);driverCollisionLooks[0].apply(signals,driverChoice);}
+                signals.lookBack=lookBehind;
                 signals.blink=physicsSteps%180==0;
                 driverPose=driverController.step(signals);
                 mkw::simprof::add(mkw::simprof::PresPlayer,postTickStart);

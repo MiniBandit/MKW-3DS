@@ -180,6 +180,7 @@ public:
         return odds_.load(data,size,local,local+1,mode);
     }
     void setBattleScores(const std::array<uint16_t,12>& scores){battleScores_=scores;}
+    void setTimeTrial(bool timeTrial){timeTrial_=timeTrial;}
     unsigned oddsRank(unsigned player)const{
         if(!battleOdds_)return rank(player);
         std::array<RaceTeam,12> teams;for(unsigned i=0;i<12;++i)teams[i]=racers_[i].team;
@@ -330,6 +331,7 @@ private:
     std::array<uint16_t,MaxRacers> cloudTransfer_{},cloudAge_{},cloudSlot_{};
     std::array<bool,MaxRacers> itemLock_{};
     std::array<uint8_t,MaxRacers> heldDropTicks_{};
+    bool timeTrial_=false;
     struct InventoryDrop { ItemKind kind=ItemKind::None;uint8_t count=0,ticks=0;std::array<Vec3,3> velocity{}; };
     std::array<InventoryDrop,MaxRacers> inventoryDrops_{};
     std::array<uint32_t,MaxRacers> inkReadyFrame_{};

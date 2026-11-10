@@ -65,6 +65,7 @@ void fillRaceAudioFrame(RaceAudioFrame& f, snd::Vec3f eye, snd::Vec3f target) {
   auto* move = kart->move();
   k.speed = move->speed(); k.speedRatioCapped = move->speedRatioCapped(); k.baseSpeed = move->baseSpeed();
   k.startBoostCharge = kart->state()->startBoostCharge();
+  k.canWheelie = move->canWheelie();
   // A half-pipe trick start (retail fn_1_64AAC, Kinoko KartHalfPipe::activateTrick
   // setting ZipperTrick): Kinoko cues no sound there, so take the rising edge.
   const bool zipperTrick = kart->status().onBit(K::Kart::eStatus::ZipperTrick);
@@ -88,6 +89,13 @@ void fillRaceAudioFrame(RaceAudioFrame& f, snd::Vec3f eye, snd::Vec3f target) {
      for (std::uint16_t j = 0; j < map->getGeoObjCount(); ++j) {
       const auto* object = map->getGeoObj(j);
       if (object->id() == 17 && (object->presenceFlag() & 1)) { k.cues |= cue::LavaSplash; break; }
+     }
+   // EffectsMgr +0x16: Rainbow's fall effect needs the course's "entry" object.
+   if (kart->collide()->rainbowFall())
+    if (const auto* map = K::System::CourseMap::Instance())
+     for (std::uint16_t j = 0; j < map->getGeoObjCount(); ++j) {
+      const auto* object = map->getGeoObj(j);
+      if (object->id() == 0x12 && (object->presenceFlag() & 1)) { k.rainbowFall = true; break; }
      }
   }
   std::memcpy(k.status, &kart->status(), sizeof k.status);

@@ -702,6 +702,7 @@ private:
     void shadowUnionNow(bool active);
     // rect: x0,y0,x1,y1 in screen pixels (the whole screen when null).
     void screenFadeNow(float opacity,bool white,bool depthOnly=false,int shadowMode=0,const float* rect=nullptr);
+    void drawPausedTopNow();
     void spriteNow(const Texture& texture,float x,float y,float width,float height,float u0,float v0,float u1,float v1,float alpha,uint32_t rgba,const uint32_t* corners,bool additive,float angle);
     void fontSpriteNow(const Texture& texture,float x,float y,float width,float height,float u1,float v1,float alpha,uint32_t gradientTop,uint32_t gradientBottom,uint32_t color0,uint32_t color1);
     void materialQuadsNow(const Texture* texture,const MaterialQuad* quads,unsigned count,uint32_t color0,uint32_t color1,int wrapS,int wrapT,bool additive=false,bool opaque=false);
