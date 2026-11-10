@@ -106,7 +106,7 @@ unsigned MenuState::count()const{
  case UiPage::Cup:return 8;
  case UiPage::Course:return 4;
  case UiPage::BattleStage:return 5;
- case UiPage::Ghost:return 1;
+ case UiPage::Ghost:return 3;
  case UiPage::Pause:return pauseCount();
  default:return 1;
  }
@@ -230,7 +230,7 @@ void MenuState::enter(UiPage next){
  case UiPage::Course:cursor=selection.course%4;break;
  case UiPage::BattleCup:cursor=selection.battleStage/5;break;
  case UiPage::BattleStage:cursor=selection.battleStage%5;break;
- case UiPage::Ghost:cursor=0;break; // Ghost racing/replays are deferred; solo remains usable.
+ case UiPage::Ghost:cursor=std::min(selection.ghost,2u);break;
  case UiPage::EraseLicense:case UiPage::QuitConfirm:cursor=1;break;
  default:break;
  }
@@ -403,7 +403,7 @@ UiAction MenuState::input(UiInput key){
   if(selection.course/4!=cursor||selection.mode==UiMode::GrandPrix)selection.course=cursor*4;
   enter(selection.mode==UiMode::GrandPrix?UiPage::Confirm:UiPage::Course);break;
  case UiPage::Course:selection.course=selection.course/4*4+cursor;enter(selection.mode==UiMode::TimeTrials?UiPage::Ghost:UiPage::Confirm);break;
- case UiPage::Ghost:enter(UiPage::Confirm);break;
+ case UiPage::Ghost:selection.ghost=cursor;enter(UiPage::Confirm);break;
  case UiPage::BattleCup:
   if(selection.battleStage/5!=cursor)selection.battleStage=cursor*5;
   enter(UiPage::BattleStage);break;

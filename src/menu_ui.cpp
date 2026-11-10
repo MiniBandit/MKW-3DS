@@ -1153,11 +1153,14 @@ static void composeMenuImpl(const MenuState& s,const UiRaceView& race,std::vecto
   c.chrome(pick?"Cups":"Stages");break;
  }
  case UiPage::Ghost:{
-  // No ghost enumeration yet: do not claim imported saves contain no ghosts.
-  // Keep the supported solo action; deferred race/replay actions stay hidden.
+  // Solo, or race the disc's staff / expert staff ghost (Race/TimeAttack).
+  // The Wii stacks these choices 50 units apart.
   c.timeTrialBest();
-  auto solo=control("TimeAttackGhostList","Alone",0);solo.y=0;
-  c.group(UiMenuRole::Choice,0,solo,"ghost_free");c.button("ghost",0,solo,"Solo Time Trials");
+  const char* names[]={"Solo Time Trials","Race the Staff Ghost","Race the Expert Staff Ghost"};
+  for(unsigned i=0;i<3;++i){
+   auto pose=control("TimeAttackGhostList","Alone",i);pose.y=50.f-50.f*float(i);
+   c.group(UiMenuRole::Choice,i,pose,"ghost_free");c.button("ghost",i,pose,names[i]);
+  }
   c.chrome("Time Trials");break;
  }
  case UiPage::DriftHelp:{

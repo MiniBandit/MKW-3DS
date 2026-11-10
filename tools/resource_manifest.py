@@ -498,6 +498,11 @@ for rel,src in overlay.items():
  for old in by_relative.get(rel,()):del files[old]
  files[src]=Path(rel)
 import sys
+# Time Trials staff and expert staff ghosts, read from Race/TimeAttack (optional:
+# builds made before 0.8.0 have none, and the game races solo without them).
+staff_ghosts=ROOT/'build/staff-ghosts/Race/TimeAttack'
+for ghost in sorted(staff_ghosts.glob('ghost[12]/ghost[12]_comp_[0-3][0-9].rkg')):
+ if not ghost.name.startswith('._'):files[ghost]=Path('Race/TimeAttack')/ghost.relative_to(staff_ghosts)
 # Indexed archives (tools/pack_menu_assets.py, tools/pack_race_assets.py): the
 # runtime reads packed assets with one open handle; loose files remain as a
 # fallback for anything not packed.

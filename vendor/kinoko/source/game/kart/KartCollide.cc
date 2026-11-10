@@ -13,6 +13,7 @@
 #include "game/field/CollisionDirector.hh"
 #include "game/field/ObjectCollisionKart.hh"
 #include "game/field/ObjectDirector.hh"
+#include "game/system/RaceConfig.hh"
 
 #include <egg/math/BoundBox.hh>
 #include <egg/math/Math.hh>
@@ -87,9 +88,17 @@ void KartCollide::calcKartCollision() {
     if (count < 2 || selfIdx >= count) {
         return;
     }
+    // MKW-3DS: a ghost (Time Trials) passes through every kart, as on the Wii.
+    const auto &players = System::RaceConfig::Instance()->raceScenario().players;
+    auto isGhost = [&](size_t i) {
+        return players[i].type == System::RaceConfig::Player::Type::Ghost;
+    };
+    if (isGhost(selfIdx)) {
+        return;
+    }
     KartObject *self = objects->object(selfIdx);
     for (size_t i = 0; i < count; ++i) {
-        if (i != selfIdx) {
+        if (i != selfIdx && !isGhost(i)) {
             checkKartCollision(self, objects->object(i));
         }
     }

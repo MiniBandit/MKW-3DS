@@ -222,6 +222,8 @@ static mkw::CpuRoster selectedRoster;
 static std::array<uint8_t,12> selectedStartPositions{};
 // LAN play (src/lan_play.cpp): a two-player VS race against another console.
 static bool lanRace=false,lanHost=false,lanWaiting=false;static std::array<unsigned,12> lanRoster{};
+// Time Trials ghost (Race/TimeAttack on the SD card): racer 1 replays it.
+static bool ghostRace=false;static std::vector<uint8_t> ghostRkg;
 static uint16_t lanButtons=0;static int8_t lanStick=0;static uint8_t lanTrick=0,lanItemFlags=0;static uint32_t lanAppliedTick=0;
 static void configure(K::System::RaceConfig* config,void* context) {
     if(replayData){config->setGhost(replayData);config->raceScenario().players[0].type=K::System::RaceConfig::Player::Type::Ghost;return;}
@@ -230,8 +232,10 @@ static void configure(K::System::RaceConfig* config,void* context) {
     s.cpuDifficulty=uint8_t(selectedCpu);s.cpuVehicles=uint8_t(selectedCpuVehicles);s.itemMode=uint8_t(selectedItems);
     s.gameMode=static_cast<K::System::RaceConfig::Scenario::GameMode>(selectedRaceMode);
     s.teams=selectedTeams;s.humanTeam=uint8_t(selectedHumanTeam);s.battleType=coinRunnersMode?1:0;
-    if(fullRace){static_cast<mkw::RaceGrid*>(context)->configure(*config,selectedGarageIndex(),lanRace?2:timeTrial?1:12,lanRace?&lanRoster:selectedRoster.ready?&selectedRoster.choices:nullptr);for(unsigned i=0;i<s.playerCount;++i)s.players[i].startPosition=selectedStartPositions[i];
+    if(fullRace){static_cast<mkw::RaceGrid*>(context)->configure(*config,selectedGarageIndex(),lanRace||ghostRace?2:timeTrial?1:12,lanRace?&lanRoster:selectedRoster.ready?&selectedRoster.choices:nullptr);for(unsigned i=0;i<s.playerCount;++i)s.players[i].startPosition=selectedStartPositions[i];
         // LAN: both consoles build the same grid, host first.
+        // Time Trials ghost: Kinoko's ghost controller drives racer 1 from the file.
+        if(ghostRace){s.players[1].type=K::System::RaceConfig::Player::Type::Ghost;config->setGhost(ghostRkg.data(),1);}
         if(lanRace){s.players[0].startPosition=lanHost?1:2;s.players[1].startPosition=lanHost?2:1;s.players[1].driftIsAuto=mkw::lan::session().peerAutoDrift();}s.players[0].driftIsAuto=automaticDrift;return;}
     auto& p=s.players[0];p.type=K::System::RaceConfig::Player::Type::Local;
     const auto& driver=selectedVehicle();
@@ -1212,6 +1216,22 @@ int main() {
         const unsigned cc=vs?menu.selection.vsClass:menu.selection.mode==mkw::UiMode::GrandPrix?unsigned(menu.selection.engineClass):2;
         selectedMirror=cc==3;selectedEngineClass=std::min(cc,2u);
         selectedCpu=battleMode?menu.selection.battleCpu:vs?menu.selection.vsCpu:(selectedRaceMode==0?std::min(selectedEngineClass,2u):1u);selectedCpuVehicles=battleMode?menu.selection.battleVehicles:vs?menu.selection.vsVehicles:0;selectedItems=battleMode?menu.selection.battleItems:vs?menu.selection.vsItems:0;
+        // Time Trials: the staff (1) or expert staff (2) ghost from the disc, if the
+        // build copied them (builds before 0.8.0 did not: race solo then).
+        ghostRace=false;
+        if(timeTrial&&menu.selection.ghost){
+            const unsigned set=std::min(menu.selection.ghost,2u);char path[80];
+            std::snprintf(path,sizeof path,"Race/TimeAttack/ghost%u/ghost%u_comp_%02u.rkg",set,set,courseChoice);
+            ghostRkg.clear();
+            if(FILE* f=std::fopen(path,"rb")){
+                std::fseek(f,0,SEEK_END);const long size=std::ftell(f);std::fseek(f,0,SEEK_SET);
+                if(size>0x88&&size<=0x2800){ghostRkg.resize(size_t(size));if(std::fread(ghostRkg.data(),1,ghostRkg.size(),f)!=ghostRkg.size())ghostRkg.clear();}
+                std::fclose(f);
+            }
+            // RKGD header: the course id is the top six bits of byte 7.
+            if(ghostRkg.size()>8&&!std::memcmp(ghostRkg.data(),"RKGD",4)&&unsigned(ghostRkg[7]>>2)==unsigned(Courses[courseChoice].id))ghostRace=true;
+            LOGF("ghost: %s %s",path,ghostRace?"racing":"missing or for another course: racing solo");
+        }
         // LAN play: agree on the course and swap drivers before loading (lan.txt).
         lanRace=false;
         auto& lan=mkw::lan::session();
@@ -1735,7 +1755,7 @@ int main() {
                 if(balloonBattle.replenish(unsigned(racer)))balloonRuntime.replenish(unsigned(racer));
         },nullptr);
         if(!raceGrid.reset()){trackLoadFailed=true;report("FAIL course CPU route: race suspended; choose another map");}
-        raceGrid.remoteMask=lanRace?2u:0u;
+        raceGrid.remoteMask=lanRace||ghostRace?2u:0u;
         raceItems->resetFromCourse(raceGrid.count());
         if(battleMode&&!raceGrid.ai().setBattleSources(*raceItems,coinRunnersMode?&coinBattle:nullptr)){
             trackLoadFailed=true;report("FAIL original battle search graph");

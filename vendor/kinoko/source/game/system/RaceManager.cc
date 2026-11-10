@@ -34,6 +34,9 @@ void RaceManager::findKartStartPoint(EGG::Vector3f &pos, EGG::Vector3f &angles, 
     if (scenario.gameMode == RaceConfig::Scenario::GameMode::Grand_Prix ||
             scenario.gameMode == RaceConfig::Scenario::GameMode::Versus)
         placement = previous >= 1 && previous <= playerCount ? previous : playerCount - index;
+    // MKW-3DS: a Time Trials ghost starts where the player does, as on the Wii.
+    if (scenario.gameMode == RaceConfig::Scenario::GameMode::Time_Trial)
+        placement = 1;
     // Retail USA80531908..80531938: awards start each kart at its
     // own KTPT, without ordinary starting-grid offsets. Camera mode 12
     // has six slots; other award cameras have three. This is required

@@ -175,6 +175,9 @@ COOK_STEPS=[
  # The menu archive indexes the menu files; the race archives are packed with
  # the finished game (tools/package_sd.py), which their file map lists.
  ('menu archive',['{py}','tools/pack_menu_assets.py'],[SD+'/menu.pak']),
+ # Time Trials: the disc's staff and expert staff ghosts (Race/TimeAttack), raced
+ # from the Ghost page. Last, so builder folders from 0.7 only run this step.
+ ('staff ghosts',['{py}','tools/extract_disc.py','{disc}','build/staff-ghosts','--prefix','Race/TimeAttack'],['build/staff-ghosts/Race/TimeAttack/ghost2/ghost2_comp_31.rkg']),
 ]
 
 def log(*a):print('[build_cia]',*a,flush=True)
