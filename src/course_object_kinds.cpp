@@ -1014,6 +1014,9 @@ bool classifyObject(Visual& v,const ObjectAssets& assets,int course){
     if(v.object&&K::Field::ObjectBlockStatue::isStatue(v.geo->id())&&course==33&&
        !static_cast<const K::Field::ObjectBlockStatue*>(v.object)->shown())return false;
     auto* main=assets.main(v.resource);
+    // The big pillar's flow entry names FlamePole_v_big, an archive no course has; it loads
+    // FlamePole_v like the small one.
+    if(!main&&v.object&&v.object->id()==ObjectId::FlamePoleVBig)main=assets.main("FlamePole_v");
     v.main=assets.tracks(main);
     v.low=assets.tracks(assets.low(main));
     // Gold Mine flags already bake at load, but FlagB's far asset also has

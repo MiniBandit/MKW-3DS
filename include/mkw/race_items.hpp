@@ -346,6 +346,7 @@ private:
     uint16_t bulletNoEnd_=0;
     struct HeldState {
         uint16_t angle=0,angularSpeed=600,spin=0,age=0;
+        Vec3 up{0,1,0}; // the held frame's eased up axis
         float radiusX=0,radiusZ=0,hop=0;
         std::array<float,3> scales{HeldInitialScale,HeldInitialScale,HeldInitialScale};
         std::array<Vec3,3> positions{},previous{},ups{},forwards{};

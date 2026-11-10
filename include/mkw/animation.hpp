@@ -1,6 +1,7 @@
 #pragma once
 #include "mkw/renderer.hpp"
 #include <array>
+#include <cstring>
 #include <string>
 #include <vector>
 #include <mkw/visibility.hpp>
@@ -45,6 +46,8 @@ public:
     int handleDriveClip() const {return handleDrive_;}
     int dashClip() const {return dash_;}
     int shakeClip() const {return shake_;}
+    // The kart body's item throw clip (the Booster Seat's hatch), played with the driver's throw.
+    int throwClip(const char* driverClip) const {return throw_>=0&&!std::strncmp(driverClip,"throw_",6)?throw_:-1;}
     int face(const char* name) const;
     unsigned faceDuration(int expression) const {return expression>=0&&unsigned(expression)<faceCount_?faces_[expression].duration:0;}
     const char* name(unsigned clip) const {return clip<count_?clips_[clip].name:"none";}
@@ -171,7 +174,7 @@ private:
     uint8_t* data_=nullptr;const SourceVertex* source_=nullptr;const Range* ranges_=nullptr;
     unsigned vertices_=0,matrices_=0,shapes_=0,count_=0,faceCount_=0,transitionTick_=0;
     int lastClip_=-1;
-    int handleDrive_=-1,dash_=-1,shake_=-1;
+    int handleDrive_=-1,dash_=-1,shake_=-1,throw_=-1;
     bool gpu_=false;
     std::array<bool,64> shapeHidden_{};
     bool skinNormals_=true;
