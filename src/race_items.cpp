@@ -415,7 +415,8 @@ void RaceItems::useLightning(unsigned player){
     // cannon racers are skipped first (fn_288374).
     for(unsigned i=0;i<count_;++i){
         if(i==player||sameRaceTeam(racers_[player].team,racers_[i].team))continue;const auto& r=racers_[i];
-        if(r.damageProtected||r.unavailable||r.inCannon||r.finished)continue;
+        // Nothing on this path tests a finish: a racer past the line is struck too.
+        if(r.damageProtected||r.unavailable||r.inCannon)continue;
         // fn_1_288374 restarts the struck racer's bolt (KartEffect +0x4c) whatever the
         // kart's own immunity decides.
         events_.push_back({ItemEffect::Bolt,uint8_t(i),0});
@@ -618,6 +619,13 @@ void RaceItems::updateHolder(unsigned i){
     if(h.golden&&!--h.golden){h.item=ItemKind::None;h.charges=0;}
     // Respawning (fn_1_288494) clears the inventory, the roulette and the slot lock.
     if(racers_[i].unavailable&&!racers_[i].inCannon){applyLoss(i,{true,true,false});h.slotLock=ItemKind::None;}
+    // ItemHolderPlayer_update (0x80797928): a finished racer's inventory is cleared every
+    // frame and its trailing items vanish (no drop, no break). The Thunder Cloud never
+    // enters the retail inventory, so its slot stays.
+    if(racers_[i].finished){
+        if(h.item!=ItemKind::ThunderCloud){h.item=ItemKind::None;h.charges=0;h.golden=0;}
+        if(h.deployed){heldDropTicks_[i]=0;for(unsigned slot=0;slot<3;++slot)removeHeld(i,slot,false);}
+    }
     auto& drop=inventoryDrops_[i];
     if(drop.ticks&&--drop.ticks&&(drop.ticks==7||drop.ticks==5||drop.ticks==3)&&drop.count){
         const auto velocity=drop.velocity[--drop.count];

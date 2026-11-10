@@ -19,6 +19,7 @@ struct DriverSignals {
     bool bike=false,wheelie=false,airborne=false,hopping=false;
     bool handleRelativeBike=false; // Retail axle/body type 1; excludes Quacker.
     bool accelerating=false,braking=false,countdown=false;
+    bool lookBack=false; // The look-behind button (input +0x2C & 0x20).
     int trickVariant=-1; // Optional authored sjump_a/b/c selection, 0..2.
     int finishType=0; // 0 first, 1 good, 2 bad; cutoff depends on field size.
     int itemThrowDirection=0; // Rising edge: +1 forward, -1 backward.
@@ -81,7 +82,7 @@ public:
         motionBlend_.reset();posePresent_=false;previousMotion_=Wait;lastBaseState_=7;
         steering_=0;steeringEnvelope_=1;previousBurnoutPitch_=0;active_=Wait;clipFrame_=0;
         oneShot_=Count;oneShotFrame_=0;nextTrick_=0;blinkFrame_=8;
-        finishFrames_=0;finishMotionFrames_=0;previous_={};pendingTrick_=TrickA;airTrick_=false;jumpAirborne_=false;
+        finishFrames_=0;finishMotionFrames_=0;lookBack_=0;previous_={};pendingTrick_=TrickA;airTrick_=false;jumpAirborne_=false;
     }
     // Populate this from each character's CHR0 metadata after loading. Defaults
     // below are the original Mario Standard Kart M bank, not universal timings.
@@ -183,6 +184,12 @@ public:
         else if(s.boost) {wanted=Dash;parameterized=true;}
         else if(s.countdown||(!s.accelerating&&std::fabs(s.speed)<0.05f))wanted=Wait;
         else {wanted=Drive;parameterized=true;}
+        // 0x807CC174 counts the button below its cannon and wheelie returns.
+        const bool lookFace=wanted==Drive||wanted==Wait;
+        if(!cannonJump&&!s.wheelie){
+            lookBack_=s.lookBack?std::min(lookBack_+frames,999u):0;
+            if(lookFace&&lookBack_==60)blinkFrame_=0; // the eyes return with a wink
+        }
 
         // 807c3108: base motions wait for the current blend to finish.
         // Event motions retain their existing priority; their source rates
@@ -222,6 +229,8 @@ public:
         else pose.frame=clipFrame_;
         if(wanted==First||wanted==Good||wanted==Bad||wanted==Damage) {
             pose.faceName=names[wanted];pose.faceFrame=pose.frame;
+        } else if(lookFace&&lookBack_>=1&&lookBack_<=59) {
+            pose.faceName="right";pose.faceFrame=float(lookBack_-1); // fn_1_2B6690: 59 frames, then forward
         } else if(blinkFrame_<8) {pose.faceName="wink";pose.faceFrame=float(blinkFrame_);}
         // Retail FaceController (USA807b7fe4): drive/drift states 3/7
         // stop PAT(type3) and SRT(type2). left/right are special look-back
@@ -249,7 +258,7 @@ private:
     std::array<float,Count> durations_{{50,31,49,19,31,31,31,31,49,31,50,50,55,20,20,35,30,31,30,30,21,6,20}};
     float steering_=0,steeringEnvelope_=1,previousBurnoutPitch_=0,clipFrame_=0,oneShotFrame_=0;
     Clip active_=Wait,oneShot_=Count,pendingTrick_=TrickA;
-    unsigned nextTrick_=0,blinkFrame_=8,finishFrames_=0,finishMotionFrames_=0;
+    unsigned nextTrick_=0,blinkFrame_=8,finishFrames_=0,finishMotionFrames_=0,lookBack_=0;
     bool airTrick_=false,jumpAirborne_=false;
     DriverSignals previous_{};
 };

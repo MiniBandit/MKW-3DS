@@ -58,7 +58,8 @@ public:
  void previewLeave();          // the preview's fade-out starts (RaceRSARPlayer::Stop)
  void previewEnded();          // the course preview finished or was skipped
  void pause(bool paused);      // RaceRSARPlayer::Pause / Resume
- void carryResultMusic(); // Next/Next Race: retire racing actors, keep result stream
+ void fadeResultMusic(int frames); // The results music fades with the picture.
+ void leaveResults(bool carryMusic); // Retire the racing actors; the ceremony keeps the stream.
  void quit();                  // RaceRSARPlayer::Stop: the race is left
  bool active() const { return active_; }
  // QA: called with a line on every race state change and countdown/lap sound.

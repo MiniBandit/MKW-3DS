@@ -40,6 +40,7 @@ void KartCollide::init() {
     m_oobWaterHeightSlot = -1;
     m_oobLavaHeightSlot = -1;
     m_sinkholeFall = false;
+    m_rainbowFall = false;
     m_solidOobTimer = 0;
     m_shrinkTimer = 0;
     m_smoothedBack = 0.0f;
@@ -787,6 +788,7 @@ void KartCollide::activateOob(bool detachCamera, Field::KCLTypeMask *mask,
     m_oobWaterHeightSlot = -1;
     m_oobLavaHeightSlot = -1;
     m_sinkholeFall = false;
+    m_rainbowFall = false;
     if (mask && !detachCamera && !somethingBullet) {
         const auto *entry = Field::CollisionDirector::Instance()->closestCollisionEntry();
         if (entry && (entry->variant() == 1 || entry->variant() == 3))
@@ -795,6 +797,8 @@ void KartCollide::activateOob(bool detachCamera, Field::KCLTypeMask *mask,
         // Keep its non-solid state until rescue; a new wave must not catch
         // an already sinking kart and push it back above the sand.
         m_sinkholeFall = entry && entry->variant() == 6;
+        // Effects::Player 0x806AB6B0: variant 5 starts the Rainbow fall timer.
+        m_rainbowFall = entry && entry->variant() == 5;
         if (entry && entry->variant() == 2)
             m_oobLavaHeightSlot = (static_cast<u16>(entry->attribute) >> 8) & 7;
     }

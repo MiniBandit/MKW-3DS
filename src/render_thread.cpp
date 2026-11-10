@@ -65,7 +65,7 @@ struct Header {uint16_t type,reserved;uint32_t size;};
 enum : uint16_t {
     CmdBegin=1,CmdEnd,CmdProjection,CmdCourseLighting,CmdRetailFog,CmdRequestBloom,CmdApplyBloom,CmdBottom,
     CmdDraw,CmdDrawAtScreen,CmdMenuIcon,CmdEnvironmentUv,CmdUv1,CmdUvOffset,CmdClearEnvironment,
-    CmdRigid,CmdSkin,CmdOverrides,CmdShadows,CmdSparks,CmdEffects,CmdSceneEffects,CmdCinema,CmdFade,CmdSprite,CmdFontSprite,
+    CmdRigid,CmdSkin,CmdOverrides,CmdShadows,CmdSparks,CmdEffects,CmdSceneEffects,CmdCinema,CmdFade,CmdPausedTop,CmdSprite,CmdFontSprite,
     CmdMaterialQuads,CmdText,CmdScreenDepth,CmdMenuModelLayer,CmdIntroWorldEnd,CmdRequestStadium,CmdCoinHudModel,CmdPlayerShadow,CmdSceneRegion,CmdShadowUnion,
     CmdDiagPass, // diagnostic overlay: GPU pass boundary (mkw/diag.hpp)
 };
@@ -112,6 +112,7 @@ struct SceneEffectsCommand {static constexpr uint16_t Type=CmdSceneEffects;const
 struct EffectsCommand {static constexpr uint16_t Type=CmdEffects;const RaceEffects* effects;const ef::DrawList* list;const Texture* textures;};
 struct CinemaCommand {static constexpr uint16_t Type=CmdCinema;float top,bottom,opacity;};
 struct FadeCommand {static constexpr uint16_t Type=CmdFade;float opacity;bool white;};
+struct PausedTopCommand {static constexpr uint16_t Type=CmdPausedTop;};
 struct SpriteCommand {
     static constexpr uint16_t Type=CmdSprite;
     const Texture* texture;float x,y,width,height,u0,v0,u1,v1,alpha,angle;uint32_t rgba,corners[4];bool hasCorners,additive;
@@ -438,6 +439,7 @@ void Renderer::execute(FrameList& list){
         case CmdEffects:{const auto& c=*static_cast<const EffectsCommand*>(body);effectListNow(*c.effects,*c.list,c.textures);break;}
         case CmdCinema:{const auto& c=*static_cast<const CinemaCommand*>(body);drawCinemaBars(c.top,c.bottom,c.opacity);break;}
         case CmdFade:{const auto& c=*static_cast<const FadeCommand*>(body);drawScreenFade(c.opacity,c.white);break;}
+        case CmdPausedTop:drawPausedTopNow();break;
         case CmdSprite:{
             const auto& c=*static_cast<const SpriteCommand*>(body);
             drawScreenSpriteRegion(*c.texture,c.x,c.y,c.width,c.height,c.u0,c.v0,c.u1,c.v1,c.alpha,c.rgba,c.hasCorners?c.corners:nullptr,c.additive,c.angle);break;
@@ -870,6 +872,10 @@ void Renderer::drawCinemaBars(float topHeight,float bottomHeight,float opacity){
     if(opacity<=0||(topHeight<=0&&bottomHeight<=0))return;
     if(!recording()){cinemaBarsNow(topHeight,bottomHeight,opacity);return;}
     auto& c=command<CinemaCommand>();c.top=topHeight;c.bottom=bottomHeight;c.opacity=opacity;
+}
+void Renderer::drawPausedTop(){
+    if(!pausedTop_.data||!pausedVertices_)return;
+    if(recording())command<PausedTopCommand>();else drawPausedTopNow();
 }
 void Renderer::drawScreenFade(float opacity,bool white){
     if(opacity<=0)return;

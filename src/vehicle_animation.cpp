@@ -224,10 +224,9 @@ void VehicleAnimation::evaluate() const{
         wheelFrames_[i].r[0].w=position.x;wheelFrames_[i].r[1].w=position.y;wheelFrames_[i].r[2].w=position.z;
         wheels_[i]=multiply(wheelFrames_[i],local({},{roll_[i],0,0}));
         Vec3 meshScale=(!bike_&&!front)?displayVec(0x3c):Vec3{1,1,1};
-        // Preserve source model oversize and the original rear XYZ scale. Only
-        // the physical radius's live change (e.g. offroad sinking) is additional.
-        const float compression=bspRadii_[i]>0?radii_[i]/bspRadii_[i]:1;
-        scale(wheels_[i],{kartScale.x*meshScale.x*compression,kartScale.y*meshScale.y*compression,kartScale.z*meshScale.z*compression});
+        // Wheel::UpdateMatrix (USA 0x8059444c): the scale is the kart's times the display vector
+        // only. The sunk radius (+0x6c) sets the roll rate; the lowered axle is what buries the tire.
+        scale(wheels_[i],{kartScale.x*meshScale.x,kartScale.y*meshScale.y,kartScale.z*meshScale.z});
     }
     updateAccessories();
 }

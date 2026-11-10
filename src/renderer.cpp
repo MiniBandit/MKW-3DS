@@ -2880,8 +2880,7 @@ void Renderer::drawPauseControls(){
     if(!pauseControls_.ready||!pausedTop_.data)return;
     drawScreenSpriteRegion(pauseControls_,0,8,400,128,0,0,400.f/pauseControls_.gpu.width,128.f/pauseControls_.gpu.height);
 }
-void Renderer::drawPausedTop(){
-    if(!pausedTop_.data||!pausedVertices_||recording())return;
+void Renderer::drawPausedTopNow(){
     flushSprites();
     bloomPass(topTarget(),400,240);
     C3D_TexEnvBufUpdate(C3D_Both,0);

@@ -632,7 +632,7 @@ void RaceSound::step(const Frame& f, RaceAudioFrame* actors) {
   if (!introLoaded_) a.objectSounds = 0;
   a.raceState = std::uint8_t(state_); a.alteration = std::uint8_t(alteration_); a.engineClass = std::uint8_t(std::min(setup_.engineClass, 2u));
   // A frame dropped by a full ring keeps its cues for the next one.
-  if (layer_.push(a)) { for (auto& k : a.kart) { k.cues = 0; k.bumpedBy = 0; k.powerObjectContact = 0; k.coinArrival = false; } a.itemSounds = 0; a.ambienceOps = 0; a.objectSounds = 0; a.balloonSounds = 0; }
+  if (layer_.push(a)) { for (auto& k : a.kart) { k.cues = 0; k.bumpedBy = 0; k.powerObjectContact = 0; k.coinArrival = false; k.rainbowFall = false; } a.itemSounds = 0; a.ambienceOps = 0; a.objectSounds = 0; a.balloonSounds = 0; }
  }
  SoundCommand c; c.type = SoundCommand::Layer; sys.post(c);
 }
@@ -649,13 +649,19 @@ void RaceSound::pause(bool paused) {
  for (std::uint32_t p = 2; p < 11; ++p) post(SoundCommand::PausePlayer, 0, p, paused ? 1.0f : 0.0f, 10);
 }
 
-void RaceSound::carryResultMusic(){
- if(!active_||!finished_||bgm_.active<0)return;
+void RaceSound::fadeResultMusic(int frames){
+ if(active_&&finished_)bgm_.stop(frames);
+}
+
+void RaceSound::leaveResults(bool carryMusic){
+ if(!active_||!finished_)return;
  auto& sys=SoundSystem::instance();
- const int i=bgm_.active;
- if(bgm_.delay>=0)post(SoundCommand::StartPrepared,bgm_.slot[i],0,0);
- sys.carryMusic(bgm_.sound[i],bgm_.slot[i]);
- bgm_.active=-1;bgm_.delay=-1;
+ if(carryMusic&&bgm_.active>=0){
+  const int i=bgm_.active;
+  if(bgm_.delay>=0)post(SoundCommand::StartPrepared,bgm_.slot[i],0,0);
+  sys.carryMusic(bgm_.sound[i],bgm_.slot[i]);
+  bgm_.active=-1;bgm_.delay=-1;
+ }
  // Removing the layer resets every actor-owned loop on the audio thread.
  // quit leaves the transferred music handle alone and stops race players.
  quit();
