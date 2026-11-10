@@ -248,3 +248,55 @@ void RetailFogState::step(const CourseLighting& course,int targetState,bool time
     if(done&&!timed){value.type=dest.type;value.enabled=dest.enabled;}
 }
 }
+
+namespace mkw {
+namespace {
+uint8_t lerpByte(uint8_t from,uint8_t to,float t){
+    // 0x805A3DD8: from + (int)(t*(to-from)), stored as a byte.
+    return uint8_t(int(from)+int(t*float(int(to)-int(from))));
+}
+RacerLightZone zones[12];
+const CourseLighting* zoneCourse=nullptr;
+bool zonesReady=false;
+}
+void RacerLightZone::reset(const CourseLighting& course){
+    current=target=0;progress=1.f;
+    const auto& l=course.lights[0];
+    direction={l.direction[0],l.direction[1],l.direction[2]};
+    for(unsigned c=0;c<4;++c){color[c]=channel(l.color,c);ambient[c]=channel(course.ambient[0],c);}
+}
+void RacerLightZone::step(const CourseLighting& course,unsigned index){
+    target=uint8_t(index&7);
+    if(target!=current){current=target;progress=0.f;}
+    if(progress>=1.f)return;
+    progress=std::min(progress+.1f,1.f);
+    const auto& l=course.lights[current];
+    const Vec3 to{l.direction[0],l.direction[1],l.direction[2]};
+    direction=direction+(to-direction)*progress;
+    for(unsigned c=0;c<4;++c){color[c]=lerpByte(color[c],channel(l.color,c),progress);ambient[c]=lerpByte(ambient[c],channel(course.ambient[current],c),progress);}
+}
+RetailLight RacerLightZone::light(const CourseLighting& course) const{
+    RetailLight out=course.lights[0];
+    out.flags=0x641;
+    const Vec3 d=normalized(direction,{0.f,-1.f,0.f});
+    out.direction[0]=d.x;out.direction[1]=d.y;out.direction[2]=d.z;
+    out.color=uint32_t(color[0])<<24|uint32_t(color[1])<<16|uint32_t(color[2])<<8|color[3];
+    return out;
+}
+uint32_t RacerLightZone::ambientColor() const{
+    return uint32_t(ambient[0])<<24|uint32_t(ambient[1])<<16|uint32_t(ambient[2])<<8|ambient[3];
+}
+namespace racerLightZones {
+void reset(){zonesReady=false;}
+void step(const CourseLighting* course,const uint8_t* indices,unsigned count){
+    if(course!=zoneCourse||!zonesReady){
+        zoneCourse=course;zonesReady=course!=nullptr;
+        if(course)for(auto& z:zones)z.reset(*course);
+    }
+    if(!course)return;
+    for(unsigned i=0;i<count&&i<12;++i)zones[i].step(*course,indices[i]);
+}
+const RacerLightZone* zone(unsigned player){return zonesReady&&zoneCourse&&player<12?&zones[player]:nullptr;}
+const CourseLighting* course(){return zonesReady?zoneCourse:nullptr;}
+}
+}

@@ -696,6 +696,7 @@ int main() {
     mkw::diag::modelPixels=exists("sdmc:/3ds/mkw-3ds/model-pixels.txt");
     mkw::diag::menuFast=!exists("sdmc:/3ds/mkw-3ds/no-menu-fast.txt");mkw::diag::menuCheck=exists("sdmc:/3ds/mkw-3ds/menu-check.txt");mkw::diag::unlitBanks=!exists("sdmc:/3ds/mkw-3ds/no-unlit-banks.txt");mkw::diag::pauseKeep=!exists("sdmc:/3ds/mkw-3ds/no-pause-keep.txt");
     mkw::diag::liveLight=!exists("sdmc:/3ds/mkw-3ds/no-live-light.txt");mkw::diag::rearBake=!exists("sdmc:/3ds/mkw-3ds/no-rear-bake.txt");mkw::diag::liveOpponents=exists("sdmc:/3ds/mkw-3ds/live-opponents.txt");
+    mkw::diag::lightZones=!exists("sdmc:/3ds/mkw-3ds/no-light-zones.txt");report(mkw::diag::lightZones?"light zones on":"light zones off");
     report(mkw::diag::liveLight?"live light on":"live light off");report(mkw::diag::rearBake?"rear bake on":"rear bake off");report(mkw::diag::liveOpponents?"live opponents on":"live opponents off");
     mkw::diag::loadCache=!exists("sdmc:/3ds/mkw-3ds/no-load-cache.txt");report(mkw::diag::loadCache?"load cache on":"load cache off");
     if(!renderer.init()){report("FAIL Citro3D initialization");return startupFailure("Citro3D initialization failed.");}
@@ -2857,7 +2858,7 @@ int main() {
                         if(scenes.currentSceneId()==0)scenes.createChildScene(2,scenes.currentScene());
                         else scenes.changeSiblingScene(2);
                         courseObjects.invalidate();stage("kinoko scene");
-                        driftEffects.reset();raceEffects.reset();resetKartFx();cameraShake.reset();shakeActionStarts=~0u;lightningFlash={};boostFov=0;driverPose={};wasTricking=false;wasBoosting=false;trickModel.reset();++restarts;
+                        driftEffects.reset();raceEffects.reset();resetKartFx();cameraShake.reset();shakeActionStarts=~0u;lightningFlash={};boostFov=0;driverPose={};wasTricking=false;wasBoosting=false;trickModel.reset();mkw::racerLightZones::reset();++restarts;
                         loadRequiredRace();
                     }
                     raceResident=!trackLoadFailed;if(!trackLoadFailed)menu.raceStarted();else menu.enter(mkw::UiPage::Error);uiRace={};uiRace.pauseControls=renderer.pauseControlsAvailable();
@@ -2908,7 +2909,7 @@ int main() {
                 }
                 scenes.currentScene()->heap()->enableAllocation();scenes.changeSiblingScene(2);courseObjects.invalidate();
                 if(down&(KEY_X|KEY_Y))loadDriver();
-                accumulator=0;driftEffects.reset();raceEffects.reset();resetKartFx();cameraShake.reset();shakeActionStarts=~0u;lightningFlash={};boostFov=0;driverController.reset();driverAnimation.resetLook();driverPose={};vehicleAnimation.reset();vehicleAnimation.step(*K::Kart::KartObjectManager::Instance()->object(0));bodyClock={};accessoryClocks={};wasTricking=false;wasBoosting=false;trickModel.reset();restarts++;report("race restarted");
+                accumulator=0;driftEffects.reset();raceEffects.reset();resetKartFx();cameraShake.reset();shakeActionStarts=~0u;lightningFlash={};boostFov=0;driverController.reset();driverAnimation.resetLook();driverPose={};vehicleAnimation.reset();vehicleAnimation.step(*K::Kart::KartObjectManager::Instance()->object(0));bodyClock={};accessoryClocks={};wasTricking=false;wasBoosting=false;trickModel.reset();mkw::racerLightZones::reset();restarts++;report("race restarted");
                 resetRaceSystems(bool(down&(KEY_X|KEY_Y)));
             }
             circlePosition pad;hidCircleRead(&pad);
@@ -3475,6 +3476,12 @@ int main() {
                         }
                     }
 
+                }
+                {   // Light zones: each racer's KCL light index, blended per tick (RacerLightZone).
+                    auto* karts=K::Kart::KartObjectManager::Instance();uint8_t lightIndex[12]{};
+                    const unsigned kartCount=std::min<unsigned>(unsigned(karts->count()),12u);
+                    if(mkw::diag::lightZones)for(unsigned i=0;i<kartCount;++i)lightIndex[i]=karts->object(i)->collide()->lightIndex();
+                    mkw::racerLightZones::step(mkw::courseLighting(Courses[courseChoice].archive),lightIndex,kartCount);
                 }
                 double us=(svcGetSystemTick()-tick)*1000000.0/SYSCLOCK_ARM11;stepTotal+=us;stepMax=std::max(stepMax,us);mkw::simprof::add(mkw::simprof::TickTotal,tick);physicsSteps++;accumulator-=1;
                 const auto postTickStart=mkw::simprof::now();
@@ -4144,6 +4151,8 @@ int main() {
             if(vehicle&&(!fullRace||!raceItems->hud(0).bullet)&&playerBattleVisible){
                 renderer.additiveColor=fullRace?(mkw::starMaterialColor(raceItems->hud(0).star)|
                     uint32_t(raceItems->hud(0).inkShade)):0;
+                const auto* zone=mkw::racerLightZones::zone(0);const auto* zoneCourse=mkw::racerLightZones::course();
+                if(zone&&zoneCourse){const auto light=zone->light(*zoneCourse);renderer.setRacerLight(&light,zone->ambientColor());}
                 transform=vehicleAnimation.body();drawSkinned(bodyAnimation.get(),*vehicle,transform);
                 if(playerLuma){playerLuma->prepare(renderer.viewFrustum(),vehicleAnimation,physicsSteps);playerLuma->draw(renderer);}
                 if(driver){C3D_Mtx seated=transform;const auto& choice=selectedVehicle();
@@ -4169,6 +4178,7 @@ int main() {
                         drawSkinned(accessoryAnimations[i].get(),*accessories[i],vehicleAnimation.accessory(name,accessoryAnimations[i]&&accessoryAnimations[i]->handleDriveClip()>=0,instance));
                 }
             }
+            renderer.setRacerLight(nullptr);
             if(coinRunnersMode){renderer.setCourseLighting(true);coinBattle.draw(renderer,physicsSteps);renderer.setCourseLighting(false);}
             if(battleMode&&!coinRunnersMode)balloonRuntime.draw(renderer);
             renderer.additiveColor=0;
@@ -4370,7 +4380,7 @@ int main() {
             replayHeap[finishes]=scenes.currentScene()->heap()->getAllocatableSize();finishes++;
             LOGF("rendered replay finished; drift blue_frames=%u orange_frames=%u particles=%u boost_fov_peak=%.3f trick_events=%u",driftEffects.blueFrames,driftEffects.orangeFrames,driftEffects.emitted,maxFov,trickCount);
             if(finishes==2){replayPass&=replayHeap[0]==replayHeap[1];if(FILE* f=fopen("sdmc:/3ds/mkw-3ds/replay-result.json","w")){fprintf(f,"{\"pass\":%s,\"finishes\":%u,\"heap_free\":[%u,%u],\"physics_steps\":%u,\"mean_step_us\":%.3f,\"max_step_us\":%.3f,\"track_parts\":%u,\"vehicle_loaded\":%s}\n",replayPass?"true":"false",finishes,replayHeap[0],replayHeap[1],physicsSteps,stepTotal/physicsSteps,stepMax,unsigned(track.size()),vehicle?"true":"false");fclose(f);}break;}
-            renderer.waitForGpu();scenes.currentScene()->heap()->enableAllocation();scenes.changeSiblingScene(2);courseObjects.invalidate();accumulator=0;driftEffects.reset();raceEffects.reset();resetKartFx();cameraShake.reset();shakeActionStarts=~0u;lightningFlash={};boostFov=0;driverController.reset();driverAnimation.resetLook();driverPose={};vehicleAnimation.reset();wasTricking=false;wasBoosting=false;trickModel.reset();restarts++;
+            renderer.waitForGpu();scenes.currentScene()->heap()->enableAllocation();scenes.changeSiblingScene(2);courseObjects.invalidate();accumulator=0;driftEffects.reset();raceEffects.reset();resetKartFx();cameraShake.reset();shakeActionStarts=~0u;lightningFlash={};boostFov=0;driverController.reset();driverAnimation.resetLook();driverPose={};vehicleAnimation.reset();wasTricking=false;wasBoosting=false;trickModel.reset();mkw::racerLightZones::reset();restarts++;
         }
         if(smoke&&frames==120){
             report("SMOKE COMPLETE 120 rendered frames");

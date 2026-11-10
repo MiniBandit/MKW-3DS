@@ -110,4 +110,34 @@ struct RetailFogState {
     // targetState: KMP AREA type 2 parameter (or -1 outside); timed: course 6.
     void step(const CourseLighting& course,int targetState,bool timed,uint32_t raceFrame);
 };
+// Light zones. Each racer owns G3D light set 8+n = {light 16+n, ambient 16+n}
+// (StaticR 0x8055CE78; controller 0x8055C014), which its kart and driver are
+// drawn with; it starts as a copy of BLIGHT light 0 and ambient 0 (0x8055C768).
+// KCL attribute bits 8-10 under the racer select BLIGHT light and ambient k
+// (0x8058B144). Every frame (0x8055D1D8) a new k restarts the blend at 0; then
+// progress += 0.1 (max 1) and the light's position, aim and colour and the
+// ambient move by progress of their remaining difference (0x8055C98C; colours
+// byte-truncated, 0x805A3DD8). The light keeps light 0's space, type and
+// intensity (only position, aim and colour are copied); its flags are 0x641.
+struct RacerLightZone {
+    uint8_t current=0,target=0;
+    float progress=1.f;
+    // Unit aim direction; retail blends position and aim separately, which
+    // differs only while a blend runs (10 frames).
+    Vec3 direction{};
+    uint8_t color[4]{},ambient[4]{};
+    void reset(const CourseLighting& course);
+    void step(const CourseLighting& course,unsigned index);
+    RetailLight light(const CourseLighting& course) const;
+    uint32_t ambientColor() const;
+};
+// Light zone state of every racer in the current race (player index 0-11).
+namespace racerLightZones {
+void reset();
+// One simulation tick: indices[i] is racer i's KCL light index.
+void step(const CourseLighting* course,const uint8_t* indices,unsigned count);
+// Null without course lighting or for an unknown racer.
+const RacerLightZone* zone(unsigned player);
+const CourseLighting* course();
+}
 }

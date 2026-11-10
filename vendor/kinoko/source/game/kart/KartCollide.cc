@@ -39,6 +39,7 @@ void KartCollide::init() {
     m_respawnTimer = 0;
     m_oobWaterHeightSlot = -1;
     m_oobLavaHeightSlot = -1;
+    m_lightIndex = 0;
     m_sinkholeFall = false;
     m_rainbowFall = false;
     m_solidOobTimer = 0;
@@ -677,8 +678,13 @@ void KartCollide::calcTriggers(Field::KCLTypeMask *mask, const EGG::Vector3f &po
     if (twoPoint) {
         handleTriggers(mask);
     } else {
+        // Retail USA 0x8056a8d8 and 0x8056cc94: the closest floor's attribute bits 8-10
+        // select the racer's BLIGHT light (0x8058b144).
         if (*mask & KCL_TYPE_FLOOR) {
-            Field::CollisionDirector::Instance()->findClosestCollisionEntry(mask, KCL_TYPE_FLOOR);
+            auto *colDir = Field::CollisionDirector::Instance();
+            if (colDir->findClosestCollisionEntry(mask, KCL_TYPE_FLOOR)) {
+                m_lightIndex = (static_cast<u16>(colDir->closestCollisionEntry()->attribute) >> 8) & 7;
+            }
         }
 
         if (*mask & KCL_TYPE_WALL) {
@@ -709,6 +715,10 @@ void KartCollide::handleTriggers(Field::KCLTypeMask *mask) {
     if (*mask & KCL_TYPE_BIT(COL_TYPE_EFFECT_TRIGGER)) {
         auto *colDir = Field::CollisionDirector::Instance();
         if (colDir->findClosestCollisionEntry(mask, KCL_TYPE_BIT(COL_TYPE_EFFECT_TRIGGER))) {
+            // Retail USA 0x8056a804..0x8056a844: variants 0 and 1 also set the light index.
+            if (colDir->closestCollisionEntry()->variant() <= 1) {
+                m_lightIndex = (static_cast<u16>(colDir->closestCollisionEntry()->attribute) >> 8) & 7;
+            }
             if (colDir->closestCollisionEntry()->variant() == 4) {
                 halfPipe()->end(true);
                 status().setBit(eStatus::EndHalfPipe);

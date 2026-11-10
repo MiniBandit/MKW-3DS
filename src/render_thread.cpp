@@ -68,9 +68,11 @@ enum : uint16_t {
     CmdRigid,CmdSkin,CmdOverrides,CmdShadows,CmdSparks,CmdEffects,CmdSceneEffects,CmdCinema,CmdFade,CmdPausedTop,CmdSprite,CmdFontSprite,
     CmdMaterialQuads,CmdText,CmdScreenDepth,CmdMenuModelLayer,CmdIntroWorldEnd,CmdRequestStadium,CmdCoinHudModel,CmdPlayerShadow,CmdSceneRegion,CmdShadowUnion,
     CmdDiagPass, // diagnostic overlay: GPU pass boundary (mkw/diag.hpp)
+    CmdRacerLight,
 };
 // begun: C3D_FrameBegin already ran on the recording thread (stereo immediate frames).
 struct DiagPassCommand {static constexpr uint16_t Type=CmdDiagPass;uint8_t pass;};
+struct RacerLightCommand {static constexpr uint16_t Type=CmdRacerLight;bool on;uint8_t space;float direction[3];uint32_t color,ambient;};
 struct ShadowUnionCommand {static constexpr uint16_t Type=CmdShadowUnion;bool active;};
 struct SceneRegionCommand {static constexpr uint16_t Type=CmdSceneRegion;unsigned mask;};
 struct BeginCommand {static constexpr uint16_t Type=CmdBegin;C3D_Mtx view,projection;unsigned lightingTick;bool sync,begun,loading,aa;};
@@ -355,7 +357,7 @@ void Renderer::execute(FrameList& list){
     const unsigned eye=bottomWorldPass_?0:pass;
     bool afterWorld=false;
     // Each eye starts from the state the frame started with.
-    rigid_=nullptr;skinPalette_=nullptr;overrides_=nullptr;overrideCount_=0;eye_=eye;
+    rigid_=nullptr;skinPalette_=nullptr;overrides_=nullptr;overrideCount_=0;eye_=eye;racerLightOn_=false;
     // The bottom screen (after CmdBottom) is drawn once, with the last eye.
     bool bottom=false;
     uint8_t diagRegion=diag::PassNone;bool diagBottom=false;
@@ -389,6 +391,7 @@ void Renderer::execute(FrameList& list){
         case CmdProjection:projection_=eyeProjection(static_cast<const ProjectionCommand*>(body)->projection);break;
         case CmdSceneRegion:execSceneRegion_=static_cast<const SceneRegionCommand*>(body)->mask;break;
         case CmdCourseLighting:courseLighting_=static_cast<const CourseLightingCommand*>(body)->enabled;break;
+        case CmdRacerLight:{const auto& c=*static_cast<const RacerLightCommand*>(body);racerLightNow(c.on,c.direction,c.color,c.space,c.ambient);break;}
         case CmdRetailFog:retailFogNow(static_cast<const RetailFogCommand*>(body)->fog);break;
         case CmdRequestStadium:{const auto& c=*static_cast<const RequestStadiumCommand*>(body);requestStadiumScreen(c.screens,c.count);break;}
         case CmdRequestBloom:{const auto& c=*static_cast<const RequestBloomCommand*>(body);requestBloomNow(*c.settings,c.clipped?c.clip:nullptr);break;}
@@ -488,7 +491,7 @@ void Renderer::execute(FrameList& list){
         diagPreviousActive=false;
     }
     // Recorded copies end with the list.
-    rigid_=nullptr;skinPalette_=nullptr;overrides_=nullptr;overrideCount_=0;
+    rigid_=nullptr;skinPalette_=nullptr;overrides_=nullptr;overrideCount_=0;racerLightOn_=false;
     stats_.renderMs=float((svcGetSystemTick()-start)*1000.0/SYSCLOCK_ARM11)-stats_.beginWaitMs;
     if(began)publish();
 }
@@ -561,6 +564,16 @@ void Renderer::setSceneRegion(unsigned mask){
 void Renderer::setCourseLighting(bool enabled){
     if(recording())command<CourseLightingCommand>().enabled=enabled;
     else courseLighting_=enabled;
+}
+void Renderer::setRacerLight(const RetailLight* light,uint32_t ambient){
+    const float none[3]={0,0,0};
+    const float* direction=light?light->direction:none;
+    const uint32_t color=light?light->color:0;const uint8_t space=light?light->space:0;
+    if(recording()){
+        auto& c=command<RacerLightCommand>();
+        c.on=light!=nullptr;c.space=space;c.color=color;c.ambient=ambient;
+        for(unsigned i=0;i<3;++i)c.direction[i]=direction[i];
+    }else racerLightNow(light!=nullptr,direction,color,space,ambient);
 }
 void Renderer::setRetailFog(const RetailFog& fog){
     if(recording())command<RetailFogCommand>().fog=fog;

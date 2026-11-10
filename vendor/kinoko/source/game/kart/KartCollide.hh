@@ -104,6 +104,11 @@ public:
     [[nodiscard]] s8 oobWaterHeightSlot() const { return m_oobWaterHeightSlot; }
     [[nodiscard]] s8 oobLavaHeightSlot() const { return m_oobLavaHeightSlot; }
     [[nodiscard]] bool rainbowFall() const { return m_rainbowFall; }
+    /// Presentation: KCL attribute bits 8-10 (BLIGHT light index) of the last floor or
+    /// effect trigger that set the racer's light (retail USA 0x8058b144 writes it to the
+    /// kart's two light controllers; reset to 0 at respawn, 0x8057e340).
+    [[nodiscard]] u8 lightIndex() const { return m_lightIndex; }
+    void resetLightIndex() { m_lightIndex = 0; }
     /// Presentation uses the same post-decrement countdown as retail OOB wipe.
     [[nodiscard]] s16 respawnTimer() const { return m_respawnTimer; }
     /// QA and AI recovery callers state the camera request of an activation.
@@ -309,6 +314,7 @@ private:
     bool m_rainbowFall = false; ///< This fall hit a variant 5 (Rainbow) fall boundary.
     s8 m_oobWaterHeightSlot = -1;
     s8 m_oobLavaHeightSlot = -1;
+    u8 m_lightIndex = 0; ///< Presentation only: never read by the simulation.
     /// mkw-3ds: applySomeFloorMoment's world-space inverse inertia tensor for the
     /// last (mainRot, invInertiaTensor) bit pattern; every wheel of one suspension
     /// pass shares those inputs, so the same product is reused bit for bit.
