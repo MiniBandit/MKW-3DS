@@ -128,14 +128,21 @@ public:
  // Game, or only Next after the final race of a VS set (IsFinalRace).
  // GP/VS/BT match the retail PauseMenu: Continue Game / Quit Game. TT adds
  // Restart,ChangeCourse,ChangeCharacter before Quit (USA808a84a8..d0).
- unsigned pauseCount()const{return selection.mode==UiMode::TimeTrials?5u:2u;}
+ // Watching a ghost: PauseMenuGhostWatch (USA list 808a8534: Continue, Restart,
+ // BattleGhost, Quit; texts 0x404, 0x406, 0x3fe, 0x405). ChangeGhost is unused.
+ bool watchingGhost()const{return selection.mode==UiMode::TimeTrials&&watchGhost;}
+ unsigned pauseCount()const{return watchingGhost()?4u:selection.mode==UiMode::TimeTrials?5u:2u;}
  unsigned pauseQuitSlot()const{return pauseCount()-1;}
  const char* pauseVariant(unsigned i)const{
   static constexpr const char* tt[]={"ButtonContinue","ButtonRestart","ButtonChangeCourse","ButtonChangeCharacter","ButtonQuit"};
+  static constexpr const char* watch[]={"ButtonContinue","ButtonRestart","ButtonBattleGhost","ButtonQuit"};
+  if(watchingGhost())return watch[std::min(i,3u)];
   return selection.mode==UiMode::TimeTrials?tt[std::min(i,4u)]:i==0?"ButtonContinue":"ButtonQuit";
  }
  const char* pauseLabel(unsigned i)const{
   static constexpr const char* tt[]={"Continue","Restart","Change Course","Change Character","Quit"};
+  static constexpr const char* watch[]={"Continue Replay","Restart Replay","Start Race","Quit Replay"};
+  if(watchingGhost())return watch[std::min(i,3u)];
   return selection.mode==UiMode::TimeTrials?tt[std::min(i,4u)]:i==0?"Continue Game":"Quit Game";
  }
  bool finalRace=false;

@@ -442,7 +442,11 @@ UiAction MenuState::input(UiInput key){
  case UiPage::Confirm:if(supportsRace())return UiAction::StartRace;unavailable=true;break;
  case UiPage::Pause:
   if(cursor==0){enter(UiPage::Race);return UiAction::ResumeRace;}
-  if(selection.mode==UiMode::TimeTrials){
+  if(watchingGhost()){
+   if(cursor==1)return UiAction::RestartRace;
+   // Start Race: race the ghost just watched, as "Race This Ghost" does.
+   if(cursor==2){watchGhost=false;return UiAction::RestartRace;}
+  }else if(selection.mode==UiMode::TimeTrials){
    if(cursor==1)return UiAction::RestartRace;
    if(cursor==2){enter(UiPage::Cup);break;}
    if(cursor==3){enter(UiPage::Character);break;}

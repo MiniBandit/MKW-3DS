@@ -595,7 +595,7 @@ def main():
   'license_management':['Check Records','Change Miis','Erase License'],
   # The pause rows (TT) and the quit question also use this family; without
   # their styles the focus pulse falls back to the outlined plain text.
-  'settings_button':['Nintendo GameCube Controller','Network Settings','Mario Kart Channel','Continue','Restart','Change Course','Change Character','Quit','Yes','No'],
+  'settings_button':['Nintendo GameCube Controller','Network Settings','Mario Kart Channel','Continue','Restart','Change Course','Change Character','Quit','Yes','No','Continue Replay','Restart Replay','Start Race','Quit Replay'],
   'rule_base':['Class','CPU','CPU Vehicles','Courses','Items','Race Count'],
   'rule_option':['50cc','100cc','150cc','Mirror','Easy','Normal','Hard','Karts','Bikes','All','Choose','Random','In Order','Balanced','Aggressive','Strategic','None'],
   'rule_chosen':['50cc','100cc','150cc','Mirror','Easy','Normal','Hard','Karts','Bikes','All','Choose','Random','In Order','Balanced','Aggressive','Strategic','None'],
@@ -738,7 +738,7 @@ def main():
  controller_paths += [ROOT/'assets/menu-ui/Channel/button/ctrl/OptionTopButton.brctr']
  controller_paths += [ROOT/'assets/menu-ui/Present/common/ctrl/NextButton.brctr']
  controller_paths += list((ROOT/'assets/menu-ui/Present/control/ctrl').glob('*.brctr'))
- controller_paths += [ROOT/'assets/race-ui/Race/button/ctrl'/(name+'.brctr') for name in ['PauseMenuVS','PauseMenuGrandPrix','PauseMenuTimeAttack','PauseMenuBT']]
+ controller_paths += [ROOT/'assets/race-ui/Race/button/ctrl'/(name+'.brctr') for name in ['PauseMenuVS','PauseMenuGrandPrix','PauseMenuTimeAttack','PauseMenuBT','PauseMenuGhostWatch']]
  for p in controller_paths:
   if p.name.startswith('._'):continue
   source(p);data=controllers(p);ctr.setdefault(p.stem,{}).update(data);alphas.setdefault(p.stem,{}).update(controller_alphas(p));qualified_controllers[str(p.relative_to(ROOT))]=data

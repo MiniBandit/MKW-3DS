@@ -26,7 +26,7 @@ float fadeOpacity(float frame,bool entering){return colorFaderOpacity(frame,ente
 
 const char* uiPauseMenuControl(const MenuState& state){
  switch(state.selection.mode){
- case UiMode::TimeTrials:return "PauseMenuTimeAttack";
+ case UiMode::TimeTrials:return state.watchGhost?"PauseMenuGhostWatch":"PauseMenuTimeAttack";
  case UiMode::GrandPrix:return "PauseMenuGrandPrix";
  case UiMode::Battle:return "PauseMenuBT";
  default:return "PauseMenuVS";
