@@ -303,7 +303,7 @@ public:
  }
  void textSprite(unsigned index,const UiPaneInfo& pane,Pose p,uint32_t color=0xffffffff){diag::ComposeTimer diagTimer_(8);
   if(index>=std::size(UiSprites)||!pane.visible)return;
-  if(layout.role==UiMenuRole::Description){
+  if(layout.role==UiMenuRole::Description&&std::strncmp(UiSprites[index].key,"name_glyph_",11)){
    const char* caption=UiSprites[index].text;
    for(unsigned i=0;i<std::size(UiSprites);++i)
     if(!std::strncmp(UiSprites[i].key,"footer_caption_",15)&&!std::strcmp(UiSprites[i].text,caption)){index=i;break;}
@@ -609,10 +609,10 @@ public:
   }
  }
  // A runtime caption (ghost names and times) in the native-font name glyphs.
- void glyphText(const char* value,const char* base,Pose p,const char* name="text"){
+ void glyphText(const char* value,const char* base,Pose p,const char* name="text",bool fixed=false){
   // The preload makes every glyph of every possible label resident ("Your
   // Ghost" lost its Y and u without them).
-  if(transition&&transition->preload)value="Staff Ghost Expert Your 0123456789:.";
+  if(!fixed&&transition&&transition->preload)value="Staff Ghost Expert Your 0123456789:.";
   const auto* original=pane(base,name);if(!original)return;
   unsigned indices[48]{},count=0;float widths[48]{},total=0;
   for(const unsigned char* ch=reinterpret_cast<const unsigned char*>(value);*ch&&count<48;++ch){
@@ -746,12 +746,14 @@ public:
   auto key=buttonState(base,slot);panel(key.c_str(),p);
   if(caption){text(caption,key.c_str(),p);if(state.cursor==slot)glow(base,p,caption);}
  }
- void chrome(const char* title,const char* description=""){diag::ComposeTimer diagTimer_(18);
+ // glyphs: the description has no baked caption; it is set from the name glyphs.
+ void chrome(const char* title,const char* description="",bool glyphs=false){diag::ComposeTimer diagTimer_(18);
   group(UiMenuRole::Header);panel("header",motionOnly("MenuObiTop","MenuObiTop"));
   group(UiMenuRole::Footer);panel("footer",control("MenuObiBottom","MenuObiBottom"));
   const auto titlePose=control("MenuObiTitleText","MenuObiTitleText");groupPane(UiMenuRole::Title,titlePose,"header_text","text");text(title,"header_text",titlePose);
   Pose back=control("Back","ButtonBack");groupPane(UiMenuRole::Back,back,"back_free","touch");panel("back_free",back);inPane("button_back","back_free","text",back);
-  if(*description){const auto p=control("MenuObiInstructionText","MenuObiInstructionText");groupPane(UiMenuRole::Description,p,"footer_help","text");text(description,"footer_help",p,0xffffffff);}
+  if(*description){const auto p=control("MenuObiInstructionText","MenuObiInstructionText");groupPane(UiMenuRole::Description,p,"footer_help","text");
+   if(glyphs)glyphText(description,"footer_help",p,"text",true);else text(description,"footer_help",p,0xffffffff);}
   group(UiMenuRole::Content);
  }
  void bareTitle(const char* title){
@@ -1279,7 +1281,7 @@ static void composeMenuImpl(const MenuState& s,const UiRaceView& race,std::vecto
    std::snprintf(label,sizeof label,"%s %u:%02u.%03u",slot==2?"Your Ghost":slot?"Expert Staff Ghost":"Staff Ghost",ms/60000,ms/1000%60,ms%1000);
    const auto key=c.buttonState("ghost",slot);c.glyphText(label,key.c_str(),p);
   }
-  c.chrome("Time Trials",s.cursor<3?"A: Race this ghost   Y: Watch replay":"");break;
+  c.chrome("Time Trials",s.cursor<3?"A: Race this ghost   Y: Watch replay":"",true);break;
  }
  case UiPage::DriftHelp:{
   c.group(UiMenuRole::Shade);c.panel("confirm_back",control("RaceConfirmBack","BlackBack"));
@@ -1492,6 +1494,7 @@ void layoutMenuScreens(const MenuState& state,const std::vector<UiQuad>& source,
  top.clear();bottom.clear();top.reserve(source.size());bottom.reserve(source.size());
  if(unchangedMenu(state.page)){top=source;for(auto& q:top)q.bottom=false;return;}
  const bool fullMovie=state.page==UiPage::Course||state.page==UiPage::BattleStage||state.page==UiPage::Confirm;
+ float glyphX=0;
  for(const auto& q:source){
   const auto& g=q.menu;const unsigned i=g.group;
   const bool upperConfirm=g.page==UiPage::Confirm;
@@ -1512,6 +1515,10 @@ void layoutMenuScreens(const MenuState& state,const std::vector<UiQuad>& source,
    placeMenuQuad(q,{14,6,372,20},false,top,true);if(!upperConfirm)placeMenuQuad(q,{12,6,296,20},true,bottom,true);break;
   case UiMenuRole::Description:
    {auto text=q;const auto& a=UiSprites[q.sprite];
+    // A description set from name glyphs: one glyph cell per quad, laid out
+    // left to right (the run is centred below).
+    if(!std::strncmp(a.key,"name_glyph_",11)){const float h=17.f,w=h*a.w/a.h;
+     text.x=glyphX;text.y=219;text.w=w;text.h=h;glyphX+=w;text.affine=false;text.bottom=false;top.push_back(text);break;}
     const float h=std::min(14.f,384.f*a.h/a.w),w=h*a.w/a.h;
     text.x=200-w*.5f;text.y=222;text.w=w;text.h=h;text.affine=false;
     text.bottom=false;top.push_back(text);break;}
