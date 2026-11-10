@@ -639,6 +639,7 @@ def cook(root, output, course_only=False, balloon_only=False, coin_only=False, c
                            ('koopa_course', 'dossun', ['rk_dossun']),
                            ('sand_battle', 'quicksand', ['rk_qsandDossun']),
                            ('desert_course', 'sanbo', ['rk_sanbo']),
+                           ('old_peach_gc', 'poihana', ['rk_poihanaExclm']),
                            ('rainbow_course', 'StarRing', ['rk_StarRing']),
                            ('rainbow_course', 'entry', ['rk_entry']),
                            ('treehouse_course', 'hanachan', ['rk_hanaSmk']),

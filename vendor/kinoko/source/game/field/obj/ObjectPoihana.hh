@@ -62,6 +62,8 @@ public:
     void onGlobalItemCollision(s16 reactionOnItem, s16 reactionOnObj) override;
     [[nodiscard]] const char *animationName() const { return m_animationName; }
     [[nodiscard]] f32 animationFrame() const { return m_animationFrame; }
+    /// Chase (state 2) frame count; the lock-on is frames 1..19 (USA 0x80739d7c).
+    [[nodiscard]] u32 actionFrame() const { return m_actionFrame; }
 
 private:
     mkw::ObjectAnimationSound m_animationSound;
