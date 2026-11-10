@@ -213,7 +213,7 @@ void Lakitu::step(const LakituInput& in){
         }
     }else if(respawning&&!m.wasRespawning){
         m.mode=Mode::Rescue;m.phase=Phase::Stay;m.phaseTimer=0;m.attachment=None;m.forward=forwardH*-1.f;m.clips("wait","pickup");
-    }else if(in.finished&&!m.wasFinished){
+    }else if(in.goal&&in.finished&&!m.wasFinished){
         m.mode=Mode::Goal;m.phase=Phase::Drop;m.interp.init(60);m.attachment=Flag;m.forward=forwardH*-1.f;m.clips("jg_wy","wait");
         m.goalFrom=m.cameraFrame(forwardH,{0,2000,700});m.goalTo=m.cameraFrame(forwardH,{0,120,700});m.pos=m.goalFrom;
     }else if(in.lap!=m.lastLap&&in.lap>=2&&in.lap<=in.lapCount&&!in.finished&&m.mode!=Mode::Start&&m.mode!=Mode::Rescue){

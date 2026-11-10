@@ -247,7 +247,7 @@ void MenuState::enter(UiPage next){
  case UiPage::Course:cursor=selection.course%4;break;
  case UiPage::BattleCup:cursor=selection.battleStage/5;break;
  case UiPage::BattleStage:cursor=selection.battleStage%5;break;
- case UiPage::Ghost:cursor=ghostChoice==1?0:ghostChoice==2?1:ghostChoice==3?2:3;break; // Replays are deferred.
+ case UiPage::Ghost:cursor=ghostChoice==1?0:ghostChoice==2?1:ghostChoice==3?2:3;break;
  case UiPage::EraseLicense:case UiPage::QuitConfirm:cursor=1;break;
  default:break;
  }
@@ -292,6 +292,11 @@ UiAction MenuState::input(UiInput key){
   default:break;
   }
   return UiAction::None;
+ }
+ // Y on a ghost's row watches its replay; A races it.
+ if(key.switchType&&page==UiPage::Ghost){
+  if(cursor>=3||!choiceVisible(cursor))return UiAction::None;
+  ghostChoice=cursor+1;watchGhost=true;enter(UiPage::Confirm);return UiAction::None;
  }
  if(key.switchType&&page==UiPage::EngineClass){
   if(!mixedTypesUnlocked(0)&&!mixedTypesUnlocked(1))return UiAction::None;
@@ -429,7 +434,7 @@ UiAction MenuState::input(UiInput key){
   enter(selection.mode==UiMode::GrandPrix?UiPage::Confirm:UiPage::Course);break;
  case UiPage::Course:selection.course=selection.course/4*4+cursor;enter(selection.mode==UiMode::TimeTrials?UiPage::Ghost:UiPage::Confirm);break;
  case UiPage::Ghost:if(!choiceVisible(cursor)){unavailable=true;break;}
-  ghostChoice=cursor==0?1:cursor==1?2:cursor==2?3:0;enter(UiPage::Confirm);break;
+  ghostChoice=cursor==0?1:cursor==1?2:cursor==2?3:0;watchGhost=false;enter(UiPage::Confirm);break;
  case UiPage::BattleCup:
   if(selection.battleStage/5!=cursor)selection.battleStage=cursor*5;
   enter(UiPage::BattleStage);break;
