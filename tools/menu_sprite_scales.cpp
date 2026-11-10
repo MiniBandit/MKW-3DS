@@ -27,9 +27,10 @@ int main(int argc,char** argv){
  UiRaceView race{};race.count=12;for(unsigned i=0;i<12;++i){race.racers[i].driver=i;race.racers[i].rank=i+1;}
  std::vector<UiQuad> q;
  for(UiPage page:pages)for(unsigned mode=0;mode<4;++mode)for(unsigned variant=0;variant<24;++variant)for(int mixed=0;mixed<2;++mixed){
-  if(mixed&&page!=UiPage::EngineClass&&page!=UiPage::Vehicle)continue;
+  // mixed on Pause: the ghost-watch pause (PauseMenuGhostWatch) and its labels.
+  if(mixed&&page!=UiPage::EngineClass&&page!=UiPage::Vehicle&&page!=UiPage::Pause)continue;
   MenuState s;for(auto& flags:s.licenseUnlocks)flags.fill(~0u);s.selection.mode=UiMode(mode);s.selection.driver=variant;s.selection.vehicle=variant%12;
-  s.selection.course=(variant*4+mode)%32;s.selection.battleStage=variant%10;s.selection.mixedEngineTypes=mixed;
+  s.selection.course=(variant*4+mode)%32;s.selection.battleStage=variant%10;s.selection.mixedEngineTypes=mixed&&page!=UiPage::Pause;s.watchGhost=mixed&&page==UiPage::Pause;
   s.selection.engineClass=UiEngineClass(variant%4);
   s.licenseOccupied.fill((variant&1)!=0);
   for(auto& cups:s.licenseCups)for(unsigned i=0;i<cups.size();++i)cups[i]=1+i%3;
