@@ -1,12 +1,5 @@
 # Changelog
 
-# 0.7.1: builder fixes
-
-- Windows: packaging no longer stops at the last step with "Invalid menu movie path".
-- The builder checks for the C++ compiler at the start instead of failing at step 11.
-- Linux instructions: devkitPro's install script for Debian, Ubuntu and ChromeOS; Intel or AMD computers only.
-- The game is unchanged from 0.7.0: a game built with 0.7.0 does not need rebuilding.
-
 # 0.7.0: Redux merge
 
 Epic's Mario Kart Wii 3DS Redux is now the game, by her permission, on top of this project's builder and quick updates. Every player must build again in a new, empty folder.
@@ -15,6 +8,7 @@ Epic's Mario Kart Wii 3DS Redux is now the game, by her permission, on top of th
 - Builder: a fresh build no longer stops at the course material overlay; devkitPro is found on any drive; folder paths with non-English letters, out-of-date devkitPro and synced folders are explained; failed movie frames are retried; Python package errors are shown; long steps report that they are still running; a click no longer freezes a Windows console; Linux instructions.
 - Old 3DS: opponents use low-detail models when memory runs short, so races load instead of crashing; big file reads no longer split the heap; a 128 KiB main stack replaces the one that overflowed at start-up.
 - Staff credits still play without the console's Mii resource.
+- Builder update (same version): Windows packaging no longer stops at the last step with "Invalid menu movie path"; the builder checks for the C++ compiler at the start; Linux instructions cover devkitPro's install script (Intel or AMD computers only).
 
 Changes retained on top of the existing port, grouped by feature; withdrawn experiments, packaging-only revisions and unfinished investigations are excluded.
 
