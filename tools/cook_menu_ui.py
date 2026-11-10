@@ -173,6 +173,9 @@ def bake_panel(name,resource,states=('free','select'),exclude=(),bounds=None,ove
   colors={'fuchi_pattern':[c0,c1,[255,255,255,255]],'color_base':[base,base,[255,255,255,255]]} if states!=('',) else {}
   pane_overrides=dict(overrides or {})
   for hidden_pane in hidden:pane_overrides[hidden_pane]={'visible':False}
+  # Unselected license cards at full size (user, Nov 10). Retail's free clip
+  # scales null_all to 0.87 (select 1.15); players read them as too small.
+  if name.startswith('license_') and name.endswith(('_used','_empty')) and state=='free':pane_overrides['null_all']={'sx':1,'sy':1}
   if name=='character':
    # ButtonDriver::{Reset,Set}ButtonColours modifies its black_base pane in
    # addition to the shared PushButton border palette (RMCU 807dde6c/807de0a0).
