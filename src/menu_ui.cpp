@@ -1281,7 +1281,9 @@ static void composeMenuImpl(const MenuState& s,const UiRaceView& race,std::vecto
    std::snprintf(label,sizeof label,"%s %u:%02u.%03u",slot==2?"Your Ghost":slot?"Expert Staff Ghost":"Staff Ghost",ms/60000,ms/1000%60,ms%1000);
    const auto key=c.buttonState("ghost",slot);c.glyphText(label,key.c_str(),p);
   }
-  c.chrome("Time Trials",s.cursor<3?"A: Race this ghost   Y: Watch replay":"",true);break;
+  // The preload composes the hint at any cursor, so its glyphs are resident
+  // before the page shows (on Solo Time Trials, moving up drew them in late).
+  c.chrome("Time Trials",s.cursor<3||preload?"A: Race this ghost   Y: Watch replay":"",true);break;
  }
  case UiPage::DriftHelp:{
   c.group(UiMenuRole::Shade);c.panel("confirm_back",control("RaceConfirmBack","BlackBack"));

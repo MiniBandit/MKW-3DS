@@ -175,7 +175,7 @@ void MenuModels::setIdentity(Renderer& renderer,unsigned slot,const NativeMii& i
         if(entry.kind!=Driver||entry.id<24||unsigned(entry.id-24)/2!=slot){++it;continue;}
         if(entry.job)entry.job->cancel();
         if(shownDriver_==entry.id){shownDriver_=-1;driverClip_=driverFace_=-1;driverFrame_=0;}
-        renderer.retire(std::move(entry.model));renderer.retire(std::move(entry.head));
+        renderer.retire(std::move(entry.model));renderer.retire(std::move(entry.head));renderer.retire(std::move(entry.animation));
         it=entries_.erase(it);
     }
 }
@@ -300,7 +300,9 @@ void MenuModels::update(Renderer& renderer,const MenuState& state,const UiTransi
         if(!victim)break;
         if(victim->job){victim->job->cancel();victim->job.reset();}
         if(victim->model)retiring+=victim->model->vertexCount*sizeof(Vertex);
-        renderer.retire(std::move(victim->head));renderer.retire(std::move(victim->model));victim->animation.reset();victim->environment.clear();
+        // The animation too: a queued deferred write (DriverAnimation::write) of
+        // a frame still drawing on the render thread holds it.
+        renderer.retire(std::move(victim->head));renderer.retire(std::move(victim->model));renderer.retire(std::move(victim->animation));victim->environment.clear();
     }
     entries_.erase(std::remove_if(entries_.begin(),entries_.end(),[&](const auto& e){return !e->resident()&&!e->job&&!e->failed&&evictable(*e);}),entries_.end());
     const bool backgroundPending=std::any_of(entries_.begin(),entries_.end(),[](const auto& e){return e->kind==Background&&e->job&&!e->job->done();});
@@ -323,7 +325,7 @@ void MenuModels::prepare(Renderer& renderer,const MenuState& state){
 }
 void MenuModels::reset(Renderer& renderer) {
     settings_.reset(renderer);
-    for(auto& e:entries_){if(e->job)e->job->cancel();renderer.retire(std::move(e->head));renderer.retire(std::move(e->model));}
+    for(auto& e:entries_){if(e->job)e->job->cancel();renderer.retire(std::move(e->head));renderer.retire(std::move(e->model));renderer.retire(std::move(e->animation));}
     entries_.clear();shownDriver_=shownBackground_=shownMachine_=-1;driverClip_=driverFace_=backgroundClip_=-1;
     machineRotation_={};
 }

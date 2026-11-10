@@ -244,6 +244,10 @@ void* Renderer::data(std::size_t bytes){
 }
 DeferredWrites* Renderer::writes(){
     if(renderThread)return nullptr;
+    // Other threads (the asset loader posing a menu model it just loaded) write
+    // buffers no frame draws yet: at once. Queued into the recording frame, the
+    // write outlived a cancelled job's model and animation (menu crash).
+    if(!recordThread&&!onJobWorker())return nullptr;
     // A frame between begin() and end() queues its writes.
     if(auto* list=writeTarget_.load(std::memory_order_acquire))return &list->writes;
     // Immediate frames: a job on the other core queues them for the main thread.
