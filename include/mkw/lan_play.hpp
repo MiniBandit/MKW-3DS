@@ -75,6 +75,8 @@ public:
     void poll();
     bool peerFrame(Frame& out) const{if(!hasFrame_)return false;out=latest_;return true;}
     uint32_t framesSinceHeard() const{return silentPolls_;}
+    // The other player said goodbye (quit or left the race).
+    bool peerLeft() const{return peerLeft_;}
     const char* reason() const{return reason_;}
     // Human-readable steps for the connection screen, oldest first.
     bool takeEvent(char* out,size_t size);
@@ -93,7 +95,7 @@ private:
     bool peerKnown_=false,welcomed_=false,peerReady_=false,goSeen_=false,hasFrame_=false;
     unsigned course_=0,engineClass_=2,peerGarage_=0,hostGarage_=0,goRepeats_=0,pollCount_=0;bool mirror_=false,autoDrift_=false,peerAutoDrift_=false;
     uint32_t silentPolls_=0;
-    bool relay_=false,roomJoined_=false,failed_=false;char room_[9]{};char server_[64]{};unsigned joinCount_=0;char failure_[48]{};
+    bool relay_=false,roomJoined_=false,failed_=false,peerLeft_=false;char room_[9]{};char server_[64]{};unsigned joinCount_=0;char failure_[48]{};
     Frame latest_{};
     const char* reason_="";
 };

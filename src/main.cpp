@@ -221,7 +221,7 @@ static const auto& selectedVehicle(){return mkw::raceGarageChoice(selectedGarage
 static mkw::CpuRoster selectedRoster;
 static std::array<uint8_t,12> selectedStartPositions{};
 // LAN play (src/lan_play.cpp): a two-player VS race against another console.
-static bool lanRace=false,lanHost=false,lanWaiting=false,lanFromFile=false;static std::array<unsigned,12> lanRoster{};
+static bool lanRace=false,lanHost=false,lanWaiting=false,lanFromFile=false,lanLost=false;static std::array<unsigned,12> lanRoster{};
 // Time Trials ghost (Race/TimeAttack on the SD card): racer 1 replays it.
 static bool ghostRace=false;static std::vector<uint8_t> ghostRkg;
 static uint16_t lanButtons=0;static int8_t lanStick=0;static uint8_t lanTrick=0,lanItemFlags=0;static uint32_t lanAppliedTick=0;
@@ -2002,7 +2002,7 @@ int main() {
             // Execute and retire the first complete render, then its reuse
             // frame while still black. Resource allocation alone does not
             // prime pose uploads, shadow captures or their GPU dependencies.
-            raceWarmupFrames=fullRace?2u:0u;lanWaiting=lanRace;
+            raceWarmupFrames=fullRace?2u:0u;lanWaiting=lanRace;lanLost=false;
             if(fullRace)K::System::RaceManager::Instance()->setIntroHeld(true);
             raceResident=fullRace;return true;
         };
@@ -2369,7 +2369,7 @@ int main() {
                         const auto& c=raceGrid.ai().itemCommand(i);inputs[i]={c.use,c.backwards,c.forwards};
                     }
                     lanItemFlags=uint8_t((inputs[0].use?1:0)|(inputs[0].backwards?2:0)|(inputs[0].forwards?4:0));
-                    if(lanRace&&raceGrid.count()>1){mkw::lan::Frame peer;inputs[1]=mkw::lan::session().peerFrame(peer)?mkw::ItemInput{bool(peer.flags&1),bool(peer.flags&2),bool(peer.flags&4)}:mkw::ItemInput{};}
+                    if(lanRace&&!lanLost&&raceGrid.count()>1){mkw::lan::Frame peer;inputs[1]=mkw::lan::session().peerFrame(peer)?mkw::ItemInput{bool(peer.flags&1),bool(peer.flags&2),bool(peer.flags&4)}:mkw::ItemInput{};}
                         if(kQa&&autoplay&&!afterGoal&&raceGrid.driveLocal)for(auto& g:qaGives){
                             if(g.player>=raceGrid.count())continue;
                             // Opponent POW must actually target player zero; do not alter ranks.
@@ -2401,7 +2401,11 @@ int main() {
                     }
                     // Resolve item activation/expiry before choosing this tick's
                     // controller, including CPU Bullet Bills and the handoff back.
-                    if(lanRace&&raceGrid.count()>1){
+                    // Five seconds without a word, or a goodbye: the other kart races on as a CPU.
+                    if(lanRace&&!lanLost&&!lanWaiting&&(mkw::lan::session().peerLeft()||mkw::lan::session().framesSinceHeard()>300)){
+                        lanLost=true;raceGrid.remoteMask=0;LOGF("LAN: connection lost; the other kart is now a CPU");
+                    }
+                    if(lanRace&&!lanLost&&raceGrid.count()>1){
                         // The other console's latest inputs drive its kart here between state corrections.
                         auto& lan=mkw::lan::session();lan.poll();mkw::lan::Frame peer;
                         auto* remotePad=K::System::KPadDirector::Instance()->hostController(1);
@@ -2427,7 +2431,7 @@ int main() {
                 // QA: a fall boundary (variant 0) activation, so the retail SetCamera hold applies.
                 if(autoplay&&lakituRespawnStep&&physicsSteps==lakituRespawnStep){auto* qaCollide=K::Kart::KartObjectManager::Instance()->object(0)->collide();qaCollide->setOobCameraPending(uint16_t(lakituRequest));qaCollide->activateOob(false,nullptr,false,false);}
                 scenes.calc();
-                if(lanRace&&raceGrid.count()>1){
+                if(lanRace&&!lanLost&&raceGrid.count()>1){
                     // LAN: send this tick's kart, then pull the other kart onto the newest state it sent.
                     auto& lan=mkw::lan::session();auto* objects=K::Kart::KartObjectManager::Instance();
                     if(auto* mine=objects->object(0)){
@@ -3391,6 +3395,7 @@ int main() {
             if(fullRace&&!intro.active()){auto* race=K::System::RaceManager::Instance();
 
                 raceHud.drawOverlay(renderer,*raceItems,unsigned(race->stage()),race->timer(),battleMode?battleRank(0):raceGrid.rank(),raceGrid.lap(),battleMode?battleTicks>=balloonBattle.durationTicks():raceGrid.finished(),physicsSteps,results.finishFrame(),results.hudSlide(),camera->lookingBack());
+                if(lanLost)renderer.drawScreenText("Connection lost: the other kart is now a CPU",8,4,1.f,0xffffffffu);
 }
             renderer.setScreenDepth(renderer.stereoLayer(mkw::stereo::HudLayer));
             if(fullRace)flowUi.drawResults(renderer,results,bottomScreen.miiPortrait());

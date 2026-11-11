@@ -180,7 +180,7 @@ void Session::receive(const uint8_t* data,size_t size,uint32_t address,uint16_t 
         if(!hasFrame_||frame.tick>=latest_.tick){latest_=frame;hasFrame_=true;}
         break;
     }
-    case Type::Bye:hasFrame_=false;peerReady_=false;reason_="the other player left";break;
+    case Type::Bye:hasFrame_=false;peerReady_=false;peerLeft_=true;reason_="the other player left";break;
     }
 }
 
@@ -233,5 +233,5 @@ void Session::sendFrame(uint32_t tick,uint16_t buttons,int8_t stickX,uint8_t tri
     send(&f,sizeof f);
 }
 
-void Session::resetRace(){welcomed_=false;peerReady_=false;goSeen_=false;goRepeats_=0;hasFrame_=false;}
+void Session::resetRace(){peerLeft_=false;silentPolls_=0;welcomed_=false;peerReady_=false;goSeen_=false;goRepeats_=0;hasFrame_=false;}
 }
