@@ -213,6 +213,9 @@ void Session::handshakeStep(unsigned localGarage,bool autoDrift,unsigned course,
 
 bool Session::readyStep(){
     poll();
+    // Loading a race sends nothing for a while: re-announce to the room so the
+    // server re-adds this console if it has forgotten it.
+    if(relay_&&pollCount_%KeepAliveEvery==0)sendJoin();
     if(role_==Role::Host){
         if(!peerReady_)return false;
         if(goRepeats_<GoRepeats){Go go{header(Type::Go)};send(&go,sizeof go);++goRepeats_;}
