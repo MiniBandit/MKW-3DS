@@ -40,6 +40,8 @@ struct UiSelection {
  // together between their restricted type and the combined kart/bike list.
  bool mixedEngineTypes=false;
  unsigned ledMode=0,ledBrightness=100;bool dynamicShadows=true; // Per-license port options, separate from retail RKSD.
+ // Graphics: 0 Auto (Old 3DS Performance, New 3DS Quality), 1 Quality, 2 Performance.
+ unsigned graphics=0;
  bool operator==(const UiSelection&)const=default;
 };
 struct UiCharacterInfo {const char* name;unsigned retailId,weight;};

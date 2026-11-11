@@ -440,7 +440,7 @@ public:
  // Existing native-font name glyphs allow runtime option values without
  // adding texture assets or using a platform/system font.
  void optionText(const char* value,const UiPaneInfo& original,Pose p){
-  if(transition&&transition->preload)value="0123456789% Change Miis Erase License LED: Off Items + Events Drifts Dynamic Shadows On Brightness";
+  if(transition&&transition->preload)value="0123456789% Change Miis Erase License LED: Off Items + Events Drifts Dynamic Shadows On Brightness Graphics: Auto Quality Performance";
   unsigned indices[128]{},count=0;float widths[128]{},total=0;
   for(const unsigned char* ch=reinterpret_cast<const unsigned char*>(value);*ch&&count<128;++ch){
    char key[32];std::snprintf(key,sizeof key,"name_glyph_%04x",unsigned(*ch));
@@ -879,14 +879,16 @@ static void composeMenuImpl(const MenuState& s,const UiRaceView& race,std::vecto
  }
  case UiPage::LicenseSettings:{
   // Reuse the original control and game-font text, including the two port options.
-  const char* variants[]={"ChangeMii","Delete","ChangeMii","ChangeMii","ChangeMii"};
+  const char* variants[]={"ChangeMii","Delete","ChangeMii","ChangeMii","ChangeMii","ChangeMii"};
   const char* modes[]={"Off","Items","Items + Events","Items + Events + Drifts"};
-  char ledLabel[64],shadowLabel[64],brightnessLabel[48];
+  char ledLabel[64],shadowLabel[64],brightnessLabel[48],graphicsLabel[48];
+  const char* graphicsNames[]={"Auto","Quality","Performance"};
+  std::snprintf(graphicsLabel,sizeof graphicsLabel,"Graphics: %s",graphicsNames[std::min(s.selection.graphics,2u)]);
   std::snprintf(brightnessLabel,sizeof brightnessLabel,"LED Brightness: %u%%",s.selection.ledBrightness);
   std::snprintf(ledLabel,sizeof ledLabel,"LED: %s",modes[std::min(s.selection.ledMode,3u)]);
   std::snprintf(shadowLabel,sizeof shadowLabel,"Dynamic Shadows: %s",s.selection.dynamicShadows?"On":"Off");
-  const char* labels[]={"Change Miis","Erase License",ledLabel,shadowLabel,brightnessLabel};
-  for(unsigned i=0;i<5;++i){const auto row=control("LicenseManagementButton",variants[i],i);
+  const char* labels[]={"Change Miis","Erase License",ledLabel,shadowLabel,brightnessLabel,graphicsLabel};
+  for(unsigned i=0;i<6;++i){const auto row=control("LicenseManagementButton",variants[i],i);
    c.group(UiMenuRole::Choice,i,row,"license_management_free");c.button("license_management",i,row,labels[i]);}
   // The card displays this license's saved cups; its identity stays separate
   // from whichever driver is currently selected for the next race.
@@ -1344,7 +1346,8 @@ MenuRect menuChoiceRect(const UiQuad& q,const MenuState& state){
  case UiPage::VSRules:return {0,32.f+27.f*i,304,25};
  case UiPage::BattleRules:return {0,42.f+29.f*i,304,27};
  case UiPage::Settings:return {12,46.f+54.f*i,296,44};
- case UiPage::LicenseSettings:return {12,33.f+35.f*i,296,31};
+ // Six rows (with Graphics): tighter spacing keeps the last above the Back bar.
+ case UiPage::LicenseSettings:return {12,30.f+30.f*i,296,28};
  case UiPage::TeamConfirm:return {52,95,216,48};
  case UiPage::Confirm:return {72,83,176,80};
  case UiPage::EraseLicense:return {35,65.f+75.f*i,250,52};

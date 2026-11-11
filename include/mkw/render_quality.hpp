@@ -38,12 +38,21 @@ struct RenderQuality {
     // Course, sky and course-object textures move from LINEAR (FCRAM) to VRAM
     // after the race's VRAM users have loaded, leaving vramReserve bytes free.
     bool vramCourseTextures=true;
+    // The player's dynamic shadow (License Settings). Off in Performance: it
+    // redraws the ground under each wheel, about a third of a race's draws.
+    bool dynamicShadow=true;
     static constexpr std::size_t vramReserve=1024*1024;
     void setReduced(bool on){
         *this=RenderQuality{};
         if(!on)return;
         reduced=true;minScreenRatio=.015f;objectLowDistance=4000.f;
-        shadowVolumes=false;bloomBlurRounds=1;boxSparkleRatio=.04f;particleBudget=96;kartEffectScreens=2;animationStep=4;vramCourseTextures=true;
+        shadowVolumes=false;dynamicShadow=false;bloomBlurRounds=1;boxSparkleRatio=.04f;particleBudget=96;kartEffectScreens=2;animationStep=4;vramCourseTextures=true;
+    }
+    // License Settings > Graphics: 0 Auto (Performance on Old 3DS, Quality on
+    // New 3DS), 1 Quality, 2 Performance (reduced detail, no dynamic shadow).
+    void setGraphics(unsigned choice,bool new3ds){
+        if(choice==0)choice=new3ds?1:2;
+        setReduced(choice==2);
     }
 #ifdef MKW_RENDER_QUALITY_C3D
     // True when bounds b placed by transform t are too small to draw from camera.

@@ -1216,6 +1216,15 @@ int main() {
         const unsigned cc=vs?menu.selection.vsClass:menu.selection.mode==mkw::UiMode::GrandPrix?unsigned(menu.selection.engineClass):2;
         selectedMirror=cc==3;selectedEngineClass=std::min(cc,2u);
         selectedCpu=battleMode?menu.selection.battleCpu:vs?menu.selection.vsCpu:(selectedRaceMode==0?std::min(selectedEngineClass,2u):1u);selectedCpuVehicles=battleMode?menu.selection.battleVehicles:vs?menu.selection.vsVehicles:0;selectedItems=battleMode?menu.selection.battleItems:vs?menu.selection.vsItems:0;
+        // License Settings > Graphics, applied before the race loads (some reductions
+        // apply at load). Test builds: qa-graphics.txt (0-3) overrides it.
+        {
+            bool isNew3ds=false;APT_CheckNew3DS(&isNew3ds);unsigned graphics=menu.selection.graphics;int qaShadow=-1;
+            if(kQa)if(FILE* f=std::fopen("sdmc:/3ds/mkw-3ds/qa-graphics.txt","r")){unsigned g=0,shadow=1;const int n=std::fscanf(f,"%u %u",&g,&shadow);if(n>=1)graphics=std::min(g,2u);if(n==2){menu.selection.dynamicShadows=shadow!=0;qaShadow=int(shadow!=0);}std::fclose(f);}
+            const bool mipmaps=mkw::renderQuality().mipmaps;mkw::renderQuality().setGraphics(graphics,isNew3ds);mkw::renderQuality().mipmaps=mipmaps;
+            if(kQa&&qaShadow>=0)mkw::renderQuality().dynamicShadow=qaShadow!=0;
+            LOGF("graphics %u (%s)",graphics,mkw::renderQuality().reduced?"reduced":"full");
+        }
         // Time Trials: the staff (1) or expert staff (2) ghost from the disc, if the
         // build copied them (builds before 0.8.0 did not: race solo then).
         ghostRace=false;
@@ -1792,7 +1801,7 @@ int main() {
     auto loadBottomScreen=[&](){
         const auto* bloom=mkw::courseBloom(Courses[courseChoice].archive);
         if(!effectsTest&&bloom&&bloom->enabled()&&!renderer.reserveBloom()){report("FAIL required bloom targets");return false;}
-        if(!effectsTest&&!renderer.configurePlayerShadow(menu.selection.dynamicShadows))report("WARN player shadow target unavailable; native volume retained");
+        if(!effectsTest&&!renderer.configurePlayerShadow(menu.selection.dynamicShadows&&mkw::renderQuality().dynamicShadow))report("WARN player shadow target unavailable; native volume retained");
         if(!renderer.configureStadiumScreen(!effectsTest&&(int(Courses[courseChoice].id)==18||int(Courses[courseChoice].id)==6||int(Courses[courseChoice].id)==35))){report("FAIL stadium screen targets");return false;}
         if(!bottomScreen.load(renderer,courseChoice)){report("FAIL required bottom screen");return false;}
         if(driverChoice>=24&&!bottomScreen.setMiiPortrait(renderer,selectedRaceMii)){report("FAIL Mii map portrait");return false;}
@@ -3242,7 +3251,7 @@ int main() {
             bool objectSupport=cameraKart->collisionData().bHasRoadVel;
             for(unsigned w=0;w<vehicleAnimation.wheelCount();++w)
                 objectSupport|=cameraKart->collisionData(w).bHasRoadVel;
-            const bool playerDynamicShadow=menu.selection.dynamicShadows&&renderer.playerShadowReady();
+            const bool playerDynamicShadow=menu.selection.dynamicShadows&&mkw::renderQuality().dynamicShadow&&renderer.playerShadowReady();
             // Test fixtures count clips while posing: they pose on this thread.
             playerJobQueued=fullRace&&!animationTest&&!effectsTest&&mkw::jobWorker().running();
             if(playerJobQueued){playerJob.reset(&runJob<decltype(posePlayer)>,&posePlayer);mkw::jobWorker().submit(playerJob);}
@@ -3377,7 +3386,7 @@ int main() {
                 std::array<const mkw::Model*,256> receivers{};unsigned count=0;
                 for(const auto& model:track)if(count<receivers.size())receivers[count++]=model.get();
                 const auto& objects=courseObjects.shadowReceivers(lakitu.position(),2400.f);
-                lakitu.drawShadow(renderer,receivers.data(),count,playerShadowLight,menu.selection.dynamicShadows,
+                lakitu.drawShadow(renderer,receivers.data(),count,playerShadowLight,menu.selection.dynamicShadows&&mkw::renderQuality().dynamicShadow,
                                   objects.data(),unsigned(objects.size()));
             }
             if(mergeJudgeShadow)renderer.setShadowUnion(false);
