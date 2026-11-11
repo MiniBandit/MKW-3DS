@@ -12,6 +12,14 @@ The Redux author has chosen not to declare a separate license for the later
 Redux contributions at this time.
 Do not interpret the root MIT text as a blanket license for every file.
 
+Online code (0.8.0 and later)
+-----------------------------
+Files marked "SPDX-License-Identifier: LicenseRef-MKW3DS-Online" (the online,
+leaderboard and ghost sharing code) are under licenses/MKW3DS-ONLINE-LICENSE.txt,
+not MIT: you may read, build and contribute to them, but not publish changed
+versions or builds containing them. Official builds alone can race each other
+online and post to the official leaderboard.
+
 Bundled and external components
 -------------------------------
 Kinoko, noclip.website and gclib: MIT; see licenses/.

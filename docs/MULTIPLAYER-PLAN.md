@@ -1,6 +1,7 @@
 # Multiplayer plan
 
-Status: planning only. No network code exists in the game yet.
+Status: superseded. 0.8.0 races peer to peer with our own packets; see
+[NET-PROTOCOL.md](NET-PROTOCOL.md). Kept for the Retro Rewind research below.
 
 Based on reading the public sources on 2026-11-04: Retro Rewind's
 [wfc-server](https://github.com/Retro-Rewind-Team/wfc-server) (AGPL-3.0),

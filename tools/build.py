@@ -138,15 +138,9 @@ def main():
         )
     version_stamp += '#define MKW_WHATS_NEW "' + "\\n".join(news) + '"\n'
     # Online play: which source this game was built from (tools/build_id.py);
-    # the server accepts only the fingerprints listed as allowed.
+    # consoles race only others built from the same source.
     from build_id import build_id
     version_stamp += f'#define MKW_BUILD_ID "{build_id(ROOT)}"\n'
-    # The online server built in (tools/release/online_server.txt), "" for none.
-    server = next((line.split('#')[0].strip() for line in (ROOT / "tools/release/online_server.txt").read_text().splitlines()
-                   if line.split('#')[0].strip()), "")
-    if any(c in server for c in '"\\'):
-        raise SystemExit("online_server.txt: no quotes or backslashes")
-    version_stamp += f'#define MKW_ONLINE_SERVER "{server}"\n'
     # The GitHub update build (MKW_QUICK_UPDATE=1, .github/workflows/update-cia.yml).
     quick_update = "1" if os.environ.get("MKW_QUICK_UPDATE") == "1" else "0"
     version_stamp += f"#define MKW_QUICK_UPDATE {quick_update}\n"

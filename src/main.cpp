@@ -32,7 +32,7 @@
 #include <mkw/vehicle_animation.hpp>
 #include <mkw/luma_visual.hpp>
 #include <mkw/race_grid.hpp>
-#include <mkw/lan_play.hpp>
+#include <mkw/net_session.hpp>
 #include <mkw/lan_handshake.hpp>
 #include <mkw/balloon_battle.hpp>
 #include <mkw/battle_round_result.hpp>
@@ -220,11 +220,13 @@ static unsigned selectedGarageIndex(){return driverChoice<24?driverChoice*mkw::V
 static const auto& selectedVehicle(){return mkw::raceGarageChoice(selectedGarageIndex());}
 static mkw::CpuRoster selectedRoster;
 static std::array<uint8_t,12> selectedStartPositions{};
-// LAN play (src/lan_play.cpp): a two-player VS race against another console.
-static bool lanRace=false,lanHost=false,lanWaiting=false,lanFromFile=false,lanLost=false;static std::array<unsigned,12> lanRoster{};
+// Online and LAN play (src/net_session.cpp): a VS race against other consoles.
+// Each console is racer 0 on its own screen; netGlobal maps local racers to lobby slots.
+static bool netRace=false,netWaiting=false;static uint32_t netRemoteMask=0,netLostMask=0;static unsigned netCount=0;
+static std::array<unsigned,12> netRoster{};static std::array<uint8_t,12> netGlobal{};static std::array<uint32_t,12> netAppliedTick{};
 // Time Trials ghost (Race/TimeAttack on the SD card): racer 1 replays it.
 static bool ghostRace=false;static std::vector<uint8_t> ghostRkg;
-static uint16_t lanButtons=0;static int8_t lanStick=0;static uint8_t lanTrick=0,lanItemFlags=0;static uint32_t lanAppliedTick=0;
+static uint16_t lanButtons=0;static int8_t lanStick=0;static uint8_t lanTrick=0,lanItemFlags=0;
 static void configure(K::System::RaceConfig* config,void* context) {
     if(replayData){config->setGhost(replayData);config->raceScenario().players[0].type=K::System::RaceConfig::Player::Type::Ghost;return;}
     auto& s=config->raceScenario();s.course=Courses[courseChoice].id;
@@ -232,11 +234,11 @@ static void configure(K::System::RaceConfig* config,void* context) {
     s.cpuDifficulty=uint8_t(selectedCpu);s.cpuVehicles=uint8_t(selectedCpuVehicles);s.itemMode=uint8_t(selectedItems);
     s.gameMode=static_cast<K::System::RaceConfig::Scenario::GameMode>(selectedRaceMode);
     s.teams=selectedTeams;s.humanTeam=uint8_t(selectedHumanTeam);s.battleType=coinRunnersMode?1:0;
-    if(fullRace){static_cast<mkw::RaceGrid*>(context)->configure(*config,selectedGarageIndex(),lanRace||ghostRace?2:timeTrial?1:12,lanRace?&lanRoster:selectedRoster.ready?&selectedRoster.choices:nullptr);for(unsigned i=0;i<s.playerCount;++i)s.players[i].startPosition=selectedStartPositions[i];
-        // LAN: both consoles build the same grid, host first.
+    if(fullRace){static_cast<mkw::RaceGrid*>(context)->configure(*config,selectedGarageIndex(),netRace?netCount:ghostRace?2:timeTrial?1:12,netRace?&netRoster:selectedRoster.ready?&selectedRoster.choices:nullptr);for(unsigned i=0;i<s.playerCount;++i)s.players[i].startPosition=selectedStartPositions[i];
+        // Online: every console builds the same grid in lobby order, host first.
         // Time Trials ghost: Kinoko's ghost controller drives racer 1 from the file.
         if(ghostRace){s.players[1].type=K::System::RaceConfig::Player::Type::Ghost;config->setGhost(ghostRkg.data(),1);}
-        if(lanRace){s.players[0].startPosition=lanHost?1:2;s.players[1].startPosition=lanHost?2:1;s.players[1].driftIsAuto=mkw::lan::session().peerAutoDrift();}s.players[0].driftIsAuto=automaticDrift;return;}
+        if(netRace)for(unsigned i=0;i<netCount;++i){s.players[i].startPosition=uint8_t(netGlobal[i]+1);if(i)s.players[i].driftIsAuto=mkw::net::session().autoDrift(netGlobal[i]);}s.players[0].driftIsAuto=automaticDrift;return;}
     auto& p=s.players[0];p.type=K::System::RaceConfig::Player::Type::Local;
     const auto& driver=selectedVehicle();
     p.character=static_cast<K::Character>(driver.character);p.vehicle=static_cast<K::Vehicle>(driver.vehicle);p.driftIsAuto=false;
@@ -408,8 +410,8 @@ int main() {
     const bool embedded=assets.mounted&&contentMatches("romfs:");
     const char* assetRoot=embedded?"romfs:/":DATA;
     report(embedded?"assets: embedded RomFS":"assets: external SD package");
-    if((lanFromFile=mkw::lan::session().configure()))report(mkw::lan::session().online()?"LAN: online (lan.txt)":mkw::lan::session().role()==mkw::lan::Role::Host?"LAN: host (lan.txt)":"LAN: join (lan.txt)");
-    else if(*mkw::lan::session().reason())report(mkw::lan::session().reason());
+    if(mkw::net::session().configureFile())report(mkw::net::session().host()?"LAN: host (lan.txt)":"LAN: join (lan.txt)");
+    else if(*mkw::net::session().reason())report(mkw::net::session().reason());
     report("version " MKW_VERSION);
 #ifndef MKW_EXTERNAL_ASSETS
     if(!embedded&&!sdContentReady())return 1;
@@ -1241,69 +1243,89 @@ int main() {
             if(ghostRkg.size()>8&&!std::memcmp(ghostRkg.data(),"RKGD",4)&&unsigned(ghostRkg[7]>>2)==unsigned(Courses[courseChoice].id))ghostRace=true;
             LOGF("ghost: %s %s",path,ghostRace?"racing":"missing or for another course: racing solo");
         }
-        // LAN play: agree on the course and swap drivers before loading (lan.txt).
-        lanRace=false;
-        auto& lan=mkw::lan::session();
-        // Main menu Online: the built-in server, unless online.txt on the SD card names another.
-        const bool onlineChosen=menu.selection.online&&vs;
-        if(onlineChosen&&!lanFromFile){
-            char server[80]=MKW_ONLINE_SERVER;
-            if(FILE* f=std::fopen("sdmc:/3ds/mkw-3ds/online.txt","r")){if(!std::fgets(server,sizeof server,f))server[0]=0;std::fclose(f);}
-            if(!lan.configureOnline(server)){
-                mkw::LanTerminal terminal(renderer);
-                terminal.add("MKW 3DS - ONLINE",true);terminal.add("");
-                terminal.add("> No online server is set in this build.");
-                terminal.add("> Put its address in sd:/3ds/mkw-3ds/online.txt");
-                terminal.add("");terminal.add("Press B to race offline.",true);
-                while(aptMainLoop()){hidScanInput();if(hidKeysDown()&KEY_B)break;terminal.frame();}
+        // Online (main menu) or LAN (lan.txt): find the other consoles, agree on
+        // the race and swap drivers before loading. docs/ONLINE-TESTING.md.
+        netRace=false;
+        auto& net=mkw::net::session();
+        const bool netWanted=vs&&!selectedTeams&&(net.fromFile()||(menu.selection.online&&vs));
+        if(netWanted){
+            mkw::LanTerminal terminal(renderer);char step[64];
+            // Test builds: qa-online.txt "host <players>" starts once that many are in;
+            // "join <code>" joins without the keyboard.
+            unsigned qaHostPlayers=0;char qaCode[32]{};
+            if(kQa)if(FILE* f=std::fopen("sdmc:/3ds/mkw-3ds/qa-online.txt","r")){char mode[8]{},arg[32]{};
+                if(std::fscanf(f,"%7s %31s",mode,arg)==2){if(!std::strcmp(mode,"host"))qaHostPlayers=std::max(2u,unsigned(std::strtoul(arg,nullptr,10)));else std::snprintf(qaCode,sizeof qaCode,"%s",arg);}std::fclose(f);}
+            auto typeCode=[&](const char* hint,char* out,size_t size){
+                SwkbdState keyboard;swkbdInit(&keyboard,SWKBD_TYPE_QWERTY,2,15);swkbdSetHintText(&keyboard,hint);
+                swkbdSetValidation(&keyboard,SWKBD_NOTEMPTY_NOTBLANK,0,0);
+                return swkbdInputText(&keyboard,out,size)==SWKBD_BUTTON_CONFIRM;
+            };
+            auto waitB=[&](){terminal.add("Press B to race offline.",true);while(aptMainLoop()){hidScanInput();if(hidKeysDown()&KEY_B)break;terminal.frame();}};
+            terminal.add(net.fromFile()?"MKW 3DS - LAN PLAY (lan.txt)":"MKW 3DS - ONLINE",true);terminal.add("");
+            bool go=true;
+            if(!net.fromFile()){
+                mkw::net::Mode mode=qaHostPlayers?mkw::net::Mode::Host:*qaCode?mkw::net::Mode::Join:mkw::net::Mode::None;
+                if(mode==mkw::net::Mode::None){
+                    terminal.add("A  Host a race (you choose the course)",true);
+                    terminal.add("Y  Join a race with the host's code",true);
+                    terminal.add("B  Race offline instead",true);terminal.add("");
+                    while(aptMainLoop()){hidScanInput();const u32 k=hidKeysDown();
+                        if(k&KEY_A){mode=mkw::net::Mode::Host;break;}if(k&KEY_Y){mode=mkw::net::Mode::Join;break;}if(k&KEY_B)break;terminal.frame();}
+                }
+                if(mode==mkw::net::Mode::None)go=false;
+                else{net.configureOnline(mode);terminal.add(mode==mkw::net::Mode::Host?"> Hosting a race.":"> Joining a race.");}
             }
-        }
-        const bool lanWanted=lan.active()&&vs&&!selectedTeams&&(lanFromFile||onlineChosen);
-        if(lanWanted&&lan.online()&&!*lan.room()){
-            // Online: both players type the same room code.
-            SwkbdState keyboard;char room[16]{};
-            swkbdInit(&keyboard,SWKBD_TYPE_QWERTY,2,8);swkbdSetHintText(&keyboard,"Room code (both players type the same)");
-            swkbdSetValidation(&keyboard,SWKBD_NOTEMPTY_NOTBLANK,0,0);
-            if(swkbdInputText(&keyboard,room,sizeof room)==SWKBD_BUTTON_CONFIRM)lan.setRoom(room);
-        }
-        if(lanWanted&&(!lan.online()||*lan.room())){
-            if(!lan.open())LOGF("LAN: %s",lan.reason());
-            else{
-                lan.resetRace();
-                LOGF("LAN: %s, waiting for the other console",lan.online()?"online":lan.role()==mkw::lan::Role::Host?"hosting":"joining");
-                {
-                    // The connection screen: a terminal of what the link is doing,
-                    // then a handshake once both consoles agree on the race.
-                    mkw::LanTerminal terminal(renderer);char step[64];
-                    terminal.add("MKW 3DS - LAN PLAY",true);
-                    if(lan.online()){char line[64];std::snprintf(line,sizeof line,"Online race in room %s.",lan.room());terminal.add(line,true);}
-                    else terminal.add(lan.role()==mkw::lan::Role::Host?"Hosting a race on this Wi-Fi network.":"Joining a race on this Wi-Fi network.",true);
-                    terminal.add("Press B to cancel and race offline.",true);terminal.add("");
-                    while(!lan.handshakeDone()&&!lan.failed()&&aptMainLoop()){
-                        hidScanInput();if(hidKeysDown()&KEY_B)break;
-                        lan.handshakeStep(selectedGarageIndex(),automaticDrift,courseChoice,selectedEngineClass,selectedMirror);
-                        while(lan.takeEvent(step,sizeof step))terminal.add(step);
-                        terminal.frame();
-                    }
-                    if(lan.failed()){
-                        // Refused (e.g. another build): show why until B, then race offline.
-                        while(lan.takeEvent(step,sizeof step))terminal.add(step);
-                        terminal.add("Press B to race offline.",true);
-                        while(aptMainLoop()){hidScanInput();if(hidKeysDown()&KEY_B)break;terminal.frame();}
-                    }
-                    if(lan.handshakeDone()){
-                        while(lan.takeEvent(step,sizeof step))terminal.add(step);
-                        terminal.add("> Handshake complete. Connected!",true);
-                        // Each side repeats its messages until answered, so nothing is lost while this plays.
-                        for(unsigned f=0;f<120&&aptMainLoop();++f)terminal.frame(f/60.f);
+            if(go&&!net.open()){char line[64];std::snprintf(line,sizeof line,"> %s",net.reason());terminal.add(line);waitB();go=false;}
+            if(go){
+                net.newRound();
+                if(!net.host()&&!net.hostKnown()){
+                    if(*qaCode&&!net.addCode(qaCode))LOGF("online: bad qa code %s",qaCode);
+                    while(!net.hostKnown()&&aptMainLoop()){
+                        char text[32]{};
+                        if(!typeCode("The host's code, e.g. 7K2D-QX9M-4PA",text,sizeof text)){go=false;break;}
+                        if(!net.addCode(text)){terminal.add("> That code isn't right. Check it and try again.");terminal.frame();}
                     }
                 }
-                if(lan.handshakeDone()){
-                    lanRace=true;lanHost=lan.role()==mkw::lan::Role::Host;
-                    courseChoice=lan.raceCourse();selectedEngineClass=std::min(lan.raceEngineClass(),2u);selectedMirror=lan.raceMirror();
-                    lanRoster=selectedRoster.choices;lanRoster[1]=lan.peerGarage();
-                    LOGF("LAN: race course=%u other driver garage=%u as %s",courseChoice,lan.peerGarage(),lanHost?"host":"player");
+            }
+            if(go){
+                LOGF("online: %s, waiting in the lobby",net.host()?"hosting":"joining");
+                bool shownCode=false;unsigned shownCount=0;
+                if(net.host())terminal.add(net.fromFile()?"A start  B cancel":"A start  X add a player's code  B cancel",true);
+                else terminal.add("Waiting for the host to start. B cancel",true);
+                while(!net.started()&&!net.failed()&&aptMainLoop()){
+                    hidScanInput();const u32 k=hidKeysDown();
+                    if(k&KEY_B){go=false;break;}
+                    net.lobbyStep(selectedGarageIndex(),automaticDrift,courseChoice,selectedEngineClass,selectedMirror);
+                    while(net.takeEvent(step,sizeof step))terminal.add(step);
+                    if(!shownCode&&*net.code()){shownCode=true;char line[64];
+                        std::snprintf(line,sizeof line,"YOUR CODE: %s",net.code());terminal.add("");terminal.add(line,true);
+                        if(net.host()&&!net.fromFile())terminal.add("Send it to the other players.",true);
+                        terminal.add("");LOGF("online: code %s",net.code());}
+                    if(net.host()&&net.lobbyCount()!=shownCount){shownCount=net.lobbyCount();char line[64];
+                        std::snprintf(line,sizeof line,"> Players in the lobby: %u of 12%s",shownCount,shownCount>=2?" (A to start)":"");terminal.add(line);}
+                    if(net.host()&&!net.fromFile()&&(k&KEY_X)){char text[32]{};
+                        if(typeCode("A joining player's code",text,sizeof text)&&!net.addCode(text))terminal.add("> That code isn't right.");}
+                    if(net.canStart()&&((k&KEY_A)||(qaHostPlayers&&net.lobbyCount()>=qaHostPlayers)))net.start();
+                    terminal.frame();
                 }
+                if(net.failed()){while(net.takeEvent(step,sizeof step))terminal.add(step);waitB();go=false;}
+                if(go&&net.started()){
+                    while(net.takeEvent(step,sizeof step))terminal.add(step);
+                    terminal.add("> Handshake complete. Connected!",true);
+                    // Each side repeats its messages until answered, so nothing is lost while this plays.
+                    for(unsigned f=0;f<120&&aptMainLoop();++f){net.poll();terminal.frame(f/60.f);}
+                }
+            }
+            if(go&&net.started()){
+                netRace=true;netCount=std::min(net.count(),12u);
+                courseChoice=net.course();selectedEngineClass=std::min(net.engineClass(),2u);selectedMirror=net.mirror();
+                // Local racer 0 is this console; the others follow in lobby order.
+                const unsigned me=net.slot();netRemoteMask=0;netRoster=selectedRoster.choices;
+                for(unsigned g=0,i=1;g<netCount;++g){
+                    const unsigned local=g==me?0:i++;netGlobal[local]=uint8_t(g);
+                    if(local){netRoster[local]=net.garage(g);netRemoteMask|=1u<<local;}
+                }
+                LOGF("online: race course=%u players=%u as player %u",courseChoice,netCount,me+1);
             }
         }
     };
@@ -1779,7 +1801,7 @@ int main() {
                 if(balloonBattle.replenish(unsigned(racer)))balloonRuntime.replenish(unsigned(racer));
         },nullptr);
         if(!raceGrid.reset()){trackLoadFailed=true;report("FAIL course CPU route: race suspended; choose another map");}
-        raceGrid.remoteMask=lanRace||ghostRace?2u:0u;
+        raceGrid.remoteMask=netRace?netRemoteMask:ghostRace?2u:0u;
         raceItems->resetFromCourse(raceGrid.count());
         if(battleMode&&!raceGrid.ai().setBattleSources(*raceItems,coinRunnersMode?&coinBattle:nullptr)){
             trackLoadFailed=true;report("FAIL original battle search graph");
@@ -1982,7 +2004,7 @@ int main() {
             if(fullRace){
                 startIntro();
                 // LAN: no course preview; both consoles start the countdown together.
-                if(lanRace)intro.stop();
+                if(netRace)intro.stop();
                 if(intro.active()&&!flowUi.loadIntro(introInfo())){report("FAIL required preview labels");return false;}
                 stage("intro labels");
                 if(finishingMenuCue){
@@ -2011,7 +2033,7 @@ int main() {
             // Execute and retire the first complete render, then its reuse
             // frame while still black. Resource allocation alone does not
             // prime pose uploads, shadow captures or their GPU dependencies.
-            raceWarmupFrames=fullRace?2u:0u;lanWaiting=lanRace;lanLost=false;
+            raceWarmupFrames=fullRace?2u:0u;netWaiting=netRace;netLostMask=0;netAppliedTick={};
             if(fullRace)K::System::RaceManager::Instance()->setIntroHeld(true);
             raceResident=fullRace;return true;
         };
@@ -2378,7 +2400,8 @@ int main() {
                         const auto& c=raceGrid.ai().itemCommand(i);inputs[i]={c.use,c.backwards,c.forwards};
                     }
                     lanItemFlags=uint8_t((inputs[0].use?1:0)|(inputs[0].backwards?2:0)|(inputs[0].forwards?4:0));
-                    if(lanRace&&!lanLost&&raceGrid.count()>1){mkw::lan::Frame peer;inputs[1]=mkw::lan::session().peerFrame(peer)?mkw::ItemInput{bool(peer.flags&1),bool(peer.flags&2),bool(peer.flags&4)}:mkw::ItemInput{};}
+                    if(netRace)for(unsigned i=1;i<raceGrid.count();++i)if(raceGrid.remoteMask>>i&1u){
+                        mkw::net::Frame peer;inputs[i]=mkw::net::session().frame(netGlobal[i],peer)?mkw::ItemInput{bool(peer.flags&1),bool(peer.flags&2),bool(peer.flags&4)}:mkw::ItemInput{};}
                         if(kQa&&autoplay&&!afterGoal&&raceGrid.driveLocal)for(auto& g:qaGives){
                             if(g.player>=raceGrid.count())continue;
                             // Opponent POW must actually target player zero; do not alter ranks.
@@ -2411,15 +2434,22 @@ int main() {
                     // Resolve item activation/expiry before choosing this tick's
                     // controller, including CPU Bullet Bills and the handoff back.
                     // Five seconds without a word, or a goodbye: the other kart races on as a CPU.
-                    if(lanRace&&!lanLost&&!lanWaiting&&(mkw::lan::session().peerLeft()||mkw::lan::session().framesSinceHeard()>300)){
-                        lanLost=true;raceGrid.remoteMask=0;LOGF("LAN: connection lost; the other kart is now a CPU");
-                    }
-                    if(lanRace&&!lanLost&&raceGrid.count()>1){
-                        // The other console's latest inputs drive its kart here between state corrections.
-                        auto& lan=mkw::lan::session();lan.poll();mkw::lan::Frame peer;
-                        auto* remotePad=K::System::KPadDirector::Instance()->hostController(1);
-                        if(lan.peerFrame(peer))remotePad->setInputsRawStick(peer.buttons,unsigned(std::clamp(int(peer.stickX),-7,7)+7),7,K::System::Trick(std::min<unsigned>(peer.trick,4)));
-                        else remotePad->setInputsRawStick(0,7,7,K::System::Trick::None);
+                    if(netRace){
+                        auto& net=mkw::net::session();net.poll();
+                        for(unsigned i=1;i<raceGrid.count();++i){
+                            const unsigned g=netGlobal[i];
+                            // A lost console that speaks again takes its kart back from the CPU.
+                            if((netLostMask>>i&1u)&&!net.left(g)&&net.silence(g)<30){raceGrid.remoteMask|=1u<<i;netLostMask&=~(1u<<i);LOGF("online: player %u is back",g+1);}
+                            if(!(raceGrid.remoteMask>>i&1u))continue;
+                            // Five seconds without a word, or a goodbye: that kart races on as a CPU.
+                            if(!netWaiting&&(net.left(g)||net.silence(g)>300)){
+                                raceGrid.remoteMask&=~(1u<<i);netLostMask|=1u<<i;LOGF("online: lost player %u; racer %u is now a CPU",g+1,i);continue;
+                            }
+                            // The other console's latest inputs drive its kart here between state corrections.
+                            mkw::net::Frame peer;auto* remotePad=K::System::KPadDirector::Instance()->hostController(i);
+                            if(net.frame(g,peer))remotePad->setInputsRawStick(peer.buttons,unsigned(std::clamp(int(peer.stickX),-7,7)+7),7,K::System::Trick(std::min<unsigned>(peer.trick,4)));
+                            else remotePad->setInputsRawStick(0,7,7,K::System::Trick::None);
+                        }
                     }
                     raceGrid.beforeStep(raceItems->bulletPlayers());
                 }
@@ -2440,19 +2470,20 @@ int main() {
                 // QA: a fall boundary (variant 0) activation, so the retail SetCamera hold applies.
                 if(autoplay&&lakituRespawnStep&&physicsSteps==lakituRespawnStep){auto* qaCollide=K::Kart::KartObjectManager::Instance()->object(0)->collide();qaCollide->setOobCameraPending(uint16_t(lakituRequest));qaCollide->activateOob(false,nullptr,false,false);}
                 scenes.calc();
-                if(lanRace&&!lanLost&&raceGrid.count()>1){
-                    // LAN: send this tick's kart, then pull the other kart onto the newest state it sent.
-                    auto& lan=mkw::lan::session();auto* objects=K::Kart::KartObjectManager::Instance();
+                if(netRace){
+                    // Online: send this tick's kart, then pull the other karts onto the newest states they sent.
+                    auto& net=mkw::net::session();auto* objects=K::Kart::KartObjectManager::Instance();
                     if(auto* mine=objects->object(0)){
                         const auto* d=mine->dynamics();const auto& p=d->pos();const auto& fr=d->fullRot();const auto& mr=d->mainRot();
                         const auto& ev=d->extVel();const auto& iv=d->intVel();
                         const float pos[3]={p.x,p.y,p.z},full[4]={fr.v.x,fr.v.y,fr.v.z,fr.w},main[4]={mr.v.x,mr.v.y,mr.v.z,mr.w};
                         const float ext[3]={ev.x,ev.y,ev.z},in[3]={iv.x,iv.y,iv.z};
-                        lan.sendFrame(physicsSteps,lanButtons,lanStick,lanTrick,lanItemFlags,pos,full,main,ext,in);
+                        net.sendFrame(physicsSteps,lanButtons,lanStick,lanTrick,lanItemFlags,pos,full,main,ext,in);
                     }
-                    mkw::lan::Frame peer;
-                    if(lan.peerFrame(peer)&&peer.tick!=lanAppliedTick)if(auto* other=objects->object(1)){
-                        lanAppliedTick=peer.tick;auto* d=other->dynamics();
+                    for(unsigned i=1;i<raceGrid.count();++i){
+                        mkw::net::Frame peer;if(!(raceGrid.remoteMask>>i&1u)||!net.frame(netGlobal[i],peer)||peer.tick==netAppliedTick[i])continue;
+                        auto* other=objects->object(i);if(!other)continue;
+                        netAppliedTick[i]=peer.tick;auto* d=other->dynamics();
                         d->setPos({peer.pos[0],peer.pos[1],peer.pos[2]});
                         d->setFullRot(K::EGG::Quatf(peer.fullRot[3],peer.fullRot[0],peer.fullRot[1],peer.fullRot[2]));
                         d->setMainRot(K::EGG::Quatf(peer.mainRot[3],peer.mainRot[0],peer.mainRot[1],peer.mainRot[2]));
@@ -3404,7 +3435,7 @@ int main() {
             if(fullRace&&!intro.active()){auto* race=K::System::RaceManager::Instance();
 
                 raceHud.drawOverlay(renderer,*raceItems,unsigned(race->stage()),race->timer(),battleMode?battleRank(0):raceGrid.rank(),raceGrid.lap(),battleMode?battleTicks>=balloonBattle.durationTicks():raceGrid.finished(),physicsSteps,results.finishFrame(),results.hudSlide(),camera->lookingBack());
-                if(lanLost)renderer.drawScreenText("Connection lost: the other kart is now a CPU",8,4,1.f,0xffffffffu);
+                if(netLostMask)renderer.drawScreenText(netLostMask&(netLostMask-1)?"Connection lost: some karts are now CPUs":"Connection lost: a kart is now a CPU",8,4,1.f,0xffffffffu);
 }
             renderer.setScreenDepth(renderer.stereoLayer(mkw::stereo::HudLayer));
             if(fullRace)flowUi.drawResults(renderer,results,bottomScreen.miiPortrait());
@@ -3435,10 +3466,10 @@ int main() {
         }else renderer.begin({0,100,500},{0,0,0},{0,1,0});
         if(frames==0)report("graphics first frame submitting");
         renderer.end();profiler->mark(Profile::Submit);profiler->end(physicsSteps,renderer);frames++;
-        if(lanWaiting&&!raceWarmupFrames&&mkw::lan::session().readyStep()){lanWaiting=false;K::System::RaceManager::Instance()->setIntroHeld(intro.active());LOGF("LAN: go");}
+        if(netWaiting&&!raceWarmupFrames&&mkw::net::session().readyStep()){netWaiting=false;K::System::RaceManager::Instance()->setIntroHeld(intro.active());LOGF("online: go");}
         if(raceWarmupFrames){
             renderer.waitForGpu();
-            if(!--raceWarmupFrames)K::System::RaceManager::Instance()->setIntroHeld(intro.active()||lanWaiting);
+            if(!--raceWarmupFrames)K::System::RaceManager::Instance()->setIntroHeld(intro.active()||netWaiting);
             renderer.loadingFrame=false;
             accumulator=0;previous=svcGetSystemTick();lastRefresh=C3D_FrameCounter(0);presentation.reset();
         }
