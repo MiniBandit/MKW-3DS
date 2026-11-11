@@ -1,5 +1,15 @@
 # Changelog
 
+# 0.8.0: online play
+
+Needs a new build: the builder now copies the staff ghosts from your disc, and the menus have new labels.
+
+- **Online:** a new Online button on the main menu. Two players type the same room code and race VS through the online server; no router set-up. A terminal screen shows each connection step and a handshake when both consoles are ready. If the other player leaves or loses connection, their kart races on as a CPU.
+- **Same Wi-Fi play** without a server (lan.txt, for testing).
+- **Build check:** the online server only accepts official builds.
+- **Time Trials:** race the staff ghost or the expert staff ghost for each course. Ghosts start with you and pass through you, as on the Wii.
+- Old 3DS: an opponent that runs out of memory loading in full detail is retried in low detail instead of failing the race.
+
 # 0.7.0: Redux merge
 
 Epic's Mario Kart Wii 3DS Redux is now the game, by her permission, on top of this project's builder and quick updates. Every player must build again in a new, empty folder.

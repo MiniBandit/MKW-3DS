@@ -1,9 +1,7 @@
-Bug fixes:
-Old 3DS: VS and Grand Prix races
-  no longer crash when loading
-Menus no longer move to the top
-  screen after a race
-The course tour shows the whole
-  course during the fly-over
-This screen is no longer covered
-  by the menus' lower screen
+New in 0.8.0:
+Online: choose Online on the main
+  menu and race a friend. Both type
+  the same room code.
+Time Trials: race the staff ghost
+  or the expert staff ghost.
+Old 3DS: fewer races fail to load.
