@@ -221,7 +221,7 @@ static const auto& selectedVehicle(){return mkw::raceGarageChoice(selectedGarage
 static mkw::CpuRoster selectedRoster;
 static std::array<uint8_t,12> selectedStartPositions{};
 // LAN play (src/lan_play.cpp): a two-player VS race against another console.
-static bool lanRace=false,lanHost=false,lanWaiting=false;static std::array<unsigned,12> lanRoster{};
+static bool lanRace=false,lanHost=false,lanWaiting=false,lanFromFile=false;static std::array<unsigned,12> lanRoster{};
 // Time Trials ghost (Race/TimeAttack on the SD card): racer 1 replays it.
 static bool ghostRace=false;static std::vector<uint8_t> ghostRkg;
 static uint16_t lanButtons=0;static int8_t lanStick=0;static uint8_t lanTrick=0,lanItemFlags=0;static uint32_t lanAppliedTick=0;
@@ -408,7 +408,7 @@ int main() {
     const bool embedded=assets.mounted&&contentMatches("romfs:");
     const char* assetRoot=embedded?"romfs:/":DATA;
     report(embedded?"assets: embedded RomFS":"assets: external SD package");
-    if(mkw::lan::session().configure())report(mkw::lan::session().online()?"LAN: online (lan.txt)":mkw::lan::session().role()==mkw::lan::Role::Host?"LAN: host (lan.txt)":"LAN: join (lan.txt)");
+    if((lanFromFile=mkw::lan::session().configure()))report(mkw::lan::session().online()?"LAN: online (lan.txt)":mkw::lan::session().role()==mkw::lan::Role::Host?"LAN: host (lan.txt)":"LAN: join (lan.txt)");
     else if(*mkw::lan::session().reason())report(mkw::lan::session().reason());
     report("version " MKW_VERSION);
 #ifndef MKW_EXTERNAL_ASSETS
@@ -1235,14 +1235,29 @@ int main() {
         // LAN play: agree on the course and swap drivers before loading (lan.txt).
         lanRace=false;
         auto& lan=mkw::lan::session();
-        if(lan.active()&&vs&&!selectedTeams&&lan.online()&&!*lan.room()){
+        // Main menu Online: the built-in server, unless online.txt on the SD card names another.
+        const bool onlineChosen=menu.selection.online&&vs;
+        if(onlineChosen&&!lanFromFile){
+            char server[80]=MKW_ONLINE_SERVER;
+            if(FILE* f=std::fopen("sdmc:/3ds/mkw-3ds/online.txt","r")){if(!std::fgets(server,sizeof server,f))server[0]=0;std::fclose(f);}
+            if(!lan.configureOnline(server)){
+                mkw::LanTerminal terminal(renderer);
+                terminal.add("MKW 3DS - ONLINE",true);terminal.add("");
+                terminal.add("> No online server is set in this build.");
+                terminal.add("> Put its address in sd:/3ds/mkw-3ds/online.txt");
+                terminal.add("");terminal.add("Press B to race offline.",true);
+                while(aptMainLoop()){hidScanInput();if(hidKeysDown()&KEY_B)break;terminal.frame();}
+            }
+        }
+        const bool lanWanted=lan.active()&&vs&&!selectedTeams&&(lanFromFile||onlineChosen);
+        if(lanWanted&&lan.online()&&!*lan.room()){
             // Online: both players type the same room code.
             SwkbdState keyboard;char room[16]{};
             swkbdInit(&keyboard,SWKBD_TYPE_QWERTY,2,8);swkbdSetHintText(&keyboard,"Room code (both players type the same)");
             swkbdSetValidation(&keyboard,SWKBD_NOTEMPTY_NOTBLANK,0,0);
             if(swkbdInputText(&keyboard,room,sizeof room)==SWKBD_BUTTON_CONFIRM)lan.setRoom(room);
         }
-        if(lan.active()&&vs&&!selectedTeams&&(!lan.online()||*lan.room())){
+        if(lanWanted&&(!lan.online()||*lan.room())){
             if(!lan.open())LOGF("LAN: %s",lan.reason());
             else{
                 lan.resetRace();

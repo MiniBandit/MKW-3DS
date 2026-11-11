@@ -256,6 +256,7 @@ UiAction MenuState::input(UiInput key){
   case UiPage::Mode:enter(UiPage::MainMenu);break;
   case UiPage::EngineClass:case UiPage::VSMode:case UiPage::BattleMode:enter(UiPage::Mode);break;
   case UiPage::Character:
+   if(selection.online){enter(UiPage::MainMenu);cursor=4;uiFocusReset(*this);break;}
    enter(selection.mode==UiMode::GrandPrix?UiPage::EngineClass:selection.mode==UiMode::VS?UiPage::VSMode:selection.mode==UiMode::Battle?UiPage::BattleMode:UiPage::Mode);break;
   case UiPage::TeamConfirm:enter(UiPage::Character);break;
   case UiPage::Vehicle:enter(selection.teams?UiPage::TeamConfirm:UiPage::Character);break;
@@ -365,7 +366,12 @@ UiAction MenuState::input(UiInput key){
   else if(cursor==4)selection.ledBrightness=selection.ledBrightness>=100?50:selection.ledBrightness+10;
   break;
  case UiPage::EraseLicense:if(cursor==0){eraseLicenseRequest=int(selection.license);enter(UiPage::License);}else{enter(UiPage::LicenseSettings);cursor=1;uiFocusReset(*this);}break;
- case UiPage::MainMenu:if(cursor==0)enter(UiPage::Mode);else unavailable=true;break;
+ case UiPage::MainMenu:
+  selection.online=cursor==4;
+  if(cursor==0)enter(UiPage::Mode);
+  // Online: VS solo on a chosen course; the room code is asked for at the start.
+  else if(cursor==4){selection.mode=UiMode::VS;selection.teams=false;selection.vsCourses=0;enter(UiPage::Character);}
+  else unavailable=true;break;
  case UiPage::Mode:
   if(!raceMode(UiMode(cursor))){unavailable=true;break;}
   selection.mode=UiMode(cursor);selection.teams=false;

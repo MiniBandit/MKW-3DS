@@ -545,7 +545,7 @@ def main():
  roster=json.loads((OUT/'models/roster.json').read_text());garage=json.loads((OUT/'models/garage.json').read_text())
  courses=json.loads((OUT/'models/course-catalog.json').read_text())['courses']
  course_names=re.findall(r'\{"([^"]+)"', (ROOT/'include/mkw/course_catalog.hpp').read_text())[:32]
- labels=['--','0%','General','Favorites','Other Records','Next','Save failed','Erase License?','Single Player','Multiplayer','Nintendo WFC','Main Menu','Grand Prix','Time Trials','VS','Battle','Not available','Character','Character Select','Vehicle','Machine Select','Drift','Drift Type','Automatic','Manual','Cup','Select Cup','Course','Start Race','Pause','Continue','Restart','Quit','Quit this race?','Yes','No','Results','Race Again','Change Course','Change Character','Main Menu','Press A','A: Select    B: Back','A: Select    B: Cancel','A: Start    B: Back','START: Pause','A: Next    B: Back','Loading...','Race unavailable','Choose another course','Finish','Racing','12 racers','No teams','150cc','A: Accelerate   B: Brake','R: Drift   L: Item','Circle Pad: Steer','D-pad: Trick / Wheelie','Hold down + L: Throw back','A: Confirm    B: Cancel','Manual drift','Automatic drift','VS Race','Course Select','Single race','Mushroom Cup','Flower Cup','Star Cup','Special Cup','Shell Cup','Banana Cup','Leaf Cup','Lightning Cup']
+ labels=['--','0%','General','Favorites','Other Records','Next','Save failed','Erase License?','Single Player','Multiplayer','Nintendo WFC','Online','Main Menu','Grand Prix','Time Trials','VS','Battle','Not available','Character','Character Select','Vehicle','Machine Select','Drift','Drift Type','Automatic','Manual','Cup','Select Cup','Course','Start Race','Pause','Continue','Restart','Quit','Quit this race?','Yes','No','Results','Race Again','Change Course','Change Character','Main Menu','Press A','A: Select    B: Back','A: Select    B: Cancel','A: Start    B: Back','START: Pause','A: Next    B: Back','Loading...','Race unavailable','Choose another course','Finish','Racing','12 racers','No teams','150cc','A: Accelerate   B: Brake','R: Drift   L: Item','Circle Pad: Steer','D-pad: Trick / Wheelie','Hold down + L: Throw back','A: Confirm    B: Cancel','Manual drift','Automatic drift','VS Race','Course Select','Single race','Mushroom Cup','Flower Cup','Star Cup','Special Cup','Shell Cup','Banana Cup','Leaf Cup','Lightning Cup']
  labels+=['Mario','Luigi','Peach','Yoshi','Baby Mario','Baby Peach','Toad','Koopa Troopa','Wario','Waluigi','Donkey Kong','Bowser']
  labels+=course_names+[c['name'] for c in garage['choices']]+list('0123456789:.-/%')
  labels+=[text for values in help_text.values() for text in values]
@@ -565,7 +565,7 @@ def main():
  roles={
   'header_text':['Main Menu','Select License','Characters','Vehicles','Engine Classes','Cups','Courses','Drift','Grand Prix','Time Trials','Single Player','VS','Battle','Stages','Ghosts','Wii Stages','Retro Stages','Select Stage','Start Race','Rules','Teams','Settings','License Settings','Erase License?','General','Favorites','Other Records'],
   'footer_help':[v for vv in help_text.values() for v in vv],
-  'main':['Single Player','Multiplayer','Nintendo WFC','Mario Kart Channel'],
+  'main':['Single Player','Multiplayer','Nintendo WFC','Online','Mario Kart Channel'],
   'main_button':['1','Player','1\nPlayer'],'main_multi':['2','3','4','Players','2\nPlayers','3\nPlayers','4\nPlayers'],'main_wifi':['1','2','Player','Players','1\nPlayer','2\nPlayers'],
   'mode':['Grand Prix','Time Trials','VS','Battle'], 'class':['50cc','100cc','150cc','Mirror']+[menu_messages[i] for i in range(0xbbe,0xbc4)],
   'class_switch':['Switch'],
@@ -588,12 +588,12 @@ def main():
   'drift':['Automatic','Manual'],'cup':['Mushroom Cup','Flower Cup','Star Cup','Special Cup','Shell Cup','Banana Cup','Leaf Cup','Lightning Cup','Wii Stages','Retro Stages'], 'character':[], 'vehicle':[],
   'cup_course':course_names,
   'battle_course':battle_labels,
-  'ghost':['Race This Ghost','Watch the Replay','Solo Time Trials'],
+  'ghost':['Race This Ghost','Watch the Replay','Solo Time Trials','Race the Staff Ghost','Race the Expert Staff Ghost'],
   'ghost_info':course_names+['There are no ghosts for this course.'],
   'course':course_names+battle_labels,'vs':['Solo Race','Team Race'],'battle':['Balloon Battle','Coin Runners'],
   'confirm':['OK','Start Race','Race This Ghost','Watch the Replay','Solo Time Trials'],
   'back':['←Back','Back'],
-  'button':['Race This Ghost','Watch the Replay','Solo Time Trials','Yes','No','Continue','Restart','Quit','Race Again','Change Course','Change Character','Main Menu','Not available','OK']}
+  'button':['Race This Ghost','Watch the Replay','Solo Time Trials','Race the Staff Ghost','Race the Expert Staff Ghost','Yes','No','Continue','Restart','Quit','Race Again','Change Course','Change Character','Main Menu','Not available','OK']}
  for kind in ['Course','Driver','Vehicle','Mii']:
   roles['unlock_'+kind.lower()]=[row['body'] for row in unlock_messages if row['kind']==kind]
   roles['unlock_title_'+kind.lower()]=[row['title'] for row in unlock_messages if row['kind']==kind]

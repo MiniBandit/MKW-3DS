@@ -44,6 +44,8 @@ public:
     // or "online <server> [room] [port]" (internet play through the relay server).
     // False when the file is absent: the game plays offline as usual.
     bool configure();
+    // Main menu Online: "host [port]" (the built-in server, or sd:/3ds/mkw-3ds/online.txt).
+    bool configureOnline(const char* server);
     bool active() const{return role_!=Role::None;}
     bool online() const{return relay_;}
     // Online: the room both players type in. Empty until set (the game asks).

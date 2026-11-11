@@ -908,14 +908,14 @@ static void composeMenuImpl(const MenuState& s,const UiRaceView& race,std::vecto
   break;
  }
  case UiPage::MainMenu:{
-  const char* titles[]={"Single Player","Multiplayer","Nintendo WFC","Mario Kart Channel"};
+  const char* titles[]={"Single Player","Multiplayer","Online","Mario Kart Channel"};
   const char* groups[]={"TopMenuSingleWaku","TopMenuMultiWaku","TopMenuWifiWaku","TopMenuChannelWaku"};
   for(unsigned i=0;i<4;++i){Pose p=control(groups[i],groups[i],UiFocusMainParentBase+i);c.group(UiMenuRole::Choice,i,p,"main_free");c.panel("main_free",p);for(const char* field:{"text_sha","text"})c.mainText(titles[i],"main_free",p,field);
    if(i==0){auto b=child(p,control("TopMenuSingle","ButtonSingle",0));auto base=c.buttonState("main_button",0);c.movieButton(base.c_str(),b);c.movie("main_movie_",0,base.c_str(),"black_base",b);c.movieOverlay(base.c_str(),b);c.mainText("1\nPlayer",base.c_str(),b);}
    if(i==1||i==2){unsigned n=i==1?3:2;for(unsigned k=0;k<n;++k){char v[48];std::snprintf(v,sizeof v,i==1?"ButtonMulti%uP":"ButtonWifi%uP",k+(i==1?2:1));Pose b=child(p,control(i==1?"TopMenuMulti":"TopMenuWifi",v,i==1?1+k:4+k));const auto slot=i==1?1+k:4+k;auto base=c.buttonState(i==1?"main_multi":"main_wifi",slot);c.movieButton(base.c_str(),b);c.movie("main_movie_",slot,base.c_str(),"black_base",b);c.movieOverlay(base.c_str(),b);char caption[20];const unsigned players=k+(i==1?2:1);std::snprintf(caption,sizeof caption,"%u\n%s",players,players==1?"Player":"Players");c.mainText(caption,base.c_str(),b);}}
    if(i==3){Pose b=child(p,control("TopMenuChannel","ButtonChannel",6));auto base=c.buttonState("main_button",6);c.movieButton(base.c_str(),b);c.movie("main_movie_",6,base.c_str(),"black_base",b);c.movieOverlay(base.c_str(),b);}
   }
-  c.chrome("Main Menu",s.cursor==7?"":s.cursor==0?UiHelpMain[0]:s.cursor<4?UiHelpMainMulti[s.cursor-1]:s.cursor<6?UiHelpWfc[s.cursor-4]:UiHelpMain[3]);
+  c.chrome("Main Menu",s.cursor==7?"":s.cursor==0?UiHelpMain[0]:s.cursor<4?UiHelpMainMulti[s.cursor-1]:s.cursor==4?"Race another player online with a room code.":s.cursor==5?"Two players on one console: not available online yet.":UiHelpMain[3]);
   // License Settings overlaps the top banner and draws above it.
   {Pose edit=control("FileAdmin","ButtonFileAdmin",7);c.group(UiMenuRole::Auxiliary,0,edit,"license_edit_free");auto editBase=c.buttonState("license_edit",7);c.panel(editBase.c_str(),edit);c.text("License Settings",editBase.c_str(),edit);if(s.cursor==7)c.glow("license_edit",edit,"License Settings");}break;
  }

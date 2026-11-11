@@ -1,0 +1,3 @@
+# The online server address built into the game (Main menu > Online).
+# One line: a name or IP address, optionally followed by a port. Empty: no
+# server yet (players can still set one in sd:/3ds/mkw-3ds/online.txt).

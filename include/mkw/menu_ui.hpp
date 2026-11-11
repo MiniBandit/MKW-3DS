@@ -34,6 +34,8 @@ struct UiSelection {
  unsigned license=0,battleStage=0;bool teams=false,coinRunners=false;
  // Time Trials: 0 solo, 1 the staff ghost, 2 the expert staff ghost (from the disc).
  unsigned ghost=0;
+ // Main menu Online: a VS race against another console through the online server.
+ bool online=false;
  // The retail unlocked engine-class page switches both 50cc/100cc entries
  // together between their restricted type and the combined kart/bike list.
  bool mixedEngineTypes=false;

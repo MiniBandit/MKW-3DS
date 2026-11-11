@@ -62,6 +62,16 @@ bool Session::configure(){
     reason_="lan.txt: expected 'host' or 'join <ip>'";return false;
 }
 
+bool Session::configureOnline(const char* server){
+    if(relay_&&socket_>=0)return true; // already online (lan.txt or an earlier race)
+    // "host [port [room]]": the room is for testing; players type it in.
+    char host[64]{},room[16]{};unsigned port=DefaultPort;
+    if(!server||std::sscanf(server,"%63s %u %15s",host,&port,room)<1||!*host){reason_="this build has no online server";return false;}
+    if(*room)setRoom(room);
+    role_=Role::Online;relay_=true;std::snprintf(server_,sizeof server_,"%s",host);
+    peerPort_=uint16_t(port?port:DefaultPort);localPort_=0;return true;
+}
+
 void Session::setRoom(const char* room){
     // Room codes are up to 8 letters or digits, upper case.
     unsigned n=0;for(const char* c=room;*c&&n<8;++c)if(std::isalnum(static_cast<unsigned char>(*c)))room_[n++]=char(std::toupper(static_cast<unsigned char>(*c)));
