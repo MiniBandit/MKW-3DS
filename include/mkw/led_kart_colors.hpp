@@ -13,7 +13,7 @@ inline constexpr std::array<std::array<uint32_t,2>,24> StandardKartColors{{
   {{0xff0000u,0xffffffu}}, // Toad
   {{0x39ae00u,0x33aefcu}}, // Koopa Troopa
   {{0xa71183u,0xf1ba00u}}, // Wario
-  {{0xfede04u,0x00004cu}}, // Waluigi
+  {{0xfede04u,0x7a1fc0u}}, // Waluigi (purple: the paint sample 0x00004c showed as blue on the LED)
   {{0x7e5310u,0x311000u}}, // Donkey Kong
   {{0xf97b0au,0x1e3905u}}, // Bowser
   {{0xf1a310u,0xe76f00u}}, // Baby Daisy
