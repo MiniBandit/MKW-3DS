@@ -98,6 +98,12 @@ struct ItemActor {
     uint8_t ownerImmunity=30;
     float blastInitialScale=1,bounceImpulse=0;
     uint8_t floorBounces=0;
+    // Online: the owner's number for this object (0: not shared), so every console
+    // can name it.
+    uint16_t netId=0;
+    // Online: frames left for another console to confirm the hit of a Red Shell that
+    // reached its racer here; it breaks when they run out (0: not waiting).
+    uint8_t netGrace=0;
     ShellGuidance guidance{};
     Vec3 visualPosition()const{return kind==ItemKind::BlueShell&&!explosion&&guidance.phase<4?Vec3{position.x,guidance.visualY,position.z}:position;}
     bool diving()const{return kind==ItemKind::BlueShell&&!explosion&&guidance.phase==5;}
@@ -150,6 +156,22 @@ enum class ItemSoundCue : uint8_t {
     HitSuccess, // CharacterActor USA 808610e8: the attacker's ITM_SCES voice
 };
 struct ItemSound { ItemSoundCue cue; uint8_t player=0xff, actor=0xff; ItemKind kind=ItemKind::None; Vec3 position{}; bool flag=false; uint8_t value=0; };
+// Online races (src/item_net.cpp, docs/NET-PROTOCOL.md "Race events"): what this
+// console tells the others about its own racer, and what it plays from theirs.
+// Racer numbers are local; `other` is 255 for none.
+struct ItemNetEvent {
+    enum Kind:uint8_t {Spawn=1,Use=2,Hit=3,Shrink=4,Take=5,Item=6,Cloud=7};
+    // Spawn flags, and what became of the object a Hit, Take or Item names.
+    enum:uint8_t {Backwards=1,Scattered=2,Blast=4, Kept=0,Broken=1,Exploded=2, NoAction=0xff};
+    // id of a Hit on a tethered item: HeldSlot + its place (0-2) behind its holder.
+    static constexpr uint16_t HeldSlot=0xfff0;
+    uint8_t kind=0,a=0,other=255,c=0,d=0,e=0;uint16_t id=0;float v[6]{};
+};
+// The local racer's item window and tethered items, sent with every kart state.
+struct ItemNetState {
+    enum:uint8_t {Roulette=1,Cloud=2,Bullet=4};
+    uint8_t item=20,charges=0,heldKind=20,heldMask=0,flags=0;
+};
 using ItemWorldQuery=ItemSurface(*)(Vec3 previous,Vec3 position,float radius);
 using ItemTimedWorldQuery=ItemSurface(*)(Vec3 previous,Vec3 position,float radius,unsigned timeOffset);
 // Shared native course query: includes moving collision and item-only KCL.
@@ -232,7 +254,40 @@ public:
     /// victim, whose state at the bump is `target`.
     void cloudBump(unsigned attacker,unsigned victim,const ItemRacer& target);
     static bool segmentHits(Vec3 from,Vec3 to,Vec3 center,float radius);
+    // Online: racer 0 is this console's and decides everything about itself; the
+    // racers in remoteMask belong to other consoles, which decide for them. Their
+    // items, item use and hits happen here only when they say so.
+    void setNet(bool online,uint16_t remoteMask){net_=online;netRemote_=online?remoteMask:0;}
+    bool netRemote(unsigned player)const{return (netRemote_>>player)&1u;}
+    // What racer 0 did since the last call, oldest first.
+    bool takeNetEvent(ItemNetEvent& out);
+    ItemNetState netState()const;
+    // From the console that owns `player`; call between beforeStep and the kart step.
+    void applyNetState(unsigned player,const ItemNetState& state);
+    void applyNetEvent(unsigned player,const ItemNetEvent& event);
 private:
+    static constexpr unsigned NetQueue=32,NetRedGrace=90;
+    bool net_=false,netApplying_=false;uint16_t netRemote_=0,netNextId_=0;
+    std::array<ItemNetEvent,NetQueue> netOut_{};unsigned netOutHead_=0,netOutCount_=0;
+    int8_t netAction_=-1;
+    // Tethered items of other consoles' racers this kart ran into: hidden until
+    // their owner agrees or the wait runs out.
+    std::array<uint8_t,MaxRacers> netHeldVeto_{},netHeldVetoTicks_{};
+    bool netSelf(unsigned player)const{return net_&&player==0;}
+    void netEmit(const ItemNetEvent& event);
+    void netAfterStep();
+    void netHolder(unsigned player);
+    void netContact(unsigned player,const ItemActor& actor,bool wasBlast,int started,Vec3 direction);
+    void netHeldContact(unsigned player,unsigned owner,unsigned slot,ItemKind kind,int action,Vec3 direction);
+    void netActorChanged(const ItemActor& actor,bool wasBlast);
+    ItemActor* netActor(unsigned owner,uint16_t id);
+    void netItemFate(unsigned owner,uint16_t id,uint8_t fate);
+    void netSpawn(unsigned player,const ItemNetEvent& event);
+    bool useEffect(unsigned player,ItemKind kind);
+    void beginHeld(unsigned player,ItemKind kind);
+    std::array<uint8_t,MaxRacers> netHeldRaw_{};
+    // The action and direction of the last hit a racer took (strike).
+    int8_t lastStarted_=-1;Vec3 lastDirection_{};
     ItemOdds odds_;
     WoodboxOdds woodboxOdds_;
     ShellRoute shellRoute_;

@@ -12,10 +12,10 @@ namespace mkw::net {
 // connection code (net_code.hpp); players swap codes to find each other.
 // docs/NET-PROTOCOL.md describes the packets so other ports can join.
 constexpr uint32_t Magic=0x314E4B4D; // "MKN1"
-constexpr uint16_t Version=2;
+constexpr uint16_t Version=3;
 constexpr uint16_t DefaultPort=41750;
 constexpr unsigned MaxPlayers=12;
-enum class Type:uint8_t {Hello=1,Lobby=2,Ready=3,Go=4,Frame=5,Bye=6,Refuse=7,Ping=8};
+enum class Type:uint8_t {Hello=1,Lobby=2,Ready=3,Go=4,Frame=5,Bye=6,Refuse=7,Ping=8,Events=9};
 
 #pragma pack(push,1)
 // sender: the player's slot in the lobby (0 is the host), 255 before it has one.
@@ -35,13 +35,46 @@ struct Ready {Header h;uint16_t round;};
 struct Go {Header h;uint16_t round;};
 // Every simulation tick (every other tick above four players). reach as in Hello.
 // flags: 1 use item, 2 throw backwards, 4 throw forwards.
+// item..itemFlags: the sender's own item window and tethered items (ItemKind
+// numbers, 20 none; heldMask: a bit per tethered item; itemFlags: 1 roulette
+// running, 2 Thunder Cloud overhead, 4 Bullet Bill). round: the race this
+// belongs to (packets of another race are ignored). finish: 0 while racing,
+// else the sender's finishing key (see FinishKey). ack[slot]: the low byte of
+// the next race event the sender expects from that slot.
 struct Frame {Header h;uint32_t tick;uint16_t buttons;int8_t stickX,stickY;uint8_t trick,flags;uint16_t reach;
-              float pos[3],fullRot[4],mainRot[4],extVel[3],intVel[3];};
+              float pos[3],fullRot[4],mainRot[4],extVel[3],intVel[3];
+              uint8_t item,charges,heldKind,heldMask,itemFlags,reserved;uint16_t round;uint32_t finish;uint8_t ack[MaxPlayers];};
+// Something that happened to the sender's own kart or items, which every
+// console must play once: see docs/NET-PROTOCOL.md "Race events". seq counts
+// from 1 for each sender in each race. Player numbers are lobby slots, 255 none.
+enum class EventKind:uint8_t {Spawn=1,Use=2,Hit=3,Shrink=4,Take=5,Item=6,Cloud=7};
+struct RaceEvent {uint16_t seq;uint8_t kind,a,b,c,d,e;uint16_t id,reserved;float v[6];};
+// All -> all, when the sender has race events some console has not acknowledged:
+// the oldest such events, in order.
+constexpr unsigned EventsPerPacket=8;
+struct Events {Header h;uint8_t count,reserved;uint16_t round;RaceEvent events[EventsPerPacket];};
 struct Bye {Header h;};
 // Host -> a console it can't take, with the reason for display.
 struct Refuse {Header h;uint32_t id;char message[44];};
 #pragma pack(pop)
-static_assert(sizeof(Header)==16&&sizeof(Hello)==56&&sizeof(LobbyPlayer)==14&&sizeof(Lobby)==208&&sizeof(Frame)==96&&sizeof(Refuse)==64);
+static_assert(sizeof(Header)==16&&sizeof(Hello)==56&&sizeof(LobbyPlayer)==14&&sizeof(Lobby)==208&&sizeof(Frame)==120&&sizeof(Refuse)==64&&sizeof(RaceEvent)==36&&sizeof(Events)==308);
+
+// Finishing keys: lower finishes ahead. A finisher's key is its race time in
+// milliseconds at the line. A console that has not finished 30 seconds after
+// the first finisher reports DidNotFinish plus how far it was from the goal;
+// a console that vanished without reporting ranks last, by slot.
+namespace FinishKey {
+constexpr uint32_t DidNotFinish=0x80000000u,Gone=0xFFFFFF00u;
+constexpr unsigned WaitFrames=30*60;
+inline uint32_t time(uint32_t milliseconds){return milliseconds?(milliseconds<DidNotFinish?milliseconds:DidNotFinish-1):1;}
+inline uint32_t unfinished(float raceCompletion){
+    const float left=16.f-raceCompletion;
+    return DidNotFinish+uint32_t((left<0?0:left>16.f?16.f:left)*1000000.f);
+}
+inline uint32_t gone(unsigned slot){return Gone|slot;}
+}
+// The part of a Frame about the sender's items and finish.
+struct FrameState {uint8_t item=20,charges=0,heldKind=20,heldMask=0,itemFlags=0;uint32_t finish=0;};
 
 enum class Mode:uint8_t {None,Host,Join};
 
@@ -89,7 +122,13 @@ public:
     bool readyStep();
     void poll();
     void sendFrame(uint32_t tick,uint16_t buttons,int8_t stickX,uint8_t trick,uint8_t flags,const float pos[3],const float fullRot[4],
-                   const float mainRot[4],const float extVel[3],const float intVel[3]);
+                   const float mainRot[4],const float extVel[3],const float intVel[3],const FrameState& state);
+    // Race events: each reaches every other console once, in the order sent
+    // (repeated until every console still racing has acknowledged it).
+    void sendEvent(RaceEvent event);
+    // Each tick, after the tick's events are queued.
+    void eventStep();
+    bool takeRaceEvent(unsigned& slot,RaceEvent& out);
     bool frame(unsigned slot,Frame& out) const{if(slot>=MaxPlayers||!hasFrame_[slot])return false;out=latest_[slot];return true;}
     uint32_t silence(unsigned slot) const{return silent_[slot];}
     bool left(unsigned slot) const{return left_[slot];}
@@ -124,6 +163,14 @@ private:
     uint16_t round_=0,lastRound_=0;unsigned course_=0,engineClass_=2,goRepeats_=0,readyPolls_=0;bool mirror_=false;
     bool started_=false,goSeen_=false,failed_=false,announcedWait_=false;unsigned heardBefore_=0;
     std::array<Frame,MaxPlayers> latest_{};std::array<bool,MaxPlayers> hasFrame_{},left_{};std::array<uint32_t,MaxPlayers> silent_{};
+    // Race events: mine not yet acknowledged by all (a ring by seq), what each
+    // console has acknowledged, and what has arrived for the game to play.
+    static constexpr unsigned OutboxSize=32,InboxSize=64;
+    struct Incoming {uint8_t slot;RaceEvent event;};
+    void resetEvents();
+    std::array<RaceEvent,OutboxSize> outbox_{};std::array<Incoming,InboxSize> inbox_{};
+    std::array<uint16_t,MaxPlayers> acked_{},expected_{};
+    uint16_t nextSeq_=1;unsigned inboxHead_=0,inboxCount_=0,eventQuiet_=0;bool eventNew_=false;
     char events_[8][64]{};unsigned eventHead_=0,eventCount_=0;char failure_[48]{};
     const char* reason_="";
 };

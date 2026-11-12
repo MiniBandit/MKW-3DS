@@ -278,4 +278,5 @@ src/staff_scene.cpp
 src/vehicle_animation.cpp
 src/vehicle_visual_assets.cpp
 src/net_session.cpp
+src/item_net.cpp
 src/lan_handshake.cpp

@@ -457,6 +457,14 @@ void RaceGrid::afterStep(){
     std::array<unsigned,Capacity> order{};for(unsigned i=0;i<count_;++i)order[i]=i;
     std::sort(order.begin(),order.begin()+count_,[&](unsigned a,unsigned b){
         const auto& x=manager->player(a);const auto& y=manager->player(b);
+        if(netFinish_){
+            // Online: the order every console's own report gives.
+            if(bool(netKeys_[a])!=bool(netKeys_[b]))return netKeys_[a]!=0;
+            if(netKeys_[a]!=netKeys_[b])return netKeys_[a]<netKeys_[b];
+            if(netKeys_[a])return netSlots_[a]<netSlots_[b];
+            if(x.raceCompletion()!=y.raceCompletion())return x.raceCompletion()>y.raceCompletion();
+            return netSlots_[a]<netSlots_[b];
+        }
         if(x.finished()!=y.finished())return x.finished();
         if(x.finished())return x.finishOrder()<y.finishOrder();
         if(x.raceCompletion()!=y.raceCompletion())return x.raceCompletion()>y.raceCompletion();
@@ -464,7 +472,7 @@ void RaceGrid::afterStep(){
     });
     for(unsigned rank=0;rank<count_;++rank)ranks_[order[rank]]=rank+1;
     } // Battle receives the mode's prior-position/score ranks after scoring.
-    for(unsigned i=0;i<count_;++i){const auto& p=manager->player(i);finished_[i]=p.finished();laps_[i]=unsigned(std::clamp<int>(p.currentLap(),1,3));}
+    for(unsigned i=0;i<count_;++i){const auto& p=manager->player(i);finished_[i]=netFinish_?netKeys_[i]!=0:p.finished();laps_[i]=unsigned(std::clamp<int>(p.currentLap(),1,3));}
 }
 void RaceGrid::forwardBumps(){
     using namespace Kinoko;

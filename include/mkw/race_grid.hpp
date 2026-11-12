@@ -66,6 +66,10 @@ public:
     // Racers driven by another console (LAN play): their controllers are set
     // from the network, never by the CPU driver.
     uint32_t remoteMask=0;
+    // Online: every console reports its own finish as a key (lower is ahead, 0 not
+    // yet; net_session.hpp FinishKey). Ranks then follow the keys, the lobby slot
+    // breaking ties, so all consoles agree; racers without one rank by progress.
+    void setNetFinish(bool online,const std::array<uint32_t,Capacity>& keys,const std::array<uint8_t,Capacity>& slots){netFinish_=online;netKeys_=keys;netSlots_=slots;}
     CpuAi& ai(){return ai_;}
 private:
     void forwardBumps();
@@ -77,5 +81,6 @@ private:
     std::array<bool,Capacity> finished_{};
     CpuSpeedParam speedParam_{};bool speedParamReady_=false;float lapDistance_=0;
     unsigned count_=1,engineClass_=2,difficulty_=1;bool battleArena_=false;
+    bool netFinish_=false;std::array<uint32_t,Capacity> netKeys_{};std::array<uint8_t,Capacity> netSlots_{};
 };
 }
