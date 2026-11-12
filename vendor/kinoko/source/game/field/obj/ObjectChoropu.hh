@@ -89,13 +89,19 @@ public:
     }
 
     /// @addr{0x806B9164}
-    Kart::Reaction onCollision(Kart::KartObject * /*kartObj*/, Kart::Reaction reactionOnKart,
+    Kart::Reaction onCollision(Kart::KartObject *kartObj, Kart::Reaction reactionOnKart,
             Kart::Reaction /*reactionOnObj*/, EGG::Vector3f &hitDepth) override {
+        cueGroundContact(kartObj);
         hitDepth.setZero();
         return reactionOnKart;
     }
 
+    /// @addr{0x806BBEAC} Empty in retail (no kart object-hit sound).
+    void onObjectCollision(Kart::KartObject *) override {}
+
     void calcPosAndMat(f32 height, const EGG::Matrix34f &mat);
+    /// @brief Port, audio only: the contact's SE_CC_CHOROPU_COL_GND on the kart (0x806B9164).
+    void cueGroundContact(Kart::KartObject *kartObj) const;
 
     [[nodiscard]] f32 height() const {
         return m_height;
@@ -129,6 +135,9 @@ public:
     [[nodiscard]] const char *getKclName() const override {
         return "holl";
     }
+
+    /// @addr{0x806BBE3C} Empty in retail (no kart object-hit sound).
+    void onObjectCollision(Kart::KartObject *) override {}
 
     /// @addr{0x806B9428}
     void createCollision() override {

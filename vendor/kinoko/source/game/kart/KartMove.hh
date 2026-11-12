@@ -65,6 +65,8 @@ public:
     void calcRespawnStart();
     void calcInRespawn();
     void calcRespawnBoost();
+    void startBattleBlink();
+    void calcBattleBlink();
     void calcTop();
     void calcAirtimeTop();
     void calcSpecialFloor();
@@ -164,7 +166,6 @@ public:
     void calcMushroomBoost();
     void calcZipperBoost();
     void calcSlipstream();
-    void calcGhostGoal();
     /// Frames since this ghost's goal (0 before it or for other racers).
     [[nodiscard]] s16 ghostGoalFrames() const {
         return m_ghostGoalFrames;
@@ -172,6 +173,8 @@ public:
     void landTrick();
     void activateCrush(u16 timer);
     void calcCrushed();
+    void calcGhostGoal();
+    void calcVanish();
     void calcScale();
     void calcMega();
     void calcPow();
@@ -189,8 +192,8 @@ public:
     /// @}
 
     /// @addr{0x80580768}
-    void activateShrink() {
-        applyLightningEffect(300, true, false);
+    bool activateShrink() {
+        return applyLightningEffect(300, true, false);
     }
 
     bool applyLightningEffect(u16 timer, bool spinShrink, bool cloudStrike);
@@ -257,6 +260,27 @@ public:
     [[nodiscard]] f32 statBaseSpeed() const { return m_baseSpeed; } ///< Retail KartMove +0x14.
     void setBulletRouteFlight(bool flight,const EGG::Vector3f &up){m_bulletRouteFlight=flight;m_bulletRouteUp=up;}
     void setBulletGroundContact(bool contact,const EGG::Vector3f& normal=EGG::Vector3f::ey);
+
+    // Retail KartObjectProxy::isCpu (KartState +0x14 bit 0; a local player gets it at its
+    // goal, fn_1_7EC98 0x8058F04C) points two stick readers at the AI instead of the pad:
+    // KartModel 0x807CD32C reads Enemy::AI +0x14 (AI::getStick 0x80726204) and the bike
+    // lean 0x80587E58 reads KartMove +0x28C (AI fn_1_220A00). The port's AI sets them.
+    // isCpu also gates the drift turn (0x8057AAD4), the start boost (0x80595A00) and the
+    // moving-road push (0x80597C10).
+    void setCpuSteer(bool cpu, f32 stick, f32 lean) {
+        m_cpuSteer = cpu;
+        m_cpuStick = stick;
+        m_cpuLean = lean;
+    }
+    [[nodiscard]] bool cpuSteer() const { return m_cpuSteer; }
+    [[nodiscard]] f32 cpuStick() const { return m_cpuStick; }
+
+    /// The AI stuck handler's recovery state sets status bit 58 and +0x254 bit 3 on entry
+    /// (fn_1_234DB0 0x80745164) and clears both on exit (fn_1_2352A4 0x80745658).
+    void setStuckRecovery(bool on) {
+        status().changeBit(on, eStatus::StuckRecovery);
+        m_flags.changeBit(on, eFlags::StuckRecovery);
+    }
     [[nodiscard]] bool bulletActive() const { return m_bulletActive; }
 
     void setKartSpeedLimit() {
@@ -305,6 +329,9 @@ public:
     bool takeFloorInkClear() { const bool pending=m_floorInkClear; m_floorInkClear=false; return pending; }
     /// @brief Read only, for presentation (audio).
     bool ssmtCharged() const { return m_flags.onBit(eFlags::SsmtCharged); }
+    /// @brief Read only, for presentation (KartEffect's SSMT sparks, src/main.cpp).
+    bool ssmtLeeway() const { return m_flags.onBit(eFlags::SsmtLeeway); }
+    s16 ssmtCharge() const { return m_ssmtCharge; }
     // Presentation-only equivalent of the StartUpEffects duration callback.
     // Kart::Link GP wall counter, USA 8058b028. Half-pipe airborne and
     // the first three zipper-boost ticks are exempt from the wall penalty.
@@ -382,6 +409,33 @@ public:
         cueSound(SoundCue::SoundTrigger);
         m_soundCues.soundZone = zone;
     }
+    /// @brief Port, audio only: an object's kart-contact callback (retail vtable +0xCC
+    /// onWallCollision 0x8081F5D8 / +0xC8 onObjectCollision 0x8081F548), which plays the
+    /// kart's object-hit sound (Audio::KartActor 0x80709CA4 / 0x80709B08).
+    void cueObjectSound(const void *object, bool wall) {
+        if (m_soundCues.objectSoundCount < m_soundCues.objectSounds.size()) {
+            m_soundCues.objectSounds[m_soundCues.objectSoundCount++] = {object, wall};
+        }
+    }
+    /// @brief Port, audio only: every kart contact an object's onCollision (vtable +0xC0) sees,
+    /// in or out of an action, with its reaction on the object (Wiggler segments: fn_1_1B68E0).
+    /// Recorded for the race audio only; it changes no reaction and nothing reads it here.
+    void cueObjectReaction(const void *object, s32 reactionOnObj) {
+        if (m_soundCues.objectContactCount < m_soundCues.objectContacts.size()) {
+            m_soundCues.objectContacts[m_soundCues.objectContactCount++] = {object, reactionOnObj};
+        }
+    }
+    /// @brief Port, audio only: activateOob's Effects::Player call (0x806AB6B0) on a fall boundary.
+    void cueFallBoundary(u8 variant) {
+        m_soundCues.fallBoundary = variant;
+    }
+    /// @brief Port, audio only: object code starting a sound on this kart's
+    /// Audio::KartActor (vtable +0xE0, StartSoundLimited).
+    void cueKartSound(u16 sound) {
+        if (m_soundCues.kartSoundCount < m_soundCues.kartSounds.size()) {
+            m_soundCues.kartSounds[m_soundCues.kartSoundCount++] = sound;
+        }
+    }
     struct SoundCues {
         u32 cues = 0;
         u16 bumpedBy = 0; ///< Racers whose contact cued Bumped.
@@ -393,6 +447,21 @@ public:
         u8 fallVoice = 0; ///< The fall voice type (0x16-0x19).
         u8 soundZone = 0; ///< The last sound trigger zone (KCL type 0x18 variant).
         bool poihanaThrow = false; ///< USA80739588 -> KartEffect806a325c.
+        struct ObjectSound {
+            const void *object; ///< The Field::ObjectBase.
+            bool wall;          ///< onWallCollision (reaction WallAllSpeed / WallSpark).
+        };
+        std::array<ObjectSound, 4> objectSounds{};
+        u8 objectSoundCount = 0;
+        struct ObjectContact {
+            const void *object; ///< The Field::ObjectBase.
+            s32 reaction;       ///< Its reaction on the object after processKartReactions.
+        };
+        std::array<ObjectContact, 8> objectContacts{};
+        u8 objectContactCount = 0;
+        u8 fallBoundary = 0xff; ///< The fall boundary's KCL variant (0xff: none).
+        std::array<u16, 4> kartSounds{};
+        u8 kartSoundCount = 0;
     };
     /// @brief The cues since the last call.
     SoundCues takeSoundCues() {
@@ -521,6 +590,12 @@ public:
         return m_respawnPostLandTimer;
     }
 
+    /// @brief Retail +0x1a8: frames left of the battle blink (state bit 40). Presentation
+    /// blinks the kart model meanwhile (kartBlink, fn_1_59F3C / fn_1_59F4C).
+    [[nodiscard]] s16 battleBlinkTimer() const {
+        return m_battleBlinkTimer;
+    }
+
     [[nodiscard]] PadType &padType() {
         return m_padType;
     }
@@ -548,6 +623,7 @@ protected:
         DriftReset = 1,  ///< Set when a wall bonk should cancel your drift.
         SsmtCharged = 2, ///< Set after holding a stand-still mini-turbo for 75 frames.
         CpuRecovery = 3, ///< Retail +0x254 bit3: bypass wall speed loss during AI recovery.
+        StuckRecovery = 3, ///< PR #76's name for the same flag.
         LaunchBoost = 4,
         SsmtLeeway = 5,       ///< If set, activates SSMT when not pressing A or B.
         TrickableSurface = 6, ///< Set when driving on a trickable surface.
@@ -582,10 +658,14 @@ protected:
     f32 m_softSpeedLimit; ///< Base speed + boosts + wheelies, restricted to the hard speed limit.
     f32 m_cpuSpeed = 0.0f; ///< Retail +0x1c: AISpeedRace result (CPU ground speed-limit base).
     bool m_cpu = false;    ///< Set once the CPU speed has been written (KartObjectProxy::isCpu).
+    bool m_cpuSteer = false; ///< Retail KartObjectProxy::isCpu (see setCpuSteer).
+    f32 m_cpuStick = 0.0f;   ///< Retail Enemy::AI +0x14: the AI's animation stick.
+    f32 m_cpuLean = 0.0f;    ///< Retail +0x28C: the AI's bike lean input.
     f32 m_speed;          ///< Current speed, restricted to the soft speed limit.
     f32 m_lastSpeed;      ///< Last frame's speed, cached to calculate angular velocity.
     f32 m_processedSpeed; ///< Offset 0x28. It's only ever just a copy of @ref m_speed.
     f32 m_megaScale = 1.0f; ///< Retail KartMove + 0x17c collision scale.
+    f32 m_vanishScale = 1.0f;  ///< Retail +0x160: shrinks to 0.001 while Vanishing.
     bool m_megaEnding = false; ///< Retail +0x196: the scale-down animation has started.
     BattleRecovery m_battleRecovery;
     u32 m_battleWipeSerial=0;
@@ -671,6 +751,7 @@ protected:
     s16 m_respawnPreLandTimer;  ///< Counts down from 4 when pressing A before landing from respawn.
     s16 m_respawnPostLandTimer; ///< Counts up to 4 if not accelerating after respawn landing.
     s16 m_respawnTimer;
+    s16 m_battleBlinkTimer = 0; ///< Retail +0x1a8: the battle blink (state bit 40) countdown.
     s16 m_bumpTimer;                     ///< Set when a @ref Reaction::SmallBump collision occurs.
     DrivingDirection m_drivingDirection; ///< Current state of driver's direction.
     s16 m_backwardsAllowCounter;         ///< Tracks the 15f delay before reversing.

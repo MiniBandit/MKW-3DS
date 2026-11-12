@@ -5,6 +5,9 @@
 
 #include "game/system/RaceManager.hh"
 
+#include "game/kart/KartMove.hh"
+#include "game/kart/KartObject.hh"
+
 namespace Kinoko::Field {
 
 /// @addr{0x806B96A0}
@@ -322,6 +325,10 @@ void ObjectChoropuGround::calcPosAndMat(f32 height, const EGG::Matrix34f &mat) {
     matTemp.setBase(1, matTemp.base(1) * (height / m_height));
     matTemp.setBase(3, mat.base(3));
     setTransform(matTemp);
+}
+
+void ObjectChoropuGround::cueGroundContact(Kart::KartObject *kartObj) const {
+    kartObj->move()->cueKartSound(0x267); // SE_CC_CHOROPU_COL_GND
 }
 
 /// @addr{0x806B93CC}

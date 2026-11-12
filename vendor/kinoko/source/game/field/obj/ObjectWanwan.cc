@@ -3,6 +3,7 @@
 #include "game/field/CollisionDirector.hh"
 #include "game/field/ObjectDirector.hh"
 
+#include "game/kart/KartMove.hh"
 #include "game/kart/KartObject.hh"
 
 #include "game/system/RaceConfig.hh"
@@ -118,6 +119,10 @@ void ObjectWanwan::calc() {
 /// @addr{0x806E526C}
 Kart::Reaction ObjectWanwan::onCollision(Kart::KartObject *kartObj, Kart::Reaction reactionOnKart,
         Kart::Reaction /*reactionOnObj*/, EGG::Vector3f & /*hitDepth*/) {
+    // Port, audio only: SE_CC_WANWAN_COL_ATK while attacking (retail state 5), else
+    // SE_CC_WANWAN_COL, on the kart's actor.
+    kartObj->move()->cueKartSound(m_currentStateId == 1 ? 0x233 : 0x232);
+
     if (m_currentStateId == 1 && !m_attackStill) {
         return reactionOnKart;
     }

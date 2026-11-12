@@ -6,6 +6,7 @@
 #include "game/kart/KartJump.hh"
 #include "game/kart/KartMove.hh"
 
+#include "game/system/RaceConfig.hh"
 #include "game/system/RaceManager.hh"
 
 namespace Kinoko::Kart {
@@ -47,7 +48,9 @@ void KartState::init() {
 void KartState::reset() {
     // In the base game, we only wipe bitfield 0, 1, 2, and 3, so we need to bring back bitfield4.
     bool isAutoDrift = m_status.onBit(eStatus::AutoDrift);
+    bool vanishStarted = m_status.onBit(eStatus::VanishStarted);
     m_status.makeAllZero().changeBit(isAutoDrift, eStatus::AutoDrift);
+    m_status.changeBit(vanishStarted, eStatus::VanishStarted);
 
     m_airtime = 0;
     m_top.setZero();
@@ -388,7 +391,11 @@ void KartState::calcHandleStartBoost() {
         return;
     }
 
-    if (m_status.onBit(eStatus::Accelerate)) {
+    // 0x80595A00: a CPU keeps the boost its AI preset (setStartBoostIdx); nobody charges one
+    // on Chain Chomp Roulette or Funky Stadium (RaceConfig +0xB68 = 0x22, 0x23).
+    const Course course = System::RaceConfig::Instance()->raceScenario().course;
+    if (!move()->cpuSteer() && course != Course::Chain_Chomp_Roulette &&
+            course != Course::Funky_Stadium && m_status.onBit(eStatus::Accelerate)) {
         if (m_startBoostCharge > START_BOOST_ENTRIES.back().range) {
             m_startBoostIdx = std::numeric_limits<size_t>::max();
         } else if (m_startBoostCharge > START_BOOST_ENTRIES.front().range) {

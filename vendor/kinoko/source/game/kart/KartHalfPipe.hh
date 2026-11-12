@@ -26,6 +26,12 @@ public:
         return 65.0f;
     }
 
+    /// Port: the trick input activateTrick used, which retail also passes to the driver
+    /// model (0x80574E60 -> PlayerModel setTrick(2, trick)). Presentation only.
+    [[nodiscard]] System::Trick trick() const {
+        return m_trick;
+    }
+
 private:
     enum class StuntType {
         None = -1,

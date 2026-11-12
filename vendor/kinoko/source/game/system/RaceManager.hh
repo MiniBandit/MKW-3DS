@@ -123,6 +123,15 @@ public:
     // its race-mode controller; reuse the native finish-time/finish hook.
     bool endBattle(const std::array<u8,12>& order);
 
+    /// @addr{0x805342E8}
+    /// @brief Port hook: fn_1_23F34 with its forced flag. The race mode's end
+    /// (fn_1_25A34 0x80535DE8) ends each racer still running with an estimated time;
+    /// RaceinfoPlayer_endRace (0x805347F4) then sets +0x38 & 2 as for a finish.
+    void endRaceEstimated(size_t idx, const Timer &estimate) {
+        ASSERT(idx < m_playerCount);
+        m_players[idx].endRace(estimate);
+    }
+
     void calc();
 
     /// @addr{0x80536230}
@@ -207,6 +216,8 @@ private:
     u16 m_introTimer;
     bool m_introHeld = false;
     u32 m_timer;
+    u16 m_battleLastJugem = 0; ///< Battle RaceMode +0xc: the point handed out last.
+    u32 m_battleAreaMask = 1;  ///< Battle RaceMode +0x8: enabled respawn areas (init 1).
 
     static constexpr u16 STAGE_COUNTDOWN_DURATION = 240;
     static constexpr u32 RNG_SEED = 0x74A1B095;

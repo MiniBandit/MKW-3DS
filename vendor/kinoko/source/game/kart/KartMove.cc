@@ -117,7 +117,9 @@ void KartMove::calcTurn() {
     }
 
     m_realTurn = (m_weightedTurn + static_cast<f32>(m_hopStickX)) * 0.5f;
-    m_realTurn = m_realTurn * 0.8f + 0.2f * static_cast<f32>(m_hopStickX);
+    // 0x8057AAD4: a CPU gets no extra pull toward its hop side (0 instead of 0.2).
+    const f32 hopPull = m_cpuSteer ? 0.0f : 0.2f;
+    m_realTurn = m_realTurn * (1.0f - hopPull) + hopPull * static_cast<f32>(m_hopStickX);
     m_realTurn = std::max(-1.0f, std::min(1.0f, m_realTurn));
 }
 
@@ -196,6 +198,7 @@ void KartMove::init(bool b1, bool b2) {
     m_nonZipperAirtime = 0;
     m_realTurn = 0.0f;
     m_weightedTurn = 0.0f;
+    m_vanishScale = 1.0f; // 0x80578708, before the b1 test
 
     if (!b1) {
         m_battleRecovery.reset();
@@ -235,6 +238,7 @@ void KartMove::init(bool b1, bool b2) {
     m_respawnPreLandTimer = 0;
     m_respawnPostLandTimer = 0;
     m_respawnTimer = 0;
+    m_battleBlinkTimer = 0;
     m_bumpTimer = 0;
     m_drivingDirection = DrivingDirection::Forwards;
     m_padType.makeAllZero();
@@ -242,6 +246,7 @@ void KartMove::init(bool b1, bool b2) {
     m_jump->reset();
     m_halfPipe->reset();
     m_rawTurn = 0.0f;
+    m_ghostGoalFrames = 0; // 0x805788B4
 }
 
 /// @addr{0x8058348C}
@@ -435,7 +440,9 @@ void KartMove::calc() {
     calcShock();
     calcCrushed();
     calcBattleRecovery();
+    calcVanish();
     calcScale();
+    calcBattleBlink();
 
     if (status.onBit(eStatus::InCannon)) {
         calcCannon();
@@ -466,22 +473,6 @@ void KartMove::loseAllBalloons() {
     if (status().onBit(static_cast<eStatus>(131))) return;
     m_battleRecovery.empty();
     status().setBit(eStatus::BattleDamageProtection, eStatus::BattleEmpty, eStatus::BattleRefillWait);
-}
-
-/// @addr{0x80578968}
-/// @brief A ghost after its goal loses a tenth of its speed each frame (from
-/// ThePhilosophicalOne's retail-accuracy work, PR #76); the game fades it out.
-void KartMove::calcGhostGoal() {
-    const u8 idx = param()->playerIdx();
-    if (System::RaceConfig::Instance()->raceScenario().players[idx].type !=
-                    System::RaceConfig::Player::Type::Ghost ||
-            !System::RaceManager::Instance()->player(idx).finished()) {
-        return;
-    }
-    m_speed *= 0.9f;
-    if (m_ghostGoalFrames < 0x7fff) {
-        ++m_ghostGoalFrames;
-    }
 }
 
 void KartMove::calcBattleRecovery() {
@@ -541,10 +532,11 @@ void KartMove::calcRespawnStart() {
     constexpr float RESPAWN_HEIGHT = 700.0f;
 
     const auto *jugemPoint = System::RaceManager::Instance()->jugemPoint(param()->playerIdx());
-    const EGG::Vector3f &jugemPos = jugemPoint->pos();
     const EGG::Vector3f &jugemRot = jugemPoint->rot();
 
-    EGG::Vector3f respawnPos = jugemPos;
+    // fn_1_85B8 (0x8051896C): the racer's grid slot at the point, then 700 up.
+    EGG::Vector3f respawnPos;
+    jugemPoint->findRespawnPos(respawnPos, param()->playerIdx());
     respawnPos.y += RESPAWN_HEIGHT;
     EGG::Vector3f respawnRot = EGG::Vector3f(0.0f, jugemRot.y, 0.0f);
 
@@ -561,6 +553,32 @@ void KartMove::calcRespawnStart() {
     // Retail DoRespawn (USA 0x8057de08): the point's sound zone (KMP::Holder<JGPT> +0x2c).
     if (s16 zone = jugemPoint->soundZone(); zone > 0) {
         cueSoundTrigger(static_cast<u8>(zone - 1));
+    }
+}
+
+/// @addr{0x805819A8}
+/// @brief Battle only: state bit 40 for 150 frames (0x808B5A14) and the kart blink.
+/// Bit 40 exempts the racer from kart contact, actions and lightning.
+void KartMove::startBattleBlink() {
+    constexpr s16 BATTLE_BLINK_FRAMES = 150;
+
+    if (System::RaceConfig::Instance()->raceScenario().gameMode !=
+            System::RaceConfig::Scenario::GameMode::Battle) {
+        return;
+    }
+
+    status().setBit(eStatus::BattleRespawnBlink);
+    m_battleBlinkTimer = BATTLE_BLINK_FRAMES;
+}
+
+/// @addr{0x80581824}
+/// @brief The battle blink countdown, run just before the cannon update. The zero-balloon
+/// branch of the retail function needs the balloon count, which the host keeps.
+void KartMove::calcBattleBlink() {
+    if (status().onBit(eStatus::BattleRespawnBlink)) {
+        if (--m_battleBlinkTimer < 1) {
+            status().resetBit(eStatus::BattleRespawnBlink);
+        }
     }
 }
 
@@ -608,6 +626,12 @@ void KartMove::calcRespawnBoost() {
 
             status.resetBit(eStatus::AfterRespawn);
             m_flags.resetBit(eFlags::Respawned);
+
+            // Balloon battle: the 150-frame respawn blink starts on landing.
+            if (System::RaceConfig::Instance()->raceScenario().gameMode ==
+                    System::RaceConfig::Scenario::GameMode::Battle) {
+                startBattleBlink();
+            }
         }
 
         m_respawnPreLandTimer = std::max(0, m_respawnPreLandTimer - 1);
@@ -1567,6 +1591,9 @@ void KartMove::calcVehicleSpeed() {
     if (status.offBit(eStatus::CpuRecovery) &&
             (status.onBit(eStatus::MovingWaterVertical) ||
             (status.onBit(eStatus::MovingWaterDecaySpeed) &&
+                    // 0x8057AC64: the stuck recovery, Mega, Bullet, Cloud and Star are immune.
+                    status.offBit(eStatus::StuckRecovery, eStatus::Mega, eStatus::Bullet,
+                            eStatus::ThunderCloud, eStatus::Star) &&
                     status.offBit(eStatus::MushroomBoost) && EGG::Mathf::abs(m_speed) > 5.0f))) {
         water = true;
         m_speed *= collide()->pullPath().roadSpeedDecay();
@@ -1799,6 +1826,11 @@ void KartMove::calcAcceleration() {
         m_softSpeedLimit = std::max(m_softSpeedLimit - 3.0f, speedLimit);
     } else {
         m_softSpeedLimit = speedLimit;
+    }
+
+    // 0x8057BF98: a vanishing kart loses another tenth of its speed each frame.
+    if (status.onBit(eStatus::Vanishing)) {
+        m_speed *= 0.9f;
     }
 
     m_softSpeedLimit = std::min(m_hardSpeedLimit, m_softSpeedLimit);
@@ -2250,6 +2282,20 @@ void KartMove::initOob() {
     clearZipperBoost();
     clearSsmt();
     clearOffroadInvincibility();
+
+    // Retail also ends the slipstream: +0xec = 0, +0xf0 = 1.0 and state bits 64-66 off.
+    m_slipstreamTimer = 0;
+    m_slipstreamCharge = 1.0f;
+    m_slipstreamCharging = false;
+    m_slipstreamBoost = false;
+
+    // Retail cancelBullet (0x8059C118) when state bit 91 is set: the regular hard speed limit
+    // and bit 102 (AfterCannon, cleared on landing). The item side ends with the race items'
+    // own respawn check.
+    if (status().onBit(eStatus::Bullet)) {
+        setKartSpeedLimit();
+        status().setBit(eStatus::AfterCannon);
+    }
 }
 
 /// @stage 2
@@ -2588,13 +2634,57 @@ void KartMove::calcCrushed() {
     }
 }
 
+/// @addr{0x80578968}
+/// @brief A ghost (KartState +0x14 bit 6) after its goal (RaceManager player +0x38 & 2) loses
+/// a tenth of its speed each frame; after 70 frames it starts to vanish. fn_1_7710C
+/// (0x805874C0) is the same block without the ghost test.
+void KartMove::calcGhostGoal() {
+    constexpr s16 VANISH_FRAMES = 70;
+    auto &status = KartObjectProxy::status();
+    const u8 idx = param()->playerIdx();
+    if (System::RaceConfig::Instance()->raceScenario().players[idx].type !=
+                    System::RaceConfig::Player::Type::Ghost ||
+            !System::RaceManager::Instance()->player(idx).finished() ||
+            status.onBit(eStatus::VanishStarted)) {
+        return;
+    }
+
+    m_speed *= 0.9f;
+    if (++m_ghostGoalFrames > VANISH_FRAMES) {
+        if (status.offBit(eStatus::Vanishing, eStatus::Vanished)) {
+            status.setBit(eStatus::Vanishing);
+        }
+        status.setBit(eStatus::VanishStarted);
+    }
+}
+
+/// @addr{0x805813E8}
+/// @brief The vanish shrink: the scale falls by 0.05 a frame to 0.001, then the kart is gone
+/// (retail also hides its parts, fn_1_806D8 0x80590A8C). Not here: the first frame's
+/// SE_VCL_BTL_NO_BALLOON (0x1AA, host audio), and the second half, which needs KartState
+/// +0x14 bit 0x20000 that Kinoko has no producer for.
+void KartMove::calcVanish() {
+    auto &status = KartObjectProxy::status();
+    if (status.offBit(eStatus::Vanishing)) {
+        return;
+    }
+
+    m_vanishScale -= 0.05f;
+    if (m_vanishScale < 0.001f) {
+        m_vanishScale = 0.001f;
+        status.resetBit(eStatus::Vanishing);
+        status.setBit(eStatus::Vanished);
+    }
+}
+
 /// @addr{0x8058160C}
 void KartMove::calcScale() {
     m_kartScale->calc();
 
-    const EGG::Vector3f sizeScale = m_kartScale->sizeScale();
+    // +0x160 (PR #76): a ghost's vanish shrink scales the size before the press scale.
+    const EGG::Vector3f sizeScale = m_kartScale->sizeScale() * m_vanishScale;
     setScale(m_kartScale->pressScale() * sizeScale * m_battleRecovery.scale());
-    m_totalScale = m_shockSpeedMultiplier * m_megaScale * m_battleRecovery.scale();
+    m_totalScale = m_vanishScale * m_shockSpeedMultiplier * m_megaScale * m_battleRecovery.scale();
     m_hitboxScale = std::max(sizeScale.z, m_totalScale);
 
     if (sizeScale.z != 1.0f) {
@@ -2731,8 +2821,10 @@ void KartMove::calcMega() {
 bool KartMove::applyLightningEffect(u16 timer, bool spinShrink, bool cloudStrike) {
     auto &status = state()->status();
 
-    if (status.onBit(eStatus::TriggerRespawn, eStatus::InRespawn, eStatus::AfterRespawn,
-                eStatus::CannonStart, eStatus::InCannon, eStatus::Star, eStatus::Bullet)) {
+    // RMCP 0x805807A8: also the battle blink (state +0x8 & 0x102).
+    if (status.onBit(eStatus::TriggerRespawn, eStatus::BattleRespawnBlink, eStatus::InRespawn,
+                eStatus::AfterRespawn, eStatus::CannonStart, eStatus::InCannon, eStatus::Star,
+                eStatus::Bullet)) {
         return false;
     }
 
@@ -2992,7 +3084,8 @@ void KartMoveBike::calcVehicleRotation(f32 turn) {
     m_leanRotCap += 0.3f * (leanRotCap - m_leanRotCap);
     m_leanRotInc += 0.3f * (leanRotInc - m_leanRotInc);
 
-    f32 stickX = state()->stickX();
+    // 0x80587E58: a CPU leans from the AI's input at +0x28C, not its pad stick.
+    f32 stickX = m_cpuSteer ? m_cpuLean : state()->stickX();
     f32 extVelXFactor = 0.0f;
     f32 leanRotMin = -m_leanRotCap;
     f32 leanRotMax = m_leanRotCap;

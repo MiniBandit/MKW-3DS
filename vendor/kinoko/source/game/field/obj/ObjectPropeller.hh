@@ -25,6 +25,11 @@ public:
     [[nodiscard]] f32 getCollisionRadius() const override;
     bool checkCollision(ObjectCollisionBase *lhs, EGG::Vector3f &dist) override;
 
+    /// Presentation only: retail +0xbc, the spin axis the blades turn about.
+    [[nodiscard]] const EGG::Vector3f &axis() const {
+        return m_axis;
+    }
+
 private:
     f32 m_angVel;
     f32 m_angle;

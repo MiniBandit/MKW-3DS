@@ -57,6 +57,14 @@ public:
         return m_collision;
     }
 
+    /// @addr{0x80681734}
+    /// @brief Retail vtable +0xd8: whether a CPU with state bit 88 (far from every local
+    /// human) still collides with this object (ObjectDirector 0x8082AB04). Every retail
+    /// collidable class returns 0 except the item boxes and Hwanwan (0x806C69D4).
+    [[nodiscard]] virtual bool collidesWithFarCpu() const {
+        return false;
+    }
+
 protected:
     void createCollision() override;
 

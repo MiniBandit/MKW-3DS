@@ -26,6 +26,12 @@ void RaceManager::findKartStartPoint(EGG::Vector3f &pos, EGG::Vector3f &angles, 
     ASSERT(index < m_playerCount);
     u32 placement = index + 1;
     u32 playerCount = m_playerCount;
+    // Time Trial ghosts start where the player does: the run they replay began
+    // there, alone on the grid.
+    if (RaceConfig::Instance()->raceScenario().isTimeTrial()) {
+        placement = 1;
+        playerCount = 1;
+    }
     u32 startPointIdx = 0;
     const auto &scenario = RaceConfig::Instance()->raceScenario();
     // RaceConfig::Scenario::initPlayers uses count-index on the first offline
@@ -125,6 +131,9 @@ void RaceManager::calc() {
         break;
     case Stage::Race:
     case Stage::FinishLocal:
+    // RaceInfo_update (0x805331B4) counts +0x20 in every stage from the countdown on,
+    // stage 4 included, so course objects keep moving after the last racer finishes.
+    case Stage::FinishGlobal:
         ++m_timer;
         break;
     default:
@@ -277,7 +286,9 @@ void RaceManager::Player::init(size_t index) {
 
 /// @addr{0x80535304}
 void RaceManager::Player::calc() {
-    if (m_finished) return;
+    // Retail keeps tracking the checkpoint and respawn point after the goal (only the
+    // lap and finish logic stops: incrementLap / decrementLap), so a finished racer who
+    // falls respawns near where it fell.
     auto *courseMap = CourseMap::Instance();
     const auto *kart = Kart::KartObjectManager::Instance()->object(m_playerIndex);
 
@@ -395,6 +406,11 @@ bool RaceManager::Player::areCheckpointsSubsequent(const MapdataCheckPoint *chec
 
 /// @addr{0x80534D6C}
 void RaceManager::Player::decrementLap() {
+    // Retail (inlined in 0x80534DF8) skips both writes once the racer has finished.
+    if (m_finished) {
+        return;
+    }
+
     auto *courseMap = CourseMap::Instance();
 
     if (courseMap->getCheckPointCount() > 0 && courseMap->getCheckPathCount() > 0) {
@@ -409,6 +425,11 @@ void RaceManager::Player::decrementLap() {
 /// @addr{0x805349B8}
 void RaceManager::Player::incrementLap() {
     m_maxKcp = 0;
+    // Retail RaceinfoPlayer_endLap: no lap counts after the racer has finished.
+    if (m_finished) {
+        return;
+    }
+
     if (++m_currentLap <= m_maxLap) {
         return;
     }

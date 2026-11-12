@@ -54,6 +54,12 @@ public:
         return 1;
     }
 
+    /// @addr{0x806C69D4}
+    /// @brief Retail w_itemboxline (vtable 0x808CEEA0 +0xd8) keeps far CPUs colliding.
+    [[nodiscard]] bool collidesWithFarCpu() const override {
+        return true;
+    }
+
 private:
     owning_span<ObjectItemboxPress *> m_press;
     owning_span<ObjectItemboxBlock *> m_blocks;

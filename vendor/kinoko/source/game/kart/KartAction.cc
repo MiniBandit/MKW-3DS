@@ -235,6 +235,12 @@ void KartAction::end() {
     status().resetBit(eStatus::InAction, eStatus::LargeFlipHit);
     dynamics()->setForceUpright(true);
 
+    // Battle: the racer blinks for 150 frames after an action, unless a POW spin was dodged
+    // (+0xcc & 2). startBattleBlink checks the mode.
+    if (m_flags.offBit(eFlags::PowDodged)) {
+        move()->startBattleBlink();
+    }
+
     m_currentAction = Action::None;
     m_priority = 0;
     m_flags.makeAllZero();

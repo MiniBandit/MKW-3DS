@@ -108,6 +108,7 @@ vendor/kinoko/source/game/field/obj/ObjectPropeller.cc
 vendor/kinoko/source/game/field/obj/ObjectPsea.cc
 vendor/kinoko/source/game/field/obj/ObjectPylon.cc
 vendor/kinoko/source/game/field/obj/ObjectQuicksand.cc
+vendor/kinoko/source/game/field/obj/ObjectStarRing.cc
 vendor/kinoko/source/game/field/obj/ObjectRock.cc
 vendor/kinoko/source/game/field/obj/ObjectSanbo.cc
 vendor/kinoko/source/game/field/obj/ObjectSandcone.cc

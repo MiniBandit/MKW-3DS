@@ -46,6 +46,14 @@ public:
         return m_isBigStatue;
     }
 
+    /// @addr{0x806C0850} Empty in retail's GeoObjectSmoke (no kart object-hit sound).
+    void onObjectCollision(Kart::KartObject *) override {}
+
+    /// Presentation only: retail +0xc8, the fire cycle frame after calc (1..480; 480 at rest).
+    [[nodiscard]] u32 cycleFrame() const {
+        return m_cycleFrame;
+    }
+
 private:
     const bool m_isBigStatue; ///< Differentiates the first rBC turn statue from tiny statues
     const u32 m_startDelay;

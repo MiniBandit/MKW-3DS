@@ -65,6 +65,13 @@ public:
         u8 battleType = 0; // Original: 0 Balloon Battle, 1 Coin Runners.
         u8 humanTeam = 0;
         u8 cpuDifficulty = 1, cpuVehicles = 0, itemMode = 0;
+        // Set by the host for a Time Trial (the player, with or without a ghost).
+        bool timeTrial = false;
+        /// @brief Retail's ObjectDirector time-trial flag (+0x55). Kinoko's
+        /// trace/replay tests run their ghost as player 0.
+        [[nodiscard]] bool isTimeTrial() const {
+            return timeTrial || (playerCount > 0 && players[0].type == Player::Type::Ghost);
+        }
         [[nodiscard]] f32 engineClassRate() const {
             // USA Kart::Movement constructor 80571840; table 808b1414.
             constexpr f32 rates[] = {0.8f, 0.9f, 1.0f};

@@ -1,5 +1,6 @@
 #include "KartCollide.hh"
 #include "BattleEvents.hh"
+#include "game/system/RaceConfig.hh"
 
 #include <cstring>
 
@@ -59,8 +60,10 @@ namespace {
 /// (with state bit 81) and ghost racers never touch another racer.
 bool KartCollisionExempt(const KartObject *kart) {
     const auto &status = kart->status();
+    // PR #76: a ghost's vanish (Vanishing/Vanished) is also out of kart contact.
     return status.onBit(eStatus::TriggerRespawn, eStatus::InRespawn, eStatus::AfterRespawn,
-            eStatus::CannonStart, eStatus::InCannon, eStatus::AfterCannon, eStatus::BattleHidden);
+            eStatus::CannonStart, eStatus::InCannon, eStatus::AfterCannon, eStatus::BattleHidden,
+            eStatus::Vanishing, eStatus::Vanished);
 }
 } // namespace
 
@@ -68,6 +71,8 @@ KartCollide::ItemCollisionHook KartCollide::s_itemCollisionHook = nullptr;
 void *KartCollide::s_itemCollisionContext = nullptr;
 KartCollide::KartBumpHook KartCollide::s_kartBumpHook = nullptr;
 void *KartCollide::s_kartBumpContext = nullptr;
+KartCollide::BalloonHook KartCollide::s_balloonHook = nullptr;
+void *KartCollide::s_balloonContext = nullptr;
 
 /// @brief RMCU 0x805905e4: item contacts for this racer, after its object collision.
 void KartCollide::calcItemCollision() {
@@ -188,41 +193,51 @@ bool KartCollide::checkKartCollision(KartObject *self, KartObject *other) {
     const bool otherBullet = otherStatus.onBit(eStatus::Bullet);
     const bool selfStar = selfStatus.onBit(eStatus::Star);
     const bool otherStar = otherStatus.onBit(eStatus::Star);
+    // Battle (gameMode 3): an accepted Star hit steals a balloon (RaceMode vtable +0x30) and
+    // a Mega crush costs one (+0x2c); a Bullet hit makes no battle call.
+    const bool battle = System::RaceConfig::Instance()->raceScenario().gameMode ==
+            System::RaceConfig::Scenario::GameMode::Battle;
     auto react = [&](KartObject *victim, KartObject *attacker, const EGG::Vector3f &away,
-                         Action reaction, bool force) {
+                         Action reaction, bool force, const BalloonEvent *balloon) {
         KartAction *victimAction = victim->action();
         victimAction->setHitDepth(away);
         if (victimAction->start(reaction, force, attacker->param()->playerIdx())) {
             victim->move()->cueSound(KartMove::SoundCue::StarHit);   // USA 0x8056b0b8
             attacker->move()->cueSound(KartMove::SoundCue::PowerHit); // USA 0x8056b294
+            if (battle && balloon) {
+                CallBalloonHook(*balloon, victim->param()->playerIdx(),
+                        attacker->param()->playerIdx());
+            }
         }
     };
+    static constexpr BalloonEvent STEAL = BalloonEvent::Steal;
+    static constexpr BalloonEvent CRUSH = BalloonEvent::Crush;
     bool bump = true;
     if (selfBullet == otherBullet) {
         if (selfStar != otherStar) {
             if (otherStar && !selfBullet && !selfStar) {
-                react(self, other, -normal, Action::UNK_3, true);
+                react(self, other, -normal, Action::UNK_3, true, &STEAL);
                 bump = false;
             } else if (selfStar && !otherBullet && !otherStar) {
-                react(other, self, normal, Action::UNK_3, true);
+                react(other, self, normal, Action::UNK_3, true, &STEAL);
                 bump = false;
             }
         } else {
             const bool selfMega = selfStatus.onBit(eStatus::Mega);
             const bool otherMega = otherStatus.onBit(eStatus::Mega);
             if (otherMega && !selfMega && selfStatus.offBit(eStatus::Crushed)) {
-                react(self, other, -normal, Action::UNK_13, false);
+                react(self, other, -normal, Action::UNK_13, false, &CRUSH);
                 bump = false;
             } else if (selfMega && !otherMega && otherStatus.offBit(eStatus::Crushed)) {
-                react(other, self, normal, Action::UNK_13, false);
+                react(other, self, normal, Action::UNK_13, false, &CRUSH);
                 bump = false;
             }
         }
     } else if (otherBullet && !selfStar) {
-        react(self, other, -normal, Action::UNK_6, true);
+        react(self, other, -normal, Action::UNK_6, true, nullptr);
         bump = false;
     } else if (selfBullet && !otherStar) {
-        react(other, self, normal, Action::UNK_6, true);
+        react(other, self, normal, Action::UNK_6, true, nullptr);
         bump = false;
     }
     if (!bump) {
@@ -588,7 +603,7 @@ void KartCollide::calcFloorEffect() {
     m_sumHitboxBottomHeightFloorOnly = 0.0f;
     m_surfaceFlags.resetBit(eSurfaceFlags::Wall, eSurfaceFlags::SolidOOB, eSurfaceFlags::BoostRamp,
             eSurfaceFlags::Offroad, eSurfaceFlags::Trickable, eSurfaceFlags::NotTrickable,
-            eSurfaceFlags::StopHalfPipeState);
+            eSurfaceFlags::MovingRoad, eSurfaceFlags::StopHalfPipeState);
     m_sumHitboxBottomHeightSoftWall = 0.0f;
     m_numFloorOnlyCollisions = 0;
     m_numSoftWallCollisions = 0;
@@ -615,7 +630,9 @@ void KartCollide::calcFloorEffect() {
     m_solidOobTimer =
             m_surfaceFlags.onBit(eSurfaceFlags::SolidOOB) ? std::min(3, m_solidOobTimer + 1) : 0;
 
-    if (status().onBit(eStatus::Wall3Collision, eStatus::WallCollision)) {
+    // Retail skips the wall-side fall boundary probe for a Bullet (state +0xc 0x8000000).
+    if (status().offBit(eStatus::Bullet) &&
+            status().onBit(eStatus::Wall3Collision, eStatus::WallCollision)) {
         Field::KCLTypeMask maskOut = KCL_NONE;
 
         if (colDir->checkSphereCachedPartialPush(m_boundingRadius, pos(), EGG::Vector3f::inf,
@@ -749,6 +766,13 @@ void KartCollide::activateOob(bool detachCamera, Field::KCLTypeMask *mask,
     auto &status = KartObjectProxy::status();
     const u16 cameraRequest = m_oobCameraPending;
     m_oobCameraPending = 0;
+
+    // Port, audio only (PR #76): retail calls Effects::Player 0x806AB6B0 here, before the
+    // respawn check, on a fall boundary (no camera detach): the water / lava / Rainbow splash.
+    if (mask && !detachCamera) {
+        const auto *entry = Field::CollisionDirector::Instance()->closestCollisionEntry();
+        move()->cueFallBoundary(entry ? static_cast<u8>(entry->variant()) : 0);
+    }
 
     if (status.onBit(eStatus::BeforeRespawn)) {
         return;
@@ -969,6 +993,7 @@ void KartCollide::calcObjectCollision() {
             size_t handlerIdx = static_cast<std::underlying_type_t<Reaction>>(reaction);
             Action newAction = (this->*s_objectCollisionHandlers[handlerIdx])(i);
 
+            bool started = false;
             if (reaction == Reaction::SpinShrink && (m_shrinkTimer == 0)) {
                 m_shrinkTimer = SHRINK_TIME;
                 if (move()->applyLightningEffect(300, true, false)) move()->recordObjectDamage();
@@ -984,6 +1009,14 @@ void KartCollide::calcObjectCollision() {
                     // repeated overlaps while invulnerable or an action is locked.
                     if (action()->start(newAction)) move()->recordObjectDamage();
                 }
+            }
+
+            // Retail: an object hit that started an action costs a balloon in battle
+            // (RaceMode vtable +0x34).
+            if (started &&
+                    System::RaceConfig::Instance()->raceScenario().gameMode ==
+                            System::RaceConfig::Scenario::GameMode::Battle) {
+                CallBalloonHook(BalloonEvent::Lose, param()->playerIdx(), NO_BALLOON_ATTACKER);
             }
         }
 
@@ -1199,6 +1232,11 @@ void KartCollide::processFloor(CollisionData &collisionData, Hitbox &hitbox,
             state()->setJumpPadVariant(closestColEntry->variant());
         }
         collisionData.bTrickable = true;
+    }
+
+    // 0x8056EDF4: read by KartSub::calcMovingObj.
+    if (*maskOut & KCL_TYPE_BIT(COL_TYPE_MOVING_ROAD)) {
+        m_surfaceFlags.setBit(eSurfaceFlags::MovingRoad);
     }
 }
 
@@ -1513,6 +1551,15 @@ Action KartCollide::handleReactOffroad(size_t /*idx*/) {
 Action KartCollide::handleReactLaunchSpin(size_t idx) {
     action()->setTranslation(objectCollisionKart()->translation(idx));
     return Action::UNK_5;
+}
+
+/// Port, camera only (no physics): ObjectCarTGE::onCollision's tail (retail 0x806D7760)
+/// calls Kart::Link 0x80590F58 unless the kart is already in action 5 (fn_1_809F0, the
+/// launch spin); counted for the presentation race camera.
+void KartCollide::cueCarCamera() {
+    if (action()->currentAction() != Action::UNK_5) {
+        ++m_carCameraHits;
+    }
 }
 
 /// @addr{0x805736C8}

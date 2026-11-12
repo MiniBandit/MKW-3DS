@@ -247,7 +247,7 @@ static uint16_t lanButtons=0;static int8_t lanStick=0;static uint8_t lanTrick=0,
 static void configure(K::System::RaceConfig* config,void* context) {
     if(replayData){config->setGhost(replayData);config->raceScenario().players[0].type=K::System::RaceConfig::Player::Type::Ghost;return;}
     auto& s=config->raceScenario();s.course=Courses[courseChoice].id;
-    s.engineClass=uint8_t(selectedEngineClass);s.mirror=selectedMirror;
+    s.engineClass=uint8_t(selectedEngineClass);s.mirror=selectedMirror;s.timeTrial=timeTrial;
     s.cpuDifficulty=uint8_t(selectedCpu);s.cpuVehicles=uint8_t(selectedCpuVehicles);s.itemMode=uint8_t(selectedItems);
     s.gameMode=static_cast<K::System::RaceConfig::Scenario::GameMode>(selectedRaceMode);
     s.teams=selectedTeams;s.humanTeam=uint8_t(selectedHumanTeam);s.battleType=coinRunnersMode?1:0;

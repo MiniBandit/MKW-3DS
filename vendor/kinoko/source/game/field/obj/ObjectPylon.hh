@@ -22,6 +22,8 @@ public:
             Kart::Reaction reactionOnObj, EGG::Vector3f &hitDepth) override;
     s16 onItemCollision(const EGG::Vector3f &position, const EGG::Vector3f &velocity,
             s16 reactionOnItem, s16 reactionOnObj, EGG::Vector3f &hitDepth) override;
+    /// @addr{0x8082E4F4} Empty in retail (onCollision calls the base itself).
+    void onObjectCollision(Kart::KartObject *) override {}
 
 private:
     enum State {

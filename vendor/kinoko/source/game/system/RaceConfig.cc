@@ -101,6 +101,7 @@ void RaceConfig::Scenario::init() {
     engineClass = 2;
     gameMode = GameMode::Time_Trial;
     mirror = false;
+    timeTrial = false;
 
     for (size_t i = 0; i < players.size(); ++i) {
         Player &player = players[i];

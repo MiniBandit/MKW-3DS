@@ -39,6 +39,9 @@ public:
     const EGG::Matrix34f &modelTransform() const { return m_modelTransform; }
     f32 animationFrame() const { return m_animationFrame; }
 
+    /// @addr{0x806C69DC} Empty in retail (no kart object-hit sound).
+    void onObjectCollision(Kart::KartObject *) override {}
+
 private:
     void enterState0() { m_chompFrame = 10; }
     void enterState1() {}

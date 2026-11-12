@@ -76,6 +76,11 @@ public:
     [[nodiscard]] s16 cooldown() const {
         return m_cooldown;
     }
+    /// Port: the trick direction start() used, which retail also passes to the driver
+    /// model (PlayerTrick_start 0x80575EE8 -> setTrick(variant, trick)). Presentation only.
+    [[nodiscard]] System::Trick nextTrick() const {
+        return m_nextTrick;
+    }
     /// @endGetters
 
 protected:

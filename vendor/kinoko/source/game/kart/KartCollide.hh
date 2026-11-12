@@ -62,6 +62,7 @@ public:
         GroundBoostPanelOrRamp = 7,
         Trickable = 11,
         NotTrickable = 12,
+        MovingRoad = 15, ///< Retail +0x2c 0x8000: a moving road floor (KCL 0x15), 0x8056EDF4.
         StopHalfPipeState = 16,
     };
     typedef EGG::TBitFlag<u32, eSurfaceFlags> SurfaceFlags;
@@ -153,6 +154,30 @@ public:
     static void SetKartBumpHook(KartBumpHook hook, void *context) {
         s_kartBumpHook = hook;
         s_kartBumpContext = context;
+    }
+
+    /// Port: the balloon battle RaceMode calls that retail kart code makes. Kinoko keeps no
+    /// balloons; the host applies them.
+    /// - Lose (vtable +0x34, fn_1_2880C): activateOob (not its CPU form, 0x80573B00) and an
+    ///   object hit that starts an action (0x80571F10). attacker is NO_BALLOON_ATTACKER.
+    /// - Crush (+0x2c, fn_1_283BC): a Mega flattens the victim; the victim loses a balloon.
+    /// - Steal (+0x30, fn_1_285E0): Star contact or a mushroom bump (0x8056F7F0).
+    enum class BalloonEvent : u8 {
+        Lose,
+        Crush,
+        Steal,
+    };
+    static constexpr size_t NO_BALLOON_ATTACKER = 0xff;
+    using BalloonHook = void (*)(void *context, BalloonEvent event, size_t victim,
+            size_t attacker);
+    static void SetBalloonHook(BalloonHook hook, void *context) {
+        s_balloonHook = hook;
+        s_balloonContext = context;
+    }
+    static void CallBalloonHook(BalloonEvent event, size_t victim, size_t attacker) {
+        if (s_balloonHook) {
+            s_balloonHook(s_balloonContext, event, victim, attacker);
+        }
     }
 
     /// Racer-to-racer collision (absent from Kinoko's time-trial scope).
@@ -264,7 +289,14 @@ public:
     [[nodiscard]] u8 kartBumpAttacker() const {
         return m_kartBumpAttacker;
     }
+    /// Port, camera only: retail ObjectCarTGE::onCollision's Kart::Link calls (0x80590F58 ->
+    /// RaceCamera 0x805A6DCC, flag 0x200 for 60 frames). Never read by the simulation.
+    [[nodiscard]] u32 carCameraHits() const {
+        return m_carCameraHits;
+    }
     /// @endGetters
+
+    void cueCarCamera();
 
 private:
     typedef Action (KartCollide::*ObjectCollisionHandler)(size_t idx);
@@ -298,6 +330,7 @@ private:
     bool m_sinkholeFall = false;
     s8 m_oobWaterHeightSlot = -1;
     s8 m_oobLavaHeightSlot = -1;
+    u32 m_carCameraHits = 0;    ///< Port hook: car-hit camera calls (camera only).
     /// mkw-3ds: applySomeFloorMoment's world-space inverse inertia tensor for the
     /// last (mainRot, invInertiaTensor) bit pattern; every wheel of one suspension
     /// pass shares those inputs, so the same product is reused bit for bit.
@@ -314,6 +347,8 @@ private:
     static ItemCollisionHook s_itemCollisionHook;
     static KartBumpHook s_kartBumpHook;
     static void *s_kartBumpContext;
+    static BalloonHook s_balloonHook;
+    static void *s_balloonContext;
     static void *s_itemCollisionContext;
 };
 

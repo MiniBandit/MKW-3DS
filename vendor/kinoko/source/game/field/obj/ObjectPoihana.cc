@@ -56,7 +56,7 @@ void ObjectPoihana::init() {
     m_airVelocity = m_airOffset = 0.0f;
     const auto &scenario = System::RaceConfig::Instance()->raceScenario();
     m_fixedMovement = scenario.gameMode == System::RaceConfig::Scenario::GameMode::Time_Trial &&
-            scenario.playerCount && scenario.players[0].type == System::RaceConfig::Player::Type::Ghost;
+            scenario.isTimeTrial();
     playAnimation("walk");
     m_nextStateId = 0;
 }

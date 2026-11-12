@@ -26,6 +26,9 @@ public:
         return ObjectId::Itembox;
     }
 
+    /// @addr{0x806C69DC} Empty in retail (no kart object-hit sound).
+    void onObjectCollision(Kart::KartObject *) override {}
+
     /// @addr{0x8076E9C4}
     [[nodiscard]] u32 loadFlags() const override {
         return 1;

@@ -107,6 +107,30 @@ public:
     void lookupSphereCached(const EGG::Vector3f &p1, const EGG::Vector3f &p2, u32 typeMask,
             f32 radius);
 
+    /// Port: the lookup cursor the lookup*() calls set and the check*() iterators advance (nothing
+    /// else in KColData changes during a query). The presentation race camera
+    /// (src/race_chase_camera.cpp) saves it before its own course query and restores it after, so
+    /// no simulation query ever sees the camera's.
+    struct LookupState {
+        EGG::Vector3f pos;
+        EGG::Vector3f prevPos;
+        EGG::Vector3f movement;
+        f32 radius;
+        KCLTypeMask typeMask;
+        const u16 *prismIter;
+    };
+    [[nodiscard]] LookupState lookupState() const {
+        return {m_pos, m_prevPos, m_movement, m_radius, m_typeMask, m_prismIter};
+    }
+    void restoreLookupState(const LookupState &state) {
+        m_pos = state.pos;
+        m_prevPos = state.prevPos;
+        m_movement = state.movement;
+        m_radius = state.radius;
+        m_typeMask = state.typeMask;
+        m_prismIter = state.prismIter;
+    }
+
     [[nodiscard]] const u16 *searchBlock(const EGG::Vector3f &pos);
 
     /// @beginGetters

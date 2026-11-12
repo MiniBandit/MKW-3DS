@@ -112,7 +112,9 @@ Kart::Reaction ObjectPylon::onCollision(Kart::KartObject *kartObj,
 
     u32 t = System::RaceManager::Instance()->timer();
 
+    // Port, audio only: retail calls the base onObjectCollision itself on these hits.
     if (m_state == State::ComeBack) {
+        ObjectCollidable::onObjectCollision(kartObj);
         startHit(COME_BACK_HIT_FACTOR, hitDepth);
         m_stateStartFrame = t;
         return Kart::Reaction::WeakWall;
@@ -126,6 +128,7 @@ Kart::Reaction ObjectPylon::onCollision(Kart::KartObject *kartObj,
     }
 
     if (canChangeState && m_state == State::Hit) {
+        ObjectCollidable::onObjectCollision(kartObj);
         return Kart::Reaction::WeakWall;
     }
 
@@ -136,6 +139,7 @@ Kart::Reaction ObjectPylon::onCollision(Kart::KartObject *kartObj,
     f32 speedRatio = kartObj->speedRatioCapped();
     if ((speedRatio >= HIT_SPEED_RATIO_THRESHOLD && m_state != State::Moving) ||
             m_state == State::Hiding || m_state == State::Hide) {
+        ObjectCollidable::onObjectCollision(kartObj);
         if (m_state == State::Idle) {
             startHit(speedRatio, hitDepth);
             m_stateStartFrame = t;

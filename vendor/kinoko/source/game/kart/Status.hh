@@ -49,6 +49,9 @@ enum class eStatus {
     InATrick = 38,
     BoostOffroadInvincibility = 39, ///< Set if we should ignore offroad slowdown this frame.
     BattleDamageProtection = 40, ///< Retail 150-tick post-damage protection.
+    /// @brief Retail bit 40 (PR #76's name): the battle respawn blink (0x80581C90, 150
+    /// frames). Exempts the racer from kart contact and item targeting.
+    BattleRespawnBlink = 40,
     HalfPipeRamp = 41,              ///< Set while colliding with zipper KCL.
     OverZipper = 42,                ///< Set while mid-air from a zipper.
     JumpPadMushroomCollision = 43,
@@ -64,6 +67,7 @@ enum class eStatus {
     JumpPadMushroomVelYInc = 55,
     ChargingSSMT = 57,      ///< Tracks whether we are charging a stand-still mini-turbo.
     CpuRecovery = 58, ///< AIStuckHandler Recover; excludes moving-water speed decay.
+    StuckRecovery = 58, ///< The same retail bit 58 (PR #76's name, 0x80745164).
     RejectRoad = 59,        ///< Collision which causes a change in the player's pos and rot.
     RejectRoadTrigger = 60, ///< e.g. DK Summit ending, and Maple Treeway side walls.
     GroundDirs = 61, ///< Retail state bit 61: calcDirs updated the facing this frame (AI::isDriftingOnGround).
@@ -88,6 +92,9 @@ enum class eStatus {
     MovingWaterDecaySpeed = 85,
     JumpPadDisableYsusForce = 86,
     HalfpipeMidair = 87,
+    /// @brief Retail bit 88 (AI fn_1_220528, 0x807308DC): a CPU far from every local human;
+    /// objects whose vtable +0xd8 returns 0 skip it (ObjectDirector 0x8082AB04).
+    FarFromHumans = 88,
     Bullet = 91,       ///< Retail Bullet Bill (KartKiller) status.
     Ink = 92,          ///< Retail Blooper ink status.
     ThunderCloud = 93, ///< Retail cloud status, 95-unit speed floor.
@@ -105,8 +112,14 @@ enum class eStatus {
 
     AutoDrift = 133, ///< True if auto transmission, false if manual.
     BattleEmpty = 135,
+    VanishStarted = 140, ///< Retail bit 140: a finished ghost's vanish has started (0x80578A14).
     BattleRefillWait = 144,
     BattleRespawnWait = 145,
+    /// @brief A finished ghost shrinking out of the race (PR #76; retail bit 82, KartMove
+    /// +0x160, 0x805813E8): KartSub skips its object and item contacts (0x80596DE8). Kept
+    /// apart from bit 82, which the battle vanish (BattleVanish) runs on here.
+    Vanishing = 146,
+    Vanished = 147, ///< Retail bit 83 for a ghost: gone; both KartSub passes skip it.
 
     FlagMax, ///< Internal. Total number of bits in the status.
 };

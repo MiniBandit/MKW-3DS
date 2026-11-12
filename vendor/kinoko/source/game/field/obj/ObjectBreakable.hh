@@ -28,6 +28,11 @@ public:
         m_state = 1;
     }
 
+    /// Presentation only: retail +0xB0. 0 is hidden (retail hides the model), 1 and 2 show it.
+    [[nodiscard]] u32 state() const {
+        return m_state;
+    }
+
 protected:
     u32 m_state;
 };

@@ -125,6 +125,11 @@ void ObjectPenguinS::calcSlider() {
     if (--m_anmTimer == 0) {
         m_state = State::SliderSlow;
     }
+
+    // Port, audio only: the slide sound over the slider's last 26 frames (0x80776650).
+    if (m_anmTimer < 0x1a) {
+        cueSound(0x34a, SoundCall::Hold);
+    }
 }
 
 /// @addr{0x80776670}
@@ -157,6 +162,8 @@ void ObjectPenguinS::calcRail() {
         anmMgr->playAnim(0.0f, 1.0f, 1);
         m_state = State::Slider;
         m_anmTimer = anmMgr->activeAnim(Render::AnmType::Chr)->frameCount();
+        // Port, audio only: SE_CR_64S_PNGN_C_JUMP with the belly slide (0x80776A4C).
+        cueSound(0x348, SoundCall::Start);
     } else if (setting == 2 && m_state == State::Walk) {
         m_state = State::Dive;
     }

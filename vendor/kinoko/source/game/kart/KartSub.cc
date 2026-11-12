@@ -131,7 +131,14 @@ void KartSub::calcPass0() {
     action()->calc();
     collide()->pullPath().calc();
 
-    if (status.onBit(eStatus::SkipWheelCalc)) {
+    // 0x80596994: a vanished kart is not simulated any more.
+    if (status.onBit(eStatus::Vanished)) {
+        return;
+    }
+
+    // 0x805969A0: the vanish start (bit 140) also pins the wheels, unless still shrinking.
+    if (status.onBit(eStatus::SkipWheelCalc, eStatus::VanishStarted) &&
+            status.offBit(eStatus::Vanishing)) {
         for (size_t tireIdx = 0; tireIdx < tireCount(); ++tireIdx) {
             tirePhysics(tireIdx)->setLastPos(pos());
         }
@@ -177,6 +184,11 @@ void KartSub::calcPass0() {
 void KartSub::calcPass1() {
     constexpr s16 SIDE_COLLISION_TIME = 5;
 
+    // 0x80596D44: nothing collides with a vanished kart.
+    if (KartObjectProxy::status().onBit(eStatus::Vanished)) {
+        return;
+    }
+
     state()->resetEjection();
 
     m_movingWaterCollisionCount = 0;
@@ -193,13 +205,17 @@ void KartSub::calcPass1() {
 
     // Retail searches with 0x1f and resolves each racer it finds first.
     collide()->calcKartCollision();
-    collide()->calcObjectCollision();
-    collide()->calcItemCollision();
-    dynamics()->setPos(pos() + collide()->tangentOff());
+    // 0x80596DE8: a vanishing kart skips its object and item contacts and the pushes below.
+    const bool contacts = KartObjectProxy::status().offBit(eStatus::Vanishing, eStatus::Vanished);
+    if (contacts) {
+        collide()->calcObjectCollision();
+        collide()->calcItemCollision();
+        dynamics()->setPos(pos() + collide()->tangentOff());
+    }
 
     auto &status = KartObjectProxy::status();
 
-    if (status.onBit(eStatus::SoftWallPush)) {
+    if (contacts && status.onBit(eStatus::SoftWallPush)) {
         const EGG::Vector3f &softWallSpeed = state()->softWallSpeed();
         f32 speedFactor = 5.0f;
         EGG::Vector3f effectiveSpeed;
@@ -221,7 +237,8 @@ void KartSub::calcPass1() {
     }
 
     auto &colData = collisionData();
-    if (colData.bWallAtLeftCloser || colData.bWallAtRightCloser || m_sideCollisionTimer > 0) {
+    if (contacts &&
+            (colData.bWallAtLeftCloser || colData.bWallAtRightCloser || m_sideCollisionTimer > 0)) {
         EGG::Vector3f right = dynamics()->mainRot().rotateVector(EGG::Vector3f::ex);
 
         if (colData.bWallAtLeftCloser || colData.bWallAtRightCloser) {
@@ -236,7 +253,9 @@ void KartSub::calcPass1() {
         collide()->setMovement(collide()->movement() + colPerpBounceDir);
     }
 
-    m_sideCollisionTimer = std::max(m_sideCollisionTimer - 1, 0);
+    if (contacts) {
+        m_sideCollisionTimer = std::max(m_sideCollisionTimer - 1, 0);
+    }
 
     body()->calcSinkDepth();
 
@@ -266,7 +285,8 @@ void KartSub::calcPass1() {
     }
 
     EGG::Vector3f forward = fullRot().rotateVector(EGG::Vector3f::ez);
-    m_someScale = std::max(scale().y, param()->stats().shrinkScale);
+    // 0x80597344: no shrink floor for a vanishing kart.
+    m_someScale = contacts ? std::max(scale().y, param()->stats().shrinkScale) : scale().y;
 
     const EGG::Vector3f gravity(0.0f, -1.3f, 0.0f);
     f32 speedFactor = 1.0f;
@@ -285,7 +305,9 @@ void KartSub::calcPass1() {
         }
     }
 
-    if (status.offBit(eStatus::SkipWheelCalc)) {
+    // 0x8059742C: as in calcPass0, the vanish start pins the wheels unless still shrinking.
+    if (status.offBit(eStatus::SkipWheelCalc, eStatus::VanishStarted) ||
+            status.onBit(eStatus::Vanishing)) {
         EGG::Vector3f vehicleCompensation = m_maxSuspOvertravel + m_minSuspOvertravel;
         dynamics()->setPos(dynamics()->pos() + vehicleCompensation);
 
@@ -413,11 +435,34 @@ void KartSub::tryEndHWG() {
 
 /// @addr{0x80597A88}
 void KartSub::calcMovingObj() {
-    if (m_movingObjCollisionCount == 0) {
+    // 0x80597AC8: the stuck recovery (bit 58) and the Bullet only decay the push.
+    if (KartObjectProxy::status().onBit(eStatus::StuckRecovery, eStatus::Bullet) ||
+            m_movingObjCollisionCount == 0) {
         f32 scalar = state()->airtime() < 20 ? 1.0f : 0.9f;
         physics()->composeDecayingMovingObjVel(0.7f, scalar, m_floorCollisionCount != 0);
     } else {
         m_objVel *= 1.0f / static_cast<f32>(m_floorCollisionCount);
+        // 0x80597B54: on a moving road, Star/Mega/Bullet/Cloud keep only the push along the
+        // travel direction (KartMove +0x68), and a CPU only half the push against it (KartSub
+        // +0x5C, which AIControlRace sets to 0.5 each frame before this, 0x80730858).
+        if (collide()->surfaceFlags().onBit(KartCollide::eSurfaceFlags::MovingRoad)) {
+            const EGG::Vector3f &dir = move()->lastDir();
+            if (KartObjectProxy::status().offBit(eStatus::Star, eStatus::Mega, eStatus::Bullet,
+                        eStatus::ThunderCloud)) {
+                if (move()->cpuSteer()) {
+                    auto [proj, rej] = m_objVel.projAndRej(dir);
+                    if (proj.dot(dir) < 0.0f) {
+                        proj *= 0.5f;
+                    }
+                    m_objVel = proj + rej;
+                }
+            } else {
+                m_objVel = m_objVel.proj(dir);
+                if (m_objVel.dot(dir) < 0.0f) {
+                    m_objVel.setZero();
+                }
+            }
+        }
         physics()->composeMovingObjVel(m_objVel, 0.2f);
     }
 }
@@ -431,7 +476,8 @@ void KartSub::calcMovingWater() {
     auto &status = KartObjectProxy::status();
     const auto &pullPath = collide()->pullPath();
 
-    if (m_movingWaterCollisionCount > 0) {
+    // 0x80597D90: as for moving roads, bit 58 and the Bullet only decay the push.
+    if (status.offBit(eStatus::StuckRecovery, eStatus::Bullet) && m_movingWaterCollisionCount > 0) {
         f32 ratio = static_cast<f32>(m_movingWaterCollisionCount) /
                 static_cast<f32>(m_floorCollisionCount);
         EGG::Vector3f dir = pullPath.pullDirection().perpInPlane(move()->smoothedUp(), true);

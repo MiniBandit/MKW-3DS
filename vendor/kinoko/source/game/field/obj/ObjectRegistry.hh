@@ -57,6 +57,7 @@
 #include "game/field/obj/ObjectSanbo.hh"
 #include "game/field/obj/ObjectSandcone.hh"
 #include "game/field/obj/ObjectShip64.hh"
+#include "game/field/obj/ObjectStarRing.hh"
 #include "game/field/obj/ObjectSunDS.hh"
 #include "game/field/obj/ObjectSunManager.hh"
 #include "game/field/obj/ObjectTownBridge.hh"
