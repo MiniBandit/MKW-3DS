@@ -759,7 +759,7 @@ class Builder:
         self.run('picasso-cfl', [sdk / 'tools/bin/picasso', '-o', native_dir / 'vshader.shbin', REPO / 'vendor/cfl-mii/source/vshader.v.pica'])
         binary_header((native_dir / 'vshader.shbin').read_bytes(), native_dir / 'vshader_shbin.h', 'vshader_shbin')
 
-        # Generated headers: the 66 cooked tables, kept apart from the tree's own headers.
+        # Generated headers: the 67 cooked tables, kept apart from the tree's own headers.
         declared = json.loads((REPO / 'config/generated-inputs.json').read_text())['files']
         missing = [n for n in declared if not (self.root / 'include' / n).is_file()]
         if missing:

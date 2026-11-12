@@ -99,6 +99,7 @@ __pycache__/
 /include/mkw/menu_model_params.hpp
 /include/mkw/menu_movie_assets.hpp
 /include/mkw/menu_movie_chapters.hpp
+/include/mkw/menu_name_glyph_atlas.hpp
 /include/mkw/menu_name_glyphs.hpp
 /include/mkw/menu_record_text.inc
 /include/mkw/menu_text_styles.hpp

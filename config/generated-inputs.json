@@ -158,6 +158,10 @@
       "sha256": "95932248bfa2be406b86c67b17f0a5f44901f5184e8897a0b531eb3a2086704d",
       "bytes": 1095
     },
+    "mkw/menu_name_glyph_atlas.hpp": {
+      "sha256": "7046bcac8a5cf66595d44a94868de85c741a80170e0e706bb83a10236e57d5c9",
+      "bytes": 10038
+    },
     "mkw/menu_name_glyphs.hpp": {
       "sha256": "3df15417fbe076730b192027b6b6ca36df38daceda443c04f2d3679a419a2fcb",
       "bytes": 104659
