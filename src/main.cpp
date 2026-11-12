@@ -230,6 +230,8 @@ static bool netRace=false,netWaiting=false;static uint32_t netRemoteMask=0,netLo
 static std::array<uint8_t,12> netLocal{},netItemSeen{};static std::array<uint32_t,12> netFinishKey{};static uint32_t netFirstFinish=0;
 static uint8_t netPlayerOf(unsigned slot){return slot<12?netLocal[slot]:uint8_t(255);}
 static std::array<unsigned,12> netRoster{};static std::array<uint8_t,12> netGlobal{};static std::array<uint32_t,12> netAppliedTick{};
+// Remote karts: the position error still to glide away (see the race loop).
+static std::array<K::EGG::Vector3f,12> netCorrection{};
 // Time Trials ghost (Race/TimeAttack on the SD card): racer 1 replays it.
 static bool ghostRace=false,watchReplay=false;
 // Time Trials: the player's run as a ghost; the best per course and license is
@@ -2115,7 +2117,7 @@ int main() {
             // Execute and retire the first complete render, then its reuse
             // frame while still black. Resource allocation alone does not
             // prime pose uploads, shadow captures or their GPU dependencies.
-            raceWarmupFrames=fullRace?2u:0u;netWaiting=netRace;netLostMask=0;netAppliedTick={};ghostRun.reset();recordGhost=timeTrial&&!replay&&!watchReplay;ghostFinishLogged=false;ghostTick=0;
+            raceWarmupFrames=fullRace?2u:0u;netWaiting=netRace;netLostMask=0;netAppliedTick={};netCorrection={};ghostRun.reset();recordGhost=timeTrial&&!replay&&!watchReplay;ghostFinishLogged=false;ghostTick=0;
             if(fullRace)K::System::RaceManager::Instance()->setIntroHeld(true);
             raceResident=fullRace;return true;
         };
@@ -2643,14 +2645,39 @@ int main() {
                         netFinishKey[i]=mkw::net::FinishKey::gone(netGlobal[i]);LOGF("online: player %u did not report a finish",unsigned(netGlobal[i])+1);}
                     results.hold(waiting);
                     raceGrid.setNetFinish(true,netFinishKey,netGlobal);
+                    // Remote karts drive on their latest inputs. A Frame tells where the kart was
+                    // when it was sent, half a round trip ago: carry it forward by that delay along
+                    // its velocity, then glide the error away over a few ticks instead of snapping
+                    // back (the back-and-forth jitter). A big error (a respawn, a long gap) snaps.
                     for(unsigned i=1;i<raceGrid.count();++i){
-                        mkw::net::Frame peer;if(!(raceGrid.remoteMask>>i&1u)||!net.frame(netGlobal[i],peer)||peer.tick==netAppliedTick[i])continue;
-                        auto* other=objects->object(i);if(!other)continue;
-                        netAppliedTick[i]=peer.tick;auto* d=other->dynamics();
-                        d->setPos({peer.pos[0],peer.pos[1],peer.pos[2]});
-                        d->setFullRot(K::EGG::Quatf(peer.fullRot[3],peer.fullRot[0],peer.fullRot[1],peer.fullRot[2]));
-                        d->setMainRot(K::EGG::Quatf(peer.mainRot[3],peer.mainRot[0],peer.mainRot[1],peer.mainRot[2]));
-                        d->setExtVel({peer.extVel[0],peer.extVel[1],peer.extVel[2]});d->setIntVel({peer.intVel[0],peer.intVel[1],peer.intVel[2]});
+                        if(!(raceGrid.remoteMask>>i&1u)){netCorrection[i]={};continue;}
+                        auto* other=objects->object(i);if(!other)continue;auto* d=other->dynamics();
+                        mkw::net::Frame peer;
+                        // QA: qa-net-snap.txt restores the old snap, to compare the two.
+                        static const bool qaSnap=kQa&&exists("sdmc:/3ds/mkw-3ds/qa-net-snap.txt");
+                        if(qaSnap&&net.frame(netGlobal[i],peer)&&peer.tick!=netAppliedTick[i]){
+                            netAppliedTick[i]=peer.tick;d->setPos({peer.pos[0],peer.pos[1],peer.pos[2]});
+                            d->setFullRot(K::EGG::Quatf(peer.fullRot[3],peer.fullRot[0],peer.fullRot[1],peer.fullRot[2]));
+                            d->setMainRot(K::EGG::Quatf(peer.mainRot[3],peer.mainRot[0],peer.mainRot[1],peer.mainRot[2]));
+                            d->setExtVel({peer.extVel[0],peer.extVel[1],peer.extVel[2]});d->setIntVel({peer.intVel[0],peer.intVel[1],peer.intVel[2]});
+                        }else if(!qaSnap&&net.frame(netGlobal[i],peer)&&peer.tick!=netAppliedTick[i]){
+                            netAppliedTick[i]=peer.tick;
+                            const K::EGG::Vector3f ext{peer.extVel[0],peer.extVel[1],peer.extVel[2]},in{peer.intVel[0],peer.intVel[1],peer.intVel[2]};
+                            const float ahead=std::min(net.delayTicks(netGlobal[i]),20.f);
+                            const K::EGG::Vector3f target=K::EGG::Vector3f{peer.pos[0],peer.pos[1],peer.pos[2]}+(ext+in)*ahead;
+                            const K::EGG::Quatf full(peer.fullRot[3],peer.fullRot[0],peer.fullRot[1],peer.fullRot[2]),main(peer.mainRot[3],peer.mainRot[0],peer.mainRot[1],peer.mainRot[2]);
+                            const K::EGG::Vector3f error=target-d->pos();
+                            if(error.length()>800.f){d->setPos(target);netCorrection[i]={};d->setFullRot(full);d->setMainRot(main);}
+                            else{netCorrection[i]=error;d->setFullRot(d->fullRot().slerpTo(full,.5f));d->setMainRot(d->mainRot().slerpTo(main,.5f));}
+                            d->setExtVel(ext);d->setIntVel(in);
+                        }
+                        // Half the remaining error each tick: gone within about a tenth of a second.
+                        if(netCorrection[i].squaredLength()>.01f){const auto step=netCorrection[i]*.5f;d->setPos(d->pos()+step);netCorrection[i]-=step;}
+                        // QA: how often the shown kart jumps backwards along its own motion.
+                        if(kQa){static std::array<K::EGG::Vector3f,12> last{};static std::array<unsigned,12> back{},ticks{};static std::array<float,12> worst{};
+                            const auto p=d->pos(),v=d->extVel()+d->intVel();const auto delta=p-last[i];last[i]=p;
+                            if(v.squaredLength()>100.f){const float along=delta.dot(v)/v.length();if(along<-5.f){++back[i];worst[i]=std::min(worst[i],along);}}
+                            if(++ticks[i]%600==0){LOGF("online jitter racer %u: %u backward jumps in 600 ticks, worst %.0f, delay %.1f ticks",i,back[i],-worst[i],net.delayTicks(netGlobal[i]));back[i]=0;worst[i]=0;}}
                     }
                 }
                 {

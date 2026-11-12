@@ -42,7 +42,7 @@ joiner's code and sends Ping to it every half second, which opens its router.
 | 2 | Lobby | host → lobby, every 30 frames | `u16 round, u8 course, u8 engineClass, u8 mirror, u8 count, u8 started, u8 0, char build[16], LobbyPlayer[12]` |
 | 3 | Ready | joiner → host, every 10 frames after loading | `u16 round` |
 | 4 | Go | host → all, 6 times, and again for a late Ready | `u16 round` |
-| 5 | Frame | all → all, each tick (each other tick above 4 players) | see below |
+| 5 | Frame | all → all, each tick (60 a second) | see below |
 | 6 | Bye | all → all, when leaving | none |
 | 7 | Refuse | host → a joiner it can't take | `u32 id, char message[44]` |
 | 8 | Ping | all → all in the lobby, every 30 frames | `u32 id` |
@@ -173,7 +173,7 @@ from where a console saw another kart cross the line.
    racer 0 and the others follow in slot order.
 3. **Ready/Go.** After loading, joiners send Ready; the host sends Go once all
    are ready (or after 30 seconds). Everyone releases the countdown on Go.
-4. **Race.** Send a Frame every tick to every other player. Drive each remote
+4. **Race.** Send a Frame every tick to every other player. Every half second, send each player a Probe (type 10: `u32 time, u8 echo, u8[3] 0`); the receiver returns it at once with echo 1, and half the round trip is how old that player's Frames are when they arrive. Carry each received state forward by that delay along its velocity and correct the shown kart towards it gradually; snap only a large error. Drive each remote
    kart from its newest inputs and snap it to the newest state. Never wait for
    the network. If the host sees that a player can't hear another (its reach
    bit is clear), it passes that sender's Frames, Events and Bye on to it.

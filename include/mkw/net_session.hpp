@@ -15,7 +15,7 @@ constexpr uint32_t Magic=0x314E4B4D; // "MKN1"
 constexpr uint16_t Version=3;
 constexpr uint16_t DefaultPort=41750;
 constexpr unsigned MaxPlayers=12;
-enum class Type:uint8_t {Hello=1,Lobby=2,Ready=3,Go=4,Frame=5,Bye=6,Refuse=7,Ping=8,Events=9};
+enum class Type:uint8_t {Hello=1,Lobby=2,Ready=3,Go=4,Frame=5,Bye=6,Refuse=7,Ping=8,Events=9,Probe=10};
 
 #pragma pack(push,1)
 // sender: the player's slot in the lobby (0 is the host), 255 before it has one.
@@ -75,6 +75,13 @@ inline uint32_t unfinished(float raceCompletion){
 inline uint32_t gone(unsigned slot){return Gone|slot;}
 }
 // The part of a Frame about the sender's items and finish.
+// Round-trip timing in a race, every half second to each player: echo 0 asks, the
+// receiver sends it straight back with echo 1 and the same time (milliseconds, the
+// asker's clock). Half the round trip is how old a Frame is when it arrives.
+#pragma pack(push,1)
+struct Probe {Header h;uint32_t time;uint8_t echo,reserved[3];};
+#pragma pack(pop)
+static_assert(sizeof(Probe)==24);
 struct FrameState {uint8_t item=20,charges=0,heldKind=20,heldMask=0,itemFlags=0;uint32_t finish=0;};
 
 enum class Mode:uint8_t {None,Host,Join};
@@ -132,6 +139,9 @@ public:
     bool takeRaceEvent(unsigned& slot,RaceEvent& out);
     bool frame(unsigned slot,Frame& out) const{if(slot>=MaxPlayers||!hasFrame_[slot])return false;out=latest_[slot];return true;}
     uint32_t silence(unsigned slot) const{return silent_[slot];}
+    // How old this slot's Frames are when they arrive, in simulation ticks (half the
+    // measured round trip; 3 until measured).
+    float delayTicks(unsigned slot) const{return slot<MaxPlayers&&rttMs_[slot]>0?rttMs_[slot]*.5f*60.f/1000.f:3.f;}
     bool left(unsigned slot) const{return left_[slot];}
     // Human-readable steps for the connection screen, oldest first.
     bool takeEvent(char* out,size_t size);
@@ -163,7 +173,8 @@ private:
     std::array<bool,MaxPlayers> ready_{},inRound_{};
     uint16_t round_=0,lastRound_=0;unsigned course_=0,engineClass_=2,goRepeats_=0,readyPolls_=0;bool mirror_=false;
     bool started_=false,goSeen_=false,failed_=false,announcedWait_=false;unsigned heardBefore_=0;
-    std::array<Frame,MaxPlayers> latest_{};std::array<bool,MaxPlayers> hasFrame_{},left_{};std::array<uint32_t,MaxPlayers> silent_{};
+    std::array<Frame,MaxPlayers> latest_{};std::array<bool,MaxPlayers> hasFrame_{},left_{};std::array<float,MaxPlayers> rttMs_{};unsigned probeTick_=0;
+    std::array<uint32_t,MaxPlayers> silent_{};
     // Race events: mine not yet acknowledged by all (a ring by seq), what each
     // console has acknowledged, and what has arrived for the game to play.
     static constexpr unsigned OutboxSize=32,InboxSize=64;

@@ -274,8 +274,10 @@ bool Session::readyStep(){
 
 void Session::sendFrame(uint32_t tick,uint16_t buttons,int8_t stickX,uint8_t trick,uint8_t flags,const float pos[3],const float fullRot[4],
                         const float mainRot[4],const float extVel[3],const float intVel[3],const FrameState& state){
-    // Above four players, every other tick: the inputs carry the kart in between.
-    if(count_>4&&(tick&1))return;
+    // Every half second, time the round trip to each player (Probe).
+    if(++probeTick_>=30){probeTick_=0;Probe p{};p.h=header(Type::Probe);p.time=uint32_t(osGetTime());sendAll(&p,sizeof p);}
+    // Every tick, whatever the player count: the other consoles see this kart move at
+    // the full 60 positions a second.
     Frame f{};f.h=header(Type::Frame);f.tick=tick;f.buttons=buttons;f.stickX=stickX;f.trick=trick;f.flags=flags;f.reach=reachMask();
     std::memcpy(f.pos,pos,sizeof f.pos);std::memcpy(f.fullRot,fullRot,sizeof f.fullRot);std::memcpy(f.mainRot,mainRot,sizeof f.mainRot);
     std::memcpy(f.extVel,extVel,sizeof f.extVel);std::memcpy(f.intVel,intVel,sizeof f.intVel);
@@ -395,6 +397,15 @@ void Session::receive(const uint8_t* data,size_t size,uint32_t address,uint16_t 
     switch(h.type){
     case Type::Ready:if(mode_==Mode::Host){ready_[s]=true;if(goRepeats_>=GoRepeats){Go go{header(Type::Go),round_};sendTo(address,port,&go,sizeof go);}}break;
     case Type::Go:{if(size<sizeof(Go))return;Go go;std::memcpy(&go,data,sizeof go);if(mode_==Mode::Join&&go.round==round_)goSeen_=true;break;}
+    case Type::Probe:{
+        if(size<sizeof(Probe))return;
+        Probe p;std::memcpy(&p,data,sizeof p);
+        if(!p.echo){Probe back=p;back.h=header(Type::Probe);back.echo=1;sendTo(address,port,&back,sizeof back);break;}
+        // A round trip a few times longer than a race's patience is a stale echo.
+        const float rtt=float(uint32_t(osGetTime())-p.time);
+        if(rtt>=0&&rtt<2000)rttMs_[s]=rttMs_[s]>0?rttMs_[s]*.8f+rtt*.2f:rtt;
+        break;
+    }
     case Type::Frame:{
         if(size<sizeof(Frame))return;
         Frame frame;std::memcpy(&frame,data,sizeof frame);if(frame.round!=round_)return;reach_[s]=frame.reach;
