@@ -56,8 +56,13 @@ void fillRaceAudioFrame(RaceAudioFrame& f, snd::Vec3f eye, snd::Vec3f target) {
   RaceAudioKart& k = f.kart[i];
   auto* kart = manager->object(i);
   const auto& player = scenario.players[i];
-  k.present = kart != nullptr;
-  if (!kart) continue;
+  // A Time Trial ghost's KartActor starts nothing (PAL 0x807082D8, 0x807077BC; from
+  // ThePhilosophicalOne's PR #76): no engine, road, drift, item or voice sound. When
+  // racer 0 is the ghost too (Watch the Replay) it sounds as usual.
+  using PlayerType = K::System::RaceConfig::Player::Type;
+  const bool silentGhost = player.type == PlayerType::Ghost && scenario.players[0].type != PlayerType::Ghost;
+  k.present = kart != nullptr && !silentGhost;
+  if (!k.present) continue;
   const auto p = kart->pos();
   k.position = {p.x, p.y, p.z};
   const auto& v = kart->dynamics()->velocity();
@@ -120,7 +125,9 @@ void fillRaceAudioFrame(RaceAudioFrame& f, snd::Vec3f eye, snd::Vec3f target) {
    k.finished = p.finished(); k.rank = std::uint8_t(p.finishOrder());
   }
   k.vehicle = std::uint8_t(player.vehicle); k.character = std::uint8_t(player.character);
-  k.local = player.type == K::System::RaceConfig::Player::Type::Local;
+  // Watch the Replay: the ghost driving racer 0 sounds as the player's own kart.
+  k.local = player.type == K::System::RaceConfig::Player::Type::Local ||
+          (i == 0 && player.type == K::System::RaceConfig::Player::Type::Ghost);
  }
 }
 
