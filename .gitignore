@@ -85,5 +85,7 @@ CFL_Res.dat
 !/tools/release/artwork/banneraudio.wav
 /old-0.6.0-build/
 
+build-cia-log.txt
+
 mkw-rom/*
 !mkw-rom/.gitkeep
