@@ -7,7 +7,9 @@ namespace mkw {
 inline constexpr bool circlePadThrowBack(int y){return y<=-125;}
 static_assert(!circlePadThrowBack(-124)&&circlePadThrowBack(-125));
 inline int circlePadSteering(int x){
- constexpr int DeadZone=16;
+ // A released pad often rests 10-15 units off centre on the side it was pushed
+ // to (PR #76 measured it): read up to 20 as neutral.
+ constexpr int DeadZone=20;
  return std::abs(x)<=DeadZone?0:std::clamp(int(std::lround(x*7.f/156.f)),-7,7);
 }
 }

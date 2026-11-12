@@ -472,7 +472,9 @@ void RaceGrid::afterStep(){
     });
     for(unsigned rank=0;rank<count_;++rank)ranks_[order[rank]]=rank+1;
     } // Battle receives the mode's prior-position/score ranks after scoring.
-    for(unsigned i=0;i<count_;++i){const auto& p=manager->player(i);finished_[i]=netFinish_?netKeys_[i]!=0:p.finished();laps_[i]=unsigned(std::clamp<int>(p.currentLap(),1,3));}
+    for(unsigned i=0;i<count_;++i){const auto& p=manager->player(i);finished_[i]=netFinish_?netKeys_[i]!=0:p.finished();laps_[i]=std::max(laps_[i],unsigned(std::clamp<int>(p.currentLap(),1,3)));}
+    // Raceinfo maxLap (PR #76), not currentLap: CtrlRaceLap, JugemSwitchLap and the AI
+    // read it, so backing over the line never lowers the lap shown.
 }
 void RaceGrid::forwardBumps(){
     using namespace Kinoko;
