@@ -689,6 +689,43 @@ public:
    x+=advance;
   }
  }
+ // The ghost page's upper screen: which ghost (left/right browse), its time.
+ void ghostInfo(){
+  group(UiMenuRole::TimeTrialRecord);
+  const float slide=transition?uiTimeTrialRecordSlide(*transition):0.f;
+  auto draw=[&](unsigned index,float x,float y,float w,float h,uint32_t tint=0xffffffffu){
+   const auto first=out.size();quad(index,(x+slide-200.f)/XScale,(y-120.f)/YScale,w/XScale,h/YScale,1,tint,{},true);
+   if(out.size()>first)out.back().menu.preserveAspect=true;
+  };
+  // Runtime text in the native-font name glyphs (one texture each).
+  auto words=[&](const char* value,float y,float h,uint32_t tint){
+   if(transition&&transition->preload)value="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 <>/:.'!?-";
+   unsigned indices[96]{},count=0;float widths[96]{},total=0;
+   for(const unsigned char* ch=reinterpret_cast<const unsigned char*>(value);*ch&&count<96;++ch){
+    char key[32];std::snprintf(key,sizeof key,"name_glyph_%04x",unsigned(*ch));
+    const auto index=lookup().find(key);if(index>=std::size(UiSprites))continue;
+    indices[count]=index;const auto& g=UiSprites[index];widths[count]=h*g.w/g.h;total+=widths[count++];
+   }
+   const float fit=std::min(1.f,360.f/std::max(total,1.f));float x=200.f-total*fit*.5f;
+   for(unsigned i=0;i<count;++i){draw(indices[i],x,y,widths[i]*fit,h*fit,tint);x+=widths[i]*fit;}
+  };
+  const auto& list=state.ghosts;const unsigned at=list.empty()?0:state.selection.ghostIndex%unsigned(list.size());
+  if(list.empty()){words("No ghosts for this course yet",96,22,0xffffffffu);words("Race Solo to save your best run",128,16,0xc0c0c0ffu);return;}
+  const auto& g=list[at];
+  const char* kinds[]={"Your Best Ghost",g.name[0]?g.name:"Ghost","Staff Ghost","Expert Staff Ghost"};
+  words(kinds[std::min<unsigned>(g.kind,3)],80,22,0xffffffffu);
+  char time[24];std::snprintf(time,sizeof time,"%02u:%02u.%03u",unsigned(g.ms/60000),unsigned(g.ms/1000%60),unsigned(g.ms%1000));
+  constexpr float h=30.f,advance=23.f;const float width=advance*float(std::strlen(time)-1)+h;
+  float x=200.f-width*.5f;
+  for(const char* p=time;*p;++p){
+   const unsigned n=*p>='0'&&*p<='9'?unsigned(*p-'0'):*p==':'?10u:*p=='.'?11u:12u;
+   char key[40];std::snprintf(key,sizeof key,"menu_record_digit_%u",n);
+   const auto i=lookup().find(key);const auto first=out.size();draw(i,x,116,h,h);
+   if(out.size()>first){auto& q=out.back();q.u0=float(n%8*26+1)/256.f;q.v0=float(n/8*26+1)/64.f;q.u1=q.u0+24.f/256.f;q.v1=q.v0+24.f/64.f;q.tint=0xffe040ffu;}
+   x+=advance;
+  }
+  if(list.size()>1){char page[24];std::snprintf(page,sizeof page,"< %u/%u >",at+1,unsigned(list.size()));words(page,156,16,0xc0c0c0ffu);}
+ }
  void cupRecord(unsigned cup){
   if(state.selection.mode!=UiMode::GrandPrix||cup>=8)return;
   const unsigned slot=std::min(state.selection.license,3u),cc=std::min(unsigned(state.selection.engineClass),3u);
@@ -1155,12 +1192,13 @@ static void composeMenuImpl(const MenuState& s,const UiRaceView& race,std::vecto
   c.chrome(pick?"Cups":"Stages");break;
  }
  case UiPage::Ghost:{
-  // Solo, or race the disc's staff / expert staff ghost (Race/TimeAttack).
-  // The Wii stacks these choices 50 units apart.
-  c.timeTrialBest();
-  const char* names[]={"Solo Time Trials","Race the Staff Ghost","Race the Expert Staff Ghost"};
+  // Retail's TimeAttackGhostList choices (Run, Watch, Alone) for the ghost
+  // shown on the upper screen; left/right browse the course's ghosts.
+  c.ghostInfo();
+  const char* names[]={"Race This Ghost","Watch the Replay","Solo Time Trials"};
+  const char* variants[]={"Run","Watch","Alone"};
   for(unsigned i=0;i<3;++i){
-   auto pose=control("TimeAttackGhostList","Alone",i);pose.y=50.f-50.f*float(i);
+   auto pose=control("TimeAttackGhostList",variants[i],i);pose.y=50.f-50.f*float(i);
    c.group(UiMenuRole::Choice,i,pose,"ghost_free");c.button("ghost",i,pose,names[i]);
   }
   c.chrome("Time Trials");break;
@@ -1351,7 +1389,7 @@ MenuRect menuChoiceRect(const UiQuad& q,const MenuState& state){
  case UiPage::TeamConfirm:return {52,95,216,48};
  case UiPage::Confirm:return {72,83,176,80};
  case UiPage::EraseLicense:return {35,65.f+75.f*i,250,52};
- case UiPage::Ghost:return {25,89,270,54};
+ case UiPage::Ghost:return {12,51.f+44.f*i,296,36};
  case UiPage::Unlock:return {96,190,128,30};
  case UiPage::Error:return {15,93,290,48};
  default:return {10,35.f+39.f*i,300,34};

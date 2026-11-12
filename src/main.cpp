@@ -33,6 +33,8 @@
 #include <mkw/luma_visual.hpp>
 #include <mkw/race_grid.hpp>
 #include <mkw/net_session.hpp>
+#include <mkw/time_trial_ghost.hpp>
+#include <ctime>
 #include <mkw/lan_handshake.hpp>
 #include <mkw/balloon_battle.hpp>
 #include <mkw/battle_round_result.hpp>
@@ -225,7 +227,18 @@ static std::array<uint8_t,12> selectedStartPositions{};
 static bool netRace=false,netWaiting=false;static uint32_t netRemoteMask=0,netLostMask=0;static unsigned netCount=0;
 static std::array<unsigned,12> netRoster{};static std::array<uint8_t,12> netGlobal{};static std::array<uint32_t,12> netAppliedTick{};
 // Time Trials ghost (Race/TimeAttack on the SD card): racer 1 replays it.
-static bool ghostRace=false;static std::vector<uint8_t> ghostRkg;
+static bool ghostRace=false,watchReplay=false;
+// Time Trials: the player's run as a ghost; the best per course and license is
+// saved as ghosts/L<license>/<course>.rkg (ghost_record.hpp).
+// Time Trial ghosts (ThePhilosophicalOne's work, PR #76): the run is
+// recorded as a ghost and saved when it beats the course's best
+// (sdmc:/3ds/mkw-3ds/ghosts/pb-XX.rkg). ttGhost: the one raced or watched.
+static mkw::TimeTrialGhost ttGhost;static mkw::GhostRecorder ghostRun;
+static bool recordGhost=false,ghostFinishLogged=false;static unsigned ghostTick=0;
+static bool ghostDrawable(unsigned character,unsigned vehicle){
+    for(const auto& c:mkw::GarageChoices)if(c.character==character&&c.vehicle==vehicle)return true;
+    return false;
+}
 static uint16_t lanButtons=0;static int8_t lanStick=0;static uint8_t lanTrick=0,lanItemFlags=0;
 static void configure(K::System::RaceConfig* config,void* context) {
     if(replayData){config->setGhost(replayData);config->raceScenario().players[0].type=K::System::RaceConfig::Player::Type::Ghost;return;}
@@ -237,7 +250,9 @@ static void configure(K::System::RaceConfig* config,void* context) {
     if(fullRace){static_cast<mkw::RaceGrid*>(context)->configure(*config,selectedGarageIndex(),netRace?netCount:ghostRace?2:timeTrial?1:12,netRace?&netRoster:selectedRoster.ready?&selectedRoster.choices:nullptr);for(unsigned i=0;i<s.playerCount;++i)s.players[i].startPosition=selectedStartPositions[i];
         // Online: every console builds the same grid in lobby order, host first.
         // Time Trials ghost: Kinoko's ghost controller drives racer 1 from the file.
-        if(ghostRace){s.players[1].type=K::System::RaceConfig::Player::Type::Ghost;config->setGhost(ghostRkg.data(),1);}
+        if(ghostRace){s.players[1].type=K::System::RaceConfig::Player::Type::Ghost;config->setGhost(ttGhost.rkg(),1);}
+        // Watch the Replay: the ghost drives racer 0, alone.
+        if(watchReplay){s.players[0].type=K::System::RaceConfig::Player::Type::Ghost;config->setGhost(ttGhost.rkg(),0);}
         if(netRace)for(unsigned i=0;i<netCount;++i){s.players[i].startPosition=uint8_t(netGlobal[i]+1);if(i)s.players[i].driftIsAuto=mkw::net::session().autoDrift(netGlobal[i]);}s.players[0].driftIsAuto=automaticDrift;return;}
     auto& p=s.players[0];p.type=K::System::RaceConfig::Player::Type::Local;
     const auto& driver=selectedVehicle();
@@ -837,6 +852,14 @@ int main() {
             if(selectionSave||pendingRaceMiiConfirm)input={};
             const bool acceptedInput=!transition.active()&&!selectionSave&&!pendingRaceMiiConfirm;
             auto action=transition.input(menu,input);
+            // The ghost page browses the course's ghosts (TimeTrialGhost::list).
+            if(menu.page==mkw::UiPage::Ghost&&menu.ghostsCourse!=menu.selection.course&&menu.selection.course<32){
+                menu.ghosts.clear();menu.ghostsCourse=menu.selection.course;
+                for(const auto& e:mkw::TimeTrialGhost::list(unsigned(Courses[menu.selection.course].id),menu.selection.course,ghostDrawable)){
+                    mkw::MenuState::Ghost g;g.kind=uint8_t(e.kind);g.ms=mkw::rkgMilliseconds(e.header.finish);std::snprintf(g.name,sizeof g.name,"%s",e.name);menu.ghosts.push_back(g);}
+                if(menu.ghosts.empty())menu.cursor=2;else if(beforeInput.page!=mkw::UiPage::Ghost)menu.cursor=0;
+                menu.selection.ghostIndex%=std::max<unsigned>(1,unsigned(menu.ghosts.size()));
+            }
             if(acceptedInput&&menu.selectRaceMiiRequest>=24){
                 mkw::LicenseIdentity identity;mkw::MiiAppearance appearance;mkw::MiiBodySpec body;
                 const unsigned outfit=unsigned(menu.selectRaceMiiRequest-24);
@@ -1227,21 +1250,22 @@ int main() {
             if(kQa&&qaShadow>=0)mkw::renderQuality().dynamicShadow=qaShadow!=0;
             LOGF("graphics %u (%s)",graphics,mkw::renderQuality().reduced?"reduced":"full");
         }
-        // Time Trials: the staff (1) or expert staff (2) ghost from the disc, if the
-        // build copied them (builds before 0.8.0 did not: race solo then).
-        ghostRace=false;
-        if(timeTrial&&menu.selection.ghost){
-            const unsigned set=std::min(menu.selection.ghost,2u);char path[80];
-            std::snprintf(path,sizeof path,"Race/TimeAttack/ghost%u/ghost%u_comp_%02u.rkg",set,set,courseChoice);
-            ghostRkg.clear();
-            if(FILE* f=std::fopen(path,"rb")){
-                std::fseek(f,0,SEEK_END);const long size=std::ftell(f);std::fseek(f,0,SEEK_SET);
-                if(size>0x88&&size<=0x2800){ghostRkg.resize(size_t(size));if(std::fread(ghostRkg.data(),1,ghostRkg.size(),f)!=ghostRkg.size())ghostRkg.clear();}
-                std::fclose(f);
+        // Time Trials: race or watch the ghost chosen on the ghost page (the
+        // player's best, a friend's or a Wii's in ghosts/, or the disc's staff ghosts).
+        ghostRace=watchReplay=false;ttGhost.clear();
+        if(timeTrial&&menu.selection.ghostChoice<2){
+            const auto list=mkw::TimeTrialGhost::list(unsigned(Courses[courseChoice].id),courseChoice,ghostDrawable);
+            if(!list.empty()){
+                const auto& entry=list[menu.selection.ghostIndex%list.size()];
+                if(ttGhost.loadPath(entry.path,ghostDrawable)){
+                    ghostRace=menu.selection.ghostChoice==0;watchReplay=!ghostRace;
+                    // Watching: racer 0 takes the ghost's driver, vehicle and drift.
+                    if(watchReplay)for(unsigned i=0;i<mkw::GarageChoices.size();++i)
+                        if(mkw::GarageChoices[i].character==ttGhost.header().character&&mkw::GarageChoices[i].vehicle==ttGhost.header().vehicle){
+                            driverChoice=i/mkw::VehiclesPerDriver;vehicleChoice=i%mkw::VehiclesPerDriver;automaticDrift=ttGhost.header().automaticDrift;break;}
+                }
+                LOGF("ghost: %s %s",entry.path,ghostRace?"racing":watchReplay?"watching":"unusable: racing solo");
             }
-            // RKGD header: the course id is the top six bits of byte 7.
-            if(ghostRkg.size()>8&&!std::memcmp(ghostRkg.data(),"RKGD",4)&&unsigned(ghostRkg[7]>>2)==unsigned(Courses[courseChoice].id))ghostRace=true;
-            LOGF("ghost: %s %s",path,ghostRace?"racing":"missing or for another course: racing solo");
         }
         // Online (main menu) or LAN (lan.txt): find the other consoles, agree on
         // the race and swap drivers before loading. docs/ONLINE-TESTING.md.
@@ -1360,6 +1384,9 @@ int main() {
         }fclose(f);
     }
     const bool garageTest=(kQa&&exists("sdmc:/3ds/mkw-3ds/garage-test.txt"));
+    // QA: qa-drive.txt drives player 0 with controls only (no CPU steering),
+    // weaving, drifting and using items, so its ghost must replay exactly.
+    const bool qaDrive=(kQa&&exists("sdmc:/3ds/mkw-3ds/qa-drive.txt"));
     const bool animationTest=(kQa&&exists("sdmc:/3ds/mkw-3ds/animation-test.txt"))||garageTest;
     const unsigned fixtureFrames=garageTest?64:300,fixtureChoices=garageTest?72:12;
     bool animationPass=true;unsigned checkedDrivers=0,checkedClips=0,checkedFrames=0,rollingChoices=0;
@@ -1813,7 +1840,7 @@ int main() {
             for(unsigned i=0;i<raceGrid.count();++i)teams[i]=mkw::RaceTeam(scenario.players[i].team);
             if(!balloonRuntime.reset(raceGrid.count(),teams)){trackLoadFailed=true;report("FAIL original balloon models");}
         }
-        if(timeTrial){raceItems->reset({},raceGrid.count());raceItems->give(0,mkw::ItemKind::TripleMushroom);}
+        if(timeTrial){raceItems->reset({},raceGrid.count());raceItems->give(0,mkw::ItemKind::TripleMushroom);if(ghostRace)raceItems->give(1,mkw::ItemKind::TripleMushroom);}
         if(reload){if(!opponents.load()){trackLoadFailed=true;report("FAIL opponent graphics load");}}
         else opponents.resetAnimation();
         LOGF("race_grid count=%u opponents=%u low_only=%u route=%d item_boxes=%u linear_free=%lu",raceGrid.count(),opponents.count(),opponents.lowOnlyCount(),raceGrid.routeReady(),unsigned(raceItems->boxes().size()),(unsigned long)linearSpaceFree());
@@ -2033,7 +2060,7 @@ int main() {
             // Execute and retire the first complete render, then its reuse
             // frame while still black. Resource allocation alone does not
             // prime pose uploads, shadow captures or their GPU dependencies.
-            raceWarmupFrames=fullRace?2u:0u;netWaiting=netRace;netLostMask=0;netAppliedTick={};
+            raceWarmupFrames=fullRace?2u:0u;netWaiting=netRace;netLostMask=0;netAppliedTick={};ghostRun.reset();recordGhost=timeTrial&&!replay&&!watchReplay;ghostFinishLogged=false;ghostTick=0;
             if(fullRace)K::System::RaceManager::Instance()->setIntroHeld(true);
             raceResident=fullRace;return true;
         };
@@ -2328,6 +2355,10 @@ int main() {
             // QA autoplay owns every input: a stray host controller (Azahar's UDP
             // input server) must not steer the scripted race.
             if(autoplay||raceWarmupFrames)pad={0,0};
+            if(qaDrive&&autoplay&&!intro.active()&&held){
+                const unsigned f=physicsSteps;held=KEY_A|((f/120)%3==1?KEY_R:0)|((f%500)<20?KEY_L:0);
+                pad.dx=int16_t(((f/40)%5)*40-80);
+            }
             unsigned buttons=(held&KEY_A?1:0)|(held&KEY_B?2:0)|(held&KEY_L?4:0)|(held&KEY_R?(held&KEY_A?10:2):0);
             if(fullRace)buttons&=~4u; // Inventory owns L in races; retain stock mushrooms in trace/QA.
             auto trick=K::System::Trick::None;
@@ -2400,6 +2431,12 @@ int main() {
                         const auto& c=raceGrid.ai().itemCommand(i);inputs[i]={c.use,c.backwards,c.forwards};
                     }
                     lanItemFlags=uint8_t((inputs[0].use?1:0)|(inputs[0].backwards?2:0)|(inputs[0].forwards?4:0));
+                    // A Time Trials ghost uses its mushrooms when its recorded item button does.
+                    // Its item button is read one step ahead of its pad (PR #76).
+                    {const bool counting=K::System::RaceManager::Instance()->stage()>=K::System::RaceManager::Stage::Countdown;
+                     const bool item=counting&&ttGhost.item(ghostTick);
+                     if(ghostRace&&raceGrid.count()>1)inputs[1]={item,false,false};
+                     if(watchReplay)inputs[0]={item,false,false};}
                     if(netRace)for(unsigned i=1;i<raceGrid.count();++i)if(raceGrid.remoteMask>>i&1u){
                         mkw::net::Frame peer;inputs[i]=mkw::net::session().frame(netGlobal[i],peer)?mkw::ItemInput{bool(peer.flags&1),bool(peer.flags&2),bool(peer.flags&4)}:mkw::ItemInput{};}
                         if(kQa&&autoplay&&!afterGoal&&raceGrid.driveLocal)for(auto& g:qaGives){
@@ -2469,7 +2506,37 @@ int main() {
                 }
                 // QA: a fall boundary (variant 0) activation, so the retail SetCamera hold applies.
                 if(autoplay&&lakituRespawnStep&&physicsSteps==lakituRespawnStep){auto* qaCollide=K::Kart::KartObjectManager::Instance()->object(0)->collide();qaCollide->setOobCameraPending(uint16_t(lakituRequest));qaCollide->activateOob(false,nullptr,false,false);}
+                // Time Trials ghost: this tick's inputs, from the tick the ghost would read
+                // its first (the countdown), until the finish.
+                // Time Trials: no controls before the countdown, as a ghost has none
+                // then, so a run replays from the same state.
+                if(timeTrial&&fullRace&&K::System::RaceManager::Instance()->stage()<K::System::RaceManager::Stage::Countdown)
+                    K::System::KPadDirector::Instance()->hostController()->setInputsRawStick(0,7,7,K::System::Trick::None);
+                // The item button is the item system's (the player's L, or the autopilot's).
+                if(fullRace&&K::System::RaceManager::Instance()->stage()>=K::System::RaceManager::Stage::Countdown){
+                    if(recordGhost&&!raceGrid.finished()){
+                        const auto& in=K::System::KPadDirector::Instance()->hostController()->raceInputState();
+                        // The stick as Kinoko uses it (the autopilot sets it without the raw value).
+                        auto raw=[](float v){return uint8_t(std::clamp(int(std::lround(v*7.f))+7,0,14));};
+                        ghostRun.push({uint8_t((in.buttons&~4u)|(lanItemFlags&1?4u:0u)),raw(in.stick.x),raw(in.stick.y),uint8_t(in.trick)});
+                    }
+                    // QA: keep the controls-only run's first 2400 ticks as the course's ghost.
+                    if(kQa&&qaDrive&&recordGhost&&!ghostRace&&ghostTick==2400){
+                        mkw::GhostInfo info;info.course=uint8_t(Courses[courseChoice].id);info.character=uint8_t(selectedVehicle().character);
+                        info.vehicle=uint8_t(selectedVehicle().vehicle);info.automaticDrift=automaticDrift;info.finish={9,59,999};
+                        LOGF("QA ghost kept: %d",int(mkw::TimeTrialGhost::save(ghostRun,info)));
+                    }
+                    if(kQa&&((ghostTick%5==0||(ghostTick>=500&&ghostTick<1000))&&ghostTick<2400||ghostTick%300==0)){const unsigned k=ghostRace?1u:0u;auto* o=K::Kart::KartObjectManager::Instance()->object(k);const auto p=o->pos();
+                        const auto& in=K::System::KPadDirector::Instance()->playerInput(k).currentState();
+                        LOGF("GTRACE gt=%u k=%u pos=%.3f,%.3f,%.3f v=%.3f b=%u s=%.3f",ghostTick,k,p.x,p.y,p.z,o->move()->speed(),unsigned(in.buttons),in.stick.x);}
+                    ++ghostTick;
+                }
                 scenes.calc();
+                // The ghost's finish against the time in its file: a replay that drifts shows here.
+                // QA: a ghost in sync finishes on its file's time.
+                if(kQa&&(ghostRace||watchReplay)&&!ghostFinishLogged&&K::System::RaceManager::Instance()->player(watchReplay?0:1).finished()){ghostFinishLogged=true;
+                    const auto& t=K::System::RaceManager::Instance()->player(watchReplay?0:1).raceTimer();
+                    LOGF("ghost finish: raced %u ms, file %u ms",unsigned(t.min*60000u+t.sec*1000u+t.mil),unsigned(mkw::rkgMilliseconds(ttGhost.header().finish)));}
                 if(netRace){
                     // Online: send this tick's kart, then pull the other karts onto the newest states they sent.
                     auto& net=mkw::net::session();auto* objects=K::Kart::KartObjectManager::Instance();
@@ -2586,6 +2653,19 @@ int main() {
                         if(timeTrial&&courseChoice<bestTimes.size()){
                             const auto& t=race->player(0).raceTimer();const uint32_t ms=uint32_t(t.min)*60000u+uint32_t(t.sec)*1000u+uint32_t(t.mil);
                             if(ms&&(!bestTimes[courseChoice]||ms<bestTimes[courseChoice])){bestTimes[courseChoice]=ms;licenseSaves[activeLicense].times=bestTimes;menu.licenseBestTimes[activeLicense]=bestTimes;raceSavePending=true;}
+                            // The run becomes the course's ghost when it beats the saved one.
+                            const unsigned course=unsigned(Courses[courseChoice].id);const uint32_t saved=mkw::TimeTrialGhost::savedTime(course);
+                            if(recordGhost&&ms&&!ghostRun.full()&&(!saved||ms<saved)){
+                                mkw::GhostInfo info;info.finish={uint16_t(t.min),uint8_t(t.sec),uint16_t(t.mil)};
+                                for(unsigned l=0;l<info.laps.size();++l){const auto split=race->player(0).getLapSplit(l+1);info.laps[l]={uint16_t(split.min),uint8_t(split.sec),uint16_t(split.mil)};}
+                                info.course=uint8_t(course);info.character=uint8_t(selectedVehicle().character);info.vehicle=uint8_t(selectedVehicle().vehicle);
+                                info.automaticDrift=automaticDrift;
+                                for(unsigned c=0;c<info.name.size();++c)info.name[c]=char16_t(licenseSaves[activeLicense].name[c]);
+                                const std::time_t now=std::time(nullptr);
+                                if(const std::tm* d=std::gmtime(&now);d&&d->tm_year>=100&&d->tm_year<200){info.year=uint8_t(d->tm_year-100);info.month=uint8_t(d->tm_mon+1);info.day=uint8_t(d->tm_mday);}
+                                const bool ok=mkw::TimeTrialGhost::save(ghostRun,info);menu.ghostsCourse=~0u;
+                                LOGF("ghost saved=%d time=%u frames=%u",int(ok),ms,ghostRun.frames());
+                            }
                         }
                     }
                     {
@@ -3361,6 +3441,7 @@ int main() {
             for(auto& model:track)drawCourseLayer(renderer,*model,transform,int(Courses[courseChoice].id),true);
             courseObjects.drawWater(renderer);
             renderer.setCourseLighting(false);
+            if(fullRace)opponents.drawGhosts(renderer);
             // Resolve local projected shadows after all scene layers. Keep scene
             // depth intact so opaque actors and entered snow still occlude them.
             const bool mergeJudgeShadow=playerDynamicShadow&&fullRace&&lakitu.shadowVisible();

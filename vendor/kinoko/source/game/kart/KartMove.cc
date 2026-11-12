@@ -324,7 +324,11 @@ void KartMove::calcSlipstream() {
     auto &status = KartObjectProxy::status();
     const auto *objects = KartObjectManager::Instance();
     const size_t count = objects ? objects->count() : 0;
-    if (count < 2) {
+    // Time Trials have nobody to draft: ghosts neither give nor take a
+    // slipstream, so a run replays as it was recorded alone (from
+    // ThePhilosophicalOne's retail-accuracy work, PR #76).
+    if (count < 2 || System::RaceConfig::Instance()->raceScenario().gameMode ==
+            System::RaceConfig::Scenario::GameMode::Time_Trial) {
         return;
     }
     const u8 self = param()->playerIdx();
@@ -396,6 +400,7 @@ void KartMove::calc() {
     }
 
     dynamics()->resetInternalVelocity();
+    calcGhostGoal();
     m_burnout.calc();
     calcSsmtStart();
     m_halfPipe->calc();
@@ -461,6 +466,22 @@ void KartMove::loseAllBalloons() {
     if (status().onBit(static_cast<eStatus>(131))) return;
     m_battleRecovery.empty();
     status().setBit(eStatus::BattleDamageProtection, eStatus::BattleEmpty, eStatus::BattleRefillWait);
+}
+
+/// @addr{0x80578968}
+/// @brief A ghost after its goal loses a tenth of its speed each frame (from
+/// ThePhilosophicalOne's retail-accuracy work, PR #76); the game fades it out.
+void KartMove::calcGhostGoal() {
+    const u8 idx = param()->playerIdx();
+    if (System::RaceConfig::Instance()->raceScenario().players[idx].type !=
+                    System::RaceConfig::Player::Type::Ghost ||
+            !System::RaceManager::Instance()->player(idx).finished()) {
+        return;
+    }
+    m_speed *= 0.9f;
+    if (m_ghostGoalFrames < 0x7fff) {
+        ++m_ghostGoalFrames;
+    }
 }
 
 void KartMove::calcBattleRecovery() {

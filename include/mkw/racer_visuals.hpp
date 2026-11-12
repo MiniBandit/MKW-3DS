@@ -23,8 +23,12 @@ public:
     // Original vehicle shadow volumes resolve on the world before racers draw.
     void draw(Renderer& renderer,const RaceItems& items,Vec3 viewer,unsigned tick,
               const Model* playerShadow=nullptr,const C3D_Mtx* playerTransform=nullptr);
+    // Time Trial ghosts, see-through and without shadows: after the player and
+    // the water, before the effects. draw() leaves them out.
+    void drawGhosts(Renderer& renderer);
     unsigned count() const;
 private:
+    void drawRacer(Renderer& renderer,unsigned i);
     struct Impl;
     std::unique_ptr<Impl> impl_;
 };

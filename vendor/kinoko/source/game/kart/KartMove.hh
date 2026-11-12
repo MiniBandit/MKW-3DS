@@ -164,6 +164,11 @@ public:
     void calcMushroomBoost();
     void calcZipperBoost();
     void calcSlipstream();
+    void calcGhostGoal();
+    /// Frames since this ghost's goal (0 before it or for other racers).
+    [[nodiscard]] s16 ghostGoalFrames() const {
+        return m_ghostGoalFrames;
+    }
     void landTrick();
     void activateCrush(u16 timer);
     void calcCrushed();
@@ -587,6 +592,7 @@ protected:
     static BattleRefillHook s_battleRefillHook;
     static void *s_battleRefillContext;
     s16 m_starTimer = 0;       ///< Retail +0x18a.
+    s16 m_ghostGoalFrames = 0; ///< Retail +0x290: frames since a ghost's goal.
     s16 m_megaTimer = 0;       ///< Retail +0x194.
     s16 m_powDodgeTimer = 0;   ///< Retail +0x152: frames a trick still dodges a POW hit.
     bool m_bulletRouteFlight = false;

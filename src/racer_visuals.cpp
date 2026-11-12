@@ -33,6 +33,7 @@ struct RacerVisuals::Impl {
         std::unique_ptr<LumaVisual> luma;
         std::unique_ptr<Model> driverLod,bodyLod,bodyLodRear,handleLod,handleLodRear;RacerLod lod;
         bool lowOnly=false; // no full models or animation banks: always a low-detail stage
+        bool ghost=false;   // a Time Trial ghost: see-through, no shadow, drawn by drawGhosts
         DriverController controller;
         DriverPose pose;
         VehicleAnimation vehicle;
@@ -71,6 +72,7 @@ bool RacerVisuals::load(){
     reset();const auto& config=K::System::RaceConfig::Instance()->raceScenario();
     for(unsigned i=1;i<config.playerCount&&i<=11;++i){
         auto r=std::make_unique<Impl::Racer>();const auto& player=config.players[i];
+        r->ghost=player.type==K::System::RaceConfig::Player::Type::Ghost;
         std::string failure;
         // Old 3DS: an animated racer costs about 1.9 MiB (its bank, meshes and
         // textures), eleven do not fit. Keep room for the race sound loaded next;
@@ -279,14 +281,45 @@ void RacerVisuals::draw(Renderer& renderer,const RaceItems& items,Vec3 viewer,un
     for(unsigned i=0;i<11;++i)if(auto* r=d.racers[i].get()){
         if(d.queued[i])jobWorker().finish(d.jobs[i]);else d.prepareRacer(i);
         const auto& out=d.prepared[i];
-        if(out.draw&&r->shadow&&d.frame.view.visible(*r->shadow,out.body))shadows[shadowCount++]={r->shadow.get(),out.body};
+        if(out.draw&&!r->ghost&&r->shadow&&d.frame.view.visible(*r->shadow,out.body))shadows[shadowCount++]={r->shadow.get(),out.body};
     }
     // Submit all racers in one stencil batch: overlaps darken once. Resolve
     // before the racer models, so their own volumes cannot shade the casters.
     renderer.drawShadowVolumes(shadows.data(),shadowCount,.5f);
     for(unsigned i=0;i<11;++i)if(auto* r=d.racers[i].get()){
+        if(r->ghost)continue;
+        drawRacer(renderer,i);
+    }
+    d.frame.open=false;
+}
+// Retail Time Trial ghosts are half see-through (PR #76: the TT draw path blends
+// them at 0x80/255). A ghost fades out from 70 frames after its goal.
+void RacerVisuals::drawGhosts(Renderer& renderer){
+    auto& d=*impl_;
+    for(unsigned i=0;i<11;++i)if(auto* r=d.racers[i].get()){
+        if(!r->ghost||!d.prepared[i].draw)continue;
+        float alpha=.5f;
+        if(auto* kart=K::Kart::KartObjectManager::Instance()->object(i+1)){
+            const int after=int(kart->move()->ghostGoalFrames())-70;
+            if(after>0)alpha*=std::max(0.f,1.f-float(after)/20.f);
+        }
+        if(alpha<=0.f)continue;
+        // First its depth alone, so it hides its own far side; then its colour.
+        renderer.modelAlpha=0;drawRacer(renderer,i);
+        renderer.modelAlpha=alpha;drawRacer(renderer,i);
+        renderer.modelAlpha=1;
+    }
+}
+void RacerVisuals::drawRacer(Renderer& renderer,unsigned i){
+    auto& d=*impl_;auto* r=d.racers[i].get();
+    auto drawSkinned=[&](const DriverAnimation* bank,const Model& model,const C3D_Mtx& matrix){
+        if(bank&&bank->gpuSkinned())renderer.setSkinPalette(bank->palette(),bank->matrixCount(),21);
+        renderer.draw(model,matrix);
+        renderer.setSkinPalette(nullptr,0,12);
+    };
+    {
         const auto& out=d.prepared[i];
-        if(!out.draw)continue;
+        if(!out.draw||!r)return;
         renderer.additiveColor=out.additive;
         if(out.bodyVisible){if(out.lod==1)drawSkinned(r->bodyAnimation.get(),*r->body,out.body);else renderer.draw(*(out.lod>=3?r->bodyLodRear:r->bodyLod),out.body);}
         if(out.lowHandleVisible)renderer.draw(*(out.lod>=3?r->handleLodRear:r->handleLod),out.lowHandle);
@@ -296,6 +329,5 @@ void RacerVisuals::draw(Renderer& renderer,const RaceItems& items,Vec3 viewer,un
         for(unsigned e=0;e<out.extras;++e){const auto& x=out.extra[e];if(x.visible)drawSkinned(r->extraAnimation[x.part].get(),*r->extras[x.part],x.matrix);}
         renderer.additiveColor=0;
     }
-    d.frame.open=false;
 }
 }

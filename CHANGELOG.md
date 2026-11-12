@@ -8,7 +8,7 @@ Needs a new build: the builder now copies the staff ghosts from your disc, and t
 - **Same Wi-Fi play** without codes (lan.txt, for testing).
 - **Official builds only:** consoles only race consoles with the same official build.
 - **Licence:** the new online code is under the MKW 3DS Online Licence (see NOTICE); the rest stays as it was.
-- **Time Trials:** race the staff ghost or the expert staff ghost for each course. Ghosts start with you and pass through you, as on the Wii.
+- **Time Trial ghosts** (ThePhilosophicalOne's retail-accuracy work, brought across from their pull request): your best run on each course is saved as a ghost (`sd:/3ds/mkw-3ds/ghosts`). Choose **Race This Ghost** or **Watch the Replay**, and browse with left/right between your ghost, ghosts you copy into that folder (a friend's, or a Wii or Dolphin save's) and the staff and expert staff ghosts. Ghosts are see-through, start with you, never draft or collide, and slow down and fade out after their finish. A run replays exactly as it was driven.
 - Old 3DS: an opponent that runs out of memory loading in full detail is retried in low detail instead of failing the race.
 
 # 0.7.0: Redux merge

@@ -32,8 +32,9 @@ struct UiSelection {
  unsigned battleCpu=1,battleVehicles=2,battleCourses=0,battleItems=0,battleWins=2;
  RaceTeam humanTeam=RaceTeam::Red;
  unsigned license=0,battleStage=0;bool teams=false,coinRunners=false;
- // Time Trials: 0 solo, 1 the staff ghost, 2 the expert staff ghost (from the disc).
- unsigned ghost=0;
+ // Time Trials ghost page: 0 Race This Ghost, 1 Watch the Replay, 2 Solo;
+ // ghostIndex: which of the course's ghosts (MenuState::ghosts).
+ unsigned ghostChoice=2,ghostIndex=0;
  // Main menu Online: a VS race against another console through the online server.
  bool online=false;
  // The retail unlocked engine-class page switches both 50cc/100cc entries
@@ -75,6 +76,11 @@ public:
  int previewCourse=-1;
  LicenseRecords licenseRecords{};
  std::array<CourseBestTimes,4> licenseBestTimes{};
+ // The Time Trials ghosts for ghostsCourse, filled in by the race runtime
+ // (TimeTrialGhost::list): kind 0 the player's best, 1 another ghost
+ // (a friend's, a Wii's), 2 the staff ghost, 3 the expert staff ghost.
+ struct Ghost {uint8_t kind=0;uint32_t ms=0;char name[24]{};};
+ std::vector<Ghost> ghosts;unsigned ghostsCourse=~0u;
  unsigned unlockCondition=~0u,unlockBit=~0u;
  bool unlockNextRequested=false;
  unsigned titleLicense=~0u; // transient card shown when returning from license browsing

@@ -446,6 +446,11 @@ public:
     // Zero outside Star racer draws; no model/texture mutation is involved.
     static constexpr uint32_t InkBlack=255u; // low byte: ink coverage, original alpha preserved
     uint32_t additiveColor=0;
+    // Whole-model opacity (Time Trial ghosts, from ThePhilosophicalOne's PR #76):
+    // below 1 the model blends at this constant alpha over what is drawn,
+    // writing no depth or framebuffer alpha; 0 writes only the depth its opaque
+    // materials would (the ghost's first pass). Model draws only.
+    float modelAlpha=1;
 private:
     // Recording (src/render_thread.cpp).
     struct FrameList;
@@ -579,7 +584,7 @@ private:
     Vertex* reserveOverlay(int count);
     unsigned recordSceneRegion_=3,execSceneRegion_=3;
     Stats stats_{};
-    uint32_t execFrame_=0,execAdditive_=0;
+    uint32_t execFrame_=0,execAdditive_=0;float execAlpha_=1;
     C3D_RenderTarget* target_=nullptr;
     // Right eye (VRAM, New 3DS with a 3D screen only; linked to GFX_RIGHT).
     C3D_RenderTarget* targetRight_=nullptr;

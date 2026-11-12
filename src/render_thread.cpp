@@ -75,7 +75,7 @@ struct DrawCommand {
     static constexpr uint16_t Type=CmdDraw;
     const Model* model;const Vertex* vertices;C3D_Mtx transform;
     Renderer::MaterialBinder material;void* context;Renderer::ShapeVisible visible;
-    uint32_t frame,additive;bool backdrop;
+    uint32_t frame,additive;float alpha;bool backdrop;
 };
 struct DrawAtScreenCommand {
     static constexpr uint16_t Type=CmdDrawAtScreen;
@@ -314,27 +314,27 @@ void Renderer::execute(FrameList& list){
         case CmdBottom:bottom=true;if(!execDualScreenIntro_&&eye+1==eyes)beginBottom();break;
         case CmdDraw:{
             const auto& c=*static_cast<const DrawCommand*>(body);
-            execFrame_=c.frame;execAdditive_=c.additive;
+            execFrame_=c.frame;execAdditive_=c.additive;execAlpha_=c.alpha;
             drawNow(*c.model,c.vertices,c.transform,c.backdrop,c.material,c.context,c.visible);break;
         }
         case CmdDrawAtScreen:{
             const auto& c=*static_cast<const DrawAtScreenCommand*>(body);
-            execFrame_=c.frame;execAdditive_=c.additive;
+            execFrame_=c.frame;execAdditive_=c.additive;execAlpha_=1;
             drawAtScreenNow(*c.model,c.vertices,c.transform,c.x,c.y,c.brightness,c.scaleX,c.scaleY,c.material,c.context);break;
         }
         case CmdMenuIcon:{
             const auto& c=*static_cast<const MenuIconCommand*>(body);
-            execFrame_=c.frame;execAdditive_=c.additive;
+            execFrame_=c.frame;execAdditive_=c.additive;execAlpha_=1;
             drawMenuIconNow(*c.model,c.vertices,c.transform,*c.quad);break;
         }
         case CmdMenuModelLayer:{
             const auto& c=*static_cast<const MenuModelLayerCommand*>(body);
-            execFrame_=c.frame;execAdditive_=c.additive;
+            execFrame_=c.frame;execAdditive_=c.additive;execAlpha_=1;
             drawMenuModelLayerNow(*c.model,c.vertices,c.transform);break;
         }
         case CmdCoinHudModel:{
             const auto& c=*static_cast<const CoinHudModelCommand*>(body);
-            execFrame_=c.frame;execAdditive_=c.additive;
+            execFrame_=c.frame;execAdditive_=c.additive;execAlpha_=1;
             drawCoinHudModelNow(*c.model,c.vertices,c.transform,c.firstColumn);break;
         }
         case CmdShadowUnion:{shadowUnionNow(static_cast<const ShadowUnionCommand*>(body)->active);break;}
@@ -565,7 +565,7 @@ void Renderer::applyBloom(){
 }
 void Renderer::drawWith(const Model& model,const C3D_Mtx& transform,bool backdrop,MaterialBinder material,const void* context,std::size_t contextSize,ShapeVisible visible){
     if(!recording()){
-        if(!renderThread){execFrame_=animationFrame;execAdditive_=additiveColor;}
+        if(!renderThread){execFrame_=animationFrame;execAdditive_=additiveColor;execAlpha_=modelAlpha;}
         drawNow(model,model.vertices,transform,backdrop,material,const_cast<void*>(context),visible);
         return;
     }
@@ -573,14 +573,14 @@ void Renderer::drawWith(const Model& model,const C3D_Mtx& transform,bool backdro
     if(context&&contextSize){copied=data(contextSize);std::memcpy(copied,context,contextSize);}
     auto& c=command<DrawCommand>();
     c.model=&model;c.vertices=model.vertices;c.transform=transform;c.material=material;c.context=copied;c.visible=visible;
-    c.frame=animationFrame;c.additive=additiveColor;c.backdrop=backdrop;
+    c.frame=animationFrame;c.additive=additiveColor;c.alpha=modelAlpha;c.backdrop=backdrop;
 }
 void Renderer::drawAtScreen(const Model& model,const C3D_Mtx& transform,float x,float y,float brightness,float scaleX,float scaleY){
     drawAtScreenWith(model,transform,x,y,brightness,scaleX,scaleY,nullptr,nullptr,0);
 }
 void Renderer::drawAtScreenWith(const Model& model,const C3D_Mtx& transform,float x,float y,float brightness,float scaleX,float scaleY,MaterialBinder material,const void* context,std::size_t contextSize){
     if(!recording()){
-        if(!renderThread){execFrame_=animationFrame;execAdditive_=additiveColor;}
+        if(!renderThread){execFrame_=animationFrame;execAdditive_=additiveColor;execAlpha_=1;}
         drawAtScreenNow(model,model.vertices,transform,x,y,brightness,scaleX,scaleY,material,const_cast<void*>(context));
         return;
     }
@@ -592,7 +592,7 @@ void Renderer::drawAtScreenWith(const Model& model,const C3D_Mtx& transform,floa
 }
 void Renderer::drawMenuIcon(const Model& model,const C3D_Mtx& transform,const UiQuad& quad){
     if(!recording()){
-        if(!renderThread){execFrame_=animationFrame;execAdditive_=additiveColor;}
+        if(!renderThread){execFrame_=animationFrame;execAdditive_=additiveColor;execAlpha_=1;}
         drawMenuIconNow(model,model.vertices,transform,quad);
         return;
     }
@@ -602,7 +602,7 @@ void Renderer::drawMenuIcon(const Model& model,const C3D_Mtx& transform,const Ui
 }
 void Renderer::drawMenuModelLayer(const Model& model,const C3D_Mtx& transform){
     if(!recording()){
-        if(!renderThread){execFrame_=animationFrame;execAdditive_=additiveColor;}
+        if(!renderThread){execFrame_=animationFrame;execAdditive_=additiveColor;execAlpha_=1;}
         drawMenuModelLayerNow(model,model.vertices,transform);return;
     }
     auto& c=command<MenuModelLayerCommand>();
@@ -610,7 +610,7 @@ void Renderer::drawMenuModelLayer(const Model& model,const C3D_Mtx& transform){
 }
 void Renderer::drawCoinHudModel(const Model& model,const C3D_Mtx& transform,bool firstColumn){
     if(!recording()){
-        if(!renderThread){execFrame_=animationFrame;execAdditive_=additiveColor;}
+        if(!renderThread){execFrame_=animationFrame;execAdditive_=additiveColor;execAlpha_=1;}
         drawCoinHudModelNow(model,model.vertices,transform,firstColumn);return;
     }
     auto& c=command<CoinHudModelCommand>();

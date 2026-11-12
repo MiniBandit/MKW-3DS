@@ -1669,6 +1669,17 @@ void Renderer::drawNow(const Model& model,const Vertex* vertices,const C3D_Mtx& 
         const bool depthTest=!backdrop&&(!sourceState||(s.flags&(1u<<23)));
         const bool depthWrite=!backdrop&&(sourceState?bool(s.flags&(1u<<24)):!blended);
         C3D_DepthTest(depthTest,GPU_GEQUAL,depthWrite?GPU_WRITE_ALL:GPU_WRITE_COLOR);
+        if(execAlpha_<=0.f){
+            // A Time Trial ghost's first pass: only the depth its opaque materials
+            // write (retail's ghost depth capture), no colour (PR #76).
+            C3D_DepthTest(depthTest,GPU_GEQUAL,depthWrite?GPU_WRITE_DEPTH:GPU_WRITEMASK(0));
+        }else if(execAlpha_<1.f){
+            // A Time Trial ghost: one constant opacity for the whole model, over
+            // the depth its first pass left. Framebuffer alpha (bloom) is kept.
+            C3D_BlendingColor(uint32_t(std::lround(std::clamp(execAlpha_,0.f,1.f)*255.f))<<24);
+            C3D_AlphaBlend(GPU_BLEND_ADD,GPU_BLEND_ADD,GPU_CONSTANT_ALPHA,GPU_ONE_MINUS_CONSTANT_ALPHA,GPU_ZERO,GPU_ONE);
+            C3D_DepthTest(depthTest,GPU_GEQUAL,GPU_WRITE_COLOR);
+        }
         // Retain authored layer order without reverting distant geometry to
         // nonlinear depth. The same mapping is used by actors and shadows.
         if(menuDepthBase_>=0)C3D_DepthMap(true,-menuDepthSpan_,menuDepthBase_);

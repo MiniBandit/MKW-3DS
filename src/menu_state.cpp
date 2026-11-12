@@ -230,7 +230,7 @@ void MenuState::enter(UiPage next){
  case UiPage::Course:cursor=selection.course%4;break;
  case UiPage::BattleCup:cursor=selection.battleStage/5;break;
  case UiPage::BattleStage:cursor=selection.battleStage%5;break;
- case UiPage::Ghost:cursor=std::min(selection.ghost,2u);break;
+ case UiPage::Ghost:selection.ghostIndex=0;cursor=ghosts.empty()?2:std::min(selection.ghostChoice,2u);break;
  case UiPage::EraseLicense:case UiPage::QuitConfirm:cursor=1;break;
  default:break;
  }
@@ -282,6 +282,11 @@ UiAction MenuState::input(UiInput key){
   selection.mixedEngineTypes=!selection.mixedEngineTypes;
   focusAge=0;unavailable=false;
   return UiAction::None;
+ }
+ // Left/right browse the course's ghosts.
+ if(page==UiPage::Ghost&&(key.left||key.right)){
+  if(ghosts.size()>1)selection.ghostIndex=unsigned(selection.ghostIndex+(key.left?ghosts.size()-1:1))%unsigned(ghosts.size());
+  focusAge=0;return UiAction::None;
  }
  if(page==UiPage::LicenseSettings&&cursor>=2&&cursor<6&&(key.left||key.right)){
   if(cursor==2)selection.ledMode=(selection.ledMode+(key.left?3:1))%4;
@@ -411,7 +416,10 @@ UiAction MenuState::input(UiInput key){
   if(selection.course/4!=cursor||selection.mode==UiMode::GrandPrix)selection.course=cursor*4;
   enter(selection.mode==UiMode::GrandPrix?UiPage::Confirm:UiPage::Course);break;
  case UiPage::Course:selection.course=selection.course/4*4+cursor;enter(selection.mode==UiMode::TimeTrials?UiPage::Ghost:UiPage::Confirm);break;
- case UiPage::Ghost:selection.ghost=cursor;enter(UiPage::Confirm);break;
+ // Racing or watching a ghost needs one for the course.
+ case UiPage::Ghost:
+  if(cursor<2&&ghosts.empty()){unavailable=true;break;}
+  selection.ghostChoice=cursor;enter(UiPage::Confirm);break;
  case UiPage::BattleCup:
   if(selection.battleStage/5!=cursor)selection.battleStage=cursor*5;
   enter(UiPage::BattleStage);break;

@@ -2,6 +2,6 @@ New in 0.8.0:
 Online: race up to 12 players.
   Host, or join with the host's
   code. No server needed.
-Time Trials: race the staff ghost
-  or the expert staff ghost.
+Time Trials: your best run is
+  saved as a ghost to race or watch.
 Old 3DS: fewer races fail to load.
