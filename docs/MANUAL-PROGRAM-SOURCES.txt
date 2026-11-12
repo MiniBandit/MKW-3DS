@@ -215,6 +215,7 @@ src/item_native.cpp
 src/item_world.cpp
 src/job_worker.cpp
 src/lakitu.cpp
+src/lens_flare.cpp
 src/license_identity.cpp
 src/license_mii_store.cpp
 src/license_records.cpp

@@ -410,6 +410,12 @@ if (blooper/'receipt.json').is_file():
   tex=b[24+ns*stride+i*64:24+ns*stride+(i+1)*64].split(b'\0')[0].decode()
   overlay['textures/'+tex+'.t3x']=blooper/'textures'/(tex+'.t3x')
 else:raise ValueError('Run tools/cook_blooper.py before packaging')
+# Retail lens flare textures (cook_lens_flare.py; src/lens_flare.cpp loads all four).
+lens=ROOT/'build/lens-flare'
+if not (lens/'receipt.json').is_file():raise ValueError('Run tools/cook_lens_flare.py before packaging')
+lens_info=json.loads((lens/'receipt.json').read_text())
+if digest_file(ROOT/lens_info['source'])!=lens_info['source_sha256']:raise ValueError('Lens flare source changed')
+for t in lens_info['textures']:overlay[f"textures/lensflare_{t['index']:02d}.t3x"]=lens/'textures'/f"lensflare_{t['index']:02d}.t3x"
 # Race-flow UI (tools/cook_race_flow.py): out-of-bounds wipe, result board and
 # end-of-race menu textures, cooked into this tree's own overlay directory.
 flow=ROOT/'build/race-flow/textures'

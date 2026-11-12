@@ -70,7 +70,20 @@ Create an empty file in `sd:/3ds/mkw-3ds/` to turn one change off:
 Road always draws its sky first), `no-load-cache.txt`, `no-plain-uv.txt`,
 `no-fast-vertex.txt` (model draws without environment maps, projected
 textures, light textures or shadow passes go back to the vertex shader's
-general path; the `fast_vertex` column), `no-vram-priority.txt` (course and
+general path; the `fast_vertex` column), `no-sparkle-pair.txt` (Item Box / Fake Item Box
+outer passes one per sparkle group again instead of the shell with group 0, then groups
+1 and 2 together), `no-rigid-skin.txt` (lit skinned draws whose bones are all rotations
+times a uniform scale take the cofactor normal path again; runtime.log `lit skin draws`
+counts both), `no-bloom-triple.txt` (bloom blur rings back to two taps a quad instead of
+three), `no-shared-normal.txt` (lit EnvCamera draws transform and
+normalize the light's normal again instead of reusing the EnvCamera branch's),
+`no-hook-prep.txt` (CPU driver poses, object CPU skinning and fire
+phase copies run on the frame hook again instead of at frame start; runtime.log
+"hook prepare off"), `no-box-precull.txt` (Item Box / Fake Item Box shells are drawn whole
+again instead of without the triangles their cull mode removes; runtime.log
+`box precull` counts the triangles kept), `no-fast-yaz0.txt` (course archives decode
+with retail's Yaz0 loop again instead of the faster one with the same bytes; runtime.log
+`kinoko scene profile` has the decode time), `no-vram-priority.txt` (course and
 sky textures take VRAM in file order instead of sky first, then by covered
 surface per byte; the `vram_priority` column). Each race's `perf-races.csv` row
 records which were on. `no-sector-reads.txt` reads pack entries exactly as
@@ -166,7 +179,22 @@ the second's smallest gap: what a frame that was ready in time still waits.
 `no-unit1-vram.txt` keeps 4-bit textures that texture unit 1 samples (the
 baked shadow maps) in LINEAR; without it their ETC1 goes to VRAM as ETC1A4.
 `runtime.log` reports after each race load what stays in LINEAR (`course
-textures left in LINEAR track+sky=… unit1=… objects=…`, count/KB).
+textures left in LINEAR track+sky=… unit1=… objects=…`, count/KB; a texture
+several object models share counts once), then one `linear object texture
+model=…` line per object texture still in LINEAR.
+`no-bloom-release.txt` keeps the bloom targets a stadium-screen course (DK
+Summit, GCN Waluigi Stadium, Funky Stadium) or a Bloom: On race created
+(~1.1 MB of VRAM) through later races with Bloom: Off and no stadium screen;
+by default they are freed before the course textures move to VRAM.
+`no-texture-share.txt` loads every course object model's textures as cooked;
+by default a texture identical to one an earlier object model of the course
+loaded (size, format, sampler state, every byte) uses that copy (Daisy
+Circuit's MiiObjD signs, Coconut Mall's cara1-3; `runtime.log`: `course
+objects share textures copies=… bytes=…`).
+`texture-use.txt` writes `perf-race-NNN-textures.csv` after each race: every
+course, sky and object texture (each once, under its first model), whether it is in VRAM or LINEAR, its size, format and bytes, and the model draws per
+frame that bound it on any unit; with `model-pixels.txt` also the screen
+pixels those draws covered. Slow; for Azahar runs.
 `stereo-slider.txt` (a number from 0 to 1) pins the 3D slider for comparable
 runs.
 `lod-bias.txt` (a number from -2 to 0, default 0) is added to the LOD of every

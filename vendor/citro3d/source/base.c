@@ -357,6 +357,8 @@ void C3Di_UpdateContext(void)
 		ctx->fixedAttribDirty = 0;
 	}
 
+	if (C3D_UniformHook)
+		C3D_UniformHook(ctx->program);
 	C3D_UpdateUniforms(GPU_VERTEX_SHADER);
 	C3D_UpdateUniforms(GPU_GEOMETRY_SHADER);
 }

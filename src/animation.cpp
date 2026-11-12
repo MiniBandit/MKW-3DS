@@ -494,16 +494,43 @@ bool DriverAnimation::apply(Model& model,int clip,float frame,unsigned tick,int 
     }
     if(auto* deferred=deferredWrites()){
         // Bank data is immutable; the CPU path's pose is copied.
-        struct Write {DriverAnimation* bank;Model* model;const uint32_t* shown;const int32_t* textures;const float* uv;float* palette;};
+        // CPU path: the skinning arithmetic runs when the render thread starts
+        // the frame (prepare), the hook only stores its results.
+        struct Write {DriverAnimation* bank;Model* model;const uint32_t* shown;const int32_t* textures;const float* uv;float* palette;Vec3* skinned;};
         const std::size_t paletteBytes=gpu_?0:std::size_t(matrices_)*84;
-        auto* w=static_cast<Write*>(deferred->allocate(sizeof(Write)+paletteBytes));
-        *w={this,&model,shown,textures,uv,gpu_?nullptr:reinterpret_cast<float*>(w+1)};
+        const std::size_t skinnedBytes=!gpu_&&deferred->preparing()?std::size_t(skinnedCount(model))*sizeof(Vec3):0;
+        auto* w=static_cast<Write*>(deferred->allocate(sizeof(Write)+paletteBytes+skinnedBytes));
+        *w={this,&model,shown,textures,uv,gpu_?nullptr:reinterpret_cast<float*>(w+1),
+            skinnedBytes?reinterpret_cast<Vec3*>(reinterpret_cast<uint8_t*>(w+1)+paletteBytes):nullptr};
         if(paletteBytes)std::memcpy(w->palette,palette_.data(),paletteBytes);
-        deferred->queue([](void* p){auto& w=*static_cast<Write*>(p);w.bank->write(*w.model,w.shown,w.textures,w.uv,w.palette);},w);
+        if(skinnedBytes)deferred->prepare([](void* p){auto& w=*static_cast<Write*>(p);w.bank->skinCpu(*w.model,w.palette,w.skinned);},w,"driver pose cpu");
+        deferred->queue([](void* p){auto& w=*static_cast<Write*>(p);w.bank->write(*w.model,w.shown,w.textures,w.uv,w.palette,w.skinned);},w,gpu_?"driver pose gpu":"driver pose cpu");
     }else write(model,shown,textures,uv,palette_.data());
     return true;
 }
-void DriverAnimation::write(Model& model,const uint32_t* shown,const int32_t* textures,const float* uv,const float* palette){
+unsigned DriverAnimation::skinnedCount(const Model& model) const {
+    if(!skinNormals_&&shared_.ready())return unsigned(shared_.first.size());
+    return skinNormals_&&!model.staticLightingBaked?vertices_*2:vertices_;
+}
+void DriverAnimation::skinCpu(const Model& model,const float* palette,Vec3* out) const {
+    if(!skinNormals_&&shared_.ready()){
+        for(unsigned u=0;u<shared_.first.size();++u){
+            const auto& v=source_[shared_.first[u]];auto m=palette+v.matrix*21;
+            out[u]={m[0]*v.p[0]+m[1]*v.p[1]+m[2]*v.p[2]+m[3],m[4]*v.p[0]+m[5]*v.p[1]+m[6]*v.p[2]+m[7],m[8]*v.p[0]+m[9]*v.p[1]+m[10]*v.p[2]+m[11]};
+        }
+        return;
+    }
+    const bool normals=skinNormals_&&!model.staticLightingBaked;
+    for(unsigned i=0;i<vertices_;++i){
+        const auto& v=source_[i];auto m=palette+v.matrix*21;
+        Vec3 p{m[0]*v.p[0]+m[1]*v.p[1]+m[2]*v.p[2]+m[3],m[4]*v.p[0]+m[5]*v.p[1]+m[6]*v.p[2]+m[7],m[8]*v.p[0]+m[9]*v.p[1]+m[10]*v.p[2]+m[11]};
+        if(normals){
+            Vec3 n{m[12]*v.n[0]+m[13]*v.n[1]+m[14]*v.n[2],m[15]*v.n[0]+m[16]*v.n[1]+m[17]*v.n[2],m[18]*v.n[0]+m[19]*v.n[1]+m[20]*v.n[2]};
+            out[2*i]=p;out[2*i+1]=normalized(n);
+        }else out[i]=p;
+    }
+}
+void DriverAnimation::write(Model& model,const uint32_t* shown,const int32_t* textures,const float* uv,const float* palette,const Vec3* skinned){
     if(gpu_){
         // The GPU applies palette_. Hidden shapes collapse to one point (no
         // fragments, as the CPU path's zeroed positions); writes only on change.
@@ -542,7 +569,11 @@ void DriverAnimation::write(Model& model,const uint32_t* shown,const int32_t* te
         if(hi>lo)flushGpuData(model.vertices+lo,(hi-lo)*sizeof(Vertex));
         return;
     }
-    if(!skinNormals_&&shared_.ready()){
+    if(skinned){
+        if(!skinNormals_&&shared_.ready())for(unsigned i=0;i<vertices_;++i)model.vertices[i].position=skinned[shared_.of[i]];
+        else if(skinNormals_&&!model.staticLightingBaked)for(unsigned i=0;i<vertices_;++i){model.vertices[i].position=skinned[2*i];model.vertices[i].normal=skinned[2*i+1];}
+        else for(unsigned i=0;i<vertices_;++i)model.vertices[i].position=skinned[i];
+    }else if(!skinNormals_&&shared_.ready()){
         auto& unique=sharedPositionScratch();
         for(unsigned u=0;u<shared_.first.size();++u){
             const auto& v=source_[shared_.first[u]];auto m=palette+v.matrix*21;

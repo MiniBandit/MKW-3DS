@@ -94,6 +94,8 @@ public:
         }
         std::fclose(f);return true;
     }
+    // The bytes read() copies (frameBytes), in the cache; null if read() would fail.
+    const void* frame(unsigned phase)const{return cache_&&phase<frames?cache_+size_t(phase/stride_)*frameBytes:nullptr;}
     bool read(unsigned phase,void* target,size_t capacity){
         if(!cache_||!target||phase>=frames||capacity<frameBytes)return false;
         std::memcpy(target,cache_+size_t(phase/stride_)*frameBytes,frameBytes);return true;

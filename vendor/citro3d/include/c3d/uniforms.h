@@ -15,6 +15,9 @@ extern bool C3D_FVUnifAnyDirty[2];
 // mkw-3ds: false restores the library comparisons and full uniform scans
 // (the same commands, more CPU). May change at any time.
 extern bool C3D_FastState;
+// mkw-3ds: called before each vertex uniform upload with the bound program
+// (a shaderProgram_s*, null: none); it may rewrite uniforms through C3D_FVUnifWritePtr.
+extern void (*C3D_UniformHook)(const void* program);
 extern bool C3D_IVUnifDirty[2][C3D_IVUNIF_COUNT];
 extern bool C3D_BoolUnifsDirty[2];
 

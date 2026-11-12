@@ -403,6 +403,9 @@ std::FILE* openFile(const char* path){
  if(result)std::setvbuf(result,nullptr,_IONBF,0);
  return result;
 }
+#ifndef MKW_RELEASE
+void traceMark(const char* name){auto& all=archives();LightLock_Lock(&all.lock);if(all.trace){std::fprintf(all.trace,"#%s\n",name);std::fflush(all.trace);}LightLock_Unlock(&all.lock);}
+#endif
 void open(){auto& all=archives();LightLock_Lock(&all.lock);all.rooted=true;const Entry* e=nullptr;lookup(all,"",&e);LightLock_Unlock(&all.lock);}
 void close(){
  auto& all=archives();LightLock_Lock(&all.lock);

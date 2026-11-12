@@ -32,6 +32,8 @@ public:
  const Texture* texture()const;
  bool ready()const;
  bool failed()const;
+ // QA: stream state for menu-load-errors.txt.
+ void describe(char* out,unsigned size)const;
  bool finished()const;
  unsigned currentFrame()const;
  unsigned frameCount()const;

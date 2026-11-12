@@ -83,10 +83,15 @@ void writeEscalator(void* payload){
     flushGpuData(mesh.vertices,mesh.vertexCount*sizeof(Vertex));
 }
 // One CPU-skinned instance copy (its palette follows the record).
-struct SkinWrite {const ObjectBank* bank;Model* model;bool normals;int clip;float frame;};
+// skinned: the prepare()d results (after the palette), or null.
+struct SkinWrite {const ObjectBank* bank;Model* model;bool normals;int clip;float frame;Vec3* skinned;};
 void writeSkin(void* payload){
     const auto& w=*static_cast<const SkinWrite*>(payload);
-    w.bank->skin(reinterpret_cast<const float*>(&w+1),*w.model,w.normals,w.clip,w.frame);
+    w.bank->skin(reinterpret_cast<const float*>(&w+1),*w.model,w.normals,w.clip,w.frame,w.skinned);
+}
+void prepareSkin(void* payload){
+    const auto& w=*static_cast<const SkinWrite*>(payload);
+    w.bank->skinCompute(reinterpret_cast<const float*>(&w+1),*w.model,w.normals,w.clip,w.frame,w.skinned);
 }
 }
 
@@ -132,11 +137,53 @@ bool openFirePhases(ObjModel& m){
     if(!stream->open("textures/firebar-indirect.ftan",phaseBudget)||!stream->read(0,texture.gpu.data,texture.gpu.size)){
         std::snprintf(objectLoadFailure,sizeof objectLoadFailure,"fire phases (budget %u)",unsigned(phaseBudget));return false;}
     C3D_TexFlush(&texture.gpu);
+    // Staging for the phase uploads (New 3DS; off: no-hook-prep.txt). 256 KB
+    // of LINEAR; without it each phase is a CPU write on the frame hook.
+    if(DeferredWrites::prepareWrites&&!renderQuality().reduced&&!m.fireStaging.half[0]&&(stream->frameBytes&15)==0)
+        if(auto* both=static_cast<uint8_t*>(linearAlloc(size_t(stream->frameBytes)*2))){m.fireStaging.half[0]=both;m.fireStaging.half[1]=both+stream->frameBytes;}
     m.firePhase=0;m.firePending=false;
     fireCacheBytes.store(stream->bytes());fireCacheStride.store(stream->stride());
     m.firePhases=std::move(stream);
     return true;
 }
+}
+namespace {
+// shareObjectTextures: a texture whose size, format, sampler state and every
+// byte match one an earlier model of this course loaded is replaced by that
+// one (unit-1 marks merged), so the picture can't change.
+struct SharedTextures {
+    struct Entry {uint32_t hash;std::shared_ptr<Texture> texture;};
+    std::vector<Entry> canonical;
+    // Replaced copies stay alive until the load ends: the path cache then
+    // hands later models of the same archive the copy instead of a new read.
+    std::vector<std::pair<std::shared_ptr<Texture>,std::shared_ptr<Texture>>> replaced;
+    unsigned shared=0;std::size_t bytes=0;
+    static uint32_t hashOf(const void* data,std::size_t bytes){
+        const auto* w=static_cast<const uint32_t*>(data);uint32_t h=2166136261u;
+        for(std::size_t i=0;i<bytes/4;++i)h=(h^w[i])*16777619u;
+        return h;
+    }
+    void share(Model& model){
+        for(auto& t:model.textures){
+            if(!t||!t->ready||!t->gpu.data)continue;
+            bool done=false;
+            for(const auto& c:canonical)if(c.texture==t){done=true;break;}
+            if(done)continue;
+            for(const auto& [copy,to]:replaced)if(copy==t){to->unitOne|=t->unitOne;t=to;done=true;break;}
+            if(done)continue;
+            const auto& g=t->gpu;const std::size_t size=C3D_TexCalcTotalSize(g.size,g.maxLevel);
+            const uint32_t hash=hashOf(g.data,size);
+            for(const auto& c:canonical){
+                const auto& h=c.texture->gpu;
+                if(c.hash!=hash||h.width!=g.width||h.height!=g.height||h.fmt!=g.fmt||h.size!=g.size||h.param!=g.param||
+                   h.border!=g.border||h.lodParam!=g.lodParam||std::memcmp(h.data,g.data,size))continue;
+                c.texture->unitOne|=t->unitOne;replaced.push_back({t,c.texture});t=c.texture;
+                ++shared;bytes+=size;done=true;break;
+            }
+            if(!done)canonical.push_back({hash,t});
+        }
+    }
+};
 }
 bool ObjectAssets::load(int course){
     char path[64];std::snprintf(path,sizeof path,"models/course_%02d_visuals.list",course);
@@ -144,6 +191,7 @@ bool ObjectAssets::load(int course){
     const auto* race=Kinoko::System::RaceConfig::Instance();
     const bool miiHeads= race&&miiStatuePlayersEligible(race->raceScenario().players,race->raceScenario().playerCount);
     char resource[64],name[64],mesh[96],bankName[96];bool ok=true;
+    SharedTextures sharedTextures;
     while(std::fscanf(list,"%63s %63s %95s %95s",resource,name,mesh,bankName)==4){
         if(std::strchr(mesh,'/')||std::strstr(mesh,"..")||std::strchr(bankName,'/')||std::strstr(bankName,"..")){ok=false;break;}
         // No Mii racer means the original manager returns no statue identity.
@@ -157,6 +205,7 @@ bool ObjectAssets::load(int course){
         // Crowds and shadow volumes keep the whole bake (many vertices; no lit surface).
         const bool liveLight=diag::liveLight&&std::strncmp(resource,"group_",6)&&std::strncmp(resource,"monte_",6)&&!endsWith(name,"-shadow");
         if(!m->model->load(file,false,liveLight)){std::snprintf(objectLoadFailure,sizeof objectLoadFailure,"model %s",file);ok=false;break;}
+        if(shareObjectTextures)sharedTextures.share(*m->model);
         if((course==18&&!std::strcmp(resource,"WLscreenGC")&&!std::strcmp(name,"WLscreenGC"))||
            (course==6&&!std::strcmp(resource,"dkmonitor")&&!std::strcmp(name,"dkmonitor"))||
            (course==35&&!std::strcmp(resource,"fks_screen_wii")&&!std::strcmp(name,"fks_screen_wii"))){
@@ -240,6 +289,7 @@ bool ObjectAssets::load(int course){
         models.push_back(std::move(m));
     }
     std::fclose(list);
+    sharedObjectTextures=sharedTextures.shared;sharedObjectTextureBytes=sharedTextures.bytes;
     if(!ok){models.clear();return false;}
     if(find("koopaBall","koopaBall")||find("HeyhoBallGBA","HeyhoBallGBA")||find("K_bomb_car","K_bomb_car")){
         explosion=std::make_unique<Model>();explosionBank=std::make_unique<DriverAnimation>();
@@ -318,10 +368,24 @@ struct CourseObjects::Impl {
 CourseObjects::CourseObjects():impl_(std::make_unique<Impl>()){}
 CourseObjects::~CourseObjects()=default;
 unsigned CourseObjects::palmCount() const {return impl_->palms.size();}
+std::string CourseObjects::modelName(unsigned m) const {
+    const auto& models=impl_->assets.models;
+    return m<models.size()?models[m]->resource+"/"+models[m]->name:"palm";
+}
+void CourseObjects::forEachTextureImpl(const std::function<void(unsigned,unsigned,const Texture*)>& f) const {
+    unsigned m=0;
+    auto each=[&](const Model* model){if(model)for(unsigned i=0;i<model->textures.size();++i)if(model->textures[i])f(m,i,model->textures[i].get());++m;};
+    for(const auto& a:impl_->assets.models)each(a->model.get());
+    each(impl_->palm.get());
+}
 unsigned CourseObjects::moveTexturesToVram(Renderer& renderer,std::size_t reserve,Renderer::VramLeft* left){
     unsigned moved=0;
+    // Models of one archive share their textures (Model::load's cache): each
+    // is placed, and counted in left, once.
+    std::vector<const Texture*> seen;
     auto move=[&](const Model* model,int dynamic=-1){if(model)for(unsigned i=0;i<model->textures.size();++i)
-        if(int(i)!=dynamic&&model->textures[i])moved+=renderer.moveToVram(*model->textures[i],reserve,left);};
+        if(int(i)!=dynamic&&model->textures[i]&&std::find(seen.begin(),seen.end(),model->textures[i].get())==seen.end()){
+            seen.push_back(model->textures[i].get());moved+=renderer.moveToVram(*model->textures[i],reserve,left);}};
     // Phase textures remain CPU-writable LINEAR; uploads are deferred until
     // the previous GPU frame has finished, unlike immutable course textures.
     for(const auto& m:impl_->assets.models)move(m->model.get(),m->fireTexture);
@@ -478,7 +542,7 @@ void CourseObjects::Impl::recordObjects(){
             escalatorWritten[slot]=true;
             if(skip){}
             else if(auto* deferred=deferredWrites()){
-                auto* w=static_cast<EscalatorWrite*>(deferred->allocate(sizeof write));*w=write;deferred->queue(writeEscalator,w);
+                auto* w=static_cast<EscalatorWrite*>(deferred->allocate(sizeof write));*w=write;deferred->queue(writeEscalator,w,"escalator");
             }else writeEscalator(const_cast<EscalatorWrite*>(&write));
             objects.records.push_back({ObjectDrawRecord::Plain,false,0,&mesh,nullptr,0,0,0,0,0,objectMatrix(obj->transform(),obj->scale())});
         }
@@ -808,9 +872,13 @@ void ObjectDraw::submit(ObjModel* m,const C3D_Mtx& transform,const Anim& source)
                 copy=int(m->skinUsed++);m->skinKeys[copy]={anim.palette?-1:anim.clip,anim.frame};
                 if(auto* deferred=deferredWrites()){
                     const std::size_t bytes=std::size_t(bank->matrixCount())*12*sizeof(float);
-                    auto* w=static_cast<SkinWrite*>(deferred->allocate(sizeof(SkinWrite)+bytes));
-                    *w={bank,m->skins[copy].get(),m->litNormals,anim.clip,anim.frame};std::memcpy(w+1,palette,bytes);
-                    deferred->queue(writeSkin,w);
+                    // The skinning arithmetic runs when the render thread starts the frame; the hook stores it.
+                    const std::size_t skinnedBytes=deferred->preparing()?std::size_t(bank->skinnedCount(*m->skins[copy],m->litNormals,anim.clip))*sizeof(Vec3):0;
+                    auto* w=static_cast<SkinWrite*>(deferred->allocate(sizeof(SkinWrite)+bytes+skinnedBytes));
+                    *w={bank,m->skins[copy].get(),m->litNormals,anim.clip,anim.frame,
+                        skinnedBytes?reinterpret_cast<Vec3*>(reinterpret_cast<uint8_t*>(w+1)+bytes):nullptr};std::memcpy(w+1,palette,bytes);
+                    if(skinnedBytes)deferred->prepare(prepareSkin,w,"object cpu skin");
+                    deferred->queue(writeSkin,w,"object cpu skin");
                 }else bank->skin(palette,*m->skins[copy],m->litNormals,anim.clip,anim.frame);
                 renderMetrics.skinnedVertices+=m->skins[copy]->vertexCount;diag::tallySkin(m->resource,m->skins[copy]->vertexCount,false,cameraDistance);
             }else if(m->skinUsed)copy=int(m->skinUsed-1);
@@ -841,11 +909,14 @@ void ObjectDraw::submit(ObjModel* m,const C3D_Mtx& transform,const Anim& source)
         bool ready=int(phase)==m->firePhase;
         if(!ready){
             auto& texture=*m->model->textures[m->fireTexture];
-            if(auto* deferred=deferredWrites()){
+            auto* deferred=deferredWrites();
+            // A GX copy from the stream's cache after the previous frame, not a CPU write on the hook.
+            if(deferred&&deferred->upload(texture.gpu.data,m->firePhases->frame(phase),m->firePhases->frameBytes,m->fireStaging.half,"fire texture"))ready=true;
+            else if(deferred){
                 auto* write=static_cast<FireTextureWrite*>(deferred->allocate(sizeof(FireTextureWrite)+m->firePhases->frameBytes));
                 *write={&texture,m->firePhases->frameBytes};
                 ready=m->firePhases->read(phase,write+1,write->bytes);
-                if(ready)deferred->queue(writeFireTexture,write);
+                if(ready)deferred->queue(writeFireTexture,write,"fire texture");
             }else{
                 ready=m->firePhases->read(phase,texture.gpu.data,texture.gpu.size);
                 if(ready)C3D_TexFlush(&texture.gpu);

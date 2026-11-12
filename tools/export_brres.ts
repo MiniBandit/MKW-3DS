@@ -1012,7 +1012,7 @@ for(const model of archive.mdl0){
   const view=new DataView(loaded.vertexBuffers[0]),stride=layout.vertexBufferStrides[0];
   const indices=new Uint16Array(loaded.indexData);
   const light=lighting(material);
-  const retail=retailEnabled?retailLighting(material,!!light.vertexColor,!menuLighting&&!backdropLighting&&process.env.MKW_RETAIL_SKY!=='1'):null;
+  const retail=retailEnabled?retailLighting(material,!!light.vertexColor,!menuLighting&&!backdropLighting&&(process.env.MKW_RETAIL_SKY!=='1'||process.env.MKW_SKY_FOG==='1')):null;
   if(retail&&(racerLighting||backdropLighting)){
    retail.word|=1<<21;
    if(!retail.limitation&&material.samplers.some((s:any)=>s.name==='lm_0'||s.name==='lm_1'))unsupported.delete(material.name);

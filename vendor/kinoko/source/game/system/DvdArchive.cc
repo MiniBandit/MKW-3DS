@@ -3,6 +3,7 @@
 #include <abstract/File.hh>
 
 #include <egg/core/Decomp.hh>
+#include <mkw/load_profile.hpp>
 
 namespace Kinoko::System {
 
@@ -20,6 +21,9 @@ DvdArchive::~DvdArchive() {
 void DvdArchive::decompress() {
     m_archiveSize = EGG::Decomp::GetExpandSize(reinterpret_cast<u8 *>(m_fileStart));
     m_archiveStart = static_cast<u8 *>(EGG::egg_alloc(m_archiveSize));
+    MKW_LOAD_SCOPE(Decode);
+    mkw::loadprof::data.decodeIn += m_fileSize;
+    mkw::loadprof::data.decodeOut += m_archiveSize;
     EGG::Decomp::DecodeSZS(reinterpret_cast<u8 *>(m_fileStart),
             reinterpret_cast<u8 *>(m_archiveStart));
     m_state = State::Decompressed;
@@ -98,6 +102,7 @@ void DvdArchive::load(void *fileStart, size_t fileSize, bool decompress_) {
 
 /// @addr{0x80518DCC}
 void DvdArchive::mount() {
+    MKW_LOAD_SCOPE(Mount);
     m_archive = EGG::Archive::Mount(m_archiveStart);
     m_state = State::Mounted;
 }
@@ -113,6 +118,7 @@ void DvdArchive::move() {
 
 /// @addr{0x805190F0}
 void DvdArchive::rip(const char *path) {
+    MKW_LOAD_SCOPE(Read);
     m_fileStart = Abstract::File::Load(path, m_fileSize);
     if (m_fileSize != 0 && m_fileStart) {
         m_state = State::Ripped;

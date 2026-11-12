@@ -66,7 +66,12 @@ public:
     // CPU skinning into a per-instance copy of the model's vertex buffer.
     // normals=false leaves normals untouched, for meshes whose materials
     // never read them (unlit, not environment-mapped).
-    void skin(const float* palette,Model& model,bool normals=true,int clip=-1,float frame=0) const;
+    // skinned: skinCompute's results (computed off the frame hook) to store; null computes here.
+    void skin(const float* palette,Model& model,bool normals=true,int clip=-1,float frame=0,const Vec3* skinned=nullptr) const;
+    // The values skin() stores, in skinnedCount entries: shared unique positions,
+    // else per vertex its position (and normal) interleaved. Same arithmetic.
+    unsigned skinnedCount(const Model& model,bool normals,int clip) const;
+    void skinCompute(const float* palette,const Model& model,bool normals,int clip,float frame,Vec3* out) const;
     // Positions-only skinning transforms each shared (position, matrix) pair once.
     void shareSkinnedPositions(){shared_.build(source_,vertices_);}
     // Load-only preparation for lit CPU skinning. Reuses exact position,

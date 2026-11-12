@@ -12,6 +12,10 @@ def variant(source):
     source=source.replace('mov outtc, r13\n        mov outtcw, r10.xxxx','mov r13.z, r10.x\n        mov outtc, r13')
     source=source.replace('mov outtc, r13\n    mov outtcw, r10.xxxx','mov r13.z, r10.x\n    mov outtc, r13')
     assert 'outtcw' not in source
+    # The tail's view vector needs all of r12; the scene fast path makes z only.
+    fast = '        ; The fog coordinate needs only the eye depth.\n        dp4 r12.z, modelView[2], r0\n'
+    assert source.count(fast) == 1
+    source = source.replace(fast, ''.join(f'        dp4 r12.{c}, modelView[{i}], r0\n' for i, c in enumerate('xyzw')))
     tail='''    ; CFL quaternion/view outputs. Only the native head variant has these
     ; interpolants; ordinary racers/terrain retain their original shader.
     mov outview, -r12

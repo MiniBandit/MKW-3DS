@@ -1,3 +1,5 @@
+; projection holds projection x modelView at every draw (Renderer's
+; C3D_UniformHook, fuseClip): the clip position is one transform of r0.
 .fvec projection[4], modelView[4], light, uvScroll
 ; Environment mapping for rigidly drawn menu models: rows of the bone's normal
 ; matrix, and (cos yaw, sin yaw, mix, 0). mix=0 keeps the vertex's own UV1.
@@ -11,6 +13,10 @@
 ; Affine applied to UV1 last (rows dot (u,v,0,1)); identity outside GX
 ; EnvCamera materials whose texture SRT follows the environment projection.
 .fvec uv1Row0, uv1Row1
+; environmentPair: texcoord2 is a second affine of the point uv1Row maps
+; (rows dot (u,v,0,1)), so one draw samples two SRTs of the same EnvCamera
+; coordinate (item box sparkle groups, src/race_hud.cpp).
+.fvec uv2Row0, uv2Row1
 ; GX colour channel 0 (retail course lighting, src/renderer_retail.cpp):
 ;   colour = vertex * min(light + lightDiff * df(dot(n, lightDir.xyz)), lightDir.w)
 ; with the diffuse function df(x) = max(x*lightFn.x + lightFn.y, lightFn.z)
@@ -26,10 +32,16 @@
 ; Uniform branches skip work whose result cannot contribute to the draw.
 .bool environmentMapped, environmentTexture2, environmentPrimary, diffuseLighting
 .bool projectedWater, playerShadowProject, shadowCapture
-; Unlit course objects keep their palette index in innormal.x. Lit racers
-; use a separate attribute, retaining both UV pairs and bone-local normals.
+; The palette index arrives in inbone: lit racers' own attribute, or (unlit
+; course objects, which keep it in the normal's x) the normal field loaded
+; into this register instead of innormal (Renderer::addSkinLoaders).
 .fvec bones[57]
-.bool skinned, skinnedNormals, staticLighting
+.bool skinned, staticLighting
+.bool cofactorNormals, rigidNormals
+.bool environmentPair
+; Lighting's normal rows equal the EnvCamera rows (bitwise; Renderer::uvPlainNow):
+; the general path's light reuses the EnvCamera branch's normalized normal.
+.bool sharedNormal
 ; The draw's UV rows and uv1Row are identity and uvScroll is zero (set per
 ; draw from the uniform values): the UVs pass through without the transforms.
 .bool uvPlain
@@ -60,41 +72,37 @@
     mov r0.xyz, inpos
     mov r0.w, constants.y
     ifu skinned
-        ifu skinnedNormals
-            mova a0.x, inbone.x
-        .else
-            mova a0.x, innormal.x
-        .end
+        mova a0.x, inbone.x
         dp4 r14.x, bones[a0.x], r0
         dp4 r14.y, bones[a0.x+1], r0
         dp4 r14.z, bones[a0.x+2], r0
-        ifu shadowCapture
-            ; Silhouette needs skinned positions and alpha only.
-        .else
-        ifu skinnedNormals
+        ; Lit skinned draws outside the shadow capture (Renderer::drawNow sets
+        ; one of these for lit skins; the capture needs no normals).
+        ifu cofactorNormals
             ; Cofactor(B)*n / det(B) = inverse-transpose(B)*n. Its magnitude
             ; cancels in downstream normalization; keep determinant sign.
             ; This handles nonuniform bone scale without more bone uniforms.
-            mov r0, bones[a0.x]
-            mov r1, bones[a0.x+1]
-            mov r2, bones[a0.x+2]
-            mul r3.xyz, r1.yzx, r2.zxy
-            mad r3.xyz, -r1.zxy, r2.yzx, r3
+            ; Rows 0 and 1 in temporaries, row 2 read in place: every product
+            ; keeps one temporary operand. r0 (the input position) stays.
+            mov r7, bones[a0.x]
+            mov r8, bones[a0.x+1]
+            mul r3.xyz, bones[a0.x+2].zxy, r8.yzx
+            mad r3.xyz, -r8.zxy, bones[a0.x+2].yzx, r3
             dp3 r5.x, r3, innormal
-            dp3 r6.x, r0, r3
-            mul r3.xyz, r2.yzx, r0.zxy
-            mad r3.xyz, -r2.zxy, r0.yzx, r3
+            dp3 r6.x, r7, r3
+            mul r3.xyz, bones[a0.x+2].yzx, r7.zxy
+            mad r3.xyz, -r7.yzx, bones[a0.x+2].zxy, r3
             dp3 r5.y, r3, innormal
-            mul r3.xyz, r0.yzx, r1.zxy
-            mad r3.xyz, -r0.zxy, r1.yzx, r3
+            mul r3.xyz, r7.yzx, r8.zxy
+            mad r3.xyz, -r7.zxy, r8.yzx, r3
             dp3 r5.z, r3, innormal
             cmp constants.x, eq, eq, r6.x
             ifc cmp.x
                 ; Original normalFromMat4 falls back to B when an authored
                 ; squash makes the transform singular (e.g. Yoshi clips).
-                dp3 r15.x, r0, innormal
-                dp3 r15.y, r1, innormal
-                dp3 r15.z, r2, innormal
+                dp3 r15.x, r7, innormal
+                dp3 r15.y, r8, innormal
+                dp3 r15.z, bones[a0.x+2], innormal
             .else
                 sge r6.x, r6.x, constants.x
                 add r6.x, r6.x, r6.x
@@ -104,22 +112,26 @@
             ; Unnormalized: every user (EnvCamera, diffuse light, the Mii
             ; tail) normalizes after its linear transform, so the cofactor
             ; magnitude, which small authored scales change, drops out there.
+        .else
+        ifu rigidNormals
+            ; Every bone is a rotation times a uniform scale (any sign): the
+            ; inverse transpose is the bone up to a positive factor, which
+            ; the same normalization removes (Renderer::rigidBones).
+            dp3 r15.x, bones[a0.x], innormal
+            dp3 r15.y, bones[a0.x+1], innormal
+            dp3 r15.z, bones[a0.x+2], innormal
         .end
         .end
-        ; The cofactor rows above reuse r0.
+        ; r0.w is still 1.
         mov r0.xyz, r14.xyz
-        mov r0.w, constants.y
     .end
-    dp4 r12.x, modelView[0], r0
-    dp4 r12.y, modelView[1], r0
-    dp4 r12.z, modelView[2], r0
-    dp4 r12.w, modelView[3], r0
-    ; r12 is the view-space position (GX eye space: fog, projected rows).
-    dp4 outpos.x, projection[0], r12
-    dp4 outpos.y, projection[1], r12
-    dp4 outpos.z, projection[2], r12
-    dp4 outpos.w, projection[3], r12
+    dp4 outpos.x, projection[0], r0
+    dp4 outpos.y, projection[1], r0
+    dp4 outpos.z, projection[2], r0
+    dp4 outpos.w, projection[3], r0
     ifu fastPath
+        ; The fog coordinate needs only the eye depth.
+        dp4 r12.z, modelView[2], r0
         ; What the general path below computes for these uniforms: both UV
         ; pairs as given, texcoord0w 1, the fog coordinate, the GX colour.
         ; Outputs are written as the general path writes them: one mov from a
@@ -135,11 +147,10 @@
         mul r13.x, fogParam.z, r12.z
         add r13.x, fogParam.w, r13.x
         ifu diffuseLighting
-            mov r0.xyz, r15
-            mov r0.w, constants.x
-            dp3 r1.x, normalRow0, r0
-            dp3 r1.y, normalRow1, r0
-            dp3 r1.z, normalRow2, r0
+            ; dp3 reads xyz only: r15 directly.
+            dp3 r1.x, normalRow0, r15
+            dp3 r1.y, normalRow1, r15
+            dp3 r1.z, normalRow2, r15
             dp3 r2.x, r1, r1
             max r2.x, normalEpsilon.x, r2.x
             rsq r2.x, r2.x
@@ -159,6 +170,11 @@
         mov outtc2, r13
         mov outcolor, r4
     .else
+    ; r12 is the view-space position (GX eye space: fog, projected rows).
+    dp4 r12.x, modelView[0], r0
+    dp4 r12.y, modelView[1], r0
+    dp4 r12.z, modelView[2], r0
+    dp4 r12.w, modelView[3], r0
     ifu playerShadowProject ; outputs-ok: this order since d28f093 (console)
         ; Exact receiver coordinates without material UV, fog or lighting work.
         ; Both body and local AO use actual geometry and the same depth test.
@@ -217,23 +233,20 @@
     ifu environmentMapped
         ; Same equation as the CPU path: m=normalize(R*n),
         ; uv1=(0.5+0.5*(cos*m.x+sin*m.z), 0.5+0.5*m.y).
-        mov r0.xyz, r15
-        mov r0.w, constants.x
-        dp3 r7.x, envRow0, r0
-        dp3 r7.y, envRow1, r0
-        dp3 r7.z, envRow2, r0
+        ; r7 (the normalized normal) stays for sharedNormal's lighting.
+        dp3 r7.x, envRow0, r15
+        dp3 r7.y, envRow1, r15
+        dp3 r7.z, envRow2, r15
         dp3 r8.x, r7, r7
         max r8.x, normalEpsilon.x, r8.x
         rsq r8.x, r8.x
         mul r7.xyz, r7, r8.x
-        mov r9, envParam
-        mul r8.x, r9.x, r7.x
-        mul r8.z, r9.y, r7.z
+        mul r8.x, envParam.x, r7.x
+        mul r8.z, envParam.y, r7.z
         add r8.x, r8.x, r8.z
         mov r8.y, r7.y
-        mov r10, half
-        mul r8.xy, r10.xy, r8.xy
-        add r8.xy, r10.xy, r8.xy
+        mul r8.xy, half.xy, r8.xy
+        add r8.xy, half.xy, r8.xy
         ifu environmentTexture2
             ; Three-map statues retain their independent marble UV1.
             ; The EnvCamera SRT instead feeds unit 2's third texture.
@@ -243,7 +256,7 @@
             dp4 r14.y, uv1Row1, r8
         .else
             add r8.xy, r8.xy, -r5.xy
-            mul r8.xy, r9.zz, r8.xy
+            mul r8.xy, envParam.zz, r8.xy
             add r5.xy, r5.xy, r8.xy
         .end
     .end
@@ -255,6 +268,10 @@
     .else
         ifu uvPlain
         .else
+        ifu environmentPair
+            dp4 r14.x, uv2Row0, r5
+            dp4 r14.y, uv2Row1, r5
+        .end
         dp4 r11.x, uv1Row0, r5
         dp4 r11.y, uv1Row1, r5
         mov r5.xy, r11.xy
@@ -290,15 +307,17 @@
     mul r13.x, fogParam.z, r12.z
     add r13.x, fogParam.w, r13.x
     ifu diffuseLighting
-        mov r0.xyz, r15
-        mov r0.w, constants.x
-        dp3 r1.x, normalRow0, r0
-        dp3 r1.y, normalRow1, r0
-        dp3 r1.z, normalRow2, r0
-        dp3 r2.x, r1, r1
-        max r2.x, normalEpsilon.x, r2.x
-        rsq r2.x, r2.x
-        mul r1.xyz, r1, r2.x
+        ifu sharedNormal
+            mov r1.xyz, r7
+        .else
+            dp3 r1.x, normalRow0, r15
+            dp3 r1.y, normalRow1, r15
+            dp3 r1.z, normalRow2, r15
+            dp3 r2.x, r1, r1
+            max r2.x, normalEpsilon.x, r2.x
+            rsq r2.x, r2.x
+            mul r1.xyz, r1, r2.x
+        .end
         ; GX colour channel: light + lightDiff * df(n.L), saturated at lightDir.w.
         dp3 r2.x, lightDir, r1
         mul r2.x, lightFn.x, r2.x
@@ -308,6 +327,11 @@
         add r3, light, r3
     .else
         mov r3, light
+        ; Unlit draws only (item boxes): the pair's texcoord2 leaves through
+        ; r13 (fog coordinate otherwise), at no cost to lit draws.
+        ifu environmentPair
+            mov r13, r14
+        .end
     .end
     min r3, lightDir.wwww, r3
     ; tint includes the 1/255 scale of the colour bytes.

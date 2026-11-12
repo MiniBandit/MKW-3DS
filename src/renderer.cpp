@@ -50,6 +50,22 @@ GPU_CULLMODE cameraCull(GPU_CULLMODE mode,const C3D_Mtx& v){
 void uploadProjection(int location,const C3D_Mtx& p){
     C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER,location,&p);
 }
+// The scene shaders transform positions by projection x modelView, held in
+// the projection uniform. Every writer keeps storing the plain projection
+// there; before each upload this replaces it with the product. A slot that
+// differs from the last product written is a new projection.
+struct ClipFuse {const void* programs[2]{};int projection=-1,modelView=-1;bool have=false;C3D_Mtx projectionMatrix{},clip{},modelViewMatrix{};};
+ClipFuse clipFuse;
+void fuseClip(const void* program){
+    auto& f=clipFuse;
+    if(!program||(program!=f.programs[0]&&program!=f.programs[1]))return;
+    const C3D_FVec* u=C3D_FVUnif[GPU_VERTEX_SHADER];
+    C3D_Mtx slot,mv;std::memcpy(&slot,&u[f.projection],sizeof slot);std::memcpy(&mv,&u[f.modelView],sizeof mv);
+    if(!f.have||std::memcmp(&slot,&f.clip,sizeof slot))f.projectionMatrix=slot;
+    else if(!std::memcmp(&mv,&f.modelViewMatrix,sizeof mv))return;
+    Mtx_Multiply(&f.clip,&f.projectionMatrix,&mv);f.modelViewMatrix=mv;f.have=true;
+    C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER,f.projection,&f.clip);
+}
 void sceneDepthMap(const C3D_Mtx&,uint32_t layer=0){
     // HW08 factorization did not fix the physical-console symptom. Keep
     // GX's finite perspective/near/far clipping, not that failed workaround.
@@ -153,6 +169,20 @@ template<class Use> bool withTextureFile(const char* path,Use&& use){
     }
     std::vector<uint8_t> file;
     return readFile(path,file)&&use(file.data(),file.size());
+}
+// Every bone's 3x3 has orthogonal rows of one length (rotation, possibly a
+// reflection, times a uniform scale). Then cofactor(B)/det(B) = B/s^2: the
+// shader's rigidNormals path (B*n) has the cofactor normal's direction.
+// 1e-4 keeps the normal within ~2e-4 rad of the cofactor result.
+bool rigidBones(const float* palette,unsigned bones,unsigned stride){
+    for(unsigned b=0;b<bones;++b){
+        const float* m=palette+b*stride;
+        auto dot=[&](unsigned i,unsigned j){return m[i*4]*m[j*4]+m[i*4+1]*m[j*4+1]+m[i*4+2]*m[j*4+2];};
+        const float a=dot(0,0),tolerance=a*1e-4f;
+        if(!(a>1e-12f)||std::fabs(dot(1,1)-a)>tolerance||std::fabs(dot(2,2)-a)>tolerance||
+           std::fabs(dot(0,1))>tolerance||std::fabs(dot(0,2))>tolerance||std::fabs(dot(1,2))>tolerance)return false;
+    }
+    return true;
 }
 }
 bool Texture::load(const char* path,int halveLarge) {
@@ -494,9 +524,12 @@ return false;}
         textures.push_back(std::move(t));
     }
     // Texture unit 1 samples the second map; projected water swaps its primary there.
+    // The marble statues' third map is on unit 2: the same 4-bit rule (gpu-guard
+    // logged Daisy Circuit's ETC1 statue maps on unit 2 once they fit VRAM).
     for(const auto& s:submeshes){
         if(s.secondary>=0)textures[s.secondary]->unitOne=true;
         if((s.menuReflection==11||s.menuReflection==22)&&s.texture>=0)textures[s.texture]->unitOne=true;
+        if(s.menuReflection==8)textures[(s.reflectionConstant&0xffff)-1]->unitOne=true;
     }
     vertices=static_cast<Vertex*>(linearAlloc(vertexCount*sizeof(Vertex)));
     indices=static_cast<uint16_t*>(linearAlloc(indexCount*sizeof(uint16_t)));
@@ -668,10 +701,16 @@ bool Renderer::init(){
     if(!retailUniformLocations())return fail();
     bonesLoc_=shaderInstanceGetUniformLocation(program_.vertexShader,"bones");
     skinnedLoc_=shaderInstanceGetUniformLocation(program_.vertexShader,"skinned");
-    skinnedNormalsLoc_=shaderInstanceGetUniformLocation(program_.vertexShader,"skinnedNormals");
+    sharedNormalLoc_=shaderInstanceGetUniformLocation(program_.vertexShader,"sharedNormal");
     uvPlainLoc_=shaderInstanceGetUniformLocation(program_.vertexShader,"uvPlain");
     fastPathLoc_=shaderInstanceGetUniformLocation(program_.vertexShader,"fastPath");
-    if(bonesLoc_<0||skinnedLoc_<0||skinnedNormalsLoc_<0||uvPlainLoc_<0||fastPathLoc_<0)return fail();
+    if(bonesLoc_<0||skinnedLoc_<0||sharedNormalLoc_<0||uvPlainLoc_<0||fastPathLoc_<0)return fail();
+    cofactorNormalsLoc_=shaderInstanceGetUniformLocation(program_.vertexShader,"cofactorNormals");
+    rigidNormalsLoc_=shaderInstanceGetUniformLocation(program_.vertexShader,"rigidNormals");
+    environmentPairLoc_=shaderInstanceGetUniformLocation(program_.vertexShader,"environmentPair");
+    uv2RowLoc_[0]=shaderInstanceGetUniformLocation(program_.vertexShader,"uv2Row0");
+    uv2RowLoc_[1]=shaderInstanceGetUniformLocation(program_.vertexShader,"uv2Row1");
+    if(cofactorNormalsLoc_<0||rigidNormalsLoc_<0||environmentPairLoc_<0||uv2RowLoc_[0]<0||uv2RowLoc_[1]<0)return fail();
     if(!C3D_TexInit(&white_,8,8,GPU_RGBA8))return fail();
     // Blackout, cinema bars and fades may all submit in one frame. Each draw
     // keeps distinct vertices until the next FrameBegin drains GPU use.
@@ -680,6 +719,8 @@ bool Renderer::init(){
     text_=static_cast<Vertex*>(linearAlloc(kTextVertices*sizeof(Vertex)));if(!text_)return fail();
     particles_=static_cast<Vertex*>(linearAlloc(DriftEffects::Capacity*12*sizeof(Vertex)));if(!particles_)return fail();
     effectVertices_=linearAlloc(kEffectVertices*sizeof(ef::DrawVertex));if(!effectVertices_)return fail();
+    // Without room the shells are drawn whole, as with no-box-precull.txt.
+    if(facingCull)facingIndices_=static_cast<uint16_t*>(linearAlloc(kFacingIndices*sizeof(uint16_t)));
     if(shader_->numDVLE<3)return fail();
     shaderProgramInit(&miiProgram_);miiProgramReady_=true;
     if(R_FAILED(shaderProgramSetVsh(&miiProgram_,&shader_->DVLE[2])))return fail();
@@ -690,6 +731,8 @@ bool Renderer::init(){
         const char* name=shader_->DVLE[0].symbolTableData+u.symbolOffset;
         if(shaderInstanceGetUniformLocation(program_.vertexShader,name)!=shaderInstanceGetUniformLocation(miiProgram_.vertexShader,name))return fail();
     }
+    clipFuse=ClipFuse{};clipFuse.programs[0]=&program_;clipFuse.programs[1]=&miiProgram_;
+    clipFuse.projection=projectionLoc_;clipFuse.modelView=modelViewLoc_;C3D_UniformHook=fuseClip;
     shaderProgramInit(&effectProgram_);effectProgramReady_=true;
     if(R_FAILED(shaderProgramSetVsh(&effectProgram_,&shader_->DVLE[1])))return fail();
     effectProjectionLoc_=shaderInstanceGetUniformLocation(effectProgram_.vertexShader,"projection");
@@ -856,6 +899,9 @@ bool Renderer::allocateFrameBuffers(){
     particlesAlt_=static_cast<Vertex*>(linearAlloc(DriftEffects::Capacity*12*sizeof(Vertex)));
     effectVerticesAlt_=linearAlloc(kEffectVertices*sizeof(ef::DrawVertex));
     if(!overlayAlt_||!spritesAlt_||!textAlt_||!particlesAlt_||!effectVerticesAlt_)return false;
+    // Optional: without it facingCull stays off (a pipelined frame would
+    // overwrite lists the GPU may still read).
+    if(facingIndices_&&!(facingIndicesAlt_=static_cast<uint16_t*>(linearAlloc(kFacingIndices*sizeof(uint16_t))))){linearFree(facingIndices_);facingIndices_=nullptr;}
     if(!C3D_TexInit(&effectLookupAlt_,ef::DrawList::LookupSize,ef::DrawList::LookupSize,GPU_RGBA8))return false;
     C3D_TexSetFilter(&effectLookupAlt_,GPU_NEAREST,GPU_NEAREST);C3D_TexSetWrap(&effectLookupAlt_,GPU_CLAMP_TO_EDGE,GPU_CLAMP_TO_EDGE);
     return true;
@@ -863,6 +909,7 @@ bool Renderer::allocateFrameBuffers(){
 void Renderer::freeFrameBuffers(){
     for(Vertex** buffer:{&overlayAlt_,&spritesAlt_,&textAlt_,&particlesAlt_}){linearFree(*buffer);*buffer=nullptr;}
     linearFree(effectVerticesAlt_);effectVerticesAlt_=nullptr;
+    linearFree(facingIndicesAlt_);facingIndicesAlt_=nullptr;
     if(effectLookupAlt_.data)C3D_TexDelete(&effectLookupAlt_);
     effectLookupAlt_={};
 }
@@ -871,6 +918,7 @@ void Renderer::freeFrameBuffers(){
 void Renderer::swapFrameBuffers(){
     std::swap(overlay_,overlayAlt_);std::swap(sprites_,spritesAlt_);std::swap(text_,textAlt_);std::swap(particles_,particlesAlt_);
     std::swap(effectVertices_,effectVerticesAlt_);std::swap(effectLookup_,effectLookupAlt_);
+    std::swap(facingIndices_,facingIndicesAlt_);
     if(retailTextureAlt_[0].data)for(unsigned which=0;which<2;++which){
         std::swap(retailTexture_[which],retailTextureAlt_[which]);std::swap(retailTextureCurrent_[which],retailTextureAltCurrent_[which]);
     }
@@ -900,12 +948,14 @@ void Renderer::shutdown(){
     linearFree(effectVertices_);effectVertices_=nullptr;
     if(effectLookup_.data)C3D_TexDelete(&effectLookup_);
     effectLookup_={};delete effectDraw_;effectDraw_=nullptr;
+    C3D_UniformHook=nullptr;clipFuse=ClipFuse{};
     if(miiProgramReady_)shaderProgramFree(&miiProgram_);
     miiProgramReady_=false;miiProgram_={};
     if(effectProgramReady_)shaderProgramFree(&effectProgram_);
     effectProgramReady_=false;effectProgram_={};
     linearFree(sprites_);sprites_=nullptr;linearFree(overlay_);overlay_=nullptr;
     linearFree(text_);text_=nullptr;
+    linearFree(facingIndices_);facingIndices_=nullptr;
     freeFrameBuffers();
     retailShutdown();
     if(white_.data)C3D_TexDelete(&white_);
@@ -951,6 +1001,8 @@ void Renderer::beginNow(const C3D_Mtx& view,const C3D_Mtx& projection,bool sync,
     const bool stereo=execStereo_.active()&&targetRight_;
     if(stereo!=stereoShown_){gfxSet3D(stereo);stereoShown_=stereo;}
     eye_=0;
+    // The GPU reads nothing of this buffer's last frame any more (see swapFrameBuffers).
+    facingUsed_=facingFlushed_=0;for(auto& l:facingLists_)l.model=nullptr;
     // Dad's capture cadence: one sample per two rendered frames, independently
     // of simulation ticks, eye replays and the lower-screen intro pass.
     stadiumCaptureFrame_=stadiumRequested_&&((stadiumRenderFrames_++&1u)==0);
@@ -1239,14 +1291,21 @@ void Renderer::uvPlainNow(bool allowed){
     // citro3d's copy of the uniforms holds what the next draw uses.
     auto is=[](int location,float x,float y,float z,float w){
         const auto& v=C3D_FVUnif[GPU_VERTEX_SHADER][location];return v.x==x&&v.y==y&&v.z==z&&v.w==w;};
-    const bool plain=allowed&&plainUv&&is(uvRowLoc_[0],1,0,0,0)&&is(uvRowLoc_[1],0,1,0,0)&&is(uvRowLoc_[2],1,0,0,0)&&
+    auto on=[](int location){return (C3D_BoolUnifs[GPU_VERTEX_SHADER]>>(location-0x68))&1;};
+    // environmentPair's texcoord2 is computed in the general UV branch.
+    const bool plain=allowed&&plainUv&&!on(environmentPairLoc_)&&is(uvRowLoc_[0],1,0,0,0)&&is(uvRowLoc_[1],0,1,0,0)&&is(uvRowLoc_[2],1,0,0,0)&&
         is(uvRowLoc_[3],0,1,0,0)&&is(uvScrollLoc_,0,0,0,0)&&is(uv1RowLoc_[0],1,0,0,0)&&is(uv1RowLoc_[1],0,1,0,0);
     C3D_BoolUnifSet(GPU_VERTEX_SHADER,uvPlainLoc_,plain);
     // The short path leaves out these features' branches.
-    auto on=[](int location){return (C3D_BoolUnifs[GPU_VERTEX_SHADER]>>(location-0x68))&1;};
     const bool fast=plain&&fastVertex&&!on(playerShadowProjectLoc_)&&!on(environmentMappedLoc_)&&!on(environmentTexture2Loc_)&&
         !on(environmentPrimaryLoc_)&&!on(projectedWaterLoc_)&&!on(retailBoolLoc_)&&!on(shadowCaptureLoc_);
     C3D_BoolUnifSet(GPU_VERTEX_SHADER,fastPathLoc_,fast);
+    // The EnvCamera branch's normalized normal is the light's when both use
+    // the same rows (normalMatrixNow(..., true)); bitwise, so the same result.
+    auto same=[](int a,int b){return !std::memcmp(&C3D_FVUnif[GPU_VERTEX_SHADER][a],&C3D_FVUnif[GPU_VERTEX_SHADER][b],3*sizeof(float));};
+    const bool shared=allowed&&sharedNormals&&!fast&&on(environmentMappedLoc_)&&on(diffuseLightingLoc_)&&!on(playerShadowProjectLoc_)&&
+        same(envRowLoc_[0],normalRowLoc_[0])&&same(envRowLoc_[1],normalRowLoc_[1])&&same(envRowLoc_[2],normalRowLoc_[2]);
+    C3D_BoolUnifSet(GPU_VERTEX_SHADER,sharedNormalLoc_,shared);
 }
 // Model::materialTracks at animation frame `frame` into materialOverrides,
 // once per frame: each track loops or holds its last frame by its own flag.
@@ -1335,8 +1394,11 @@ void Renderer::drawNow(const Model& model,const Vertex* vertices,const C3D_Mtx& 
     C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER,modelViewLoc_,&mv);
     C3D_BoolUnifSet(GPU_VERTEX_SHADER,staticLightingLoc_,model.staticLightingBaked);
     if((!model.fixedLighting&&!model.staticLightingBaked)||model.liveDiffuse)normalMatrixNow(mv);
+    const bool litSkin=skinPalette_&&model.skinBoneIndices&&!model.fixedLighting&&(!model.staticLightingBaked||model.liveDiffuse);
+    // Unlit skins keep the palette index in the normal's x: load that field
+    // into inbone (v4), the register the shader reads it from.
     auto* attr=C3D_GetAttrInfo();AttrInfo_Init(attr);
-    AttrInfo_AddLoader(attr,0,GPU_FLOAT,3);AttrInfo_AddLoader(attr,1,GPU_FLOAT,3);AttrInfo_AddLoader(attr,2,GPU_FLOAT,4);AttrInfo_AddLoader(attr,3,GPU_UNSIGNED_BYTE,4);
+    AttrInfo_AddLoader(attr,0,GPU_FLOAT,3);AttrInfo_AddLoader(attr,skinPalette_&&!litSkin?4:1,GPU_FLOAT,3);AttrInfo_AddLoader(attr,2,GPU_FLOAT,4);AttrInfo_AddLoader(attr,3,GPU_UNSIGNED_BYTE,4);
     auto* buf=C3D_GetBufInfo();BufInfo_Init(buf);BufInfo_Add(buf,vertices,sizeof(Vertex),4,0x3210);
     if(model.staticEnvironment2){
         // Buffer permutations address loader slots, not shader registers.
@@ -1344,13 +1406,14 @@ void Renderer::drawNow(const Model& model,const Vertex* vertices,const C3D_Mtx& 
         const int slot=AttrInfo_AddLoader(attr,5,GPU_FLOAT,2);
         BufInfo_Add(buf,model.staticEnvironment2,2*sizeof(float),1,unsigned(slot));
     }
-    const bool litSkin=skinPalette_&&model.skinBoneIndices&&!model.fixedLighting&&(!model.staticLightingBaked||model.liveDiffuse);
     if(litSkin){AttrInfo_AddLoader(attr,4,GPU_FLOAT,1);BufInfo_Add(buf,model.skinBoneIndices,sizeof(float),1,4);}
-    C3D_BoolUnifSet(GPU_VERTEX_SHADER,skinnedNormalsLoc_,litSkin);
     if(skinPalette_){
         for(unsigned b=0;b<skinBones_;++b){const float* m=skinPalette_+b*skinStride_;
             for(unsigned r=0;r<3;++r)C3D_FVUnifSet(GPU_VERTEX_SHADER,bonesLoc_+int(b*3+r),m[r*4],m[r*4+1],m[r*4+2],m[r*4+3]);}
         C3D_BoolUnifSet(GPU_VERTEX_SHADER,skinnedLoc_,true);
+        const bool rigid=litSkin&&rigidSkin&&rigidBones(skinPalette_,skinBones_,skinStride_);
+        C3D_BoolUnifSet(GPU_VERTEX_SHADER,cofactorNormalsLoc_,litSkin&&!rigid);C3D_BoolUnifSet(GPU_VERTEX_SHADER,rigidNormalsLoc_,rigid);
+        if(litSkin)++(rigid?rigidSkinDraws:cofactorSkinDraws);
     }
     const int region=execSceneRegion_==1?0:execSceneRegion_==2?1:-1;
     const bool regionCull=region>=0&&model.regionIndices[region]&&model.regionVisibility[region].size()==model.submeshes.size();
@@ -1383,6 +1446,8 @@ void Renderer::drawNow(const Model& model,const Vertex* vertices,const C3D_Mtx& 
     // of submesh (retailEndSubmesh), deferred while the next one repeats it.
     const Submesh* last=nullptr;bool lastRetail=false,lastEnvironment=false,pendingEnd=false;
     C3D_Tex projectedWaterTexture{};
+    // DIAG texture-use.txt: the data of the textures bound to units 0-2 (diag::textureDrawn).
+    const void* useData[3]{};
     for(std::size_t i=0;i<model.submeshes.size();++i){
         if(visible && !visible(context,i))continue;
         const auto& s=model.submeshes[i];
@@ -1419,7 +1484,7 @@ void Renderer::drawNow(const Model& model,const Vertex* vertices,const C3D_Mtx& 
         }else ranges.append({s.first,s.count});
         const SubmeshOverride* o=overrides_&&i<overrideCount_&&overrides_[i].flags?&overrides_[i]:nullptr;
         // The model's own course/sky material animation (GMDL MAN1), unless the draw overrides it.
-        if(!o&&!model.materialTracks.empty()){
+        if(!o&&!materialTracksOff&&!model.materialTracks.empty()&&i<model.materialOverrides.size()){
             if(model.materialFrame!=animationFrame)evaluateMaterialTracks(model,animationFrame);
             if(model.materialOverrides[i].flags)o=&model.materialOverrides[i];
         }
@@ -1968,7 +2033,7 @@ void Renderer::drawNow(const Model& model,const Vertex* vertices,const C3D_Mtx& 
         if(menuDepthBase_>=0)C3D_DepthMap(true,-menuDepthSpan_,menuDepthBase_);
         else sceneDepthMap(projection_,backdrop?0:s.lighting);
         if(behind)C3D_DepthMap(true,0.f,0.f);
-        const bool swap=o&&(o->flags&SubmeshOverride::Texture);
+        const bool swap=o&&(o->flags&SubmeshOverride::Texture)&&!materialSwapOff;
         const int32_t primaryIndex=swap&&o->texture[0]>=0&&size_t(o->texture[0])<model.textures.size()?o->texture[0]:s.texture;
         const int32_t secondaryIndex=swap&&o->texture[1]>=0&&size_t(o->texture[1])<model.textures.size()?o->texture[1]:s.secondary;
         const bool stadium=stadiumTex_[0].data&&model.stadiumTexture>=0&&primaryIndex==model.stadiumTexture;
@@ -1998,10 +2063,12 @@ void Renderer::drawNow(const Model& model,const Vertex* vertices,const C3D_Mtx& 
             C3D_TexSetWrap(third,wraps[(s.reflectionConstant>>16)&3],wraps[(s.reflectionConstant>>18)&3]);
             C3D_TexBind(2,third);
         }
+        if(diag::textureUse){useData[0]=texture->data;useData[1]=secondary->data;useData[2]=s.menuReflection==8?model.textures[(s.reflectionConstant&0xffff)-1]->gpu.data:nullptr;}
         // Retail course lighting: fog stage, light textures (after the generic setup).
         retailEnvironment=retail&&retailCombiners(s,mv,backdrop,additiveColor||((s.menuReflection!=7&&s.menuReflection!=8&&s.menuReflection!=14)&&o&&(o->flags&SubmeshOverride::Add)),
             additiveColor?(additiveColor>>24)|((additiveColor>>8)&0xff00)|((additiveColor<<8)&0xff0000):o&&(o->flags&SubmeshOverride::Add)?o->add&0xffffff:0,constant);
         // A material binder owns the combiners and may replace any state above.
+        drawCullSet_=false;
         if(material)material(context,i);
         // Native CFL owns stages 0..2. Apply the same Star C1 contribution
         // after its material binder, retaining coverage for glasses/masks.
@@ -2069,6 +2136,7 @@ void Renderer::drawNow(const Model& model,const Vertex* vertices,const C3D_Mtx& 
             C3D_BoolUnifSet(GPU_VERTEX_SHADER,environmentPrimaryLoc_,primaryEnvironment);
         }
         uvPlainNow(true);
+        const auto useDraws=stats_.drawCalls;const auto usePixels=stats_.pixels;
         if(parts){
             const bool environment=!model.staticLightingBaked&&!(s.lighting&retail::FixedEnvironment)&&(s.flags&(1u<<25))&&((s.flags>>12)&3)==3&&rigid_->stride>=21;
             for(size_t n=0;n<parts->size();++n){
@@ -2097,7 +2165,22 @@ void Renderer::drawNow(const Model& model,const Vertex* vertices,const C3D_Mtx& 
             }
             if(menuEnvironment||(s.lighting&retail::FixedEnvironment))clearEnvironmentUvNow();
             pendingEnd=retail;
+            if(diag::textureUse)diag::textureDrawn(useData,3,stats_.drawCalls-useDraws,stats_.pixels-usePixels);
             continue;
+        }
+        // Item box shells: only the triangles the binder's cull mode keeps (facingIndicesNow).
+        if(facingIndices_&&!model.facing.empty()&&vertices==model.vertices&&subIndices==model.indices&&!skinPalette_&&!rigid_&&
+           ranges.count==1&&ranges.ranges[0].first==s.first&&ranges.ranges[0].count==s.count){
+            C3D_Mtx clip;Mtx_Multiply(&clip,&projection_,&mv);unsigned kept=0;
+            if(const uint16_t* list=facingIndicesNow(model,unsigned(i),clip,kept)){
+                ++facingDraws;facingKept+=kept/3;facingTotal+=s.count/3;
+                if(kept){
+                    C3D_DrawElements(GPU_TRIANGLES,kept,C3D_UNSIGNED_SHORT,list);
+                    stats_.triangles+=kept/3;++stats_.drawCalls;
+                    if(diag::modelPixels)stats_.pixels+=trianglePixels(clip,vertices,list,kept,screenWidth_);
+                }
+                ranges.count=0;
+            }
         }
         for(unsigned n=0;n<ranges.count;++n){
             const auto range=ranges.ranges[n];
@@ -2105,6 +2188,7 @@ void Renderer::drawNow(const Model& model,const Vertex* vertices,const C3D_Mtx& 
             stats_.triangles+=range.count/3;++stats_.drawCalls;
             if(diag::modelPixels&&!skinPalette_){C3D_Mtx clip;Mtx_Multiply(&clip,&projection_,&mv);stats_.pixels+=trianglePixels(clip,vertices,subIndices+range.first,range.count,screenWidth_);}
         }
+        if(diag::textureUse)diag::textureDrawn(useData,3,stats_.drawCalls-useDraws,stats_.pixels-usePixels);
         if(menuEnvironment||(s.lighting&retail::FixedEnvironment))clearEnvironmentUvNow();
         pendingEnd=retail;
     }
@@ -2115,15 +2199,74 @@ void Renderer::drawNow(const Model& model,const Vertex* vertices,const C3D_Mtx& 
     C3D_BoolUnifSet(GPU_VERTEX_SHADER,environmentTexture2Loc_,false);
     // Later draws (sprites, sparks, other models) expect identity UV rows/tint.
     resetMaterialUniforms();
-    if(skinPalette_)C3D_BoolUnifSet(GPU_VERTEX_SHADER,skinnedLoc_,false);
-    if(litSkin){
+    if(skinPalette_){C3D_BoolUnifSet(GPU_VERTEX_SHADER,skinnedLoc_,false);C3D_BoolUnifSet(GPU_VERTEX_SHADER,cofactorNormalsLoc_,false);C3D_BoolUnifSet(GPU_VERTEX_SHADER,rigidNormalsLoc_,false);}
+    if(skinPalette_){
         AttrInfo_Init(attr);AttrInfo_AddLoader(attr,0,GPU_FLOAT,3);AttrInfo_AddLoader(attr,1,GPU_FLOAT,3);AttrInfo_AddLoader(attr,2,GPU_FLOAT,4);AttrInfo_AddLoader(attr,3,GPU_UNSIGNED_BYTE,4);
-        C3D_BoolUnifSet(GPU_VERTEX_SHADER,skinnedNormalsLoc_,false);
     }
     if(model.nativeMiiLighting){C3D_LightEnvBind(nullptr);C3D_BindProgram(&program_);}
 }
 void Renderer::setMaterialCullNow(GPU_CULLMODE mode){
-    C3D_CullFace(cameraCull(mode,view_));
+    drawCull_=cameraCull(mode,view_);drawCullSet_=true;
+    C3D_CullFace(drawCull_);
+}
+void Renderer::flushFacingNow(){
+    if(facingIndices_&&facingUsed_>facingFlushed_)flushGpuData(facingIndices_+facingFlushed_,(facingUsed_-facingFlushed_)*sizeof(uint16_t));
+    facingFlushed_=facingUsed_;
+}
+// The triangles of `submesh` the GPU keeps under drawCull_, in their order, as
+// an index list in this frame's buffer (nullptr: draw the submesh whole).
+// A triangle's screen orientation, for vertices in front of the eye (w > 0)
+// and after near clipping alike, is the sign of det(Q * [a b e; 1 1 1]), Q the
+// x, y and w rows of clip = projection * modelView: by Cauchy-Binet
+// sum_j q_j * pi_j, q_j the 3x3 minor of Q without column j, pi_j the
+// triangle's minor without row j (Model::buildFacingCull, over |normal|).
+// The PICA's CCW is a positive determinant. Only triangles clearly on the
+// culled side are dropped: |cos| between normal and eye ray above 1/100
+// (|v| <= |q_w| * |C - a| * |cos|, C the eye; |q_w| * |C| = |q_xyz|), so
+// near-edge-on ones are left to the GPU as before. Exact for any camera:
+// stereo eyes, Mirror, negative scale.
+const uint16_t* Renderer::facingIndicesNow(const Model& model,unsigned submesh,const C3D_Mtx& clip,unsigned& count){
+    if(!facingIndices_||!drawCullSet_||drawCull_==GPU_CULL_NONE)return nullptr;
+    const Model::FacingPlanes* f=nullptr;
+    for(const auto& p:model.facing)if(p.submesh==submesh){f=&p;break;}
+    if(!f)return nullptr;
+    for(const auto& l:facingLists_)if(l.model==&model&&l.submesh==submesh&&l.cull==drawCull_&&!std::memcmp(&l.clip,&clip,sizeof clip)){count=l.count;return l.indices;}
+    const auto& s=model.submeshes[submesh];
+    if(facingUsed_+s.count>kFacingIndices){++facingFull;return nullptr;}
+    float q[4][3];
+    for(unsigned c=0;c<4;++c){q[c][0]=clip.r[0].c[3-c];q[c][1]=clip.r[1].c[3-c];q[c][2]=clip.r[3].c[3-c];}
+    auto det3=[&](unsigned a,unsigned b,unsigned c){
+        return q[a][0]*(q[b][1]*q[c][2]-q[b][2]*q[c][1])-q[b][0]*(q[a][1]*q[c][2]-q[a][2]*q[c][1])+q[c][0]*(q[a][1]*q[b][2]-q[a][2]*q[b][1]);};
+    const float m0=det3(1,2,3),m1=det3(0,2,3),m2=det3(0,1,3),m3=det3(0,1,2);
+    const float limit=.01f*(std::sqrt(m0*m0+m1*m1+m2*m2)+std::fabs(m3)*f->radius);
+    // FRONT_CCW culls v > 0, BACK_CCW v < 0: keep unless sign*v > limit.
+    const float sign=drawCull_==GPU_CULL_FRONT_CCW?1.f:-1.f;
+    const float w0=sign*m0,w1=sign*m1,w2=sign*m2,w3=sign*m3;
+    uint16_t* out=facingIndices_+facingUsed_;const uint16_t* in=model.indices+s.first;unsigned kept=0;
+    const auto* plane=f->planes.data();
+    for(unsigned t=0,n=s.count/3;t<n;++t,in+=3){
+        const auto& p=plane[t];
+        if(w0*p[0]+w1*p[1]+w2*p[2]+w3*p[3]>limit)continue;
+        out[kept]=in[0];out[kept+1]=in[1];out[kept+2]=in[2];kept+=3;
+    }
+    facingUsed_+=kept;++facingBuilt;
+    auto& l=facingLists_[facingNext_++%2];
+    l.model=&model;l.submesh=submesh;l.cull=drawCull_;l.clip=clip;l.indices=out;l.count=kept;
+    count=kept;return out;
+}
+void Model::buildFacingCull(unsigned submesh){
+    if(submesh>=submeshes.size())return;
+    const auto& s=submeshes[submesh];
+    FacingPlanes f{submesh,0.f,{}};f.planes.reserve(s.count/3);
+    for(unsigned i=s.first;i+2<s.first+s.count;i+=3){
+        const Vec3 a=vertices[indices[i]].position,b=vertices[indices[i+1]].position,e=vertices[indices[i+2]].position;
+        for(Vec3 v:{a,b,e})f.radius=std::max(f.radius,std::sqrt(dot(v,v)));
+        // Minors of [a b e; 1 1 1] without row 0..3: (N.x, -N.y, N.z, N.a).
+        const Vec3 n=cross(b-a,e-a);const float length=std::sqrt(dot(n,n));
+        if(!(length>0.f)){f.planes.push_back({0,0,0,0});continue;} // never dropped
+        f.planes.push_back({n.x/length,-n.y/length,n.z/length,dot(n,a)/length});
+    }
+    facing.push_back(std::move(f));
 }
 namespace {
 // The screen rectangle (screenFadeNow pixels, OrthoTilt 0..width x 0..240)
@@ -2243,7 +2386,16 @@ void Renderer::setBakedEnvironmentUv(){
     C3D_BoolUnifSet(GPU_VERTEX_SHADER,environmentMappedLoc_,false);
     C3D_BoolUnifSet(GPU_VERTEX_SHADER,environmentTexture2Loc_,true);
 }
+void Renderer::setEnvironmentPairNow(const float* uv){
+    C3D_BoolUnifSet(GPU_VERTEX_SHADER,environmentPairLoc_,uv!=nullptr);
+    if(!uv)return;
+    // As uv1TransformNow: GX rows in, V-up rows out.
+    const float a=uv[0],b=uv[1],tx=uv[2],c=uv[3],d=uv[4],ty=uv[5];
+    C3D_FVUnifSet(GPU_VERTEX_SHADER,uv2RowLoc_[0],a,-b,0,b+tx);
+    C3D_FVUnifSet(GPU_VERTEX_SHADER,uv2RowLoc_[1],-c,d,0,1-d-ty);
+}
 void Renderer::clearEnvironmentUvNow(){
+    C3D_BoolUnifSet(GPU_VERTEX_SHADER,environmentPairLoc_,false);
     C3D_BoolUnifSet(GPU_VERTEX_SHADER,playerShadowProjectLoc_,false);
     C3D_BoolUnifSet(GPU_VERTEX_SHADER,projectedWaterLoc_,false);
     C3D_BoolUnifSet(GPU_VERTEX_SHADER,environmentMappedLoc_,false);
@@ -2868,7 +3020,7 @@ void Renderer::textNow(const char* text,float x,float y,float size,uint32_t rgba
 bool Renderer::configureStadiumScreen(bool enabled){
     if(enabled&&stadiumTex_[0].data)return true;
     waitForGpu();
-    if(!enabled){freeStadiumScreen();return true;}
+    if(!enabled){freeStadiumScreen();if(releaseIdleBloom&&!bloomEnabled&&(sceneTarget_||bloomVertices_))freeBloom();return true;}
     // Allocate capture/composite scratch at scene load, never at first visibility.
     if(!initBloom())return false;
     for(unsigned i=0;i<2;++i){
@@ -3171,6 +3323,10 @@ void Renderer::bloomPasses(){
     // quality halves spatial samples, doubling their weights to keep energy.
     // Radii are original low-resolution texels, converted to the 3DS canvas.
     const unsigned reduction=renderQuality().bloomBlurRounds<2?2:1;
+    // The three-tap rings' texcoord2 leaves the vertex shader through the
+    // general path's unlit branch: no fast path, no light (restored below).
+    const bool lit=(C3D_BoolUnifs[GPU_VERTEX_SHADER]>>(diffuseLightingLoc_-0x68))&1;
+    if(bloomTriple){C3D_BoolUnifSet(GPU_VERTEX_SHADER,diffuseLightingLoc_,false);C3D_BoolUnifSet(GPU_VERTEX_SHADER,uvPlainLoc_,false);C3D_BoolUnifSet(GPU_VERTEX_SHADER,fastPathLoc_,false);}
     auto ring=[&](unsigned source,unsigned sourceWidth,unsigned sourceHeight,unsigned dest,unsigned width,unsigned height,
                   unsigned band,unsigned stage,bool preserve){
         bloomPass(bloomTarget_[dest],width,height);
@@ -3191,6 +3347,34 @@ void Renderer::bloomPasses(){
         const float radiusX=bloomTapRadius(settings.strength[band],band,sourceWidth,608);
         const float radiusY=bloomTapRadius(settings.strength[band],band,sourceHeight,456);
         if(reduction==1)C3D_TexBind(1,&bloomTex_[source]);
+        if(reduction==1&&bloomTriple){
+            // Three taps a quad (8 = 3+3+2, 16 = 3+3+3+3+2+2): unit 2 samples
+            // the third at texcoord2, the second tap's coordinates moved by
+            // the offset difference (environmentPair). Each tap's product is
+            // the same and the combiner adds integers as blending does, so
+            // the target holds the same sums (saturating either way).
+            C3D_TexBind(2,&bloomTex_[source]);
+            const float tw=float(bloomTex_[source].width),th=float(bloomTex_[source].height);
+            for(unsigned i=0;i<count;){
+                const unsigned left=count-i,n=left==4||left==2?2:3;
+                const auto& tap=BloomRing[i*(16/count)];const auto& next=BloomRing[(i+1)*(16/count)];
+                auto* third=C3D_GetTexEnv(2);C3D_TexEnvInit(third);
+                if(n==3){
+                    const auto& last=BloomRing[(i+2)*(16/count)];
+                    C3D_TexEnvColor(third,coefficient*0x01010101u);
+                    C3D_TexEnvSrc(third,C3D_Both,GPU_TEXTURE2,GPU_CONSTANT,GPU_PREVIOUS);C3D_TexEnvFunc(third,C3D_Both,GPU_MULTIPLY_ADD);
+                    // bloomQuad's uv1: u=(H-y*H/h-dv)/tw, v=(W-x*W/w-du)/th; the third tap differs by a translation.
+                    const float du=-(last[1]-next[1])*radiusY/tw,dv=-(last[0]-next[0])*radiusX/th;
+                    const float srt[6]={1,0,du,0,1,-dv};setEnvironmentPairNow(srt);
+                }else setEnvironmentPairNow(nullptr);
+                blend(preserve||i>0);
+                bloomQuad(bloomTex_[source],sourceWidth,sourceHeight,float(width),float(height),
+                    tap[0]*radiusX,tap[1]*radiusY,sourceWidth,sourceHeight,&bloomTex_[source],next[0]*radiusX,next[1]*radiusY);
+                i+=n;
+            }
+            setEnvironmentPairNow(nullptr);C3D_TexBind(1,nullptr);C3D_TexBind(2,nullptr);
+            return;
+        }
         for(unsigned i=0;i<count;i+=reduction==1?2:1){
             const auto& tap=BloomRing[i*(16/count)];blend(preserve||i>0);
             if(reduction==1){
@@ -3211,6 +3395,7 @@ void Renderer::bloomPasses(){
     blend(false);bloomQuad(bloomTex_[1],BloomNearWidth,BloomNearHeight,BloomFarWidth,BloomFarHeight,0,0);
     ring(3,BloomFarWidth,BloomFarHeight,2,BloomFarWidth,BloomFarHeight,1,0,false);
     ring(3,BloomFarWidth,BloomFarHeight,2,BloomFarWidth,BloomFarHeight,1,1,true);
+    if(bloomTriple)C3D_BoolUnifSet(GPU_VERTEX_SHADER,diffuseLightingLoc_,lit);
     bloomPass(topTarget(),400,240);
     // Merged: one full-screen pass, not a scene copy plus a blended composite.
     // The near and far textures move to units 1 and 2 and share texcoord 1;
@@ -3303,6 +3488,7 @@ void Renderer::endNow(){
     // been swapped (previousFrameDone() notes the framebuffers then).
     if(!execPipelined_||previousFrameDone_)notePresented();
     if(execPipelined_){endingFrame_=true;frameEndTick_=svcGetSystemTick();}
+    flushFacingNow();
     stats_.commandUsage=C3D_GetCmdBufUsage();C3D_FrameEnd(GX_CMDLIST_FLUSH);
     endingFrame_=false;
     if(execPipelined_){

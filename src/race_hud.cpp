@@ -35,11 +35,16 @@ namespace mkw {
 namespace {
 // Retail itembox / itemBoxNise materials (layout generated from the BRRES).
 struct BoxMaterial { Renderer* renderer; const Model* model; const ItemBoxLayout* layout;
-    const std::array<std::array<float,6>,300>* inner; C3D_Mtx transform; unsigned frame; bool sparkle; float environmentBlend,opacity=1.f;
+    const std::array<std::array<float,6>,300>* inner; C3D_Mtx transform; unsigned frame; uint8_t outer; float environmentBlend,opacity=1.f;
     // itemBoxNise: mat_boxin's lerp weight toward its rainbow layer (GX A0), and the pass that adds that layer.
     uint8_t rainbow=0; bool rainbowLayer=false;
     // The sparkle dot group drawn (layout.sparkleGroups: one pass per group).
-    uint8_t group=0; };
+    uint8_t group=0;
+    // OuterShellGroup: the sparkle's weight relative to the shell (opacity is the shell's).
+    float sparkleWeight=1.f; };
+// mat_boxout passes: the shell, one sparkle group, or (boxSparklePair) the
+// shell with group 0, and groups `group` and `group`+1 together.
+enum : uint8_t {OuterShell,OuterGroup,OuterShellGroup,OuterGroupPair};
 constexpr float ShellWarningDistance=6000.f;
 float boxEnvironmentBlend(Vec3 position,Vec3 viewer){
     const Vec3 delta=position-viewer;
@@ -60,6 +65,7 @@ void bindBox(void* context,std::size_t submesh){
     auto& m=*static_cast<BoxMaterial*>(context);const auto& L=*m.layout;
     for(int stage=0;stage<6;++stage)C3D_TexEnvInit(C3D_GetTexEnv(stage));
     auto* e0=C3D_GetTexEnv(0);auto* e1=C3D_GetTexEnv(1);
+    C3D_TexEnvBufUpdate(C3D_Both,0);m.renderer->setEnvironmentPairNow(nullptr);
     auto environment=[&](const float (&srt)[6]){
         if(m.model->staticLightingBaked&&m.environmentBlend<=0.f){m.renderer->clearEnvironmentUv();m.renderer->setUv1Transform(srt);}
         else m.renderer->setEnvironmentUv(m.transform,srt,false,m.environmentBlend);
@@ -103,10 +109,56 @@ void bindBox(void* context,std::size_t submesh){
         m.renderer->setMaterialCullNow(GPU_CULL_FRONT_CCW);
         C3D_AlphaBlend(GPU_BLEND_ADD,GPU_BLEND_ADD,GPU_ONE,GPU_ONE,GPU_ZERO,GPU_ONE);
         C3D_DepthTest(true,GPU_GEQUAL,GPU_WRITE_COLOR);
-        if(!m.sparkle){
+        // Sparkle group g's noise SRT and its mask channel's inverse.
+        auto noiseSrt=[&](unsigned g,float (&srt)[6]){
+            for(unsigned i=0;i<6;++i)srt[i]=L.noiseSRT[i];
+            if(L.sparkleGroups&&(m.layout==&FakeBoxMaterials?fakeBoxSparkle:itemBoxSparkle)){srt[2]+=L.sparkleOffset[g][0];srt[5]+=L.sparkleOffset[g][1];}
+        };
+        auto inverseMask=[&](unsigned g){
+            constexpr GPU_TEVOP_RGB channel[]={GPU_TEVOP_RGB_ONE_MINUS_SRC_R,GPU_TEVOP_RGB_ONE_MINUS_SRC_G,GPU_TEVOP_RGB_ONE_MINUS_SRC_B};
+            return L.sparkleGroups?channel[g%3]:GPU_TEVOP_RGB_ONE_MINUS_SRC_COLOR;
+        };
+        // The single-group stages below, from `stage`: q = clamp(0.75*noise - (1-mask)),
+        // then (with finish) 2*(q - 1/2).
+        auto group=[&](int stage,GPU_TEVSRC noise,unsigned g,bool finish){
+            auto* a=C3D_GetTexEnv(stage);auto* b=C3D_GetTexEnv(stage+1);
+            C3D_TexEnvColor(a,0xffbfbfbf);C3D_TexEnvSrc(a,C3D_RGB,noise,GPU_CONSTANT);C3D_TexEnvFunc(a,C3D_RGB,GPU_MODULATE);
+            C3D_TexEnvSrc(b,C3D_RGB,GPU_PREVIOUS,GPU_TEXTURE0);C3D_TexEnvOpRgb(b,GPU_TEVOP_RGB_SRC_COLOR,inverseMask(g));
+            C3D_TexEnvFunc(b,C3D_RGB,GPU_SUBTRACT);
+            if(finish){auto* c=C3D_GetTexEnv(stage+2);C3D_TexEnvColor(c,0xff808080);C3D_TexEnvSrc(c,C3D_RGB,GPU_PREVIOUS,GPU_CONSTANT);
+                C3D_TexEnvFunc(c,C3D_RGB,GPU_SUBTRACT);C3D_TexEnvScale(c,C3D_RGB,GPU_TEVSCALE_2);}
+        };
+        if(m.outer==OuterShell){
             environment(IdentitySRT);
             C3D_TexBind(1,texture(L.shell,GPU_CLAMP_TO_EDGE));
             C3D_TexEnvSrc(e0,C3D_RGB,GPU_TEXTURE1);C3D_TexEnvFunc(e0,C3D_RGB,GPU_REPLACE);
+        }else if(m.outer==OuterShellGroup){
+            // The shell (unit 1) plus group 0 (noise on unit 2, texcoord2):
+            // shell + w*sparkle, as the two passes' sum. Group masks never
+            // overlap above 1/2, so the clamp of the sum is the passes' clamp.
+            float noise[6];noiseSrt(0,noise);
+            environment(IdentitySRT);m.renderer->setEnvironmentPairNow(noise);
+            C3D_TexBind(0,texture(L.mask,GPU_REPEAT));C3D_TexBind(1,texture(L.shell,GPU_CLAMP_TO_EDGE));C3D_TexBind(2,texture(L.noise,GPU_REPEAT));
+            group(0,GPU_TEXTURE2,0,true);
+            auto* e3=C3D_GetTexEnv(3);
+            if(m.sparkleWeight<1.f){
+                C3D_TexEnvColor(e3,0xff000000u|uint32_t(std::lround(255.f*std::clamp(m.sparkleWeight,0.f,1.f)))*0x010101u);
+                C3D_TexEnvSrc(e3,C3D_RGB,GPU_PREVIOUS,GPU_CONSTANT,GPU_TEXTURE1);C3D_TexEnvFunc(e3,C3D_RGB,GPU_MULTIPLY_ADD);
+            }else{C3D_TexEnvSrc(e3,C3D_RGB,GPU_PREVIOUS,GPU_TEXTURE1);C3D_TexEnvFunc(e3,C3D_RGB,GPU_ADD);}
+        }else if(m.outer==OuterGroupPair){
+            // Groups g (unit 1) and g+1 (unit 2): q_g + q_g+1, then 2*(sum - 1/2).
+            // Where one q exceeds 1/2 the other is 0 (disjoint masks), and two
+            // partial q's sum below 1/2 (masks sum <= 1), so this is the sum of
+            // the two single-group passes.
+            float first[6],second[6];noiseSrt(m.group,first);noiseSrt(m.group+1u,second);
+            environment(first);m.renderer->setEnvironmentPairNow(second);
+            C3D_TexBind(0,texture(L.mask,GPU_REPEAT));C3D_TexBind(1,texture(L.noise,GPU_REPEAT));C3D_TexBind(2,texture(L.noise,GPU_REPEAT));
+            group(0,GPU_TEXTURE1,m.group,false);
+            C3D_TexEnvBufUpdate(C3D_RGB,2);
+            group(2,GPU_TEXTURE2,m.group+1u,false);
+            auto* e4=C3D_GetTexEnv(4);C3D_TexEnvSrc(e4,C3D_RGB,GPU_PREVIOUS,GPU_PREVIOUS_BUFFER);C3D_TexEnvFunc(e4,C3D_RGB,GPU_ADD);
+            auto* e5=C3D_GetTexEnv(5);C3D_TexEnvColor(e5,0xff808080);C3D_TexEnvSrc(e5,C3D_RGB,GPU_PREVIOUS,GPU_CONSTANT);
+            C3D_TexEnvFunc(e5,C3D_RGB,GPU_SUBTRACT);C3D_TexEnvScale(e5,C3D_RGB,GPU_TEVSCALE_2);
         }else{
             // GX stage 1 has SUBHALF before SCALE_2. Omitting that bias
             // lights up most of the mask instead of only its narrow peaks.
@@ -116,26 +168,17 @@ void bindBox(void* context,std::size_t submesh){
             // stage shifts each mask dot's noise lookup by that dot's
             // intensity: each group is its own pass with its own noise offset,
             // its dots in one channel of the RGB8 mask.
-            float noise[6];for(unsigned i=0;i<6;++i)noise[i]=L.noiseSRT[i];
-            if(L.sparkleGroups&&(m.layout==&FakeBoxMaterials?fakeBoxSparkle:itemBoxSparkle)){noise[2]+=L.sparkleOffset[m.group][0];noise[5]+=L.sparkleOffset[m.group][1];}
+            float noise[6];noiseSrt(m.group,noise);
             environment(noise);
             C3D_TexBind(0,texture(L.mask,GPU_REPEAT));C3D_TexBind(1,texture(L.noise,GPU_REPEAT));
-            C3D_TexEnvColor(e0,0xffbfbfbf);
-            C3D_TexEnvSrc(e0,C3D_RGB,GPU_TEXTURE1,GPU_CONSTANT);C3D_TexEnvFunc(e0,C3D_RGB,GPU_MODULATE);
-            C3D_TexEnvSrc(e1,C3D_RGB,GPU_PREVIOUS,GPU_TEXTURE0);
-            constexpr GPU_TEVOP_RGB inverseMask[]={GPU_TEVOP_RGB_ONE_MINUS_SRC_R,GPU_TEVOP_RGB_ONE_MINUS_SRC_G,GPU_TEVOP_RGB_ONE_MINUS_SRC_B};
-            C3D_TexEnvOpRgb(e1,GPU_TEVOP_RGB_SRC_COLOR,L.sparkleGroups?inverseMask[m.group%3]:GPU_TEVOP_RGB_ONE_MINUS_SRC_COLOR);
-            C3D_TexEnvFunc(e1,C3D_RGB,GPU_SUBTRACT);
-            auto* e2=C3D_GetTexEnv(2);
-            C3D_TexEnvColor(e2,0xff808080);
-            C3D_TexEnvSrc(e2,C3D_RGB,GPU_PREVIOUS,GPU_CONSTANT);
-            C3D_TexEnvFunc(e2,C3D_RGB,GPU_SUBTRACT);C3D_TexEnvScale(e2,C3D_RGB,GPU_TEVSCALE_2);
+            group(0,GPU_TEXTURE1,m.group,true);
         }
     }
     if(m.opacity<1.f){
         // Mix sampled colours, never slide UVs through unrelated texels.
+        // Alpha only: keep this stage's RGB constant (sparkle pair passes use it).
         auto* coverage=C3D_GetTexEnv(3);
-        C3D_TexEnvColor(coverage,uint32_t(std::lround(255.f*m.opacity))<<24);
+        C3D_TexEnvColor(coverage,(coverage->color&0xffffffu)|uint32_t(std::lround(255.f*m.opacity))<<24);
         C3D_TexEnvSrc(coverage,C3D_Alpha,GPU_CONSTANT);C3D_TexEnvFunc(coverage,C3D_Alpha,GPU_REPLACE);
         C3D_AlphaBlend(GPU_BLEND_ADD,GPU_BLEND_ADD,GPU_SRC_ALPHA,
             submesh==L.outer?GPU_ONE:GPU_ONE_MINUS_SRC_ALPHA,GPU_ZERO,GPU_ONE);
@@ -173,10 +216,12 @@ void bakeBoxEnvironment(Model& model,const ItemBoxLayout& layout){
         }
     }
     flushGpuData(model.vertices,model.vertexCount*sizeof(Vertex));
+    // Both shells cull half their triangles (inner: GX cull front, outer: cull back).
+    if(model.facing.empty()){model.buildFacingCull(layout.inner);model.buildFacingCull(layout.outer);}
 }
 void drawBox(Renderer& renderer,const Model& model,const ItemBoxLayout& layout,const std::array<std::array<float,6>,300>& inner,const C3D_Mtx& t,unsigned frame,float sparkle=1.f,float environmentBlend=1.f){
     const float blend=std::clamp(environmentBlend,0.f,1.f);
-    BoxMaterial m{&renderer,&model,&layout,&inner,t,frame,false,0.f};
+    BoxMaterial m{&renderer,&model,&layout,&inner,t,frame,OuterShell,0.f};
     if(layout.rainbowTexture>=0&&fakeBoxRainbow){
         // ItemObjFib (PAL 0x807A7D90): A0 = 255 * (camera distance - 3000) / (6000 - 3000),
         // clamped and truncated; far fake boxes take the real boxes' rainbow.
@@ -193,12 +238,21 @@ void drawBox(Renderer& renderer,const Model& model,const ItemBoxLayout& layout,c
     renderer.setUvOffset(0,0);
     auto outer=[&](float environment,float weight){
         if(weight<=0.f)return;
-        m.environmentBlend=environment;m.opacity=weight;m.sparkle=false;
+        m.environmentBlend=environment;m.opacity=weight;m.outer=OuterShell;m.group=0;
+        const unsigned groups=std::max(1u,layout.sparkleGroups);
+        if(boxSparklePair&&sparkle>0.f){
+            // Half the passes: shell + group 0, then groups (1, 2).
+            m.outer=OuterShellGroup;m.sparkleWeight=sparkle;
+            renderer.draw(model,t,false,bindBox,m,outerOnly);
+            m.opacity=weight*sparkle;
+            for(unsigned g=1;g<groups;g+=2){m.group=uint8_t(g);m.outer=g+1<groups?OuterGroupPair:OuterGroup;renderer.draw(model,t,false,bindBox,m,outerOnly);}
+            m.group=0;m.outer=OuterShell;return;
+        }
         renderer.draw(model,t,false,bindBox,m,outerOnly);
         if(sparkle>0.f){
-            m.sparkle=true;m.opacity=weight*sparkle;
-            for(m.group=0;m.group<std::max(1u,layout.sparkleGroups);++m.group)renderer.draw(model,t,false,bindBox,m,outerOnly);
-            m.group=0;
+            m.outer=OuterGroup;m.opacity=weight*sparkle;
+            for(m.group=0;m.group<groups;++m.group)renderer.draw(model,t,false,bindBox,m,outerOnly);
+            m.group=0;m.outer=OuterShell;
         }
     };
     outer(0.f,1.f-blend);outer(1.f,blend);

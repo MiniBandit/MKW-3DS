@@ -66,6 +66,8 @@ struct MenuMovie::Impl {
  unsigned rowBytes()const{return width/TileSize*32;} // 4bpp: 8x8 tile = 32 bytes
 };
 
+// QA: where the stream thread is (describe()).
+std::atomic<int> streamerPhase{0};std::atomic<unsigned> streamerTicks{0};
 namespace {
 class Streamer {
 public:
@@ -91,16 +93,18 @@ private:
    LightLock_Lock(&lock_);
    streams_.erase(std::remove_if(streams_.begin(),streams_.end(),[](const auto& s){return s->closing&&!s->file;}),streams_.end());
    LightLock_Unlock(&lock_);
-   if(!worked)LightEvent_Wait(&event_);
+   streamerTicks.fetch_add(1);
+   if(!worked){streamerPhase.store(1);LightEvent_Wait(&event_);streamerPhase.store(0);}
    // This worker outranks AssetLoader on the same core. Several active
    // previews must not consume every idle slice while a page is loading.
    else svcSleepThread(1000000);
   }
  }
  static bool open(MenuMovie::Impl& s,const std::string& path){
-  std::FILE* file=std::fopen(path.c_str(),"rb");if(!file)return false;
-  std::setvbuf(file,nullptr,_IONBF,0);
+  streamerPhase.store(2);std::FILE* file=std::fopen(path.c_str(),"rb");streamerPhase.store(3);if(!file)return false;
+  streamerPhase.store(30);std::setvbuf(file,nullptr,_IONBF,0);
   unsigned char header[64];
+  streamerPhase.store(31);
   if(std::fread(header,1,sizeof header,file)!=sizeof header){std::fclose(file);return false;}
   const bool banded=!std::memcmp(header,"GMV2",4)&&u32(header+4)==2;
   if(!banded&&(std::memcmp(header,"GMV1",4)!=0||u32(header+4)!=1)){std::fclose(file);return false;}
@@ -108,10 +112,10 @@ private:
   const std::uint32_t count=u32(header+12),numerator=u32(header+16),denominator=u32(header+20),frameBytes=u32(header+24),offset=u32(header+28);
   const std::uint64_t total=std::uint64_t(offset)+std::uint64_t(frameBytes)*count;
   if(!powerOfTwo(width)||!powerOfTwo(height)||!count||count>50000||!numerator||!denominator||denominator>1000000||std::uint64_t(numerator)>std::uint64_t(denominator)*120||frameBytes!=width*height/2||offset!=64||total>std::uint64_t(std::numeric_limits<long>::max())){std::fclose(file);return false;}
-  if(std::fseek(file,0,SEEK_END)!=0){std::fclose(file);return false;}
+  streamerPhase.store(32);if(std::fseek(file,0,SEEK_END)!=0){std::fclose(file);return false;}streamerPhase.store(33);
   const long fileBytes=std::ftell(file);
-  if(banded?!readIndex(s,file,header,width,height,count,fileBytes):fileBytes!=long(total)){std::fclose(file);return false;}
-  if(!s.image.initMovieEtc1(width,height)){std::fclose(file);return false;}
+  streamerPhase.store(34);if(banded?!readIndex(s,file,header,width,height,count,fileBytes):fileBytes!=long(total)){std::fclose(file);return false;}
+  streamerPhase.store(4);if(!s.image.initMovieEtc1(width,height)){std::fclose(file);return false;}streamerPhase.store(5);
   s.staging.resize(frameBytes);
   s.file=file;s.width=width;s.height=height;s.count=count;s.numerator=numerator;s.denominator=denominator;s.frameBytes=frameBytes;s.offset=offset;
   return true;
@@ -184,7 +188,7 @@ private:
   s.stage=MenuMovie::Impl::Reading;LightLock_Unlock(&s.lock);
   const unsigned rowBytes=s.rowBytes(),bytes=(end-first)*rowBytes;
   const long position=long(std::uint64_t(s.offset)+std::uint64_t(frame)*s.frameBytes+std::uint64_t(first)*rowBytes);
-  const bool ok=s.banded?readBands(s,frame,first,end):std::fseek(s.file,position,SEEK_SET)==0&&std::fread(s.staging.data(),1,bytes,s.file)==bytes;
+  streamerPhase.store(6);const bool ok=s.banded?readBands(s,frame,first,end):std::fseek(s.file,position,SEEK_SET)==0&&std::fread(s.staging.data(),1,bytes,s.file)==bytes;
   LightLock_Lock(&s.lock);
   if(ok){s.stagedFrame=frame;s.stagedFirst=first;s.stagedRows=end-first;s.stage=MenuMovie::Impl::Ready;
    s.lastFrame=frame;s.lastFirst=first;s.lastEnd=end;s.fullFrame=true;}
@@ -268,6 +272,13 @@ bool MenuMovie::uploadBlocking(std::uint64_t ticks){
 }
 const Texture* MenuMovie::texture()const{return impl_&&impl_->hasFrame?&impl_->image:nullptr;}
 bool MenuMovie::ready()const{return impl_&&impl_->hasFrame;}
+void MenuMovie::describe(char* out,unsigned size)const{
+ if(!impl_){std::snprintf(out,size,"closed");return;}
+ auto& s=*impl_;LightLock_Lock(&s.lock);
+ std::snprintf(out,size,"status=%d stage=%d hasFrame=%d paused=%d full=%d rows=%u..%u ticks=%llu want=%lu last=%lu count=%lu file=%d",s.status.load(),s.stage,int(s.hasFrame),int(s.paused),int(s.fullFrame),s.rowFirst,s.rowEnd,(unsigned long long)s.wantedTicks,(unsigned long)(s.count?s.wantedFrame(s.wantedTicks):0),(unsigned long)s.lastFrame,(unsigned long)s.count,int(s.file!=nullptr));
+ {const auto n=std::strlen(out);if(n+40<size)std::snprintf(out+n,size-n," streamer=%d loops=%u",streamerPhase.load(),streamerTicks.load());}
+ LightLock_Unlock(&s.lock);
+}
 bool MenuMovie::failed()const{return impl_&&impl_->status.load(std::memory_order_acquire)<0;}
 bool MenuMovie::finished()const{
  if(!impl_||impl_->status.load(std::memory_order_acquire)!=1||impl_->loop)return false;

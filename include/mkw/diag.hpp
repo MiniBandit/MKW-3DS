@@ -212,6 +212,98 @@ inline void drawWriteTally(DrawTally& t,int race,const char* suffix){
 }
 inline void drawWrite(int race){drawWriteTally(drawTally,race,"");drawWriteTally(gridTally,race,"grid-");}
 
+// DIAG texture-use.txt: model draws per bound texture (any unit, keyed by its
+// data), and their screen pixels with model-pixels.txt, every race frame
+// (render thread). The race load registers the course, sky and object
+// textures (main thread); textureUseWrite() writes perf-race-NNN-textures.csv,
+// one row per registered texture, where it is (vram/linear) and its use.
+inline bool textureUse=false;
+struct TextureInfo {const void* data=nullptr;std::string owner;int index=-1;unsigned width=0,height=0,fmt=0,levels=0;uint32_t bytes=0;bool unitOne=false;};
+struct TextureUseEntry {const void* data=nullptr;uint32_t draws=0,units=0;uint64_t pixels=0;};
+struct TextureUseTally {LightLock lock;TextureUseEntry entries[1024];unsigned frames=0;std::vector<TextureInfo> info;TextureUseTally(){LightLock_Init(&lock);}};
+inline TextureUseTally textureUseTally;
+inline void textureDrawn(const void* const* data,unsigned count,uint32_t draws,uint64_t pixels){
+    auto& t=textureUseTally;LightLock_Lock(&t.lock);
+    for(unsigned k=0;k<count;++k){
+        if(!data[k])continue;
+        bool repeat=false;for(unsigned j=0;j<k;++j)repeat|=data[j]==data[k];
+        if(repeat)continue;
+        unsigned i=unsigned((uintptr_t(data[k])>>4)*2654435761u)&1023u;
+        for(unsigned probe=0;probe<1024&&t.entries[i].data&&t.entries[i].data!=data[k];++probe)i=(i+1)&1023u;
+        auto& e=t.entries[i];if(e.data&&e.data!=data[k])continue;
+        e.data=data[k];e.draws+=draws;e.pixels+=pixels;e.units|=1u<<k;
+    }
+    LightLock_Unlock(&t.lock);
+}
+inline void textureFrame(){auto& t=textureUseTally;LightLock_Lock(&t.lock);++t.frames;LightLock_Unlock(&t.lock);}
+inline void textureUseReset(){auto& t=textureUseTally;LightLock_Lock(&t.lock);for(auto& e:t.entries)e={};t.frames=0;LightLock_Unlock(&t.lock);}
+inline void textureRegister(std::vector<TextureInfo> info){auto& t=textureUseTally;LightLock_Lock(&t.lock);t.info=std::move(info);LightLock_Unlock(&t.lock);}
+inline void textureUseWrite(int race){
+    if(!textureUse||race<0)return;
+    auto& t=textureUseTally;std::vector<TextureInfo> info;std::vector<TextureUseEntry> used;unsigned frames;
+    LightLock_Lock(&t.lock);info=t.info;frames=t.frames;for(const auto& e:t.entries)if(e.data)used.push_back(e);LightLock_Unlock(&t.lock);
+    if(!frames)return;
+    char path[72];std::snprintf(path,sizeof path,"sdmc:/3ds/mkw-3ds/perf-race-%03d-textures.csv",race);
+    FILE* f=std::fopen(path,"w");if(!f)return;
+    std::fprintf(f,"owner,index,where,width,height,fmt,levels,bytes,unit1,draws_per_frame,%s,units,frames\n",modelPixels?"pixels_per_frame":"pixels_off");
+    for(const auto& i:info){
+        const TextureUseEntry* e=nullptr;for(const auto& u:used)if(u.data==i.data){e=&u;break;}
+        const uintptr_t at=uintptr_t(i.data);
+        std::fprintf(f,"%s,%d,%s,%u,%u,%u,%u,%lu,%d,%.3f,%.0f,%u,%u\n",i.owner.c_str(),i.index,at>=0x1F000000u&&at<0x1F600000u?"vram":"linear",
+            i.width,i.height,i.fmt,i.levels,(unsigned long)i.bytes,int(i.unitOne),e?double(e->draws)/frames:0.0,e?double(e->pixels)/frames:0.0,e?e->units:0u,frames);
+    }
+    std::fclose(f);
+}
+
+// Deferred writes run by the pipelined frame hook (previousFrameDone), per
+// write kind (render thread): the GPU waits for them between frames.
+// writesWrite() writes the race's perf-race-NNN-hook-writes.csv.
+struct WriteEntry {const char* kind=nullptr;const void* run=nullptr;uint64_t ticks=0,maxFrameTicks=0;uint32_t count=0,frameCount=0,maxFrameCount=0;uint64_t frameTicks=0;};
+struct WriteTally {LightLock lock;WriteEntry entries[16];unsigned count=0,frames=0;uint64_t ticks=0,maxFrameTicks=0;WriteTally(){LightLock_Init(&lock);}};
+inline WriteTally writeTally;
+// The same for prepare()d writes and upload() staging copies (frame start, off the hook).
+inline WriteTally prepareTally;
+// One frame's writes, already grouped by kind (frame[i].frameTicks/frameCount).
+inline void writesFrame(const WriteEntry* frame,unsigned n,uint64_t total,WriteTally& t=writeTally){
+#ifdef MKW_RELEASE
+    return;
+#endif
+    LightLock_Lock(&t.lock);
+    for(unsigned k=0;k<n;++k){
+        const auto& f=frame[k];unsigned i=0;
+        while(i<t.count&&(t.entries[i].run!=f.run||t.entries[i].kind!=f.kind))++i;
+        if(i==t.count){if(t.count==16)continue;t.entries[t.count++]={f.kind,f.run};}
+        auto& e=t.entries[i];e.ticks+=f.frameTicks;e.count+=f.frameCount;
+        e.maxFrameTicks=std::max(e.maxFrameTicks,f.frameTicks);e.maxFrameCount=std::max(e.maxFrameCount,f.frameCount);
+    }
+    ++t.frames;t.ticks+=total;t.maxFrameTicks=std::max(t.maxFrameTicks,total);
+    LightLock_Unlock(&t.lock);
+}
+inline void writesReset(){for(auto* t:{&writeTally,&prepareTally}){LightLock_Lock(&t->lock);t->count=0;t->frames=0;t->ticks=t->maxFrameTicks=0;LightLock_Unlock(&t->lock);}}
+// Hook rows first (total = the hook's whole time); then "prepare: <kind>" rows
+// and "prepare total", per frame of the hook's frame count (frames that
+// prepared nothing count as zero).
+inline void writesWrite(int race){
+    auto& t=writeTally;std::vector<WriteEntry> rows,prepared;unsigned frames;uint64_t ticks,maxTicks,prepareTicks,prepareMax;
+    LightLock_Lock(&t.lock);rows.assign(t.entries,t.entries+t.count);frames=t.frames;ticks=t.ticks;maxTicks=t.maxFrameTicks;LightLock_Unlock(&t.lock);
+    auto& p=prepareTally;
+    LightLock_Lock(&p.lock);prepared.assign(p.entries,p.entries+p.count);prepareTicks=p.ticks;prepareMax=p.maxFrameTicks;LightLock_Unlock(&p.lock);
+    if(!frames||race<0)return;
+    auto byTime=[](const WriteEntry& a,const WriteEntry& b){return a.ticks>b.ticks;};
+    std::sort(rows.begin(),rows.end(),byTime);std::sort(prepared.begin(),prepared.end(),byTime);
+    char path[72];std::snprintf(path,sizeof path,"sdmc:/3ds/mkw-3ds/perf-race-%03d-hook-writes.csv",race);
+    FILE* f=std::fopen(path,"w");if(!f)return;
+    const double ms=1000.0/SYSCLOCK_ARM11;
+    std::fprintf(f,"kind,run,writes_per_frame,ms_per_frame,max_ms_frame,max_writes_frame,frames\n");
+    std::fprintf(f,"total,,,%.3f,%.3f,,%u\n",double(ticks)*ms/frames,double(maxTicks)*ms,frames);
+    for(const auto& e:rows)std::fprintf(f,"%s,%08lx,%.2f,%.3f,%.3f,%u,%u\n",e.kind?e.kind:"unnamed",(unsigned long)uintptr_t(e.run),
+        double(e.count)/frames,double(e.ticks)*ms/frames,double(e.maxFrameTicks)*ms,e.maxFrameCount,frames);
+    if(!prepared.empty())std::fprintf(f,"prepare total,,,%.3f,%.3f,,%u\n",double(prepareTicks)*ms/frames,double(prepareMax)*ms,frames);
+    for(const auto& e:prepared)std::fprintf(f,"prepare: %s,%08lx,%.2f,%.3f,%.3f,%u,%u\n",e.kind?e.kind:"unnamed",(unsigned long)uintptr_t(e.run),
+        double(e.count)/frames,double(e.ticks)*ms/frames,double(e.maxFrameTicks)*ms,e.maxFrameCount,frames);
+    std::fclose(f);
+}
+
 // Skinned vertices per course-object resource (recording thread), for finding
 // what skins on a course. gpu: skinned in the vertex shader each draw; else a
 // fresh CPU skin (reused poses aren't counted, as in renderMetrics).

@@ -67,8 +67,8 @@ class Texture {
 public:
     C3D_Tex gpu{};
     bool ready=false;
-    // Some draw may bind it to texture unit 1 (a material's second map,
-    // projected water, a pattern swap). Renderer::moveToVram keeps such 4-bit
+    // Some draw may bind it to texture unit 1 or 2 (a material's second map,
+    // projected water, a pattern swap, a statue's third map). Renderer::moveToVram keeps such 4-bit
     // textures in LINEAR: 3dbrew GPU/Pitfalls, TEXUNIT1 instability.
     bool unitOne=false;
     C3D_Tex noMipSampler{}; // diagnostic view; never owns/frees its data
@@ -100,6 +100,8 @@ public:
 // HUD sprites drawn 2-5x under their texel size sample a halved copy
 // (RaceHud::load). A/B: no-hud-shrink.txt.
 inline bool shrinkHudTextures=false;
+// DIAG no-material-tracks.txt: skip GMDL MAN1 (course/sky CLR0/PAT0) overrides.
+inline bool materialTracksOff=false,materialSwapOff=false;
 // Fake Item Boxes take the real boxes' rainbow with distance, as retail does
 // (one more draw per far fake box). A/B: no-fakebox-rainbow.txt.
 inline bool fakeBoxRainbow=true;
@@ -109,6 +111,9 @@ inline bool fakeBoxRainbow=true;
 inline bool fakeBoxSparkle=true;
 // The same for real Item Boxes (A/B: no-itembox-sparkle.txt).
 inline bool itemBoxSparkle=true;
+// Item / fake box outer passes in pairs: the shell with sparkle group 0, then
+// groups 1 and 2 together (texcoord2 via setEnvironmentPairNow). A/B: no-sparkle-pair.txt.
+inline bool boxSparklePair=true;
 // Per-submesh material animation for one draw: affine rows (a b tx / c d ty)
 // for both texture coordinates, texture/TEV-constant overrides, an RGBA
 // multiplier on the vertex colour and an additive colour (0xAABBGGRR).
@@ -181,6 +186,13 @@ public:
     // Use the original GPU lighting/EnvCamera path and the throttled light maps.
     bool dynamicLightTextures=false;
     bool nativeMiiLighting=false;
+    // Submeshes whose culled triangles the CPU drops before the draw
+    // (Renderer::facingCull): per triangle its homogeneous plane minors over
+    // |normal| (renderer.cpp facingIndicesNow), and the largest vertex radius.
+    // Only for vertices that never change after the call (item box shells).
+    struct FacingPlanes {uint32_t submesh;float radius;std::vector<std::array<float,4>> planes;};
+    std::vector<FacingPlanes> facing;
+    void buildFacingCull(unsigned submesh);
     ~Model();
     bool load(const char* path,bool dynamicLighting=false,bool liveDiffuse=false);
 };
@@ -220,8 +232,26 @@ struct ViewFrustum {
 class DeferredWrites {
 public:
     void* allocate(std::size_t bytes);
-    void queue(void (*run)(void*),void* payload);
-    struct Write {void (*run)(void*);void* payload;};
+    // kind: a static name for the DIAG hook-writes table (perf-race-NNN-hook-writes.csv).
+    void queue(void (*run)(void*),void* payload,const char* kind=nullptr);
+    // A pipelined frame's queue()d writes run on its hook, while the GPU idles
+    // between frames. Work that needs no GPU memory can move off the hook:
+    // preparing() is true for a recorded frame's writes (off: no-hook-prep.txt).
+    // prepare(): run on the render thread when it starts this frame, before its
+    // FrameBegin and every queue()d write, while the GPU may still draw the
+    // previous frame. It may write only its own payload (e.g. a CPU skin's
+    // results, which the queue()d write then only stores).
+    // upload(): GPU memory at destination receives bytes from source (constant
+    // until the frame is drawn) as a queue()d memcpy would, without the CPU
+    // writing it on the hook: copied into staging[frame parity] (LINEAR, each
+    // >= bytes, 16-byte multiple) when the frame starts, then a GX copy that runs
+    // after every earlier frame and before this frame's draws. False: not here.
+    static inline bool prepareWrites=true;
+    bool preparing() const;
+    void prepare(void (*run)(void*),void* payload,const char* kind=nullptr);
+    bool upload(void* destination,const void* source,uint32_t bytes,void* const staging[2],const char* kind=nullptr);
+    struct Write {void (*run)(void*);void* payload;const char* kind;};
+    struct Upload {void* destination;const void* source;uint32_t bytes;void* staging[2];const char* kind;};
 private:
     friend class Renderer;
     struct Storage;
@@ -361,6 +391,17 @@ public:
     // next call. Fades, cinema bars and bloom stay on the screen plane.
     // Ignored in 2D frames, which therefore record nothing.
     void setScreenDepth(float parallax);
+    // Retail lens flare occlusion (src/lens_flare.cpp): the scene depth in the
+    // 3x3 top-screen pixels around (x,y), read once the GPU has finished the
+    // frame that recorded it (one frame late; retail copies its EFB depth in
+    // the same frame). Recorded frames only.
+    void requestDepthProbe(float x,float y);
+    // Covered samples (non-zero depth, 0..9) of the latest finished probe; -1 none yet.
+    int depthProbeCovered() const {return depthProbeCovered_.load(std::memory_order_acquire);}
+    // DIAG lens-depth-grid.txt: with each probe, a 25x15 grid ('#' covered)
+    // sampled every 16 px from (8,8), for checking the buffer orientation.
+    bool depthGrid=false;
+    bool takeDepthGrid(char (&rows)[15][26]);
     // QA: a fixed 3D slider value (0..1) instead of the hardware slider; < 0 restores it.
     void setSliderOverride(float slider){sliderOverride_=slider;}
     // Whether the next begin() draws both eyes: a 3D screen with the slider
@@ -400,6 +441,10 @@ public:
     void setUvOffset(float u,float v);
     // Material-binder only: use the active render eye, including Mirror winding.
     void setMaterialCullNow(GPU_CULLMODE mode);
+    // Material-binder only: texcoord2 takes a second SRT (GX rows) of the
+    // point UV1's SRT maps (EnvCamera or UV1), or nothing (null). Cleared
+    // with the environment UV state.
+    void setEnvironmentPairNow(const float* uv);
     void clearEnvironmentUv();
     // While set, draw() renders each submesh's rigid parts with their bone.
     void setRigidPose(const RigidPose* pose);
@@ -547,8 +592,16 @@ public:
     // Bloom's scene copy and composite as one full-screen pass, with no LCD
     // colour clear under it (applyBloomNow). Set before the race.
     bool bloomMerge=false;
+    // Bloom blur rings sample three taps a quad instead of two (same sums,
+    // fewer blended quads). A/B: no-bloom-triple.txt.
+    bool bloomTriple=false;
     // The Settings page's Bloom option: off, no bloom targets or passes.
     bool bloomEnabled=true;
+    // Bloom: Off and a race without a stadium screen: the bloom targets a
+    // stadium course (or an earlier Bloom: On race) created draw nothing, so
+    // configureStadiumScreen(false) frees them (~1.1 MB of VRAM) for the
+    // course's textures. A/B: no-bloom-release.txt.
+    bool releaseIdleBloom=true;
     // Shadow volumes shade only the screen rectangle their bounds project to,
     // not the whole screen (shadowVolumesNow). A/B: no-shadow-rect.txt.
     bool shadowRects=false;
@@ -572,6 +625,22 @@ public:
     // textures or shadow passes take the shader's short path (fastPath; the
     // same values). A/B: no-fast-vertex.txt.
     bool fastVertex=false;
+    // Lit skinned draws whose bones are all rotations times a uniform scale
+    // transform normals by the bones instead of their cofactors (same
+    // direction). A/B: no-rigid-skin.txt.
+    bool rigidSkin=false;
+    // DIAG: lit skinned model draws so far by normal path (render thread).
+    unsigned long rigidSkinDraws=0,cofactorSkinDraws=0;
+    // Submeshes with Model::facing planes (item box shells) whose binder set a
+    // cull mode are drawn from a per-frame index list without the triangles
+    // that mode culls (the same pixels, less vertex work). A/B: no-box-precull.txt.
+    bool facingCull=false;
+    // DIAG (render thread): such draws, their triangles kept and in total,
+    // draws that went unculled for want of buffer room, and lists computed.
+    unsigned long facingDraws=0,facingKept=0,facingTotal=0,facingFull=0,facingBuilt=0;
+    // Lit EnvCamera draws whose light uses the same normal rows reuse that
+    // branch's normalized normal in the vertex shader. A/B: no-shared-normal.txt.
+    bool sharedNormals=false;
     // moveToVram widens texture-unit-1 ETC1 textures to ETC1A4 (opaque
     // alpha) instead of leaving them in LINEAR. A/B: no-unit1-vram.txt.
     bool unitOneEtc1a4=false;
@@ -616,6 +685,10 @@ private:
     void submit();
     void execute(FrameList& list);
     void runWrites(FrameList& list);
+    // The list's prepare()d writes and upload() staging copies (frame start),
+    // and its upload GX copies (after FrameBegin).
+    void runPrepares(FrameList& list);
+    void issueUploads(FrameList& list);
     // Pipelined frames: the list being drawn, its previous frame's completion
     // (C3D_FramePipelineHook) and the per-frame buffers the GPU may still read.
     FrameList* pipelineList_=nullptr;
@@ -629,6 +702,18 @@ private:
     void swapFrameBuffers();
     bool allocateFrameBuffers();
     void freeFrameBuffers();
+    // facingCull: this frame's index lists (two buffers when pipelined, swapped
+    // with the others), the part written and the part flushed, the cull mode
+    // the current submesh's binder set (setMaterialCullNow), and the lists the
+    // last draws used (a box draws each shell several times).
+    static constexpr unsigned kFacingIndices=16384;
+    uint16_t *facingIndices_=nullptr,*facingIndicesAlt_=nullptr;
+    unsigned facingUsed_=0,facingFlushed_=0;
+    GPU_CULLMODE drawCull_=GPU_CULL_NONE;bool drawCullSet_=false;
+    struct FacingList {const Model* model=nullptr;unsigned submesh=0;GPU_CULLMODE cull=GPU_CULL_NONE;C3D_Mtx clip;const uint16_t* indices=nullptr;unsigned count=0;};
+    FacingList facingLists_[2]{};unsigned facingNext_=0;
+    const uint16_t* facingIndicesNow(const Model& model,unsigned submesh,const C3D_Mtx& clip,unsigned& count);
+    void flushFacingNow();
     static void threadEntry(void* self);
     static void aptEvent(APT_HookType type,void* self);
     aptHookCookie aptCookie_{};
@@ -642,6 +727,11 @@ private:
     LightEvent wake_{},done_{};
     std::atomic<unsigned> submitted_{0},completed_{0},gpuDone_{0};
     std::atomic<bool> quit_{false};
+    struct DepthProbe {float x=0,y=0;const uint32_t* depth=nullptr;bool valid=false;};
+    DepthProbe probeExec_,probeRead_; // render thread: this frame's probe, the finished frame's
+    std::atomic<int> depthProbeCovered_{-1};
+    char depthGridRows_[15][26]{};std::atomic<bool> depthGridReady_{false};
+    void readDepthProbe();
     std::atomic<FrameList*> writeTarget_{nullptr};
     std::unique_ptr<DeferredWrites::Storage> jobStorage_;DeferredWrites jobWrites_;std::vector<DeferredWrites::Write> jobRun_;bool jobQueue_=false;
     bool deferred_=false;
@@ -816,7 +906,8 @@ private:
     const RigidPose* rigid_=nullptr;
     const float* skinPalette_=nullptr;
     unsigned skinBones_=0,skinStride_=12;
-    int bonesLoc_=-1,skinnedLoc_=-1,skinnedNormalsLoc_=-1,uvPlainLoc_=-1,fastPathLoc_=-1;
+    int bonesLoc_=-1,skinnedLoc_=-1,sharedNormalLoc_=-1,uvPlainLoc_=-1,fastPathLoc_=-1;
+    int cofactorNormalsLoc_=-1,rigidNormalsLoc_=-1,environmentPairLoc_=-1,uv2RowLoc_[2]={-1,-1};
     // Sets uvPlain for the next draws from the bound UV uniforms (drawNow only).
     void uvPlainNow(bool allowed);
     const SubmeshOverride* overrides_=nullptr;

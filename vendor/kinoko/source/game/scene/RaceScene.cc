@@ -1,5 +1,6 @@
 #include "RaceScene.hh"
 #include <mkw/sim_profile.hpp>
+#include <mkw/load_profile.hpp>
 
 #include "game/field/BoxColManager.hh"
 #include "game/field/CollisionDirector.hh"
@@ -39,42 +40,50 @@ RaceScene::~RaceScene() = default;
 void RaceScene::createEngines() {
     {
         ScopeLock<GroupID> lock(GroupID::Gfx);
+        MKW_LOAD_SCOPE(CreateCamera);
         Render::KartCamera::CreateInstance();
     }
 
     {
         ScopeLock<GroupID> lock(GroupID::Course);
+        MKW_LOAD_SCOPE(CreateCourseMap);
         System::CourseMap::CreateInstance()->init();
     }
 
     {
         ScopeLock<GroupID> lock(GroupID::Race);
+        MKW_LOAD_SCOPE(CreateRaceManager);
         System::RaceManager::CreateInstance();
     }
 
     {
         ScopeLock<GroupID> lock(GroupID::Object);
+        MKW_LOAD_SCOPE(CreateBoxCol);
         Field::BoxColManager::CreateInstance();
         Field::JugemDirector::CreateInstance();
     }
 
     {
         ScopeLock<GroupID> lock(GroupID::Kart);
+        MKW_LOAD_SCOPE(CreateKarts);
         Kart::KartObjectManager::CreateInstance();
     }
 
     {
         ScopeLock<GroupID> lock(GroupID::Course);
+        MKW_LOAD_SCOPE(CreateCollision);
         Field::CollisionDirector::CreateInstance();
     }
 
     {
         ScopeLock<GroupID> lock(GroupID::Item);
+        MKW_LOAD_SCOPE(CreateItems);
         Item::ItemDirector::CreateInstance();
     }
 
     {
         ScopeLock<GroupID> lock(GroupID::Object);
+        MKW_LOAD_SCOPE(CreateObjects);
         Field::RailManager::CreateInstance();
         Field::ObjectDirector::CreateInstance();
     }
@@ -84,26 +93,31 @@ void RaceScene::createEngines() {
 void RaceScene::initEngines() {
     {
         ScopeLock<GroupID> lock(GroupID::Kart);
+        MKW_LOAD_SCOPE(InitKarts);
         Kart::KartObjectManager::Instance()->init();
     }
 
     {
         ScopeLock<GroupID> lock(GroupID::Gfx);
+        MKW_LOAD_SCOPE(InitCamera);
         initCamera();
     }
 
     {
         ScopeLock<GroupID> lock(GroupID::Race);
+        MKW_LOAD_SCOPE(InitRaceManager);
         System::RaceManager::Instance()->init();
     }
 
     {
         ScopeLock<GroupID> lock(GroupID::Item);
+        MKW_LOAD_SCOPE(InitItems);
         Item::ItemDirector::Instance()->init();
     }
 
     {
         ScopeLock<GroupID> lock(GroupID::Object);
+        MKW_LOAD_SCOPE(InitObjects);
         Field::ObjectDirector::Instance()->init();
         Field::JugemDirector::Instance()->init();
     }

@@ -18,6 +18,13 @@ struct ObjModel {
     std::unique_ptr<FirePhaseStream> firePhases;
     bool firePending=false; // Old 3DS: phases opened after the opponents (CourseObjects::loadFirePhases)
     int fireTexture=-1,firePhase=-1;
+    // Two LINEAR staging halves of frameBytes for DeferredWrites::upload of the
+    // phases (null: each phase is a CPU write on the frame hook).
+    struct Staging {
+        void* half[2]{};
+        Staging()=default;Staging(const Staging&)=delete;Staging& operator=(const Staging&)=delete;
+        ~Staging(){if(half[0])linearFree(half[0]);}
+    } fireStaging;
     int budgetClip=-2;float budgetFrame=-1;std::vector<float> budgetPalette;
 
     std::string resource,name;

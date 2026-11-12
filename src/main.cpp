@@ -1,5 +1,7 @@
 #include "mkw/console_model.hpp"
 #include "mkw/sim_profile.hpp"
+#include "mkw/load_profile.hpp"
+#include <egg/core/Decomp.hh>
 #include "mkw/hw_probe.hpp"
 #include <mkw/mii_voice.hpp>
 #include <mkw/notification_led.hpp>
@@ -64,6 +66,7 @@
 #include <mkw/render_quality.hpp>
 #include <mkw/racer_visuals.hpp>
 #include <mkw/race_hud.hpp>
+#include <mkw/lens_flare.hpp>
 #include <mkw/race_bottom_screen.hpp>
 #include <mkw/lakitu.hpp>
 #include <mkw/course_bloom.hpp>
@@ -126,6 +129,7 @@
 #include <game/field/ObjectDirector.hh>
 #include <cstdio>
 #include <cstdlib>
+#include <csignal>
 #include <malloc.h>
 #include <new>
 #include <sys/stat.h>
@@ -367,6 +371,48 @@ static void outOfHeap(){
         (unsigned long)failedNewBytes,(unsigned long)failedNewCaller,(unsigned long)largestHeapBlock()/1024);
     report(text);
 }
+// DIAG: abort() on any thread (assert, uncaught throw, Kinoko PANIC, failed new) runs
+// __appExit, which unmaps HID while the main thread still scans it: the Luma dump
+// then shows hidScanInput, not the cause. Log the aborting thread and the code
+// addresses on its stack (resolve with addr2line on the DIAG ELF) before that.
+// DIAG texture-watch.txt: hash course and course-object textures in VRAM after the
+// race load moves them there, then again every 5 s of racing, and log any whose
+// data address or contents changed (Coconut Mall roads drew one flat colour in
+// some Azahar runs). Sampled hash: every 8th word, so a check costs a few ms.
+struct WatchedTexture{const mkw::Texture* texture;const void* data;unsigned model,index,bytes;uint32_t hash;bool reported;};
+static std::vector<WatchedTexture> watchedTextures;static bool textureWatch=false;
+static uint32_t textureHash(const void* data,unsigned bytes){
+    const auto* w=static_cast<const volatile uint32_t*>(data);uint32_t h=2166136261u;
+    for(unsigned i=0;i<bytes/4;i+=8)h=(h^w[i])*16777619u;
+    return h;
+}
+static void watchTexture(const mkw::Texture* t,unsigned model,unsigned index){
+    if(!t||!t->ready||!t->gpu.data)return;
+    for(const auto& w:watchedTextures)if(w.texture==t)return;
+    const unsigned bytes=C3D_TexCalcTotalSize(t->gpu.size,t->gpu.maxLevel);
+    watchedTextures.push_back({t,t->gpu.data,model,index,bytes,textureHash(t->gpu.data,bytes),false});
+}
+static void checkWatchedTextures(const char* when){
+    unsigned changed=0;
+    for(auto& w:watchedTextures){
+        const void* now=w.texture->gpu.data;const uint32_t h=now==w.data?textureHash(now,w.bytes):0;
+        if(now==w.data&&h==w.hash)continue;
+        ++changed;if(w.reported)continue;w.reported=true;
+        char text[200];snprintf(text,sizeof text,"texture watch %s: model=%u index=%u %ux%u fmt=%u at %08lx bytes=%u %s",when,w.model,w.index,unsigned(w.texture->gpu.width),unsigned(w.texture->gpu.height),
+            unsigned(w.texture->gpu.fmt),(unsigned long)reinterpret_cast<uintptr_t>(w.data),w.bytes,now!=w.data?"ADDRESS CHANGED":"CONTENTS CHANGED");
+        report(text);
+    }
+    char text[96];snprintf(text,sizeof text,"texture watch %s: %u watched, %u changed",when,unsigned(watchedTextures.size()),changed);report(text);
+}
+static void onAbort(int){
+    u32 sp;asm volatile("mov %0, sp":"=r"(sp));
+    u32 id=0;svcGetThreadId(&id,CUR_THREAD_HANDLE);
+    s32 prio=0;svcGetThreadPriority(&prio,CUR_THREAD_HANDLE);
+    char text[1024];int n=snprintf(text,sizeof text,"FAIL abort: thread id %lu prio %ld main %d sp %08lx; stack code:",(unsigned long)id,(long)prio,threadGetCurrent()==nullptr,(unsigned long)sp);
+    const u32* words=reinterpret_cast<const u32*>(sp);
+    for(unsigned i=0,found=0;i<512&&found<48&&n<int(sizeof text)-10;++i){const u32 w=words[i];if(w>=0x00100000u&&w<0x00600000u){n+=snprintf(text+n,sizeof text-n," %08lx",(unsigned long)w);++found;}}
+    report(text);
+}
 // DIAG replacements of the global new: the same loop as libstdc++'s (malloc, else the
 // new handler, else abort, as bad_alloc did under -fno-exceptions), plus the failed
 // request's size and caller for outOfHeap. A failed nothrow new (its caller has a
@@ -504,7 +550,7 @@ static std::size_t firstOpaqueOrdered(const mkw::Model& model){
 
 int main() {
 #ifndef MKW_RELEASE
-    outOfHeapReserve=std::malloc(64*1024);std::set_new_handler(outOfHeap);
+    outOfHeapReserve=std::malloc(64*1024);std::set_new_handler(outOfHeap);std::signal(SIGABRT,onAbort);
 #endif
     osSetSpeedupEnable(mkw::isNew3ds()); // New 3DS 804 MHz + L2 (off in the Old 3DS test build); simulation remains fixed at 60 Hz.
     gfxInitDefault();
@@ -601,6 +647,14 @@ int main() {
     auto stage=[&](const char* name){
         const auto now=svcGetSystemTick();const unsigned opens=mkw::fileOpens.load();const auto openTicks=mkw::fileOpenTicks.load();
         const unsigned reads=mkw::packReads.load();const auto readBytes=mkw::packReadBytes.load(),readTicks=mkw::packReadTicks.load();
+#ifndef MKW_RELEASE
+        if(stageTick)mkw::pack::traceMark(name);
+        // Kinoko scene load breakdown (mkw/load_profile.hpp), since the stage before.
+        if(stageTick&&!std::strcmp(name,"kinoko scene")){auto& lp=mkw::loadprof::data;char text[512];int n=snprintf(text,sizeof text,"kinoko scene profile: yaz0 %llu KB -> %llu KB",lp.decodeIn/1024,lp.decodeOut/1024);
+            for(unsigned s=0;s<mkw::loadprof::Count&&n>0&&n<int(sizeof text);++s)n+=snprintf(text+n,sizeof text-n,", %s %.1f",mkw::loadprof::Names[s],double(lp.ticks[s])*1000.0/SYSCLOCK_ARM11);
+            report(text);}
+        {const bool on=mkw::loadprof::data.on;mkw::loadprof::data={};mkw::loadprof::data.on=on;}
+#endif
         if(stageTick&&menuProfile->enabled()){char text[240];snprintf(text,sizeof text,"load %s %.1f ms, %u opens (%.1f ms opening), %llu KB in %u reads from packs (%.1f ms reading), heap %u KB used, linear %lu KB free",name,double(now-stageTick)*1000.0/SYSCLOCK_ARM11,opens-stageOpens,double(openTicks-stageOpenTicks)*1000.0/SYSCLOCK_ARM11,(readBytes-stageReadBytes)/1024,reads-stageReads,double(readTicks-stageReadTicks)*1000.0/SYSCLOCK_ARM11,unsigned(mallinfo().uordblks/1024),(unsigned long)linearSpaceFree()/1024);menuProfile->event(text);report(text);}
         // Each open in the stage, slow SD directory lookups included.
         mkw::openTrace.take([&](const mkw::OpenTrace::Open& o){
@@ -678,12 +732,29 @@ int main() {
         fclose(f);LOGF("texture lod bias %.2f",double(mkw::renderQuality().lodBias));
     }
     renderer.plainUv=!exists("sdmc:/3ds/mkw-3ds/no-plain-uv.txt");
+    renderer.depthGrid=exists("sdmc:/3ds/mkw-3ds/lens-depth-grid.txt");
+#ifndef MKW_RELEASE
+    textureWatch=exists("sdmc:/3ds/mkw-3ds/texture-watch.txt");if(textureWatch)report("texture watch on");
+    {char text[200];snprintf(text,sizeof text,"memory: app_memtype=%lu application region %lu KB (free %lu KB), heap %lu KB, linear %lu KB, new3ds=%d",(unsigned long)OS_KernelConfig->app_memtype,(unsigned long)osGetMemRegionSize(MEMREGION_APPLICATION)/1024,(unsigned long)osGetMemRegionFree(MEMREGION_APPLICATION)/1024,(unsigned long)envGetHeapSize()/1024,(unsigned long)envGetLinearHeapSize()/1024,int(mkw::isNew3ds()));report(text);}
+#endif
+    mkw::materialTracksOff=exists("sdmc:/3ds/mkw-3ds/no-material-tracks.txt");if(mkw::materialTracksOff)report("material tracks off");
+    mkw::materialSwapOff=exists("sdmc:/3ds/mkw-3ds/no-material-swap.txt");if(mkw::materialSwapOff)report("material swap off");
     renderer.fastVertex=!exists("sdmc:/3ds/mkw-3ds/no-fast-vertex.txt");
+    renderer.rigidSkin=!exists("sdmc:/3ds/mkw-3ds/no-rigid-skin.txt");
+    renderer.sharedNormals=!exists("sdmc:/3ds/mkw-3ds/no-shared-normal.txt");
+    renderer.bloomTriple=!exists("sdmc:/3ds/mkw-3ds/no-bloom-triple.txt");if(!renderer.bloomTriple)report("bloom triple off");if(!renderer.sharedNormals)report("shared normal off");if(!renderer.rigidSkin)report("rigid skin off");
+    mkw::boxSparklePair=!exists("sdmc:/3ds/mkw-3ds/no-sparkle-pair.txt");if(!mkw::boxSparklePair)report("sparkle pair off");
+    // Item box shells drop the triangles their cull mode removes before the draw.
+    renderer.facingCull=!exists("sdmc:/3ds/mkw-3ds/no-box-precull.txt");if(!renderer.facingCull)report("box precull off");
+    // Course archives (Yaz0) decode with the faster loop (same bytes).
+    Kinoko::EGG::Decomp::fastDecode=!exists("sdmc:/3ds/mkw-3ds/no-fast-yaz0.txt");if(!Kinoko::EGG::Decomp::fastDecode)report("fast yaz0 off");
     renderer.unitOneEtc1a4=!exists("sdmc:/3ds/mkw-3ds/no-unit1-vram.txt");
     renderer.lightTextureSkip=!exists("sdmc:/3ds/mkw-3ds/no-light-blend.txt");
     renderer.bloomList=!exists("sdmc:/3ds/mkw-3ds/no-bloom-list.txt");
     C3D_FastState=!exists("sdmc:/3ds/mkw-3ds/no-c3d-fast.txt");
     mkw::DriverAnimation::sharePose=!exists("sdmc:/3ds/mkw-3ds/no-pose-share.txt");
+    // CPU skins computed and fire phases staged when the render thread starts a frame, not on its hook.
+    mkw::DeferredWrites::prepareWrites=!exists("sdmc:/3ds/mkw-3ds/no-hook-prep.txt");if(!mkw::DeferredWrites::prepareWrites)report("hook prepare off");
     mkw::VehicleAnimation::lazyParts=!exists("sdmc:/3ds/mkw-3ds/no-lazy-parts.txt");
     // unit1-alternate.txt (above): set before every race load.
     auto alternateUnitOne=[&](){
@@ -692,10 +763,16 @@ int main() {
         LOGF("unit1 vram %s (alternate race %u)",renderer.unitOneEtc1a4?"on":"off",unitOneRace);
     };
     mkw::diag::modelPixels=exists("sdmc:/3ds/mkw-3ds/model-pixels.txt");
+    mkw::diag::textureUse=kQa&&exists("sdmc:/3ds/mkw-3ds/texture-use.txt");
+    renderer.releaseIdleBloom=!exists("sdmc:/3ds/mkw-3ds/no-bloom-release.txt");if(!renderer.releaseIdleBloom)report("bloom release off");
+    mkw::shareObjectTextures=!exists("sdmc:/3ds/mkw-3ds/no-texture-share.txt");if(!mkw::shareObjectTextures)report("texture share off");
     mkw::diag::menuFast=!exists("sdmc:/3ds/mkw-3ds/no-menu-fast.txt");mkw::diag::menuCheck=exists("sdmc:/3ds/mkw-3ds/menu-check.txt");mkw::diag::unlitBanks=!exists("sdmc:/3ds/mkw-3ds/no-unlit-banks.txt");mkw::diag::pauseKeep=!exists("sdmc:/3ds/mkw-3ds/no-pause-keep.txt");
     mkw::diag::liveLight=!exists("sdmc:/3ds/mkw-3ds/no-live-light.txt");mkw::diag::rearBake=!exists("sdmc:/3ds/mkw-3ds/no-rear-bake.txt");mkw::diag::liveOpponents=exists("sdmc:/3ds/mkw-3ds/live-opponents.txt");
     mkw::diag::lightZones=!exists("sdmc:/3ds/mkw-3ds/no-light-zones.txt");report(mkw::diag::lightZones?"light zones on":"light zones off");
     report(mkw::diag::liveLight?"live light on":"live light off");report(mkw::diag::rearBake?"rear bake on":"rear bake off");report(mkw::diag::liveOpponents?"live opponents on":"live opponents off");
+#ifndef MKW_RELEASE
+    mkw::loadprof::data.on=kQa;
+#endif
     mkw::diag::loadCache=!exists("sdmc:/3ds/mkw-3ds/no-load-cache.txt");report(mkw::diag::loadCache?"load cache on":"load cache off");
     if(!renderer.init()){report("FAIL Citro3D initialization");return startupFailure("Citro3D initialization failed.");}
     report(renderer.pipelineFrames?"pipelined race frames on":"pipelined race frames off");
@@ -1859,6 +1936,9 @@ int main() {
     auto raceItems=std::make_unique<mkw::RaceItems>();
     mkw::RacerVisuals opponents;
     mkw::RaceHud raceHud;
+    // Retail lens flare (src/lens_flare.cpp). A/B: no-lens-flare.txt.
+    mkw::LensFlare lensFlare;
+    const bool lensFlareOn=!exists("sdmc:/3ds/mkw-3ds/no-lens-flare.txt");
     // The lower LCD during races (docs/BOTTOM_SCREEN.md); menus keep it black.
     mkw::RaceBottomScreen bottomScreen;
     static mkw::BottomView bottomView;
@@ -2217,6 +2297,39 @@ int main() {
         // What stays in LINEAR (FCRAM): unit1 = 4-bit textures texture unit 1 samples, kept out by rule.
         LOGF("course textures left in LINEAR track+sky=%u/%luKB unit1=%u/%luKB objects=%u/%luKB unit1=%u/%luKB",courseLeft.count,(unsigned long)(courseLeft.bytes>>10),
             courseLeft.unitOne,(unsigned long)(courseLeft.unitOneBytes>>10),objectsLeft.count,(unsigned long)(objectsLeft.bytes>>10),objectsLeft.unitOne,(unsigned long)(objectsLeft.unitOneBytes>>10));
+        if(mkw::shareObjectTextures)LOGF("course objects share textures copies=%u bytes=%lu",mkw::sharedObjectTextures,(unsigned long)mkw::sharedObjectTextureBytes);
+        if(kQa){
+            // One line per object texture left in LINEAR (a shared texture
+            // once, under its first model), and the texture-use.txt registry
+            // of every course, sky and object texture.
+            std::vector<const mkw::Texture*> listed;std::vector<mkw::diag::TextureInfo> info;
+            auto describe=[&](const mkw::Texture* t,std::string owner,int index){
+                if(!t||!t->ready||std::find(listed.begin(),listed.end(),t)!=listed.end())return false;
+                listed.push_back(t);const auto& g=t->gpu;
+                info.push_back({g.data,std::move(owner),index,unsigned(g.width),unsigned(g.height),unsigned(g.fmt),unsigned(g.maxLevel)+1,
+                    uint32_t(C3D_TexCalcTotalSize(g.size,g.maxLevel)),t->unitOne});
+                return true;
+            };
+            for(unsigned m=0;m<track.size();++m)for(unsigned i=0;i<track[m]->textures.size();++i)describe(track[m]->textures[i].get(),"track"+std::to_string(m),int(i));
+            for(unsigned m=0;m<sky.size();++m)for(unsigned i=0;i<sky[m]->textures.size();++i)describe(sky[m]->textures[i].get(),"sky"+std::to_string(m),int(i));
+            courseObjects.forEachTexture([&](unsigned m,unsigned i,const mkw::Texture* t){
+                if(!describe(t,courseObjects.modelName(m),int(i)))return;
+                const auto& g=t->gpu;const auto at=reinterpret_cast<std::uintptr_t>(g.data);
+                if(at>=0x1F000000u&&at<0x1F600000u)return;
+                LOGF("linear object texture model=%s index=%u %ux%u fmt=%u levels=%u bytes=%lu unit1=%d",courseObjects.modelName(m).c_str(),i,
+                     unsigned(g.width),unsigned(g.height),unsigned(g.fmt),unsigned(g.maxLevel)+1,(unsigned long)C3D_TexCalcTotalSize(g.size,g.maxLevel),int(t->unitOne));
+            });
+            if(mkw::diag::textureUse)mkw::diag::textureRegister(std::move(info));
+        }
+#ifndef MKW_RELEASE
+        if(textureWatch){
+            watchedTextures.clear();
+            for(unsigned m=0;m<track.size();++m)for(unsigned t=0;t<track[m]->textures.size();++t)watchTexture(track[m]->textures[t].get(),m,t);
+            for(unsigned m=0;m<sky.size();++m)for(unsigned t=0;t<sky[m]->textures.size();++t)watchTexture(sky[m]->textures[t].get(),100+m,t);
+            courseObjects.forEachTexture([](unsigned m,unsigned t,const mkw::Texture* tex){watchTexture(tex,200+m,t);});
+            checkWatchedTextures("load");
+        }
+#endif
     };
     // Course meshes and their spatial indices are loaded for a race and kept
     // across pause. Only race teardown/course changes release this scenery.
@@ -2294,6 +2407,7 @@ int main() {
         if(!courseObjects.loadCourse(unsigned(Courses[courseChoice].id))){trackLoadFailed=true;
             char text[220];snprintf(text,sizeof text,"FAIL course object models: %s, %s",mkw::objectLoadFailure,mkw::pack::lastReadFailure);report(text);}
         stage("course objects");
+        if(lensFlareOn)lensFlare.reset();else lensFlare.clear();
         if(const auto* lighting=mkw::courseLighting(Courses[courseChoice].archive)){retailFog.reset(*lighting);retailFogArea=-1;}
         renderer.setRetailLighting(mkw::courseLighting(Courses[courseChoice].archive),false);
         if(!renderer.retailLightingReady(mkw::courseLighting(Courses[courseChoice].archive))){trackLoadFailed=true;report("FAIL required course lighting textures");}
@@ -2316,7 +2430,7 @@ int main() {
         opponents.reset();raceHud.reset();lakitu.unload();flowUi.unload();
         driverAnimation.reset();bodyAnimation.reset();for(auto& a:accessoryAnimations)a.reset();
         for(auto& a:accessories)a.reset();for(auto& w:wheels)w.reset();vehicle.reset();driver.reset();playerMiiHead.reset();playerLuma.reset();vehicleShadow.reset();
-        sky.clear();track.clear();courseObjects.reset();trackCourse=-1;raceResident=false;intro.stop();
+        sky.clear();track.clear();courseObjects.reset();lensFlare.clear();trackCourse=-1;raceResident=false;intro.stop();
         renderer.setRetailLighting(nullptr);raceSound.quit();bottomScreen.unload(renderer);
         unloadRaceVfx();
         // The pause textures become ordinary menu textures (the menus may be
@@ -3411,6 +3525,9 @@ int main() {
                     if(kQa&&physicsSteps%300==0){const auto& hi=raceItems->hud(0);LOGF("hb step=%u stage=%u lap=%u rank=%u finished=%d item=%d split_drains=%u drain_caller=%08lx effect_rebuilds=%u recording=%u",physicsSteps,stage,raceGrid.lap(),raceGrid.rank(),int(raceGrid.finished()),int(hi.item),
                         mkw::diag::splitStats.midFrameDrains,(unsigned long)mkw::diag::splitStats.lastDrainCaller,mkw::diag::splitStats.effectRebuilds,mkw::diag::splitStats.effectRebuildsRecording);
                     if(kQa&&physicsSteps%300==0)raceLinearLow=std::min(raceLinearLow,size_t(linearSpaceFree()));
+#ifndef MKW_RELEASE
+                    if(textureWatch&&physicsSteps%300==0&&!watchedTextures.empty()){char when[24];snprintf(when,sizeof when,"step %u",physicsSteps);checkWatchedTextures(when);}
+#endif
                     if(kQa&&physicsSteps%300==0){const auto& sr=mkw::diag::shadowRectStats;
                         LOGF("hb shadow_rects bounded=%u full=%u empty=%u mean_bounded_px=%.0f",sr.bounded,sr.full,sr.empty,sr.bounded?double(sr.area)/sr.bounded:0.0);}}
                     mkw::LakituInput jugem;
@@ -4260,7 +4377,19 @@ int main() {
             renderer.diagPass(mkw::diag::PassNone);
             renderer.markIntroWorldEnd();
             {MKW_SIM_SCOPE(EfFinish);mkw::jobWorker().finishAll();}
+            if(fullRace&&!pauseImageFrame)lensFlare.update(renderer,physicsSteps);
             {MKW_SIM_SCOPE(EfBloom);renderer.applyBloom();}
+            if(fullRace&&!pauseImageFrame)lensFlare.draw(renderer);
+#ifndef MKW_RELEASE
+            if(renderer.depthGrid){char rows[15][26];static unsigned gridStep=~0u;
+                if(physicsSteps/600!=gridStep&&renderer.takeDepthGrid(rows)){gridStep=physicsSteps/600;
+                    LOGF("lens depth grid step=%u flare fade=%d covered=%d",physicsSteps,lensFlare.fade(),renderer.depthProbeCovered());
+                    for(auto& row:rows)LOGF("lens depth %s",row);}}
+            {static unsigned skinStep=~0u;
+                if(physicsSteps/600!=skinStep){skinStep=physicsSteps/600;
+                    LOGF("lit skin draws step=%u rigid=%lu cofactor=%lu",physicsSteps,(unsigned long)renderer.rigidSkinDraws,(unsigned long)renderer.cofactorSkinDraws);
+                    LOGF("box precull step=%u draws=%lu triangles kept=%lu of %lu lists=%lu unculled=%lu",physicsSteps,renderer.facingDraws,renderer.facingKept,renderer.facingTotal,renderer.facingBuilt,renderer.facingFull);}}
+#endif
             if(fullRace)renderer.drawScreenFade(lightningFlash.opacity(),lightningFlash.white);
             profiler->mark(Profile::Effects);
             // Stereo layers (Mario Kart 7's): the HUD and result boards 4 px

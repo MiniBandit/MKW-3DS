@@ -270,9 +270,10 @@ void Renderer::normalMatrixNow(const C3D_Mtx& modelView,bool environment){
     }
 }
 
-bool Renderer::retailCombiners(const Submesh& s,const C3D_Mtx& modelView,bool backdrop,bool additive,uint32_t additiveRgb,uint32_t constant){
-    // The sky pass (backdrop) is outside the course fog object in retail.
-    const bool fog=!backdrop&&(s.lighting&retail::Fog)&&fogVisible(retailFog_);
+bool Renderer::retailCombiners(const Submesh& s,const C3D_Mtx& modelView,[[maybe_unused]] bool backdrop,bool additive,uint32_t additiveRgb,uint32_t constant){
+    // Race skies share the course's fog 0 (0x805A36B8) where their material's
+    // fog index is 0; the cook sets retail::Fog only there (MKW_SKY_FOG).
+    const bool fog=(s.lighting&retail::Fog)&&fogVisible(retailFog_);
     const unsigned channel=(s.lighting&retail::ChannelMask)>>retail::ChannelShift;
     const uint32_t fogColor=uint32_t(std::lround(retailFog_[4]*255.f))|uint32_t(std::lround(retailFog_[5]*255.f))<<8|
                             uint32_t(std::lround(retailFog_[6]*255.f))<<16|0xff000000u;

@@ -165,7 +165,13 @@ private:
     // drawing frame may still read, so a deferred frame runs them on the
     // render thread (deferredWrites). `palette` is the CPU path's pose. Only
     // write() touches the shape/UV state below and the model's buffer.
-    void write(Model& model,const uint32_t* shown,const int32_t* textures,const float* uv,const float* palette);
+    // skinned: the CPU path's positions (and normals) from skinCpu, computed off
+    // the frame hook (DeferredWrites::prepare); null computes them here.
+    void write(Model& model,const uint32_t* shown,const int32_t* textures,const float* uv,const float* palette,const Vec3* skinned=nullptr);
+    // CPU path: skinnedCount(model) values, the same arithmetic write() runs:
+    // shared unique positions, else per vertex its position (and normal) interleaved.
+    unsigned skinnedCount(const Model& model) const;
+    void skinCpu(const Model& model,const float* palette,Vec3* out) const;
     // Shared by apply() and pose(): interpolated (and blended) palette.
     void evaluate(const Clip& c,unsigned a,unsigned b,float t,unsigned tick,float blend,bool simulateBraids=true);
     std::vector<std::vector<RigidPart>> rigidParts_;

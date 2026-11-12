@@ -106,6 +106,24 @@ struct Session {
   assets.reset();physics.reset();ui.unload();renderer.clearUnusedTextureCache();
  }
 };
+// Skipping the podium ducks the sound effect players under the music cut.
+// AwardFade::HandleClick (80621474) calls 80716e60(1): PlayersVolumeMgr moves
+// players 2-6 and 8-10 (OBJ, ENGINE, RUN, SPARK, VEHICLE, VOICE, VOICE_NPC,
+// VOICE_DELAY) to 0.35 over 30 frames; BGM, MENU_UI_SE and RACE_UI keep theirs.
+// The duck holds until the next sound scene starts: its start (8070e11c ->
+// 80716c10) puts every player but MENU_UI_SE back to its base volume (1.0).
+struct SkipDuck {
+ SoundSystem& sound;float value=1,step=0;int frames=0;bool started=false;
+ static constexpr float Target=.35f;static constexpr int Frames=30;
+ void post(unsigned player,float v){SoundCommand c;c.type=SoundCommand::PlayerVolume;c.id=player;c.value=v;sound.post(c);}
+ void start(){started=true;frames=Frames;step=(Target-value)/float(Frames);}
+ void calc(){
+  if(!frames)return;
+  value=--frames?value+step:Target;
+  for(unsigned p:{2u,3u,4u,5u,6u,8u,9u,10u})post(p,value);
+ }
+ ~SkipDuck(){if(started)for(unsigned p:{0u,2u,3u,4u,5u,6u,7u,8u,9u,10u})post(p,1.f);}
+};
 }
 AwardSceneResult runAwardPodium(Renderer& renderer,const AwardResults& results,void (*report)(const char*),std::uint64_t transitionStart,Kinoko::EGG::SceneManager* scenes){
  const auto entryStart=transitionStart?transitionStart:svcGetSystemTick();
@@ -204,6 +222,7 @@ AwardSceneResult runAwardPodium(Renderer& renderer,const AwardResults& results,v
   if(auto* trophy=session.assets->trophy.get())sound.play(trophy->show());
  };
  auto previous=svcGetSystemTick();double pending=0;
+ SkipDuck skipDuck{sound};
  PresentationCadence presentation;presentation.setTicksPerSlot(2);
  while(aptMainLoop()){
   heartbeat.loop("input",unsigned(phase),frame,tick,pending,session.assets->drive.get(),soundReadyToLoad?int(sound.sceneReady()):-1,1);
@@ -215,7 +234,7 @@ AwardSceneResult runAwardPodium(Renderer& renderer,const AwardResults& results,v
   // only while the first camera is before frame400 (805b4888..48a8).
   if(advance&&phase==Phase::Drive&&frame>=70){phase=Phase::DriveOut;frame=0;}
   else if(advance&&podium&&phase==Phase::Intro&&frame>=70&&frame<400){
-   skipFrame=frame;phase=Phase::SkipOut;frame=0;sound.stopSlot(1,30);
+   skipFrame=frame;phase=Phase::SkipOut;frame=0;sound.stopSlot(1,30);skipDuck.start();
   }
   else if(advance&&phase==Phase::Board&&frame>=180&&session.ui.boardTransitionFinished()){
    session.ui.showCongratulations(false);session.ui.leaveBoard();
@@ -223,7 +242,7 @@ AwardSceneResult runAwardPodium(Renderer& renderer,const AwardResults& results,v
    phase=Phase::Leaving;frame=0;
   }
   while(pending>=1){
-   pending-=1;++tick;++frame;
+   pending-=1;++tick;++frame;skipDuck.calc();
    if(const auto id=session.ui.step())sound.play(id);
    heartbeat.at("step");
    if(phase==Phase::Drive){

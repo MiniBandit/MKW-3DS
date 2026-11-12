@@ -39,7 +39,7 @@ public:
  void start(){}
  // Called once per race-loop iteration, before begin().
  void autoFrame(bool racing){
-  if(racing){if(!active_){active_=true;skip_=true;diag::passReset();diag::skinReset();diag::drawReset();}return;}
+  if(racing){if(!active_){active_=true;skip_=true;diag::passReset();diag::skinReset();diag::drawReset();diag::writesReset();diag::textureUseReset();}return;}
   if(frames_)write(true);
   active_=false;
  }
@@ -177,7 +177,7 @@ private:
      frames_?100.0*stereoFrames_/frames_:0.0,unsigned(bloom_),unsigned(stadium_),unsigned(dynamicShadows_),unsigned(renderQuality().shadowVolumes),unsigned(diag::passState.enabled),opens_,openMs_,unsigned(pipelined_),unsigned(bloomMerge_),unsigned(RaceBottomScreen::skipCoveredFill),unsigned(shadowRect_),unsigned(playerVram_),unsigned(drawDistance_),unsigned(spatialCourse_),unsigned(hudShrink_),unsigned(skyLast_),unsigned(plainUv_),unsigned(renderQuality().racerLod),unsigned(fastVertex_),unsigned(vramPriority_));
     std::fclose(f);
    }
-   diag::passWrite(index_,course_);diag::passReset();diag::skinWrite(index_);diag::skinReset();diag::drawWrite(index_);diag::drawReset();
+   diag::passWrite(index_,course_);diag::passReset();diag::skinWrite(index_);diag::skinReset();diag::drawWrite(index_);diag::drawReset();diag::writesWrite(index_);diag::writesReset();diag::textureUseWrite(index_);diag::textureUseReset();
    reset();
   }
  }

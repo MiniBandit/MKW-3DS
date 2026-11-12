@@ -56,7 +56,7 @@ def overlay_course(c,output):
         if label not in visuals or (c['id'],label)==(5,'sky'):continue
         if digest(folder/resource)!=receipt['resources'][resource]['sha256']:raise ValueError(f"Unpacked {resource} changed: {c['name']}")
         # Same export settings as tools/import_courses.py: retail lighting state and course TEV rules.
-        env={'MKW_FREEZE_NONLINEAR_UV':'1','MKW_COURSE_MATERIALS':'1','MKW_RETAIL_LIGHTING':'1','MKW_RETAIL_SKY':'1' if label=='sky' else '0'}
+        env={'MKW_FREEZE_NONLINEAR_UV':'1','MKW_COURSE_MATERIALS':'1','MKW_RETAIL_LIGHTING':'1','MKW_RETAIL_SKY':'1' if label=='sky' else '0','MKW_SKY_FOG':'1' if label=='sky' else '0'}
         names,detail=recook(folder/resource,[],env,c['prefix']+('_sky' if label=='sky' else ''),output,
                             texel_budget=LARGE_TEXELS if label=='sky' else COURSE_TEXELS)
         changed+=names

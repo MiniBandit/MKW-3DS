@@ -616,7 +616,7 @@ class Builder:
                     continue
                 prefix = 'coconut_sky' if (c['id'], kind) == (5, 'sky') else c['prefix'] + ('_sky' if kind == 'sky' else '')
                 settings = {**self.env, 'MKW_FREEZE_NONLINEAR_UV': '1', 'MKW_COURSE_MATERIALS': '1', 'MKW_RETAIL_LIGHTING': '1',
-                            'MKW_RETAIL_SKY': '1' if kind == 'sky' else '0'}
+                            'MKW_RETAIL_SKY': '1' if kind == 'sky' else '0', 'MKW_SKY_FOG': '1' if kind == 'sky' else '0'}
                 self.run(prefix + '-export', [self.tools['node'], 'build/export_brres.mjs', source, root / 'build/course-exports' / prefix], env=settings)
                 parts = cook(root / 'build/course-exports' / prefix, sd, prefix, course_geometry=kind == 'course',
                              texel_budget=LARGE_TEXELS if kind == 'sky' else COURSE_TEXELS)
@@ -1070,6 +1070,7 @@ class Builder:
             ('coin-hud', ['cook_coin_hud_stack.py'], 'build/battle-coin-hud-assets/receipt.json'),
             ('blast', ['cook_blast.py'], 'include/mkw/bomb_blast.hpp'),
             ('blooper', ['cook_blooper.py'], 'build/blooper/receipt.json'),
+            ('lens-flare', ['cook_lens_flare.py'], 'build/lens-flare/receipt.json'),
             ('luma', ['cook_luma.py'], 'build/vfx/models/luma.gmdl'),
             ('coconut', ['cook_coconut_objects.py'], 'sd-card/3ds/mkw-3ds/models/coconut_escalator_000.gmdl'),
             ('firebar', ['prepare_firebar_stream.py'], 'build/course-water-feedback/textures/firebar-indirect.ftan'),

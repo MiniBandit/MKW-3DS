@@ -278,7 +278,8 @@ void MenuRenderer::logPending(const std::vector<UiQuad>& resident,const char* pa
   std::fprintf(f,"texture %s failures=%u job=%s\n",UiSprites[i].path,v.failures,!v.job?"none":v.job->done()?"done":v.job->queued()?"queued":"running");}
  const auto streams=neededStreams(resident);
  for(unsigned i=0;i<streams.size();++i)if(streams[i]&&(!s.movies[i]||!s.movies[i]->ready()))
-  std::fprintf(f,"movie %s failed=%d\n",UiMovieStreams[i].path,s.movies[i]&&s.movies[i]->failed());
+  {char state[200]="none";if(s.movies[i])s.movies[i]->describe(state,sizeof state);
+  std::fprintf(f,"movie %s failed=%d %s\n",UiMovieStreams[i].path,s.movies[i]&&s.movies[i]->failed(),state);}
  std::fclose(f);
 }
 

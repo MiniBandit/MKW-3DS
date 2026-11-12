@@ -69,6 +69,7 @@ enum : uint16_t {
     CmdMaterialQuads,CmdText,CmdScreenDepth,CmdMenuModelLayer,CmdIntroWorldEnd,CmdRequestStadium,CmdCoinHudModel,CmdPlayerShadow,CmdSceneRegion,CmdShadowUnion,
     CmdDiagPass, // diagnostic overlay: GPU pass boundary (mkw/diag.hpp)
     CmdRacerLight,
+    CmdDepthProbe,
 };
 // begun: C3D_FrameBegin already ran on the recording thread (stereo immediate frames).
 struct DiagPassCommand {static constexpr uint16_t Type=CmdDiagPass;uint8_t pass;};
@@ -129,20 +130,33 @@ struct MaterialQuadsCommand {
 };
 struct TextCommand {static constexpr uint16_t Type=CmdText;const char* text;float x,y,size;uint32_t rgba;};
 struct ScreenDepthCommand {static constexpr uint16_t Type=CmdScreenDepth;float parallax;};
+struct DepthProbeCommand {static constexpr uint16_t Type=CmdDepthProbe;float x,y;};
 }
 
 struct DeferredWrites::Storage {
     LightLock lock;
     Arena arena;
-    std::vector<Write> writes;
+    std::vector<Write> writes,prepares;
+    std::vector<Upload> uploads;
+    // A recorded frame's writes (FrameList), which prepare() and upload() serve.
+    bool frame=false;
     Storage(){LightLock_Init(&lock);writes.reserve(256);}
 };
 void* DeferredWrites::allocate(std::size_t bytes){
     LightLock_Lock(&storage_->lock);void* p=storage_->arena.allocate(bytes);LightLock_Unlock(&storage_->lock);
     return p;
 }
-void DeferredWrites::queue(void (*run)(void*),void* payload){
-    LightLock_Lock(&storage_->lock);storage_->writes.push_back({run,payload});LightLock_Unlock(&storage_->lock);
+void DeferredWrites::queue(void (*run)(void*),void* payload,const char* kind){
+    LightLock_Lock(&storage_->lock);storage_->writes.push_back({run,payload,kind});LightLock_Unlock(&storage_->lock);
+}
+bool DeferredWrites::preparing() const {return prepareWrites&&storage_->frame;}
+void DeferredWrites::prepare(void (*run)(void*),void* payload,const char* kind){
+    LightLock_Lock(&storage_->lock);storage_->prepares.push_back({run,payload,kind});LightLock_Unlock(&storage_->lock);
+}
+bool DeferredWrites::upload(void* destination,const void* source,uint32_t bytes,void* const staging[2],const char* kind){
+    if(!preparing()||!destination||!source||!bytes||(bytes&15)||!staging[0]||!staging[1])return false;
+    LightLock_Lock(&storage_->lock);storage_->uploads.push_back({destination,source,bytes,{staging[0],staging[1]},kind});LightLock_Unlock(&storage_->lock);
+    return true;
 }
 
 struct Renderer::FrameList {
@@ -160,8 +174,8 @@ struct Renderer::FrameList {
     uint8_t diagSkip=0,diagProbe=0;bool diagActive=false,diagGrid=false;
     // passSample's tag for this frame (diag::ProbeTag marks a probed pass).
     uint8_t diagTag() const {return diagSkip?diagSkip:diagProbe?uint8_t(diagProbe|diag::ProbeTag):uint8_t(0);}
-    FrameList(){commands.reserve(128*1024);writes.storage_=&storage;}
-    void reset(){sceneEffectsUsed=0;commands.clear();data.reset();storage.arena.reset();storage.writes.clear();stereo={};dualIntro=false;bottomCovered=false;diagSkip=0;diagProbe=0;diagActive=false;diagGrid=false;}
+    FrameList(){commands.reserve(128*1024);writes.storage_=&storage;storage.frame=true;}
+    void reset(){sceneEffectsUsed=0;commands.clear();data.reset();storage.arena.reset();storage.writes.clear();storage.prepares.clear();storage.uploads.clear();stereo={};dualIntro=false;bottomCovered=false;diagSkip=0;diagProbe=0;diagActive=false;diagGrid=false;}
 };
 
 DeferredWrites* deferredWrites(){return activeRenderer?activeRenderer->writes():nullptr;}
@@ -309,8 +323,64 @@ void Renderer::setDeferred(bool on){
 }
 void Renderer::runWrites(FrameList& list){
     // Every recording thread has finished with the list (submitted).
+#ifdef MKW_RELEASE
     for(const auto& w:list.storage.writes)w.run(w.payload);
+#else
+    // DIAG: time each write, grouped by kind (perf-race-NNN-hook-writes.csv).
+    diag::WriteEntry frame[16];unsigned kinds=0;uint64_t total=0;
+    for(const auto& w:list.storage.writes){
+        const uint64_t start=svcGetSystemTick();w.run(w.payload);const uint64_t ticks=svcGetSystemTick()-start;total+=ticks;
+        const void* run=reinterpret_cast<const void*>(w.run);unsigned i=0;
+        while(i<kinds&&(frame[i].run!=run||frame[i].kind!=w.kind))++i;
+        if(i==kinds){if(kinds==16)continue;frame[kinds++]={w.kind,run};}
+        frame[i].frameTicks+=ticks;++frame[i].frameCount;
+    }
+    if(!list.storage.writes.empty())diag::writesFrame(frame,kinds,total);
+#endif
     list.storage.writes.clear();
+}
+void Renderer::runPrepares(FrameList& list){
+    auto& s=list.storage;
+    if(s.prepares.empty()&&s.uploads.empty())return;
+    // Frame f's staging half was last read by frame f-2's GX copy, which ran
+    // before f-2's draws: every frame up to f-2 has finished once the render
+    // thread starts f (f-1's FrameEnd waited for f-2).
+    const unsigned half=list.frame&1;
+#ifndef MKW_RELEASE
+    diag::WriteEntry frame[16];unsigned kinds=0;uint64_t total=0;
+    auto tally=[&](const char* kind,const void* run,uint64_t ticks){
+        total+=ticks;unsigned i=0;
+        while(i<kinds&&(frame[i].run!=run||frame[i].kind!=kind))++i;
+        if(i==kinds){if(kinds==16)return;frame[kinds++]={kind,run};}
+        frame[i].frameTicks+=ticks;++frame[i].frameCount;
+    };
+#endif
+    for(const auto& w:s.prepares){
+#ifdef MKW_RELEASE
+        w.run(w.payload);
+#else
+        const uint64_t start=svcGetSystemTick();w.run(w.payload);tally(w.kind,reinterpret_cast<const void*>(w.run),svcGetSystemTick()-start);
+#endif
+    }
+    for(const auto& u:s.uploads){
+#ifndef MKW_RELEASE
+        const uint64_t start=svcGetSystemTick();
+#endif
+        std::memcpy(u.staging[half],u.source,u.bytes);flushGpuData(u.staging[half],u.bytes);
+#ifndef MKW_RELEASE
+        tally(u.kind,u.destination,svcGetSystemTick()-start);
+#endif
+    }
+#ifndef MKW_RELEASE
+    diag::writesFrame(frame,kinds,total,diag::prepareTally);
+#endif
+}
+void Renderer::issueUploads(FrameList& list){
+    // In the frame: GX operations run in order after the previous frame
+    // (a pipelined frame stages them) and before this frame's command lists.
+    const unsigned half=list.frame&1;
+    for(const auto& u:list.storage.uploads)
+        C3D_SyncTextureCopy(static_cast<u32*>(u.staging[half]),0,static_cast<u32*>(u.destination),0,u.bytes,8);
 }
 void Renderer::publish(){
     LightLock_Lock(&publishLock_);
@@ -337,6 +407,7 @@ static bool diagLeaveOut(uint8_t skip,uint8_t region,uint16_t type,bool& bottom)
 void Renderer::execute(FrameList& list){
     const auto start=svcGetSystemTick();
     if(!localReplay_)stats_.beginWaitMs=0;
+    runPrepares(list);
     // Deferred frames on the render thread; stereo immediate frames draw at once.
     execPipelined_=pipelineFrames&&renderThread&&!localReplay_;
     bool began=false;
@@ -376,15 +447,18 @@ void Renderer::execute(FrameList& list){
         switch(h.type){
         case CmdBegin:{
             const auto& c=*static_cast<const BeginCommand*>(body);execFrame_=c.lightingTick;execLoadingFrame_=c.loading;
+            // The previous frame's probe is read once that frame has finished (below, or previousFrameDone).
+            if(!bottomWorldPass_&&!eye){probeRead_=probeExec_;probeExec_.valid=false;}
             if(bottomWorldPass_){beginBottomWorldNow(c.view,c.projection);break;}
             if(eye){beginEyeNow(c.view,c.projection);break;}
             beginNow(c.view,c.projection,c.sync,c.begun);
             began=true;
+            issueUploads(list);
             if(execPipelined_){pipelineList_=&list;break;}
             if(!c.begun){diag::passSample(diagPreviousSkip,diagPreviousActive,stats_.previousGpuMs);diagPreviousSkip=list.diagTag();diagPreviousActive=list.diagActive;}
             // The GPU has finished every earlier frame.
             gpuDone_.store(list.frame,std::memory_order_release);
-            runWrites(list);break;
+            runWrites(list);readDepthProbe();break;
         }
         case CmdEnd:if(pass+1<passes)endEyeNow();else endNow();break;
         case CmdIntroWorldEnd:afterWorld=true;break;
@@ -461,6 +535,12 @@ void Renderer::execute(FrameList& list){
         }
         case CmdText:{const auto& c=*static_cast<const TextCommand*>(body);drawScreenText(c.text,c.x,c.y,c.size,c.rgba);break;}
         case CmdScreenDepth:screenDepthNow(static_cast<const ScreenDepthCommand*>(body)->parallax);break;
+        case CmdDepthProbe:{
+            // The left eye's scene depth (bloom and stadium frames draw the scene off-screen).
+            const auto& c=*static_cast<const DepthProbeCommand*>(body);
+            if(!bottomWorldPass_&&!eye)if(auto* t=(bloomFrame_||stadiumFrame_)?sceneTarget_:target_)
+                probeExec_={c.x,c.y,static_cast<const uint32_t*>(t->frameBuf.depthBuf),t->frameBuf.depthBuf!=nullptr};
+            break;}
         }
         if((tally||grid)&&pass==0&&h.type!=CmdBegin){
             // Volumes and the player's shadow wherever recorded; bloom runs at
@@ -477,15 +557,17 @@ void Renderer::execute(FrameList& list){
     }
     if(tally){diag::passCount(passDraws,passTriangles);diag::drawFrame();}
     if(grid)diag::gridFrame();
+    if(diag::textureUse)diag::textureFrame();
     eye_=0;execStereo_={};execDualScreenIntro_=false;execBottomCovered_=false;bottomWorldPass_=false;
     // A pipelined frame still open here continues in the next list (drain()
     // no longer splits frames, but keep it safe): its hook needs this list,
     // which the recording thread reuses only after that frame has ended.
     const bool frameOpen=C3D_FramePipelined();
     execPipelined_=false;if(!frameOpen)pipelineList_=nullptr;
-    if(!began&&!frameOpen&&!list.storage.writes.empty()){
+    if(!began&&!frameOpen&&(!list.storage.writes.empty()||!list.storage.uploads.empty())){
         // Writes recorded outside a frame wait for the GPU like a frame's.
         if(!C3D_FrameBegin(0))std::abort();
+        issueUploads(list);
         runWrites(list);
         C3D_FrameEnd(GX_CMDLIST_FLUSH);
         diagPreviousActive=false;
@@ -514,6 +596,7 @@ void Renderer::previousFrameDone(){
     const auto writesStart=svcGetSystemTick();
     runWrites(list);
     stats_.hookMs+=float((svcGetSystemTick()-writesStart)*1000.0/SYSCLOCK_ARM11);
+    readDepthProbe();
     if(endingFrame_)notePresented();
 }
 void Renderer::retireShared(std::shared_ptr<void> object){
@@ -550,6 +633,35 @@ void Renderer::beginStereo(float targetDistance){
     for(unsigned r=0;r<4;++r)for(unsigned c=0;c<4;++c)m[r][c]=mainProjection_.r[r].c[3-c];
     stereo::cullingUnion(m,frameStereo_);
     for(unsigned r=0;r<4;++r)for(unsigned c=0;c<4;++c)cullProjection_.r[r].c[3-c]=m[r][c];
+}
+void Renderer::requestDepthProbe(float x,float y){
+    if(!recording())return;
+    auto& c=command<DepthProbeCommand>();c.x=x;c.y=y;
+}
+// The top targets are 240x400 portrait D24S8 buffers in 8x8 Morton tiles; a
+// top-screen pixel (sx,sy) is buffer column 239-sy, row 399-sx (the scissor
+// mapping in drawNow). Depth is the low 24 bits; the race clears it to 0.
+void Renderer::readDepthProbe(){
+    if(!probeRead_.valid)return;
+    probeRead_.valid=false;
+    const uint32_t* depth=probeRead_.depth;
+    auto covered=[depth](int sx,int sy){
+        const unsigned x=239u-unsigned(std::clamp(sy,0,239)),y=399u-unsigned(std::clamp(sx,0,399));
+        unsigned m=0;for(unsigned b=0;b<3;++b)m|=((x>>b)&1u)<<(2*b)|((y>>b)&1u)<<(2*b+1);
+        return (depth[((y>>3)*(240u>>3)+(x>>3))*64+m]&0xffffffu)!=0;
+    };
+    const int cx=int(probeRead_.x),cy=int(probeRead_.y);int count=0;
+    for(int dy=-1;dy<=1;++dy)for(int dx=-1;dx<=1;++dx)count+=covered(cx+dx,cy+dy);
+    depthProbeCovered_.store(count,std::memory_order_release);
+    if(depthGrid&&!depthGridReady_.load(std::memory_order_acquire)){
+        for(unsigned gy=0;gy<15;++gy){for(unsigned gx=0;gx<25;++gx)depthGridRows_[gy][gx]=covered(int(gx*16+8),int(gy*16+8))?'#':'.';depthGridRows_[gy][25]=0;}
+        depthGridReady_.store(true,std::memory_order_release);
+    }
+}
+bool Renderer::takeDepthGrid(char (&rows)[15][26]){
+    if(!depthGridReady_.load(std::memory_order_acquire))return false;
+    std::memcpy(rows,depthGridRows_,sizeof rows);depthGridReady_.store(false,std::memory_order_release);
+    return true;
 }
 void Renderer::setScreenDepth(float parallax){
     if(!frameStereo_.active())return;

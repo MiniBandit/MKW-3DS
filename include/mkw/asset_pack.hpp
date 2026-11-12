@@ -59,6 +59,9 @@ void dropCache();
 // test to resultPath and passes each line to log. Mode 1: chunk sizes,
 // threads, LZ11 decode. Mode 2: sector alignment, file depth, real entries.
 void readBench(const char* resultPath,void(*log)(const char*),int mode);
+// DIAG: with pack-trace.txt, a "#name" line in pack-trace.csv after a load
+// stage's reads (tools/pak_order.py skips it).
+void traceMark(const char* name);
 #endif
 }
 }
