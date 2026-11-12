@@ -27,6 +27,8 @@ See [CHANGELOG.md](CHANGELOG.md) for the full list. Online play is not included 
 - **Mario Kart Wii (USA)**, game ID `RMCE01`, dumped as `.iso` or `.wbfs`.
   Convert RVZ or NKit dumps to ISO in Dolphin first.
 - About **30 GB** of free space and an internet connection
+
+The following dependencies are only needed if you **DON'T** build using Docker:
 - [devkitPro](https://devkitpro.org/wiki/Getting_Started) with the 3DS tools (`3ds-dev`)
 - [Python 3.11–3.14](https://www.python.org/downloads/) and [Node.js LTS](https://nodejs.org) (Python 3.15 is not supported yet)
 - [Git](https://git-scm.com)

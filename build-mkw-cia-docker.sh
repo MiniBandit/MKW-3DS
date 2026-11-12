@@ -29,6 +29,11 @@ fi
 
 if ! .venv/bin/python -c "import numpy, PIL, Crypto" >/dev/null 2>&1; then
     .venv/bin/python -m pip install -r requirements.txt
+
+    .venv/bin/python -c "import numpy, PIL, Crypto" || {
+        echo "Python dependencies failed to load. Remove the .venv folder and try again. If it happens again, share this message in an issue." >&2
+        exit 1
+    }
 fi
 
 export PYTHONUTF8=1 PYTHONUNBUFFERED=1

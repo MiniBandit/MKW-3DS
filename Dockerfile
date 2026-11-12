@@ -6,6 +6,7 @@ RUN apt-get update \
        curl \
        git \
        wget \
+       build-essential \
     && rm -rf /var/lib/apt/lists/*
 
 # install nodejs 24 LTS (nodesource)
