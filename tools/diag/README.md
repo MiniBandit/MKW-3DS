@@ -137,6 +137,9 @@ accessory matrices together with its chassis matrix instead of on their first
 read (the same values). `no-pose-share.txt` evaluates an animation bank's pose
 again for each model it is applied to (race items pose a lit and an unlit
 copy) instead of reusing the pose its other model already holds.
+`runtime.log` also lists `course draws step=… render_ms=…` every 600 steps: the render
+thread's time in the course pass's model draws per profiled frame (first eye), the
+share a recorded course command list could save.
 Old 3DS runs the presentation jobs (racer posing, the local racer's pose) on a
 job worker on core 1 at 30%; `no-core1-jobs.txt` keeps them on core 0. The worker stops for the award ceremony and starts
 again with the next race load; `core1-ceremony-keep.txt` keeps it running.
@@ -204,7 +207,7 @@ course, sky and object texture (each once, under its first model), whether it is
 frame that bound it on any unit; with `model-pixels.txt` also the screen
 pixels those draws covered. Slow; for Azahar runs.
 `stereo-slider.txt` (a number from 0 to 1) pins the 3D slider for comparable
-runs.
+runs. As with the slider, the right eye turns on above 0.03 and off at or below 0.01.
 `lod-bias.txt` (a number from -2 to 0, default 0) is added to the LOD of every
 mip-mapped texture: negative values sample sharper levels (`runtime.log`:
 `texture lod bias N`).

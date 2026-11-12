@@ -423,6 +423,7 @@ void Renderer::execute(FrameList& list){
     // Vertex probe: mono frames only (the right eye would replay it).
     const bool probe=list.diagProbe&&!execStereo_.active()&&!execDualScreenIntro_;
     uint32_t passDraws[diag::PassCount]{},passTriangles[diag::PassCount]{};
+    bool courseDrawn=false;
     for(unsigned pass=0;pass<passes;++pass){
     bottomWorldPass_=pass==eyes;
     const unsigned eye=bottomWorldPass_?0:pass;
@@ -474,7 +475,14 @@ void Renderer::execute(FrameList& list){
         case CmdDraw:{
             const auto& c=*static_cast<const DrawCommand*>(body);
             execFrame_=c.frame;execAdditive_=c.additive;execBehind_=c.behind;execGhostPass_=c.ghostPass;execGhostAlpha_=c.ghostAlpha;
+#ifndef MKW_RELEASE
+            const bool courseTimed=pass==0&&diagRegion==diag::PassCourse;
+            const auto drawStart=courseTimed?svcGetSystemTick():0;
+#endif
             drawNow(*c.model,c.vertices,c.transform,c.backdrop,c.material,c.context,c.visible);
+#ifndef MKW_RELEASE
+            if(courseTimed){courseDrawTicks+=svcGetSystemTick()-drawStart;courseDrawn=true;}
+#endif
             execBehind_=false;execGhostPass_=0;
             if(probe&&pass==0&&diagRegion==list.diagProbe){
                 // Again, culled as before but every vertex at one point: the
@@ -559,6 +567,7 @@ void Renderer::execute(FrameList& list){
     }
     }
     if(tally){diag::passCount(passDraws,passTriangles);diag::drawFrame();}
+    if(courseDrawn)++courseDrawFrames;
     if(grid)diag::gridFrame();
     if(diag::textureUse)diag::textureFrame();
     eye_=0;execStereo_={};execDualScreenIntro_=false;execBottomCovered_=false;bottomWorldPass_=false;
@@ -619,6 +628,11 @@ void Renderer::setFov(float degrees,float nearPlane,float farPlane){
     else projection_=mainProjection_;
 }
 float Renderer::slider() const{return sliderOverride_>=0?sliderOverride_:osGet3DSliderState();}
+float Renderer::sampleSlider(){
+    const float value=slider();
+    sliderOn_=value>(sliderOn_?SliderOff:SliderOn);
+    return sliderOn_?value:0.f;
+}
 // Recording side of a frame's stereo parameters (mainView_ is this frame's).
 // As in Mario Kart 7 the reference plane keeps a fixed view depth for the
 // whole scene: the subject's depth, set per frame, times the scene's ratio.
@@ -628,7 +642,7 @@ void Renderer::beginStereo(float targetDistance){
     const float subject=stereoSubjectSet_?stereoSubject_:targetDistance;
     stereoSubjectSet_=false;
     if(!targetRight_)return;
-    const float slider=this->slider();
+    const float slider=sampleSlider();
     if(!(slider>0))return;
     frameSlider_=std::min(slider,1.f);
     frameStereo_=stereo::frame(slider,stereoDisplay_,scene,subject);

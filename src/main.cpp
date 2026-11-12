@@ -4058,7 +4058,8 @@ int main() {
             physicsMs=(svcGetSystemTick()-start)*1000.0/SYSCLOCK_ARM11;maxPhysics=std::max(maxPhysics,physicsMs);
             profiler->mark(Profile::Simulation);
             if(fullRace){
-                // The 3D slider can move mid-race: the rate follows it.
+                // The 3D slider can move mid-race: the rate follows the last
+                // frame's slider read (no second read here).
                 if(const unsigned ticks=raceTicksPerFrame();ticks!=presentation.ticksPerSlot())presentation.setTicksPerSlot(ticks);
                 // Never stall the 60 Hz input/physics loop for a busy render
                 // list. Coalesce only the presentation; next frame snapshots
@@ -4393,7 +4394,12 @@ int main() {
                 if(physicsSteps/600!=skinStep){skinStep=physicsSteps/600;
                     LOGF("lit skin draws step=%u rigid=%lu cofactor=%lu",physicsSteps,(unsigned long)renderer.rigidSkinDraws,(unsigned long)renderer.cofactorSkinDraws);
                     LOGF("texture cache step=%u clears=%lu kept=%lu shared depth=%d",physicsSteps,(unsigned long)C3D_TexCacheClears,(unsigned long)C3D_TexCacheKept,int(renderer.sharedDepth()));
-                    LOGF("box precull step=%u draws=%lu triangles kept=%lu of %lu lists=%lu unculled=%lu",physicsSteps,renderer.facingDraws,renderer.facingKept,renderer.facingTotal,renderer.facingBuilt,renderer.facingFull);}}
+                    LOGF("box precull step=%u draws=%lu triangles kept=%lu of %lu lists=%lu unculled=%lu",physicsSteps,renderer.facingDraws,renderer.facingKept,renderer.facingTotal,renderer.facingBuilt,renderer.facingFull);
+                    static uint64_t courseTicks=0;static unsigned long courseFrames=0;
+                    const unsigned long frames=renderer.courseDrawFrames-courseFrames;
+                    LOGF("course draws step=%u render_ms=%.3f per frame over %lu frames",physicsSteps,
+                         frames?double(renderer.courseDrawTicks-courseTicks)*1000.0/SYSCLOCK_ARM11/double(frames):0.0,frames);
+                    courseTicks=renderer.courseDrawTicks;courseFrames=renderer.courseDrawFrames;}}
 #endif
             if(fullRace)renderer.drawScreenFade(lightningFlash.opacity(),lightningFlash.white);
             profiler->mark(Profile::Effects);

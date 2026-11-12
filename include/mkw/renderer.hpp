@@ -407,8 +407,8 @@ public:
     // QA: a fixed 3D slider value (0..1) instead of the hardware slider; < 0 restores it.
     void setSliderOverride(float slider){sliderOverride_=slider;}
     // Whether the next begin() draws both eyes: a 3D screen with the slider
-    // (or its QA override) above zero.
-    bool stereoWanted() const {return targetRight_&&slider()>0;}
+    // (or its QA override) on at the last frame's read (sampleSlider).
+    bool stereoWanted() const {return targetRight_&&sliderOn_;}
     Vec3 cameraBackward() const { return {mainView_.r[2].x,mainView_.r[2].y,mainView_.r[2].z}; }
     // World point -> top-screen pixels with the active camera; viewZ < 0 is in front.
     bool projectTop(Vec3 world,float& x,float& y,float& viewZ) const;
@@ -646,6 +646,9 @@ public:
     // DIAG (render thread): such draws, their triangles kept and in total,
     // draws that went unculled for want of buffer room, and lists computed.
     unsigned long facingDraws=0,facingKept=0,facingTotal=0,facingFull=0,facingBuilt=0;
+    // DIAG (render thread): ticks spent in the course pass's model draws
+    // (first eye of frames with pass markers) and the frames that drew any.
+    uint64_t courseDrawTicks=0;unsigned long courseDrawFrames=0;
     // Lit EnvCamera draws whose light uses the same normal rows reuse that
     // branch's normalized normal in the vertex shader. A/B: no-shared-normal.txt.
     bool sharedNormals=false;
@@ -678,6 +681,11 @@ private:
     bool recording() const;
     // The 3D slider's position (0..1), or its QA override.
     float slider() const;
+    // The frame's one slider read (beginStereo): the value, or 0 while the
+    // right eye is off. The eye turns on above SliderOn and off at or below
+    // SliderOff, so noise near the bottom can't flip races between 60 and 30 FPS.
+    static constexpr float SliderOn=0.03f,SliderOff=0.01f;
+    float sampleSlider();
     // Immediate frames in stereo (menus): recorded between begin() and end()
     // on this thread, then drawn once per eye at end().
     bool localRecording_=false,localReplay_=false;
@@ -764,7 +772,7 @@ private:
     stereo::Frame frameStereo_{};
     stereo::Scene stereoScene_=stereo::Race;
     float frameSlider_=0,stereoSubject_=0,sliderOverride_=-1;
-    bool stereoSubjectSet_=false;
+    bool stereoSubjectSet_=false,sliderOn_=false;
     void beginStereo(float targetDistance);
     void beginRecorded();
     // Drawing side: the frame being drawn, the eye (0 left / 2D, 1 right) and
