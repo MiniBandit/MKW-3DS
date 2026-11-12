@@ -638,6 +638,9 @@ public:
     // DIAG (render thread): such draws, their triangles kept and in total,
     // draws that went unculled for want of buffer room, and lists computed.
     unsigned long facingDraws=0,facingKept=0,facingTotal=0,facingFull=0,facingBuilt=0;
+    // DIAG (render thread): ticks spent in the course pass's model draws
+    // (first eye of frames with pass markers) and the frames that drew any.
+    uint64_t courseDrawTicks=0;unsigned long courseDrawFrames=0;
     // Lit EnvCamera draws whose light uses the same normal rows reuse that
     // branch's normalized normal in the vertex shader. A/B: no-shared-normal.txt.
     bool sharedNormals=false;
