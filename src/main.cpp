@@ -3094,7 +3094,13 @@ int main() {
             // QA autoplay owns every input: a stray host controller (Azahar's UDP
             // input server) must not steer the scripted race.
             if(autoplay||raceWarmupFrames)pad={0,0};
-            unsigned buttons=(held&KEY_A?1:0)|(held&KEY_B?2:0)|(held&KEY_L?4:0)|(held&KEY_R?(held&KEY_A?10:2):0);
+            // Drift bit (0x08) as the Wii sets it: R pressed with A held (or on the
+            // same frame), kept while both stay held. R held first and A pressed
+            // after brakes without a hop; releasing A ends the drift and pressing
+            // it again does not restart it (retail ghosts: 2->3, 11->2, never 2->11).
+            static bool driftHeld=false;
+            driftHeld=(held&KEY_R)&&(held&KEY_A)&&(driftHeld||(down&KEY_R));
+            unsigned buttons=(held&KEY_A?1:0)|(held&(KEY_B|KEY_R)?2:0)|(held&KEY_L?4:0)|(driftHeld?8:0);
             if(fullRace)buttons&=~4u; // Inventory owns L in races; retain stock mushrooms in trace/QA.
             auto trick=K::System::Trick::None;
             if(held&(KEY_DUP|KEY_ZR))trick=K::System::Trick::Up;else if(held&KEY_DDOWN)trick=K::System::Trick::Down;
