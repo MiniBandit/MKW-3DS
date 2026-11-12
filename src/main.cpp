@@ -160,6 +160,14 @@ namespace K = Kinoko;
 namespace mkw {extern char objectLoadFailure[160];}
 static constexpr const char* DATA = "sdmc:/3ds/mkw-3ds";
 namespace mkw {extern std::atomic<unsigned> fileOpens;extern std::atomic<unsigned long long> fileOpenTicks;}
+// New 3DS menu sprites in VRAM (menuVram): the VRAM kept free for what menus
+// allocate later (the Settings preview's bloom and shadow targets, Mii
+// portraits), and the most bytes copied in one frame.
+static constexpr std::size_t MenuVramReserve=2560*1024,MenuVramCopyBudget=1024*1024;
+// Every APT event (HOME Menu, sleep, applets): menus then redraw the lower LCD.
+static std::atomic<unsigned> aptEvents{0};
+static aptHookCookie aptEventsCookie;
+static void countAptEvent(APT_HookType,void*){aptEvents.fetch_add(1,std::memory_order_relaxed);}
 // A packed file is found in the pack index without opening it.
 static bool exists(const char* p) { if(mkw::pack::contains(p))return true; FILE* f=fopen(p,"rb"); if(!f)return false; fclose(f);return true; }
 // Sky last saves its fill where the track hides most of the sky. Rainbow
@@ -685,6 +693,16 @@ int main() {
     // Menus record their frames for the render thread, as races do, so the
     // next frame is built while the GPU draws this one (A/B: no-menu-pipeline.txt).
     const bool menuDeferred=!exists("sdmc:/3ds/mkw-3ds/no-menu-pipeline.txt");
+    // New 3DS menus: the sprites a frame draws move to VRAM, most screen area per
+    // byte first, above MenuVramReserve (A/B: no-menu-vram.txt).
+    const bool menuVram=mkw::isNew3ds()&&!exists("sdmc:/3ds/mkw-3ds/no-menu-vram.txt");
+    // Menus draw the lower LCD only when its picture changes: top-only pages keep
+    // their black or paused-race picture (A/B: no-menu-bottom-keep.txt).
+    const bool menuBottomKeep=!exists("sdmc:/3ds/mkw-3ds/no-menu-bottom-keep.txt");
+    // No colour clear or black fade under an opaque full-screen menu backdrop
+    // (A/B: no-menu-cover.txt).
+    const bool menuCover=!exists("sdmc:/3ds/mkw-3ds/no-menu-cover.txt");
+    if(kQa&&exists("sdmc:/3ds/mkw-3ds/menu-still.txt"))mkw::menuStripeSeconds=10.0;
     // A race load reuses the last race's animation banks (DriverAnimation::keepReleased;
     // A/B: no-bank-keep.txt frees and reads them again).
     const bool bankKeep=!exists("sdmc:/3ds/mkw-3ds/no-bank-keep.txt");
@@ -787,6 +805,7 @@ int main() {
     // otherwise leaves RGB565 active until the first menu).
     if(!renderer.enableBottom()){renderer.shutdown();return startupFailure("Lower LCD initialization failed.");}
     mkw::initializeLoadingScreen(renderer);
+    aptHook(&aptEventsCookie,countAptEvent,nullptr);
     // Stereo 3D (docs/STEREO_3D.md): New 3DS with a 3D screen only. QA can pin
     // the slider with stereo-slider.txt (0..1) for lockstep captures.
     if(renderer.stereoCapable()){
@@ -1139,6 +1158,14 @@ int main() {
         // The first page appears only once resident; until then the previous
         // frame (race or black) stays on screen instead of a partial page.
         bool revealed=false,pendingRaceMiiConfirm=false;unsigned stable=0,heldFrames=0;
+        // What the lower LCD shows on a top-only page, from its own fields:
+        // a frame with the same key keeps that picture (menuBottomKeep).
+        struct BottomShown {
+            mkw::UiPage page{};bool pausedRace=false;float blackAlpha=0;unsigned apt=0,loading=0;
+            bool operator==(const BottomShown& o)const{return page==o.page&&pausedRace==o.pausedRace&&blackAlpha==o.blackAlpha&&apt==o.apt&&loading==o.loading;}
+        } bottomShown;
+        bool bottomValid=false;
+        unsigned vramLogPage=~0u;
         std::unique_ptr<mkw::LoadingScope> revealLoading;
         u64 loadWaitStart=0;bool loadRecovery=false;
         std::shared_ptr<LicenseSelectionSaveJob> selectionSave;
@@ -1481,6 +1508,7 @@ int main() {
                 // draws only in an immediate frame, as the resident pause pages do.
                 const bool pausedTop=(visual.page==mkw::UiPage::Pause||visual.page==mkw::UiPage::QuitConfirm)&&renderer.hasPausedTop();
                 if(pausedTop)renderer.setDeferred(false);
+                bottomValid=false;
                 renderer.begin({0,0,1000},{0,0,0},{0,1,0});
                 if(pausedTop)renderer.drawPausedTop();
                 else renderer.drawScreenFade(1,false);
@@ -1494,7 +1522,25 @@ int main() {
             // so they stay immediate; every other page is recorded.
             renderer.setDeferred(menuDeferred&&visual.page!=mkw::UiPage::Pause&&visual.page!=mkw::UiPage::QuitConfirm);
             publishLicensePortraits(quads);
+            const bool lowerMenu=menuOnBottom(visual.page);
+            const bool pausePage=visual.page==mkw::UiPage::Pause||visual.page==mkw::UiPage::QuitConfirm;
+            const bool pausedTop=pausePage&&renderer.hasPausedTop();
+            // An opaque backdrop over the whole upper LCD hides its clear and the black under it.
+            const bool topCovered=menuCover&&!pausedTop&&menuRenderer.coversScreen(quads);
+            // A top-only page's lower LCD: black (a fade over black stays black), or
+            // the paused race's map. The loading wheel draws there while it waits.
+            const bool pausedRace=pausePage&&bool(drawPausedBottom);
+            const bool wheel=!incomingReady||bool(selectionSave);
+            const BottomShown bottomWanted{visual.page,pausedRace,pausedRace?motion.blackAlpha:0.f,aptEvents.load(std::memory_order_relaxed),mkw::loadingScopes()};
+            const bool keepBottom=menuBottomKeep&&!lowerMenu&&!wheel&&bottomValid&&bottomWanted==bottomShown;
+            renderer.setFrameCover(topCovered,keepBottom);
             menuModels.begin(renderer,visual);
+            // New 3DS: this frame's sprites into VRAM (not while a race keeps its course there).
+            if(menuVram&&!raceResident)menuRenderer.placeInVram(renderer,quads,MenuVramReserve,MenuVramCopyBudget);
+            // DIAG: once a page has settled, where its sprites are and what its frames skip.
+            if(kQa&&unsigned(visual.page)!=vramLogPage&&!transition.active()&&stable>=30){vramLogPage=unsigned(visual.page);
+                LOGF("menu vram page=%u sprites=%lu KB copied in %llu KB out %llu KB vram_free=%lu KB; backdrop cover=%d, lower LCD kept=%d",vramLogPage,(unsigned long)menuRenderer.vramBytes()/1024,
+                     (unsigned long long)menuRenderer.vramCopied(true)/1024,(unsigned long long)menuRenderer.vramCopied(false)/1024,(unsigned long)vramSpaceFree()/1024,int(topCovered),int(keepBottom));}
             menuProfile->mark(MenuStage::Begin);
             // Publish streamed movie frames for this frame: at once when the GPU
             // is idle (immediate frames), else as the frame's deferred writes.
@@ -1502,16 +1548,19 @@ int main() {
             menuProfile->mark(MenuStage::Movies);
             // Pause pages show the race as it was (no HUD, not dimmed: the Wii's
             // PauseMenu) in place of the menu backdrop (quad 0).
-            if((visual.page==mkw::UiPage::Pause||visual.page==mkw::UiPage::QuitConfirm)&&renderer.hasPausedTop()){
+            if(pausedTop){
                 renderer.drawPausedTop();
                 // The Wii's controller page: GP/VS/BT (TT's five buttons fill the screen).
                 if(visual.page==mkw::UiPage::Pause&&visual.selection.mode!=mkw::UiMode::TimeTrials)renderer.drawPauseControls();
             }
-            else{renderer.drawScreenFade(1.f,false);drawMenuBackdrop(renderer,menuRenderer,quads);}
+            else{
+                // Stereo frames clear and fade as before (setFrameCover).
+                if(!topCovered||renderer.stereoFrame().active())renderer.drawScreenFade(1.f,false);
+                drawMenuBackdrop(renderer,menuRenderer,quads);
+            }
             menuProfile->mark(MenuStage::Background);
             menuModels.draw(renderer,visual,motion);
             menuProfile->mark(MenuStage::Scene);
-            const bool lowerMenu=menuOnBottom(visual.page);
             if(lowerMenu){
                 mkw::layoutMenuScreens(visual,quads,topMenuQuads,bottomMenuQuads);
                 menuRenderer.draw(renderer,topMenuQuads,false,0,~0u,&menuIcons);
@@ -1532,12 +1581,13 @@ int main() {
                 renderer.drawScreenText("A/B: return to menu",16,195,1.3f,0xffffffffu);
             }
             if(motion.blackAlpha>0)renderer.drawScreenFade(motion.blackAlpha,false);
-            if(!lowerMenu){
+            if(!lowerMenu&&!keepBottom){
                 renderer.beginBottom();
-                if((visual.page==mkw::UiPage::Pause||visual.page==mkw::UiPage::QuitConfirm)&&drawPausedBottom)drawPausedBottom();
+                if(pausedRace)drawPausedBottom();
                 else renderer.drawScreenFade(1.f,false);
                 if(motion.blackAlpha>0)renderer.drawScreenFade(motion.blackAlpha,false);
             }
+            if(!keepBottom){bottomValid=!lowerMenu&&!wheel;bottomShown=bottomWanted;}
             if(!incomingReady)mkw::drawLoadingWheel(renderer,loadWaitStart);
             if(selectionSave)mkw::drawLoadingWheel(renderer,saveStarted);
             menuProfile->mark(MenuStage::Foreground);
@@ -1562,6 +1612,14 @@ int main() {
                 saveRightEye(renderer,path);
                 std::vector<uint8_t> lower(320*240*3);std::string lowerPath(path);lowerPath.insert(lowerPath.size()-4,"-bottom");
                 if(renderer.captureBottom(lower.data()))if(FILE* f=fopen(lowerPath.c_str(),"wb")){fprintf(f,"P6\n320 240\n255\n");fwrite(lower.data(),1,lower.size(),f);fclose(f);}
+                // What the lower LCD shows (its last presented framebuffer), which a kept
+                // lower screen doesn't redraw into the target.
+                if(renderer.copyPresentedBottom(lower.data())){
+                    std::vector<uint8_t> rgb(lower.size());
+                    for(unsigned y=0;y<240;++y)for(unsigned x=0;x<320;++x){const uint8_t* p=&lower[3*(x*240+(239-y))];uint8_t* o=&rgb[3*(y*320+x)];o[0]=p[2];o[1]=p[1];o[2]=p[0];}
+                    std::string lcdPath(path);lcdPath.insert(lcdPath.size()-4,"-lcd");
+                    if(FILE* f=fopen(lcdPath.c_str(),"wb")){fprintf(f,"P6\n320 240\n255\n");fwrite(rgb.data(),1,rgb.size(),f);fclose(f);}
+                }
             }
         }
         return leave(mkw::UiAction::Exit);
@@ -1574,14 +1632,20 @@ int main() {
         bool snapshotsOnly=false;
         if(FILE* f=fopen("sdmc:/3ds/mkw-3ds/menu-test.txt","r")){char mode[24]{};if(fscanf(f,"%23s",mode)==1)snapshotsOnly=!strcmp(mode,"snapshots");fclose(f);}
         bool ok=renderer.enableBottom();renderer.setDualScreenIntro(false);
-        unsigned captured=0,expected=std::size(pages),motionFrames=0;std::vector<uint8_t> pixels(400*240*3);mkw::UiRaceView fixture{};
+        unsigned captured=0,expected=std::size(pages),motionFrames=0,covered=0,frames=0;std::vector<uint8_t> pixels(400*240*3);mkw::UiRaceView fixture{};
         auto capture=[&](const char* name,const mkw::MenuState& visual,const mkw::UiTransitionView& motion,bool save=true,bool models=true){
             std::vector<mkw::UiQuad> quads,resident,upper,lower;mkw::composeMenu(visual,fixture,quads,motion);
             auto preload=motion;preload.active=false;preload.entering=false;preload.back=false;preload.preload=true;preload.holdFrame=0;preload.selectedControl=mkw::uiSelectedMenuControl(visual);
             mkw::composeMenu(visual,fixture,resident,preload);
             for(const auto& quad:quads)ok&=!quad.bottom;
             renderer.waitForGpu();ok&=menuRenderer.prepare(resident);ok&=menuRenderer.updateMovies(motion.underlay?motion.underlay->age:visual.age);
-            menuModels.prepare(renderer,visual);ok&=menuIcons.prepare(renderer,visual);menuModels.begin(renderer,visual);renderer.drawScreenFade(1.f,false);
+            menuModels.prepare(renderer,visual);ok&=menuIcons.prepare(renderer,visual);
+            // As the menu loop: covered backdrop, sprites in VRAM (all at once here).
+            const bool topCovered=menuCover&&menuRenderer.coversScreen(quads);
+            renderer.setFrameCover(topCovered,false);covered+=topCovered;++frames;
+            menuModels.begin(renderer,visual);
+            if(menuVram)menuRenderer.placeInVram(renderer,quads,MenuVramReserve,~std::size_t(0));
+            if(!topCovered||renderer.stereoFrame().active())renderer.drawScreenFade(1.f,false);
             drawMenuBackdrop(renderer,menuRenderer,quads);if(models)menuModels.draw(renderer,visual);
             if(menuOnBottom(visual.page)){
                 mkw::layoutMenuScreens(visual,quads,upper,lower);menuRenderer.draw(renderer,upper,false,0,~0u,&menuIcons);
@@ -1634,6 +1698,8 @@ int main() {
             }
         }
         if(FILE* f=fopen("sdmc:/3ds/mkw-3ds/menu-result.json","w")){fprintf(f,"{\"pass\":%s,\"pages\":%u,\"transition_frames\":%u,\"top_only\":false}\n",ok&&captured==expected?"true":"false",unsigned(std::size(pages)),motionFrames);fclose(f);}else ok=false;
+        LOGF("menu snapshots: backdrop covered in %u of %u frames, sprites to VRAM %llu KB, back %llu KB, in VRAM %lu KB",covered,frames,
+             (unsigned long long)menuRenderer.vramCopied(true)/1024,(unsigned long long)menuRenderer.vramCopied(false)/1024,(unsigned long)menuRenderer.vramBytes()/1024);
         report(ok?"MENU SCREENSHOT PASS":"MENU SCREENSHOT FAIL");renderer.waitForGpu();menuModels.reset(renderer);menuIcons.reset(renderer);menuRenderer.release();mkw::shutdownLoadingScreen();renderer.shutdown();gfxExit();return ok?0:4;
     }
     // Diagnostic overlay: benchmark races use one fixed setup, the same as the TPO comparison build:

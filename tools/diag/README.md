@@ -213,6 +213,21 @@ mip-mapped texture: negative values sample sharper levels (`runtime.log`:
 `texture lod bias N`).
 `no-menu-pipeline.txt` draws menus immediately on the main thread (CPU work,
 then the GPU, one after the other) instead of through the render thread.
+`no-menu-vram.txt` keeps the New 3DS menu sprites in LINEAR; by default the
+sprites a frame draws move to VRAM (a GPU copy inside the frame), most screen
+area per byte first, while 2.5 MiB of VRAM stay free, and sprites no page
+needs go back to LINEAR to make room (none while a race is loaded; `runtime.log`:
+`menu vram page=… sprites=… KB copied in … out …`).
+`no-menu-bottom-keep.txt` clears and redraws the lower LCD on every menu frame;
+by default pages that only use the upper LCD (Strap, Intro, Pause, Quit) draw it
+once and then leave its picture (no clear, no draw, no transfer) until the page,
+its fade over the paused race, the loading wheel, a loading screen or the HOME
+Menu or sleep changes it.
+`no-menu-cover.txt` clears the upper LCD and fills it black under every menu
+backdrop again; by default an opaque backdrop drawn at full alpha over the whole
+screen only clears depth (2D frames).
+With `menu-capture.txt`, each capture also writes `…-lcd.ppm`: the lower LCD's
+last presented picture.
 The Settings page's options are in `settings.dat`, not in the license:
 Dynamic Shadows for benchmarks is set there (or on the Settings page).
 

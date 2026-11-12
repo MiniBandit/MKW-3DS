@@ -347,6 +347,16 @@ public:
     // The VRAM bytes moveToVram would take: twice the LINEAR size for a
     // widened unit-1 ETC1 texture, 0 for one that must stay in LINEAR.
     std::size_t vramCost(const Texture& texture)const;
+    // Inside a frame (after begin()): a copy of `source` in VRAM (toVram; the
+    // moveToVram rules and reserve apply) or, from VRAM, in LINEAR. A GX copy
+    // fills it after every earlier frame and before this frame's draws, so draw
+    // the copy from this frame on and retire() the source (earlier frames may
+    // still sample it). Null: not possible now (no room, no frame).
+    std::unique_ptr<Texture> copyTextureInFrame(const Texture& source,bool toVram,std::size_t reserve);
+    // Before begin(), for that frame only: the upper LCD is covered by an opaque
+    // backdrop (its colour clear is skipped in 2D frames; depth still clears),
+    // and the lower LCD keeps its last picture (no clear; draw nothing there).
+    void setFrameCover(bool topCovered,bool bottomKept){nextTopCovered_=topCovered;nextBottomKept_=bottomKept;}
     void clearUnusedTextureCache();
     // Index of the frame being recorded: storage a deferred frame references
     // in place alternates on its parity (two frames are in flight).
@@ -781,6 +791,10 @@ private:
     unsigned eye_=0;
     bool stereoShown_=false;
     bool execDualScreenIntro_=false,bottomWorldPass_=false,execBottomCovered_=false;
+    // setFrameCover: the next begin()'s request, and the frame being drawn.
+    bool nextTopCovered_=false,nextBottomKept_=false,execTopCovered_=false,execBottomKept_=false;
+    // An immediate frame is open on this thread (between begin() and end()).
+    bool immediateOpen_=false;
     // Diagnostic vertex probe: drawNow uploads a projection that sends every vertex to one point.
     bool diagCollapse_=false;
     // The top-screen framebuffers the last stereo frame was transferred to.

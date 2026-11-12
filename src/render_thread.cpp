@@ -169,13 +169,13 @@ struct Renderer::FrameList {
     std::vector<std::unique_ptr<ef::DrawList>> sceneEffects;unsigned sceneEffectsUsed=0;
     unsigned frame=0;
     // Recorded at begin(): both eyes are drawn when active.
-    stereo::Frame stereo{};bool dualIntro=false,bottomCovered=false;
+    stereo::Frame stereo{};bool dualIntro=false,bottomCovered=false,topCovered=false,bottomKept=false;
     // Diagnostic overlay: the pass this frame leaves out, and whether it is a profiled race frame.
     uint8_t diagSkip=0,diagProbe=0;bool diagActive=false,diagGrid=false;
     // passSample's tag for this frame (diag::ProbeTag marks a probed pass).
     uint8_t diagTag() const {return diagSkip?diagSkip:diagProbe?uint8_t(diagProbe|diag::ProbeTag):uint8_t(0);}
     FrameList(){commands.reserve(128*1024);writes.storage_=&storage;storage.frame=true;}
-    void reset(){sceneEffectsUsed=0;commands.clear();data.reset();storage.arena.reset();storage.writes.clear();storage.prepares.clear();storage.uploads.clear();stereo={};dualIntro=false;bottomCovered=false;diagSkip=0;diagProbe=0;diagActive=false;diagGrid=false;}
+    void reset(){sceneEffectsUsed=0;commands.clear();data.reset();storage.arena.reset();storage.writes.clear();storage.prepares.clear();storage.uploads.clear();stereo={};dualIntro=false;bottomCovered=false;topCovered=false;bottomKept=false;diagSkip=0;diagProbe=0;diagActive=false;diagGrid=false;}
 };
 
 DeferredWrites* deferredWrites(){return activeRenderer?activeRenderer->writes():nullptr;}
@@ -366,7 +366,8 @@ void Renderer::runPrepares(FrameList& list){
 #ifndef MKW_RELEASE
         const uint64_t start=svcGetSystemTick();
 #endif
-        std::memcpy(u.staging[half],u.source,u.bytes);flushGpuData(u.staging[half],u.bytes);
+        // copyTextureInFrame: the source is GPU memory the GX copy reads directly.
+        if(u.staging[half]!=u.source){std::memcpy(u.staging[half],u.source,u.bytes);flushGpuData(u.staging[half],u.bytes);}
 #ifndef MKW_RELEASE
         tally(u.kind,u.destination,svcGetSystemTick()-start);
 #endif
@@ -414,7 +415,7 @@ void Renderer::execute(FrameList& list){
     execStereo_=targetRight_?list.stereo:stereo::Frame{};
     const unsigned eyes=execStereo_.active()?2:1;
     execDualScreenIntro_=list.dualIntro&&bottomTarget_;
-    execBottomCovered_=list.bottomCovered;
+    execBottomCovered_=list.bottomCovered;execTopCovered_=list.topCovered;execBottomKept_=list.bottomKept;
     const unsigned passes=eyes+unsigned(execDualScreenIntro_);
     // Per-pass draws and triangles (diagnostic): profiled frames that leave nothing out.
     const bool tally=list.diagActive&&!list.diagSkip&&!list.diagProbe;
@@ -570,7 +571,7 @@ void Renderer::execute(FrameList& list){
     if(courseDrawn)++courseDrawFrames;
     if(grid)diag::gridFrame();
     if(diag::textureUse)diag::textureFrame();
-    eye_=0;execStereo_={};execDualScreenIntro_=false;execBottomCovered_=false;bottomWorldPass_=false;
+    eye_=0;execStereo_={};execDualScreenIntro_=false;execBottomCovered_=false;execTopCovered_=execBottomKept_=false;bottomWorldPass_=false;
     // A pipelined frame still open here continues in the next list (drain()
     // no longer splits frames, but keep it safe): its hook needs this list,
     // which the recording thread reuses only after that frame has ended.
@@ -754,6 +755,10 @@ void Renderer::begin(Vec3 eye,Vec3 target,Vec3 up,bool mirror){
     beginRecorded();
 }
 void Renderer::beginRecorded(){
+    // setFrameCover applies to this frame only. A stereo frame's eyes are
+    // shifted: their backdrop may not reach an edge, so it clears as before.
+    const bool topCovered=nextTopCovered_&&!frameStereo_.active(),bottomKept=nextBottomKept_;
+    nextTopCovered_=nextBottomKept_=false;
     if(!recording()&&(frameStereo_.active()||frameDualScreenIntro_)){
         // An immediate frame in stereo: wait for the GPU now, as beginNow
         // would, so CPU writes until end() stay safe; record the draws.
@@ -764,15 +769,20 @@ void Renderer::beginRecorded(){
         renderMetrics={};retired_.clear();
         if(!localList_)localList_=std::make_unique<FrameList>();
         localList_->reset();localList_->stereo=frameStereo_;localList_->dualIntro=frameDualScreenIntro_;
+        localList_->topCovered=topCovered;localList_->bottomKept=bottomKept;
         recording_=localList_.get();localRecording_=true;
         auto& c=command<BeginCommand>();c.view=mainView_;c.projection=mainProjection_;c.lightingTick=animationFrame;c.loading=loadingFrame;c.sync=frameSync;c.begun=true;
         return;
     }
-    if(!recording()){execFrame_=animationFrame;execLoadingFrame_=loadingFrame;beginNow(mainView_,mainProjection_,frameSync);retired_.clear();return;}
+    if(!recording()){
+        execFrame_=animationFrame;execLoadingFrame_=loadingFrame;execTopCovered_=topCovered;execBottomKept_=bottomKept;
+        beginNow(mainView_,mainProjection_,frameSync);execTopCovered_=execBottomKept_=false;retired_.clear();immediateOpen_=true;return;
+    }
     renderMetrics={};
     releaseRetired();
     auto& c=command<BeginCommand>();c.view=mainView_;c.projection=mainProjection_;c.lightingTick=animationFrame;c.loading=loadingFrame;c.sync=frameSync;c.begun=false;
     recording_->stereo=frameStereo_;recording_->dualIntro=frameDualScreenIntro_;
+    recording_->topCovered=topCovered;recording_->bottomKept=bottomKept;
     recording_->diagSkip=diag::passState.skip;recording_->diagProbe=diag::passState.probe;recording_->diagActive=diag::passState.active;recording_->diagGrid=diag::drawGrid.load(std::memory_order_relaxed);
     writeTarget_.store(recording_,std::memory_order_release);
 }
@@ -803,7 +813,7 @@ void Renderer::beginSourceCamera(const float* view,const float* projection){
 void Renderer::end(){
     if(localRecording_){endLocal();return;}
     if(!recording()){
-        endNow();gpuIdle_=false;
+        immediateOpen_=false;endNow();gpuIdle_=false;
         triangles=stats_.triangles;drawCalls=stats_.drawCalls;culledTriangles=stats_.culledTriangles;culledSubmeshes=stats_.culledSubmeshes;
         previousGpuMs=stats_.previousGpuMs;beginWaitMs=stats_.beginWaitMs;commandUsage=stats_.commandUsage;renderThreadMs=0;hookMs=gpuGapMs=0;
         return;
@@ -1074,6 +1084,34 @@ void Renderer::drawScreenMaterialQuadsInPlace(const Texture* texture,const Mater
     c.texture=texture;c.quads=quads;c.count=count;c.color0=color0;c.color1=color1;c.wrapS=-1;c.wrapT=-1;c.additive=false;c.opaque=opaque;
 }
 void Renderer::bottomCovered(){if(recording()&&recording_)recording_->bottomCovered=true;}
+// Each copy adds a command-list split and a GX copy to citro3d's 32-entry GX
+// queue (overflowing it panics): callers keep to a few per frame.
+std::unique_ptr<Texture> Renderer::copyTextureInFrame(const Texture& source,bool toVram,std::size_t reserve){
+    const auto& t=source.gpu;
+    const u32 at=reinterpret_cast<u32>(t.data);
+    const bool inVram=at>=OS_VRAM_VADDR&&at<OS_VRAM_VADDR+OS_VRAM_SIZE;
+    const bool recorded=recording()&&recording_;
+    if(!source.ready||!t.data||inVram==toVram||(!recorded&&!immediateOpen_)||C3D_TexGetType(const_cast<C3D_Tex*>(&t))!=GPU_TEX_2D)return nullptr;
+    // moveToVram's rule (3dbrew GPU/Pitfalls): no 4-bit texture unit 1 may sample in VRAM.
+    if(toVram&&source.unitOne&&(t.fmt==GPU_ETC1||t.fmt==GPU_L4||t.fmt==GPU_A4))return nullptr;
+    const std::size_t bytes=C3D_TexCalcTotalSize(t.size,t.maxLevel);
+    if(!bytes||(bytes&15)||(toVram&&vramSpaceFree()<bytes+reserve))return nullptr;
+    auto copy=std::make_unique<Texture>();
+    const C3D_TexInitParams params{t.width,t.height,t.maxLevel,t.fmt,GPU_TEX_2D,toVram};
+    if(!C3D_TexInitWithParams(&copy->gpu,nullptr,params)){copy->gpu={};return nullptr;}
+    // The GX copy writes LINEAR behind the CPU cache: no dirty line of the
+    // block's earlier use may be written back over it later.
+    if(!toVram)GSPGPU_FlushDataCache(copy->gpu.data,u32(bytes));
+    if(recorded){
+        // Uploads whose staging is the source skip the CPU copy (runPrepares).
+        void* const direct[2]={const_cast<void*>(t.data),const_cast<void*>(t.data)};
+        auto& s=recording_->storage;
+        LightLock_Lock(&s.lock);s.uploads.push_back({copy->gpu.data,t.data,u32(bytes),{direct[0],direct[1]},"texture copy"});LightLock_Unlock(&s.lock);
+    }else C3D_SyncTextureCopy(static_cast<u32*>(t.data),0,static_cast<u32*>(copy->gpu.data),0,u32(bytes),8);
+    copy->gpu.param=t.param;copy->gpu.border=t.border;copy->gpu.lodParam=t.lodParam;
+    copy->unitOne=source.unitOne;copy->ready=true;
+    return copy;
+}
 void Renderer::drawScreenText(const char* text,float x,float y,float size,uint32_t rgba){
     if(!text||size<=0)return;
     if(!recording()){textNow(text,x,y,size,rgba);return;}
