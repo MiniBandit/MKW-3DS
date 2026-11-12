@@ -46,7 +46,7 @@ joiner's code and sends Ping to it every half second, which opens its router.
 | 6 | Bye | all → all, when leaving | none |
 | 7 | Refuse | host → a joiner it can't take | `u32 id, char message[44]` |
 | 8 | Ping | all → all in the lobby, every 30 frames | `u32 id` |
-| 9 | Events | all → all, while the sender has race events not everyone has acknowledged | `u8 count, u8 0, u16 round, RaceEvent[count]` (count ≤ 8) |
+| 9 | Events | all → all, while the sender has race events not everyone has acknowledged | `u8 count, u8 0, u16 round, u16 oldest, RaceEvent[count]` (count ≤ 8) |
 
 **LobbyPlayer** (14 bytes): `u32 id, u32 address, u16 port, u16 garage, u8 autoDrift, u8 0`.
 Slot = position in the list; the host is slot 0 with address 0.
@@ -137,13 +137,14 @@ Every event is about the **sender's own kart**:
 | 7 | Cloud | The sender's kart bumped its Thunder Cloud onto `b`'s kart: `id` frames left on it, `v[0]` its age in frames. `b`'s console puts it over its kart (and shows it through `itemFlags`) |
 
 **Delivery.** A sender keeps its last 32 events. Whenever some console still
-racing has not acknowledged all of them (Frame `ack`), it sends an Events
-packet with the oldest unacknowledged events in `seq` order, up to 8: at once
-when a new event is made, otherwise every 4 ticks. A receiver takes events
-from each sender strictly in `seq` order and ignores ones it already has; if
-the first event of a packet is beyond the one it expects, the ones between
-were dropped by the sender and it carries on from there. The host passes
-Events on like Frames.
+racing has not acknowledged all of them (Frame `ack`), it sends every event
+from the oldest unacknowledged one on, in `seq` order, 8 to an Events packet
+(so usually one packet): at once when a new event is made, otherwise every 4
+ticks. `oldest` is the first `seq` the sender still keeps. A receiver takes
+events from each sender strictly in `seq` order (one whose `seq` is not the
+next it expects is ignored and will come again); if it expects an event before
+`oldest`, those were dropped by the sender and it carries on from `oldest`.
+The host passes Events on like Frames.
 
 ## Finishing order
 

@@ -223,12 +223,11 @@ static std::array<uint8_t,12> selectedStartPositions{};
 // Online and LAN play (src/net_session.cpp): a VS race against other consoles.
 // Each console is racer 0 on its own screen; netGlobal maps local racers to lobby slots.
 static bool netRace=false,netWaiting=false;static uint32_t netRemoteMask=0,netLostMask=0;static unsigned netCount=0;
-static std::array<unsigned,12> netRoster{};static std::array<uint8_t,12> netGlobal{};static std::array<uint32_t,12> netAppliedTick{};
 // netLocal: lobby slot -> local racer. netFinishKey: each racer's own finishing report
 // (net_session.hpp FinishKey, 0 none yet); netFirstFinish: the step the first one was known.
 static std::array<uint8_t,12> netLocal{},netItemSeen{};static std::array<uint32_t,12> netFinishKey{};static uint32_t netFirstFinish=0;
 static uint8_t netPlayerOf(unsigned slot){return slot<12?netLocal[slot]:uint8_t(255);}
-static uint8_t netSlotOf(unsigned local,unsigned count){return local<count?netGlobal[local]:uint8_t(255);}
+static std::array<unsigned,12> netRoster{};static std::array<uint8_t,12> netGlobal{};static std::array<uint32_t,12> netAppliedTick{};
 // Time Trials ghost (Race/TimeAttack on the SD card): racer 1 replays it.
 static bool ghostRace=false;static std::vector<uint8_t> ghostRkg;
 static uint16_t lanButtons=0;static int8_t lanStick=0;static uint8_t lanTrick=0,lanItemFlags=0;
@@ -2429,8 +2428,8 @@ int main() {
                         const auto& c=raceGrid.ai().itemCommand(i);inputs[i]={c.use,c.backwards,c.forwards};
                     }
                     lanItemFlags=uint8_t((inputs[0].use?1:0)|(inputs[0].backwards?2:0)|(inputs[0].forwards?4:0));
-                    // Online: the other consoles' racers use items on their own consoles (below).
-                    if(netRace)for(unsigned i=1;i<raceGrid.count();++i)if(raceGrid.remoteMask>>i&1u)inputs[i]={};
+                    if(netRace)for(unsigned i=1;i<raceGrid.count();++i)if(raceGrid.remoteMask>>i&1u){
+                        mkw::net::Frame peer;inputs[i]=mkw::net::session().frame(netGlobal[i],peer)?mkw::ItemInput{bool(peer.flags&1),bool(peer.flags&2),bool(peer.flags&4)}:mkw::ItemInput{};}
                         if(kQa&&autoplay&&!afterGoal&&raceGrid.driveLocal)for(auto& g:qaGives){
                             if(g.player>=raceGrid.count())continue;
                             // Opponent POW must actually target player zero; do not alter ranks.
@@ -2572,7 +2571,7 @@ int main() {
                         // What this console decided for its own racer this tick, for the others to play.
                         auto& net=mkw::net::session();mkw::ItemNetEvent event;
                         while(raceItems->takeNetEvent(event)){
-                            mkw::net::RaceEvent wire{};wire.kind=event.kind;wire.a=event.a;wire.b=netSlotOf(event.other,raceGrid.count());wire.c=event.c;wire.d=event.d;wire.e=event.e;wire.id=event.id;
+                            mkw::net::RaceEvent wire{};wire.kind=event.kind;wire.a=event.a;wire.b=event.other<raceGrid.count()?netGlobal[event.other]:uint8_t(255);wire.c=event.c;wire.d=event.d;wire.e=event.e;wire.id=event.id;
                             std::copy(std::begin(event.v),std::end(event.v),wire.v);
                             net.sendEvent(wire);netLogEvent(netGlobal[0],wire);
                         }

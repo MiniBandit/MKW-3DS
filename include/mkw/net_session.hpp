@@ -50,14 +50,15 @@ struct Frame {Header h;uint32_t tick;uint16_t buttons;int8_t stickX,stickY;uint8
 enum class EventKind:uint8_t {Spawn=1,Use=2,Hit=3,Shrink=4,Take=5,Item=6,Cloud=7};
 struct RaceEvent {uint16_t seq;uint8_t kind,a,b,c,d,e;uint16_t id,reserved;float v[6];};
 // All -> all, when the sender has race events some console has not acknowledged:
-// the oldest such events, in order.
+// those events, in order. oldest: the first seq the sender still keeps (a
+// receiver expecting an earlier one has lost it for good and moves on).
 constexpr unsigned EventsPerPacket=8;
-struct Events {Header h;uint8_t count,reserved;uint16_t round;RaceEvent events[EventsPerPacket];};
+struct Events {Header h;uint8_t count,reserved;uint16_t round,oldest;RaceEvent events[EventsPerPacket];};
 struct Bye {Header h;};
 // Host -> a console it can't take, with the reason for display.
 struct Refuse {Header h;uint32_t id;char message[44];};
 #pragma pack(pop)
-static_assert(sizeof(Header)==16&&sizeof(Hello)==56&&sizeof(LobbyPlayer)==14&&sizeof(Lobby)==208&&sizeof(Frame)==120&&sizeof(Refuse)==64&&sizeof(RaceEvent)==36&&sizeof(Events)==308);
+static_assert(sizeof(Header)==16&&sizeof(Hello)==56&&sizeof(LobbyPlayer)==14&&sizeof(Lobby)==208&&sizeof(Frame)==120&&sizeof(Refuse)==64&&sizeof(RaceEvent)==36&&sizeof(Events)==310);
 
 // Finishing keys: lower finishes ahead. A finisher's key is its race time in
 // milliseconds at the line. A console that has not finished 30 seconds after

@@ -5,6 +5,7 @@
 Needs a new build: the builder now copies the staff ghosts from your disc, and the menus have new labels.
 
 - **Online, peer to peer:** a new Online button on the main menu. Host a race or join one by typing the host's connection code; up to 12 players race VS on the host's course. The consoles connect straight to each other, so there's no server to pay for or go down. A terminal screen shows each connection step, then a handshake. A player who can't reach another directly gets their kart through the host. If a player goes quiet, their kart races on as a CPU until they come back.
+- **Online races agree:** every console decides its own item roulette, the items it throws and whether its own kart is hit, and tells the others, so everyone sees the same items and hits. The results use each console's own finishing time, so every screen shows the same order; a player who drops out is placed last.
 - **Same Wi-Fi play** without codes (lan.txt, for testing).
 - **Official builds only:** consoles only race consoles with the same official build.
 - **Licence:** the new online code is under the MKW 3DS Online Licence (see NOTICE); the rest stays as it was.

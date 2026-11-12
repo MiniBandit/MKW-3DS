@@ -289,7 +289,7 @@ void Session::resetEvents(){
 }
 void Session::sendEvent(RaceEvent event){
     if(socket_<0||!started_)return;
-    // A full ring drops its oldest event: receivers skip the gap.
+    // A full ring drops its oldest event: receivers skip the gap (Events.oldest).
     event.seq=nextSeq_;event.reserved=0;outbox_[nextSeq_%OutboxSize]=event;++nextSeq_;eventNew_=true;
 }
 void Session::eventStep(){
@@ -298,11 +298,17 @@ void Session::eventStep(){
     // The oldest event a console still racing has not acknowledged.
     uint16_t lowest=nextSeq_;
     for(unsigned s=0;s<count_;++s)if(s!=slot_&&!left_[s]&&silent_[s]<LostAfter)lowest=std::min(lowest,acked_[s]);
-    if(nextSeq_-lowest>OutboxSize)lowest=uint16_t(nextSeq_-OutboxSize);
-    if(lowest==nextSeq_||(!eventNew_&&eventQuiet_<EventsEvery))return;
-    Events packet{};packet.h=header(Type::Events);packet.round=round_;packet.count=uint8_t(std::min<unsigned>(EventsPerPacket,nextSeq_-lowest));
-    for(unsigned n=0;n<packet.count;++n)packet.events[n]=outbox_[(lowest+n)%OutboxSize];
-    sendAll(&packet,offsetof(Events,events)+packet.count*sizeof(RaceEvent));
+    const uint16_t oldest=uint16_t(nextSeq_-lowest>OutboxSize?nextSeq_-OutboxSize:lowest);
+    if(oldest==nextSeq_||(!eventNew_&&eventQuiet_<EventsEvery))return;
+    // Everything outstanding, in order, eight to a packet (one packet unless
+    // a console has fallen behind), so the others never wait for the slowest.
+    Events packet{};packet.h=header(Type::Events);packet.round=round_;
+    packet.oldest=uint16_t(nextSeq_-std::min<unsigned>(OutboxSize,nextSeq_-1u));
+    for(uint16_t at=oldest;at!=nextSeq_;at=uint16_t(at+packet.count)){
+        packet.count=uint8_t(std::min<unsigned>(EventsPerPacket,nextSeq_-at));
+        for(unsigned n=0;n<packet.count;++n)packet.events[n]=outbox_[(at+n)%OutboxSize];
+        sendAll(&packet,offsetof(Events,events)+packet.count*sizeof(RaceEvent));
+    }
     eventQuiet_=0;eventNew_=false;
 }
 bool Session::takeRaceEvent(unsigned& slot,RaceEvent& out){
@@ -403,11 +409,11 @@ void Session::receive(const uint8_t* data,size_t size,uint32_t address,uint16_t 
         if(size<offsetof(Events,events))return;
         Events packet;std::memcpy(&packet,data,std::min(size,sizeof packet));if(packet.round!=round_)return;
         const unsigned count=std::min<unsigned>({packet.count,EventsPerPacket,unsigned((size-offsetof(Events,events))/sizeof(RaceEvent))});
+        // In order, each once. Events older than the sender still keeps are lost.
+        if(expected_[s]<packet.oldest)expected_[s]=packet.oldest;
         for(unsigned n=0;n<count&&inboxCount_<InboxSize;++n){
             const RaceEvent& event=packet.events[n];
-            // In order, each once. The sender starts at its oldest, so a first
-            // event beyond the expected one means the ones between are gone.
-            if(event.seq<expected_[s]||(event.seq>expected_[s]&&n))continue;
+            if(event.seq!=expected_[s])continue;
             expected_[s]=uint16_t(event.seq+1);
             inbox_[(inboxHead_+inboxCount_++)%InboxSize]={uint8_t(s),event};
         }
