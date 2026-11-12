@@ -10,6 +10,8 @@ bool C3D_FVUnifDirty[2][C3D_FVUNIF_COUNT] __attribute__((aligned(4)));
 bool C3D_FVUnifAnyDirty[2];
 bool C3D_FastState = true;
 void (*C3D_UniformHook)(const void* program) = NULL;
+bool C3D_TexCacheKeep = true;
+u32 C3D_TexCacheClears, C3D_TexCacheKept;
 bool C3D_IVUnifDirty[2][C3D_IVUNIF_COUNT];
 bool C3D_BoolUnifsDirty[2];
 

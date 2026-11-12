@@ -395,7 +395,9 @@ public:
     // 3x3 top-screen pixels around (x,y), read once the GPU has finished the
     // frame that recorded it (one frame late; retail copies its EFB depth in
     // the same frame). Recorded frames only.
-    void requestDepthProbe(float x,float y);
+    // (x,y): the centre camera's screen position; depth: its view depth (the
+    // left eye's position in 3D is found from it).
+    void requestDepthProbe(float x,float y,float depth);
     // Covered samples (non-zero depth, 0..9) of the latest finished probe; -1 none yet.
     int depthProbeCovered() const {return depthProbeCovered_.load(std::memory_order_acquire);}
     // DIAG lens-depth-grid.txt: with each probe, a 25x15 grid ('#' covered)
@@ -602,6 +604,12 @@ public:
     // configureStadiumScreen(false) frees them (~1.1 MB of VRAM) for the
     // course's textures. A/B: no-bloom-release.txt.
     bool releaseIdleBloom=true;
+    // While bloom's targets exist, the top LCD target's depth lives in the
+    // scene target's depth buffer (one 512 KB buffer instead of 384 + 512 KB).
+    // The scene is drawn first; its depth is cleared again before the first
+    // top draw (topDepthAfterSceneNow). A/B: no-shared-depth.txt.
+    bool shareDepth=true;
+    bool sharedDepth() const {return sharedDepth_!=nullptr;}
     // Shadow volumes shade only the screen rectangle their bounds project to,
     // not the whole screen (shadowVolumesNow). A/B: no-shadow-rect.txt.
     bool shadowRects=false;
@@ -727,7 +735,8 @@ private:
     LightEvent wake_{},done_{};
     std::atomic<unsigned> submitted_{0},completed_{0},gpuDone_{0};
     std::atomic<bool> quit_{false};
-    struct DepthProbe {float x=0,y=0;const uint32_t* depth=nullptr;bool valid=false;};
+    // depth: tile rows firstRow.. of a buffer stride 8x8 tiles wide (rows: how many, 0 = all).
+    struct DepthProbe {float x=0,y=0;const uint32_t* depth=nullptr;bool valid=false;unsigned stride=30,firstRow=0,rows=0;};
     DepthProbe probeExec_,probeRead_; // render thread: this frame's probe, the finished frame's
     std::atomic<int> depthProbeCovered_{-1};
     char depthGridRows_[15][26]{};std::atomic<bool> depthGridReady_{false};
@@ -912,9 +921,15 @@ private:
     void uvPlainNow(bool allowed);
     const SubmeshOverride* overrides_=nullptr;
     unsigned overrideCount_=0;
-    bool initBloomTargets();
-    bool initBloom();
+    bool initBloomTargets(bool inFrame=false);
+    bool initBloom(bool inFrame=false);
     void freeBloom();
+    void shareTopDepth(bool inFrame);
+    void unshareTopDepth();
+    void topDepthAfterSceneNow();
+    void* sharedDepth_=nullptr;
+    uint32_t* probeCopy_=nullptr;
+    bool topDepthCleared_=false;
     void bloomPass(C3D_RenderTarget* target,unsigned width,unsigned height);
     void bloomQuad(const C3D_Tex& source,unsigned sourceWidth,unsigned sourceHeight,float width,float height,float du,float dv,unsigned secondWidth=0,unsigned secondHeight=0,const C3D_Tex* secondSource=nullptr,float secondDu=0,float secondDv=0);
     void bloomPasses();

@@ -320,6 +320,7 @@ bool C3D_FrameBegin(u8 flags)
 	}
 
 	inFrame = true;
+	C3Di_TexCacheDirty = true;
 	osTickCounterStart(&cpuTime);
 	GPUCMD_SetBuffer(frameCmdBuf, frameCmdBufSize, 0);
 	return true;
@@ -330,6 +331,7 @@ bool C3D_FrameDrawOn(C3D_RenderTarget* target)
 	if (!inFrame) return false;
 
 	target->used = true;
+	C3Di_TexCacheDirty = true;
 	C3D_SetFrameBuf(&target->frameBuf);
 	C3D_SetViewport(0, 0, target->frameBuf.width, target->frameBuf.height);
 	return true;
@@ -339,6 +341,7 @@ void C3D_FrameSplit(u8 flags)
 {
 	u32 *cmdBuf, cmdBufSize;
 	if (!inFrame) return;
+	C3Di_TexCacheDirty = true;
 	if (!C3Di_SplitFrame(&cmdBuf, &cmdBufSize))
 		return;
 	if (pipelined)

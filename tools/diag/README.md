@@ -128,7 +128,11 @@ GPU commands every frame instead of copying the commands recorded on the
 race's first bloom frame (immediate mono frames: Old 3DS). `no-c3d-fast.txt`
 makes citro3d compare its register shadows with memcmp and scan every uniform
 on each draw, instead of word compares and a per-shader "any uniform dirty"
-flag (the same GPU commands). `no-lazy-parts.txt` builds a racer's wheel and
+flag (the same GPU commands). `no-tex-cache-keep.txt` clears the GPU texture
+cache on every texture bind again, instead of only when a unit's registers or
+the enabled units change, or after a frame, target or command-list boundary or
+`C3D_TexFlush` (runtime.log `texture cache` counts clears and kept caches).
+`no-lazy-parts.txt` builds a racer's wheel and
 accessory matrices together with its chassis matrix instead of on their first
 read (the same values). `no-pose-share.txt` evaluates an animation bank's pose
 again for each model it is applied to (race items pose a lit and an unlit
@@ -186,6 +190,10 @@ model=…` line per object texture still in LINEAR.
 Summit, GCN Waluigi Stadium, Funky Stadium) or a Bloom: On race created
 (~1.1 MB of VRAM) through later races with Bloom: Off and no stadium screen;
 by default they are freed before the course textures move to VRAM.
+`no-shared-depth.txt` gives the top LCD target its own depth buffer while
+bloom's targets exist (Bloom: On, stadium-screen courses). By default it uses
+the scene target's depth buffer (384 KB less VRAM), which is cleared again
+after the scene; runtime.log `texture cache ... shared depth=1`.
 `no-texture-share.txt` loads every course object model's textures as cooked;
 by default a texture identical to one an earlier object model of the course
 loaded (size, format, sampler state, every byte) uses that copy (Daisy

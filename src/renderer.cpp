@@ -14,6 +14,10 @@
 #include "mkw/coin_hud_camera.hpp"
 #include "mkw/bloom_math.hpp"
 #include <c3d/texunit.h>
+// citro3d's context and its "already on the GPU" shadows (vendor/citro3d).
+extern "C" {
+#include "../vendor/citro3d/source/internal.h"
+}
 #include "mkw/race_effects.hpp"
 #include "mkw/nw4r_ef_draw.hpp"
 #include "mkw/retail_lighting.hpp"
@@ -1080,12 +1084,16 @@ void Renderer::beginFrame(){
     overlayCount_=0;
     // The local SDK permits unbinding all units, including inherited samplers.
     for(int unit=0;unit<3;++unit)C3D_TexBind(unit,nullptr);
-    bloomFrame_=!bottomWorldPass_&&bloomRequested_&&initBloom();bloomRequested_=false;
+    bloomFrame_=!bottomWorldPass_&&bloomRequested_&&initBloom(true);bloomRequested_=false;
     if(!eye_&&!bottomWorldPass_){
+        topDepthCleared_=false;
         // A merged bloom composite writes every LCD pixel (applyBloomNow).
         // Both eyes replay the frame's bloom request.
         const auto lcd=bloomFrame_&&bloomMerge?C3D_CLEAR_DEPTH:C3D_CLEAR_ALL;
-        C3D_RenderTargetClear(target_,lcd,0x071326FF,0);
+        // A shared depth buffer holds the scene first: the left LCD's depth is
+        // cleared after it (topDepthAfterSceneNow).
+        if(bloomFrame_&&sharedDepth_){if(!bloomMerge)C3D_RenderTargetClear(target_,C3D_CLEAR_COLOR,0x071326FF,0);}
+        else C3D_RenderTargetClear(target_,lcd,0x071326FF,0);
         if(execStereo_.active())C3D_RenderTargetClear(targetRight_,lcd,0x071326FF,0);
         // A race map covers the whole lower LCD opaquely and nothing there
         // reads depth: no clear (RaceBottomScreen::draw, bottomCovered()).
@@ -1100,7 +1108,7 @@ void Renderer::beginFrame(){
     // immutable until then: the capture quad exists only in the left eye,
     // so the two eyes do not necessarily use matching quad slots.
     if(!eye_&&!bottomWorldPass_)bloomCount_=0;
-    if(stadiumFrame_&&!initBloom())stadiumFrame_=false;
+    if(stadiumFrame_&&!initBloom(true))stadiumFrame_=false;
     if(bloomFrame_||stadiumFrame_){
         if(!eye_){
             // Memory fills run in queue order, ahead of this frame's command list.
@@ -3042,6 +3050,7 @@ void Renderer::freeStadiumScreen(){
 void Renderer::captureStadiumScreenNow(){
     stadiumFrame_=false;
     if(eye_||!sceneTarget_)return;
+    topDepthAfterSceneNow();
     // Retail WLscreenGC copies the scene EFB before HUD. Keep that ordering
     // and the existing half-render-frame/visible-screen policy. Rendering a
     // crop directly into the next native target avoids LCD cache invalidation,
@@ -3149,13 +3158,32 @@ void Renderer::releaseBloom(){
     if(!deviceReady_||(!sceneTarget_&&!bloomVertices_))return;
     waitForGpu();freeBloom();
 }
-bool Renderer::initBloomTargets(){
+bool Renderer::initBloomTargets(bool inFrame){
     if(sceneTarget_)return true;
     if(bloomFailed_)return false;
     // Portrait targets: full 64x128 near and 32x64 far bloom textures.
     // The scene still occupies its native 240x400 region in 256x512.
-    bool ok=C3D_TexInitVRAM(&sceneTex_,256,512,GPU_RGBA8)&&
-        (sceneTarget_=C3D_RenderTargetCreateFromTex(&sceneTex_,GPU_TEXFACE_2D,0,GPU_RB_DEPTH24_STENCIL8))!=nullptr;
+    // A shared depth buffer takes the top LCD depth's bank (opposite its
+    // colour); the scene texture goes opposite that, as citro3d places a
+    // target's own depth opposite its colour.
+    void* shared=nullptr;
+    const bool share=shareDepth&&!depthGrid&&target_&&target_->ownsDepth&&target_->frameBuf.depthBuf;
+    if(share){
+        const size_t bytes=C3D_CalcDepthBufSize(256,512,GPU_RB_DEPTH24_STENCIL8);
+        const auto bank=addrGetVRAMBank(target_->frameBuf.depthBuf);
+        if(!(shared=vramAllocAt(bytes,bank)))shared=vramAlloc(bytes);
+    }
+    bool ok=C3D_TexInitVRAM(&sceneTex_,256,512,GPU_RGBA8);
+    if(ok&&shared&&addrGetVRAMBank(sceneTex_.data)==addrGetVRAMBank(shared))
+        if(void* moved=vramAllocAt(C3D_TexCalcTotalSize(sceneTex_.size,sceneTex_.maxLevel),addrGetVRAMBank(shared)==VRAM_ALLOC_A?VRAM_ALLOC_B:VRAM_ALLOC_A)){
+            vramFree(sceneTex_.data);sceneTex_.data=moved;}
+    ok=ok&&(sceneTarget_=C3D_RenderTargetCreateFromTex(&sceneTex_,GPU_TEXFACE_2D,0,shared?C3D_DEPTHTYPE(-1):C3D_DEPTHTYPE(GPU_RB_DEPTH24_STENCIL8)))!=nullptr;
+    if(ok&&shared){
+        C3D_FrameBufDepth(&sceneTarget_->frameBuf,shared,GPU_RB_DEPTH24_STENCIL8);
+        sharedDepth_=shared;shared=nullptr;
+        shareTopDepth(inFrame);
+    }
+    if(shared)vramFree(shared);
     for(unsigned i=0;ok&&i<std::size(bloomTex_);++i){
         const unsigned width=i>=2?BloomFarWidth:BloomNearWidth,height=i>=2?BloomFarHeight:BloomNearHeight;
         ok=C3D_TexInitVRAM(&bloomTex_[i],height,width,GPU_RGBA8)&&(bloomTarget_[i]=C3D_RenderTargetCreateFromTex(&bloomTex_[i],GPU_TEXFACE_2D,0,-1))!=nullptr;
@@ -3164,9 +3192,9 @@ bool Renderer::initBloomTargets(){
     for(auto* t:{&sceneTex_,&bloomTex_[0],&bloomTex_[1],&bloomTex_[2],&bloomTex_[3]}){C3D_TexSetFilter(t,GPU_LINEAR,GPU_LINEAR);C3D_TexSetWrap(t,GPU_CLAMP_TO_EDGE,GPU_CLAMP_TO_EDGE);}
     return true;
 }
-bool Renderer::initBloom(){
+bool Renderer::initBloom(bool inFrame){
     static_assert(kBloomVertices>=6*(2*BloomFullQuads+2));
-    if(!initBloomTargets())return false;
+    if(!initBloomTargets(inFrame))return false;
     if(bloomVertices_)return true;
     // The quad vertices are LINEAR: allocated with the first bloom request,
     // never by reserveBloom().
@@ -3175,8 +3203,55 @@ bool Renderer::initBloom(){
     std::memset(static_cast<void*>(bloomVertices_),0,kBloomVertices*sizeof(Vertex));flushGpuData(bloomVertices_,kBloomVertices*sizeof(Vertex));
     return true;
 }
+void Renderer::shareTopDepth(bool inFrame){
+    // The GPU may still use the top target's own depth: the previous frame
+    // (pipelined, in a frame) or the last one submitted (outside a frame).
+    if(inFrame)C3D_FrameWaitPrevious();
+    else C3Di_RenderQueueWaitDone();
+    void* own=target_->frameBuf.depthBuf;
+    C3D_FrameBufDepth(&target_->frameBuf,sharedDepth_,GPU_RB_DEPTH24_STENCIL8);
+    target_->ownsDepth=false;
+    vramFree(own);
+}
+void Renderer::unshareTopDepth(){
+    // Callers have waited for the GPU (releaseBloom, configureStadiumScreen,
+    // shutdown). Without room for its own buffer the top target keeps this one.
+    if(!sharedDepth_)return;
+    const size_t bytes=C3D_CalcDepthBufSize(target_->frameBuf.width,target_->frameBuf.height,GPU_RB_DEPTH24_STENCIL8);
+    const auto colour=addrGetVRAMBank(target_->frameBuf.colorBuf);
+    void* own=vramAllocAt(bytes,colour==VRAM_ALLOC_A?VRAM_ALLOC_B:VRAM_ALLOC_A);
+    if(!own)own=vramAlloc(bytes);
+    if(own){C3D_FrameBufDepth(&target_->frameBuf,own,GPU_RB_DEPTH24_STENCIL8);vramFree(sharedDepth_);}
+    target_->ownsDepth=true;
+    sharedDepth_=nullptr;
+    // The next draw on the top target rebinds its framebuffer.
+    C3Di_GetContext()->flags|=C3DiF_FrameBuf;
+}
+void Renderer::topDepthAfterSceneNow(){
+    // Left eye only: the right eye has its own target and depth.
+    if(eye_||bottomPass_||topDepthCleared_||!sceneTarget_)return;
+    // The lens flare's probe is read once the frame has finished: keep the
+    // scene depth's tile rows around it before the top LCD (shared depth) or
+    // the right eye's scene (3D) reuses the buffer.
+    const bool copy=probeExec_.valid&&probeExec_.depth==sceneTarget_->frameBuf.depthBuf&&(sharedDepth_||execStereo_.active());
+    if(!sharedDepth_&&!copy)return;
+    topDepthCleared_=true;
+    if(copy&&!probeCopy_)probeCopy_=static_cast<uint32_t*>(linearAlloc(2*(256/8)*64*sizeof(uint32_t)));
+    // Queue order: the scene's commands (flushed), the probe copy, the
+    // clear, then the top's draws.
+    C3D_FrameSplit(GX_CMDLIST_FLUSH);
+    if(copy&&probeCopy_){
+        const int cx=int(probeExec_.x);
+        const unsigned y0=399u-unsigned(std::clamp(cx+1,0,399)),y1=399u-unsigned(std::clamp(cx-1,0,399));
+        const unsigned first=y0>>3,rows=(y1>>3)-first+1,rowWords=probeExec_.stride*64;
+        C3D_SyncTextureCopy(const_cast<u32*>(probeExec_.depth)+size_t(first)*rowWords,0,reinterpret_cast<u32*>(probeCopy_),0,rows*rowWords*4,8);
+        probeExec_.depth=probeCopy_;probeExec_.firstRow=first;probeExec_.rows=rows;
+    }
+    if(sharedDepth_)C3D_RenderTargetClear(target_,C3D_CLEAR_DEPTH,0,0);
+}
 void Renderer::freeBloom(){
     bloomListValid_=false;
+    unshareTopDepth();
     for(auto*& t:bloomTarget_){if(t)C3D_RenderTargetDelete(t);t=nullptr;}
     if(sceneTarget_)C3D_RenderTargetDelete(sceneTarget_);
     sceneTarget_=nullptr;
@@ -3218,12 +3293,9 @@ void Renderer::bloomQuad(const C3D_Tex& source,unsigned sourceWidth,unsigned sou
     auto* buf=C3D_GetBufInfo();BufInfo_Init(buf);BufInfo_Add(buf,v,sizeof(Vertex),4,0x3210);
     C3D_DrawArrays(GPU_TRIANGLES,0,6);bloomCount_+=6;stats_.triangles+=2;++stats_.drawCalls;
 }
-// citro3d's context and its "already on the GPU" shadows (vendor/citro3d).
-extern "C" {
-#include "../vendor/citro3d/source/internal.h"
-}
 void Renderer::applyBloomNow(){
     flushSprites();bloomFrame_=false;
+    topDepthAfterSceneNow();
     // The commands depend only on these (and on the vertex slots holding the
     // recorded quads): immediate mono frames, no clip rectangle.
     const bool listed=bloomList&&!execPipelined_&&!execStereo_.active()&&!execDualScreenIntro_&&!bloomClipped_&&!bottomPass_;

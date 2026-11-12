@@ -130,7 +130,7 @@ struct MaterialQuadsCommand {
 };
 struct TextCommand {static constexpr uint16_t Type=CmdText;const char* text;float x,y,size;uint32_t rgba;};
 struct ScreenDepthCommand {static constexpr uint16_t Type=CmdScreenDepth;float parallax;};
-struct DepthProbeCommand {static constexpr uint16_t Type=CmdDepthProbe;float x,y;};
+struct DepthProbeCommand {static constexpr uint16_t Type=CmdDepthProbe;float x,y,depth;};
 }
 
 struct DeferredWrites::Storage {
@@ -536,10 +536,13 @@ void Renderer::execute(FrameList& list){
         case CmdText:{const auto& c=*static_cast<const TextCommand*>(body);drawScreenText(c.text,c.x,c.y,c.size,c.rgba);break;}
         case CmdScreenDepth:screenDepthNow(static_cast<const ScreenDepthCommand*>(body)->parallax);break;
         case CmdDepthProbe:{
-            // The left eye's scene depth (bloom and stadium frames draw the scene off-screen).
+            // The left eye's scene depth (bloom and stadium frames draw the scene
+            // off-screen), where the left eye shows the point: eye*parallax/2
+            // pixels from the centre camera's position (stereo::perspectiveEye).
             const auto& c=*static_cast<const DepthProbeCommand*>(body);
+            const float x=execStereo_.active()?c.x-.5f*execStereo_.parallax(c.depth):c.x;
             if(!bottomWorldPass_&&!eye)if(auto* t=(bloomFrame_||stadiumFrame_)?sceneTarget_:target_)
-                probeExec_={c.x,c.y,static_cast<const uint32_t*>(t->frameBuf.depthBuf),t->frameBuf.depthBuf!=nullptr};
+                probeExec_={x,c.y,static_cast<const uint32_t*>(t->frameBuf.depthBuf),t->frameBuf.depthBuf!=nullptr&&!topDepthCleared_,unsigned(t->frameBuf.width)/8u};
             break;}
         }
         if((tally||grid)&&pass==0&&h.type!=CmdBegin){
@@ -634,21 +637,26 @@ void Renderer::beginStereo(float targetDistance){
     stereo::cullingUnion(m,frameStereo_);
     for(unsigned r=0;r<4;++r)for(unsigned c=0;c<4;++c)cullProjection_.r[r].c[3-c]=m[r][c];
 }
-void Renderer::requestDepthProbe(float x,float y){
+void Renderer::requestDepthProbe(float x,float y,float depth){
     if(!recording())return;
-    auto& c=command<DepthProbeCommand>();c.x=x;c.y=y;
+    auto& c=command<DepthProbeCommand>();c.x=x;c.y=y;c.depth=depth;
 }
-// The top targets are 240x400 portrait D24S8 buffers in 8x8 Morton tiles; a
-// top-screen pixel (sx,sy) is buffer column 239-sy, row 399-sx (the scissor
-// mapping in drawNow). Depth is the low 24 bits; the race clears it to 0.
+// The top targets are 240x400 portrait D24S8 buffers in 8x8 Morton tiles
+// (bloom's scene target: 256 wide); a top-screen pixel (sx,sy) is buffer
+// column 239-sy, row 399-sx (the scissor mapping in drawNow). Depth is the
+// low 24 bits; the race clears it to 0.
 void Renderer::readDepthProbe(){
     if(!probeRead_.valid)return;
     probeRead_.valid=false;
     const uint32_t* depth=probeRead_.depth;
-    auto covered=[depth](int sx,int sy){
+    const unsigned stride=probeRead_.stride,first=probeRead_.firstRow,rows=probeRead_.rows;
+    // A copy (shared depth) is in cached LINEAR memory, written by the GPU.
+    if(rows)GSPGPU_InvalidateDataCache(const_cast<uint32_t*>(depth),rows*stride*64*sizeof(uint32_t));
+    auto covered=[depth,stride,first,rows](int sx,int sy){
         const unsigned x=239u-unsigned(std::clamp(sy,0,239)),y=399u-unsigned(std::clamp(sx,0,399));
+        if(rows&&((y>>3)<first||(y>>3)>=first+rows))return false;
         unsigned m=0;for(unsigned b=0;b<3;++b)m|=((x>>b)&1u)<<(2*b)|((y>>b)&1u)<<(2*b+1);
-        return (depth[((y>>3)*(240u>>3)+(x>>3))*64+m]&0xffffffu)!=0;
+        return (depth[(((y>>3)-first)*stride+(x>>3))*64+m]&0xffffffu)!=0;
     };
     const int cx=int(probeRead_.x),cy=int(probeRead_.y);int count=0;
     for(int dy=-1;dy<=1;++dy)for(int dx=-1;dx<=1;++dx)count+=covered(cx+dx,cy+dy);

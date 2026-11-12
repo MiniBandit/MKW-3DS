@@ -255,19 +255,29 @@ void C3Di_UpdateContext(void)
 	if (ctx->flags & C3DiF_TexAll)
 	{
 		u32 units = 0;
+		bool changed = false;
 		for (i = 0; i < 3; i ++)
 		{
 			if (ctx->tex[i])
 			{
 				units |= BIT(i);
 				if (ctx->flags & C3DiF_Tex(i))
-					C3Di_SetTex(i, ctx->tex[i]);
+					changed |= C3Di_SetTex(i, ctx->tex[i]);
 			}
 		}
+		changed |= units != (ctx->texConfig & 7);
 
-		// Enable texture units and clear texture cache
+		// Enable texture units and clear texture cache. mkw-3ds: a bind that
+		// changed no unit register keeps the cache unless it may be stale.
 		ctx->texConfig &= ~7;
-		ctx->texConfig |= units | BIT(16);
+		ctx->texConfig |= units;
+		if (changed || C3Di_TexCacheDirty || !C3D_FastState || !C3D_TexCacheKeep)
+		{
+			ctx->texConfig |= BIT(16);
+			C3Di_TexCacheDirty = false;
+			C3D_TexCacheClears ++;
+		} else
+			C3D_TexCacheKept ++;
 		ctx->flags &= ~C3DiF_TexAll;
 		ctx->flags |= C3DiF_TexStatus;
 	}

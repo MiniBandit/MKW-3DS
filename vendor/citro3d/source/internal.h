@@ -207,7 +207,8 @@ void C3Di_AttrInfoBind(C3D_AttrInfo* info);
 void C3Di_BufInfoBind(C3D_BufInfo* info);
 void C3Di_FrameBufBind(C3D_FrameBuf* fb);
 void C3Di_TexEnvBind(int id, C3D_TexEnv* env);
-void C3Di_SetTex(int unit, C3D_Tex* tex);
+bool C3Di_SetTex(int unit, C3D_Tex* tex);
+extern bool C3Di_TexCacheDirty;
 void C3Di_EffectBind(C3D_Effect* effect);
 void C3Di_GasUpdate(C3D_Context* ctx);
 

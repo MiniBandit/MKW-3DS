@@ -54,7 +54,7 @@ void LensFlare::update(Renderer& renderer,unsigned physicsSteps){
     float x,y,z;
     const bool onScreen=renderer.projectTop(source_,x,y,z)&&z<0&&x>=0&&x<ScreenW&&y>=0&&y<ScreenH;
     const bool covered=renderer.depthProbeCovered()>=9;
-    if(onScreen){x_=x;y_=y;haveScreen_=true;renderer.requestDepthProbe(x,y);}
+    if(onScreen){x_=x;y_=y;haveScreen_=true;renderer.requestDepthProbe(x,y,-z);}
     fade_=onScreen&&!covered?std::min(FadeMax,fade_+FadeIn*steps):std::max(0,fade_-FadeOut*steps);
 }
 

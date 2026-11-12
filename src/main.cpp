@@ -752,6 +752,10 @@ int main() {
     renderer.lightTextureSkip=!exists("sdmc:/3ds/mkw-3ds/no-light-blend.txt");
     renderer.bloomList=!exists("sdmc:/3ds/mkw-3ds/no-bloom-list.txt");
     C3D_FastState=!exists("sdmc:/3ds/mkw-3ds/no-c3d-fast.txt");
+    // Texture binds that change no unit register keep the GPU texture cache.
+    C3D_TexCacheKeep=!exists("sdmc:/3ds/mkw-3ds/no-tex-cache-keep.txt");if(!C3D_TexCacheKeep)report("texture cache keep off");
+    // The top LCD's depth shares bloom's scene depth buffer while it exists.
+    renderer.shareDepth=!exists("sdmc:/3ds/mkw-3ds/no-shared-depth.txt");if(!renderer.shareDepth)report("shared depth off");
     mkw::DriverAnimation::sharePose=!exists("sdmc:/3ds/mkw-3ds/no-pose-share.txt");
     // CPU skins computed and fire phases staged when the render thread starts a frame, not on its hook.
     mkw::DeferredWrites::prepareWrites=!exists("sdmc:/3ds/mkw-3ds/no-hook-prep.txt");if(!mkw::DeferredWrites::prepareWrites)report("hook prepare off");
@@ -4388,6 +4392,7 @@ int main() {
             {static unsigned skinStep=~0u;
                 if(physicsSteps/600!=skinStep){skinStep=physicsSteps/600;
                     LOGF("lit skin draws step=%u rigid=%lu cofactor=%lu",physicsSteps,(unsigned long)renderer.rigidSkinDraws,(unsigned long)renderer.cofactorSkinDraws);
+                    LOGF("texture cache step=%u clears=%lu kept=%lu shared depth=%d",physicsSteps,(unsigned long)C3D_TexCacheClears,(unsigned long)C3D_TexCacheKept,int(renderer.sharedDepth()));
                     LOGF("box precull step=%u draws=%lu triangles kept=%lu of %lu lists=%lu unculled=%lu",physicsSteps,renderer.facingDraws,renderer.facingKept,renderer.facingTotal,renderer.facingBuilt,renderer.facingFull);}}
 #endif
             if(fullRace)renderer.drawScreenFade(lightningFlash.opacity(),lightningFlash.white);

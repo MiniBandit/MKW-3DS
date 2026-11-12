@@ -18,6 +18,10 @@ extern bool C3D_FastState;
 // mkw-3ds: called before each vertex uniform upload with the bound program
 // (a shaderProgram_s*, null: none); it may rewrite uniforms through C3D_FVUnifWritePtr.
 extern void (*C3D_UniformHook)(const void* program);
+// mkw-3ds: false clears the texture cache on every texture bind again (the
+// library's behaviour). Counters: texture updates that cleared / kept it.
+extern bool C3D_TexCacheKeep;
+extern u32 C3D_TexCacheClears, C3D_TexCacheKept;
 extern bool C3D_IVUnifDirty[2][C3D_IVUNIF_COUNT];
 extern bool C3D_BoolUnifsDirty[2];
 
