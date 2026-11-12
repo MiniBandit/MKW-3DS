@@ -33,7 +33,7 @@ BUILD
 2. Drag your disc image into the window and press Return.
 3. Wait a few hours. You get:
        build/release/mkw-3ds.cia        the game (small)
-       build/release/sd-card/3ds        its files (about 3 GB)
+       build/release/sd-card/3ds/mkw-3ds  its files (about 3 GB)
 
 If it stops partway, double-click it again; finished steps are skipped.
 If it fails, share build-cia-log.txt from this folder when asking for help.
@@ -42,7 +42,14 @@ If it fails, share build-cia-log.txt from this folder when asking for help.
 INSTALL
 -------
 Needs a 3DS with custom firmware (https://3ds.hacks.guide).
-1. Copy the folder build/release/sd-card/3ds to the root of your SD card.
+1. Open build/release/sd-card/3ds and copy the mkw-3ds folder inside it
+   into the 3ds folder on your SD card (so it is at 3ds/mkw-3ds; make a
+   3ds folder if the card has none). Don't copy the 3ds folder itself onto
+   the card: on a Mac, Finder can replace the card's whole 3ds folder and
+   delete your other apps.
+   Updating? Your saves are in the card's mkw-3ds folder: copy the new
+   files INTO it (select everything inside the new mkw-3ds), don't replace
+   the folder.
 2. Install mkw-3ds.cia with FBI. Mario Kart Wii appears on the HOME Menu.
 3. For sound, run DSP1 once to dump your sound firmware.
 
