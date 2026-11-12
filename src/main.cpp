@@ -2294,7 +2294,9 @@ int main() {
         if(raceWarmupFrames)held=down=0;
         if(fullRace){
             // A or START skips the course preview; that press does nothing else.
-            if(intro.active()&&menu.page==mkw::UiPage::Race&&(down&(KEY_A|KEY_START))){endIntro();down&=~u32(KEY_A|KEY_START);}
+            // RaceInfo_update (PR #76): the course preview skips on a new A press (never
+            // START) from its 61st frame, so a press carried over from the menus cannot.
+            if(intro.active()&&menu.page==mkw::UiPage::Race){if(introTick>60&&(down&KEY_A))endIntro();down&=~u32(KEY_A|KEY_START);}
             if(results.active()){
                 // Result boards take A/B/START (Leaderboard, USA 0x8083A5E0);
                 // the end-of-race menu moves with the D-pad and confirms with A.
