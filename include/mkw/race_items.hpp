@@ -208,6 +208,8 @@ public:
     void kartContacts(unsigned player);
     ItemInput autoItemInput(unsigned player) const;
     const ItemHud& hud(unsigned player) const { return hud_[player<MaxRacers?player:0]; }
+    // A running POW targets this racer (its stomps, then the hit window).
+    bool powThreat(unsigned player) const { return powTimer_>0&&player<MaxRacers&&powTargets_[player]; }
     // Presentation reads the roulette phase for the item window cube roll.
     const ItemRoulette& roulette(unsigned player) const { return roulettes_[player<MaxRacers?player:0]; }
     const std::vector<ItemBox>& boxes() const { return boxes_; }

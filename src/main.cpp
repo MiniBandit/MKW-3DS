@@ -2915,6 +2915,13 @@ int main() {
             auto trick=K::System::Trick::None;
             if(held&(KEY_DUP|KEY_ZR))trick=K::System::Trick::Up;else if(held&KEY_DDOWN)trick=K::System::Trick::Down;
             else if(held&KEY_DLEFT)trick=K::System::Trick::Left;else if(held&KEY_DRIGHT)trick=K::System::Trick::Right;
+            // POW dodge on R as well: while a POW targets the player, or early in its
+            // spin, an R press is the Wii's shake (trick Up, KartMove::calcPow), like
+            // D-pad Up and ZR.
+            const bool powDodgeWindow=fullRace&&!qaMode&&!replay&&[&]{
+                const auto* action=K::Kart::KartObjectManager::Instance()->object(0)->action();
+                return raceItems->powThreat(0)||(action->currentAction()==K::Kart::Action::UNK_11&&action->frame()<8);
+            }();
             // The D-pad is out of reach while the thumb steers on the Circle Pad.
             // The pad picks the direction like a Wii Remote shake with the stick
             // held; neutral is Up (a wheelie on bikes).
@@ -2941,6 +2948,7 @@ int main() {
                 if(rampTrick){trick=padTrick();buttons=(buttons&~10u)|(held&KEY_B?2u:0u);}
                 else if(!qaMode&&(held&KEY_Y))trick=padTrick();
             }
+            if(powDodgeWindow&&(down&KEY_R))trick=K::System::Trick::Up;
             lookBehind=fullRace&&!qaMode&&!replay&&!raceGrid.finished()&&bool(held&(KEY_X|KEY_ZL));
             if(auto* camera=K::Render::KartCamera::Instance())camera->requestLookBack(lookBehind);
             // Preserve the Wii input lattice used by ghost records. Stick Y tilts

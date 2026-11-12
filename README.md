@@ -130,10 +130,10 @@ See [CHANGELOG.md](CHANGELOG.md) for what's new.
 | Circle Pad | Steer, tilt in the air, aim items |
 | A | Accelerate |
 | B | Brake and reverse |
-| R | Hop and drift, trick off a ramp |
+| R | Hop and drift, trick off a ramp, dodge a POW |
 | L | Use item |
 | Y | Trick in the Circle Pad's direction, wheelie on bikes |
-| D-pad | Trick in that direction, Up for a wheelie |
+| D-pad | Trick in that direction, Up for a wheelie or to dodge a POW |
 | ZR (New 3DS) | Same as D-pad Up |
 | X, or ZL on New 3DS | Look behind |
 | START | Pause |
