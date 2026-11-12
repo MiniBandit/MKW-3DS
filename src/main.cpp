@@ -4054,7 +4054,8 @@ int main() {
             physicsMs=(svcGetSystemTick()-start)*1000.0/SYSCLOCK_ARM11;maxPhysics=std::max(maxPhysics,physicsMs);
             profiler->mark(Profile::Simulation);
             if(fullRace){
-                // The 3D slider can move mid-race: the rate follows it.
+                // The 3D slider can move mid-race: the rate follows the last
+                // frame's slider read (no second read here).
                 if(const unsigned ticks=raceTicksPerFrame();ticks!=presentation.ticksPerSlot())presentation.setTicksPerSlot(ticks);
                 // Never stall the 60 Hz input/physics loop for a busy render
                 // list. Coalesce only the presentation; next frame snapshots

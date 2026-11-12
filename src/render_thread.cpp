@@ -616,6 +616,11 @@ void Renderer::setFov(float degrees,float nearPlane,float farPlane){
     else projection_=mainProjection_;
 }
 float Renderer::slider() const{return sliderOverride_>=0?sliderOverride_:osGet3DSliderState();}
+float Renderer::sampleSlider(){
+    const float value=slider();
+    sliderOn_=value>(sliderOn_?SliderOff:SliderOn);
+    return sliderOn_?value:0.f;
+}
 // Recording side of a frame's stereo parameters (mainView_ is this frame's).
 // As in Mario Kart 7 the reference plane keeps a fixed view depth for the
 // whole scene: the subject's depth, set per frame, times the scene's ratio.
@@ -625,7 +630,7 @@ void Renderer::beginStereo(float targetDistance){
     const float subject=stereoSubjectSet_?stereoSubject_:targetDistance;
     stereoSubjectSet_=false;
     if(!targetRight_)return;
-    const float slider=this->slider();
+    const float slider=sampleSlider();
     if(!(slider>0))return;
     frameSlider_=std::min(slider,1.f);
     frameStereo_=stereo::frame(slider,stereoDisplay_,scene,subject);

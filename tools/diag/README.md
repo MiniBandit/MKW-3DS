@@ -196,7 +196,7 @@ course, sky and object texture (each once, under its first model), whether it is
 frame that bound it on any unit; with `model-pixels.txt` also the screen
 pixels those draws covered. Slow; for Azahar runs.
 `stereo-slider.txt` (a number from 0 to 1) pins the 3D slider for comparable
-runs.
+runs. As with the slider, the right eye turns on above 0.03 and off at or below 0.01.
 `lod-bias.txt` (a number from -2 to 0, default 0) is added to the LOD of every
 mip-mapped texture: negative values sample sharper levels (`runtime.log`:
 `texture lod bias N`).
