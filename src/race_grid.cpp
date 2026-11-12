@@ -1,5 +1,7 @@
 #include <mkw/race_grid.hpp>
+#include <mkw/battle_route.hpp>
 #include <mkw/bullet_bill.hpp>
+#include <mkw/mii_garage.hpp>
 #include <mkw/garage.hpp>
 #include <mkw/race_teams.hpp>
 #include <game/system/RaceConfig.hh>
@@ -39,11 +41,31 @@ Vec3 bulletRouteNormal(Vec3 start,Vec3 end){
     const Vec3 route=start-end;
     return normalized(cross(cross(route,{0,1,0}),route),{});
 }
+// Retail keeps vehicle/BSP ground support beneath Killer's visual offset.
+// The 3DS controller runs before the ordinary kart pass: resolve that support
+// explicitly at both integration boundaries, while an actual gap keeps the
+// authored ITPT flight controller. Never fabricate a floor or use the ITPT Y as terrain.
+bool supportBullet(Kinoko::Kart::KartObject* kart){
+    using namespace Kinoko;
+    if(kart->status().onBit(Kart::eStatus::BeforeRespawn,Kart::eStatus::InRespawn,Kart::eStatus::InCannon))return false;
+    const float height=kart->bsp().initialYPos*kart->scale().y;
+    const float radius=std::clamp(height+75.f,100.f,200.f);
+    Field::CollisionInfo info{};auto* course=Field::CourseColMgr::Instance();auto* saved=course->noBounceWallInfo();course->clearNoBounceWallInfo();
+    const bool hit=Field::CollisionDirector::Instance()->checkSphereFull(radius,kart->pos(),EGG::Vector3f::inf,Field::KCLTypeMask(KCL_TYPE_DRIVER_FLOOR),&info,nullptr,0);
+    course->setNoBounceWallInfo(saved);
+    if(!hit||info.floorDist<0||info.floorNrm.y<.2f){kart->move()->setBulletGroundContact(false);return false;}
+    const auto position=kart->pos()+info.floorNrm*(height-(radius-info.floorDist));
+    kart->setPos(position);kart->physics()->updatePose();
+    kart->move()->setBulletGroundContact(true,info.floorNrm);
+    auto vel=kart->dynamics()->extVel();vel-=info.floorNrm*vel.dot(info.floorNrm);kart->dynamics()->setExtVel(vel);
+    kart->dynamics()->setNoGravity(false);
+    return true;
+}
 float horizontalProjection(Vec3 p,Vec3 a,Vec3 b){p.y=a.y=b.y=0;const Vec3 d=b-a;const float n=dot(d,d);return n>0.001f?dot(p-a,d)/n:1.f;}
 float projection(Vec3 p,Vec3 a,Vec3 b){const Vec3 d=b-a;const float n=dot(d,d);return n>0.001f?dot(p-a,d)/n:1.f;}
 }
 
-bool EnemyRoute::load(const void* bytes,size_t size,bool itemPath){
+bool EnemyRoute::load(const void* bytes,size_t size,bool itemPath,bool battle){
     clear();if(!bytes||size<16)return false;
     const auto* b=static_cast<const uint8_t*>(bytes);
     if(std::memcmp(b,"RKMD",4)||be32(b+4)>size||be32(b+4)<16)return false;
@@ -74,7 +96,11 @@ bool EnemyRoute::load(const void* bytes,size_t size,bool itemPath){
             // ENPT group-entry setting 1 requires a cutting item. Our CPU
             // driver cannot guarantee that item is held/used at entry, so use
             // ordinary branches. ITPT setting 1 has different semantics.
-            v.requiresBoost=!itemPath&&points[start].setting1==1;
+            v.requiresBoost=!itemPath&&!battle&&points[start].setting1==1;
+            if(battle&&!itemPath){
+                if(!battleRouteSuccessors(b+enph+8,groups,count,j,v.next,v.nextCount))return false;
+                continue;
+            }
             if(j+1<start+length){v.next[v.nextCount++]=j+1;continue;}
             for(unsigned k=0;k<6;++k){const unsigned next=p[8+k];if(next==255)continue;
                 if(next>=groups)return false;const unsigned point=b[enph+8+next*16];if(point>=count)return false;
@@ -84,12 +110,14 @@ bool EnemyRoute::load(const void* bytes,size_t size,bool itemPath){
         }
     }
     if(std::find(covered.begin(),covered.end(),false)!=covered.end())return false;
-    points_=std::move(points);return true;
+    points_=std::move(points);itemPath_=itemPath;return true;
 }
 unsigned EnemyRoute::successor(unsigned index,unsigned racer) const{
     if(index>=size()||!points_[index].nextCount)return Invalid;
     const auto& p=points_[index];
-    std::array<unsigned,6> allowed{};unsigned count=0;
+    // Killer passes branch 0 to KMP::GetNextITPT (USA805b13f4).
+    if(itemPath_)return p.next[0];
+    std::array<unsigned,12> allowed{};unsigned count=0;
     for(unsigned n=0;n<p.nextCount;++n)if(!points_[p.next[n]].requiresBoost)allowed[count++]=p.next[n];
     return count?allowed[racer%count]:p.next[racer%p.nextCount];
 }
@@ -119,7 +147,7 @@ Vec3 EnemyRoute::target(unsigned segment,unsigned racer,Vec3 pos,float lookahead
 void RaceGrid::configure(Kinoko::System::RaceConfig& config,unsigned localChoice,unsigned count,const std::array<unsigned,Capacity>* roster){
     constexpr unsigned driverCount=GarageChoices.size()/VehiclesPerDriver;
     static_assert(GarageChoices.size()%VehiclesPerDriver==0&&driverCount>=Capacity);
-    count_=std::clamp(count,1u,Capacity);localChoice%=GarageChoices.size();
+    count_=std::clamp(count,1u,Capacity);localChoice%=GarageChoices.size()+MiiGarageChoices.size();
     auto& scenario=config.raceScenario();scenario.playerCount=count_;
     const unsigned course=unsigned(scenario.course);
     battleArena_=course>=32&&course<42;
@@ -135,7 +163,7 @@ void RaceGrid::configure(Kinoko::System::RaceConfig& config,unsigned localChoice
             choices_[i]+=(kind?bikes:karts)[i%6];
         }
         if(i&&roster)choices_[i]=(*roster)[i];
-        const auto& choice=GarageChoices[choices_[i]];
+        const auto& choice=raceGarageChoice(choices_[i]);
         p.character=static_cast<Kinoko::Character>(choice.character);p.vehicle=static_cast<Kinoko::Vehicle>(choice.vehicle);
         p.type=i?Kinoko::System::RaceConfig::Player::Type::CPU:Kinoko::System::RaceConfig::Player::Type::Local;
         p.driftIsAuto=i!=0;
@@ -154,7 +182,7 @@ bool RaceGrid::reset(){
         drivers_[i].last=native(kart->pos());
     }
     size_t size=0;const void* kmp=System::ResourceManager::Instance()->getFile("course.kmp",&size,System::ArchiveId::Course);
-    bool ok=route_.load(kmp,size);bulletRoute_.load(kmp,size,true);
+    bool ok=route_.load(kmp,size,false,battleArena_);bulletRoute_.load(kmp,size,true);
     size_t paramSize=0;const void* params=System::ResourceManager::Instance()->getFile("kartAISpdParam.bin",&paramSize,System::ArchiveId::Core);
     const auto& scenario=config->raceScenario();
     const unsigned engine=std::min(unsigned(scenario.engineClass),2u);
@@ -177,7 +205,7 @@ bool RaceGrid::reset(){
     afterStep();
     // Retail Enemy::AI uses the selected class's opening/catch-up tables.
     CpuAi::Setup setup;setup.route=&route_;setup.count=count_;setup.engineClass=engine;setup.cpuMode=difficulty_;setup.mirror=scenario.mirror;
-    setup.speed=speedParam_;setup.speedReady=speedParamReady_;
+    setup.battle=battleArena_;setup.speed=speedParam_;setup.speedReady=speedParamReady_;
     size_t actionSize=0;const void* actions=System::ResourceManager::Instance()->getFile("kartAIActionParam.bin",&actionSize,System::ArchiveId::Core);
     setup.actionsReady=readCpuActionParam(actions,actionSize,setup.cpuMode,setup.actions);
     if(!setup.actionsReady)for(auto& a:setup.actions)a={50,10,70,70,80,50,0,0};
@@ -196,6 +224,10 @@ void RaceGrid::beforeStep(uint16_t bulletPlayers){
     using namespace Kinoko;
     auto* manager=System::RaceManager::Instance();auto* objects=Kart::KartObjectManager::Instance();
     if(!manager||!objects)return;
+    if(battleArena_&&manager->isStageReached(System::RaceManager::Stage::FinishGlobal)){
+        for(unsigned i=0;i<count_;++i)System::KPadDirector::Instance()->hostController(i)->setInputsRawStick(0,7,7,System::Trick::None);
+        return;
+    }
     const bool racing=manager->isStageReached(System::RaceManager::Stage::Race);
     if (battleArena_ && !route_.size()) {
         if(!racing)return;
@@ -233,7 +265,7 @@ void RaceGrid::beforeStep(uint16_t bulletPlayers){
             // Respawn and cannon own this flag once their controllers take over.
             if(d.bulletGravity.noGravity&&kart->status().offBit(Kart::eStatus::InRespawn,Kart::eStatus::InCannon))
                 kart->dynamics()->setNoGravity(false);
-            d.bulletGravity.reset();
+            d.bulletGravity.reset();kart->move()->setBulletRouteFlight(false,EGG::Vector3f::ey);kart->move()->setBulletGroundContact(false);
         };
         if(d.bullet&&!bullet)releaseBulletGravity();
         if(i==0&&!bullet&&!driveLocal){if(d.bullet)kart->move()->setKartSpeedLimit();d.bullet=false;continue;}
@@ -241,6 +273,7 @@ void RaceGrid::beforeStep(uint16_t bulletPlayers){
         const auto& route=bullet?bulletRoute_:route_;
         if(!route.size()){releaseBulletGravity();pad->setInputsRawStick(0,7,7,System::Trick::None);continue;}
         unsigned& segment=bullet?d.bulletSegment:d.segment;
+        const bool supported=bullet&&supportBullet(kart);
         const Vec3 pos=native(kart->pos()),forward=native(kart->bodyFront());
         bool respawning=kart->status().onBit(Kart::eStatus::BeforeRespawn,Kart::eStatus::InRespawn);
         // A human may drive far beyond the last segment between Bullet uses.
@@ -296,14 +329,19 @@ void RaceGrid::beforeStep(uint16_t bulletPlayers){
         if(bullet){
             // The current retail ITPT is the next target of our incoming segment.
             // UpdateGravity consumes it before this tick advances the route.
-            const unsigned current=route.successor(segment,i),next=route.successor(current,i);
-            const auto& a=route.point(current);const auto& b=route.point(next);
+            const unsigned current=route.successor(segment,i);
+            // USA805b2b10..58: tube spans previous/current ITPT, not current/next.
+            const auto& a=route.point(current);const auto& b=route.point(segment);
             bool inside=false;
             if(a.setting1!=1&&a.setting1!=2&&!d.bulletGravity.latched){
                 const Vec3 normal=bulletRouteNormal(a.position,b.position);
                 inside=bulletInsideRoute(pos,a.position,b.position,a.width,b.width,normal,a.setting1!=3,0.f);
             }
-            const bool noGravity=d.bulletGravity.step(a.setting1,inside,respawning);
+            bool noGravity=d.bulletGravity.step(a.setting1,inside,respawning);
+            // Retail flight latch survives ordinary road contact (805b2434).
+            // Ground support only owns this integration step; clearing the
+            // route latch here loses flight across consecutive short gaps.
+            if(supported)noGravity=false;
             // Retail Update skips physics writes during the cannon-owned phase.
             if(kart->status().offBit(Kart::eStatus::InCannon,Kart::eStatus::InRespawn)){
                 kart->dynamics()->setNoGravity(noGravity);
@@ -314,12 +352,13 @@ void RaceGrid::beforeStep(uint16_t bulletPlayers){
         }
         for(unsigned guard=0;guard<8;++guard){unsigned next=route.successor(segment,i);const Vec3 a=route.point(segment).position,b=route.point(next).position;
             if(bullet){
-                // Retail a5b08 advances after crossing the horizontal plane
-                // through the current ITPT point, along its incoming segment.
-                Vec3 delta=b-a;delta.y=0;
-                if(dot(pos-b,delta)<=0)break;
+                // USA805b1284: crossing the incoming horizontal plane OR
+                // entering clamp(ITPT.width * 50, 700, 1000) advances one point.
+                // Omitting the radius made sharp corners chase a point behind
+                // the kart and oscillate instead of anticipating the next leg.
+                if(!bulletAdvancePoint(pos,a,b,route.point(next).width))break;
             }else if((horizontalRecovery?horizontalProjection(pos,a,b):projection(pos,a,b))<1.f&&length(pos-b)>180.f)break;
-            segment=next;d.routeTicks=0;
+            segment=next;d.routeTicks=0;if(bullet)break;
         }
         Vec3 target=bullet?route.point(route.successor(segment,i)).position:route.target(segment,i,pos,lookahead,horizontalRecovery);
         float steer=steeringTo(forward,target-pos);uint16_t buttons=0;
@@ -337,15 +376,32 @@ void RaceGrid::beforeStep(uint16_t bulletPlayers){
             // controller above owns only gravity and external collision velocity.
             buttons=1;d.reverse=d.recoveries=0;
             if(kart->status().offBit(Kart::eStatus::InCannon,Kart::eStatus::InAction)){
-                const Vec3 up=normalized(native(kart->move()->smoothedUp()));
-                const Vec3 heading=normalized(tangent(native(kart->move()->dir()),up),forward);
-                const Vec3 desired=normalized(tangent(target-pos,up),heading);
-                const float angle=std::atan2(dot(cross(heading,desired),up),dot(heading,desired));
+                // USA805b1434..1758: aim the complete quaternion at the ITPT,
+                // not only yaw in the last road plane. Flight targets add100Y
+                // (805b1eec); only an actual wall contact suppresses targetY.
+                auto rotation=kart->dynamics()->mainRot();
+                rotation.normalise();
+                const auto heading=rotation.rotateVector(EGG::Vector3f::ez);
+                Vec3 offset=target-pos;
+                if(d.bulletGravity.noGravity)offset.y+=100.f;
+                if(kart->status().onBit(Kart::eStatus::WallCollision,Kart::eStatus::Wall3Collision))offset.y=0;
+                const Vec3 desired=normalized(offset,native(heading));
+                Vec3 h=native(heading),aim=desired;h.y=aim.y=0;
+                h=normalized(h,{0,0,1});aim=normalized(aim,h);
+                const float angle=std::atan2(dot(cross(h,aim),{0,1,0}),dot(h,aim));
                 d.bulletTurn=bulletTurnRate(d.bulletTurn,angle);
-                const float turn=angle*d.bulletTurn;
-                EGG::Quatf correction(std::cos(turn*.5f),up.x*std::sin(turn*.5f),up.y*std::sin(turn*.5f),up.z*std::sin(turn*.5f));
-                const EGG::Vector3f direction=correction.rotateVector(kart->move()->dir());
-                kart->setRot(correction*kart->dynamics()->mainRot());
+                EGG::Quatf correction;correction.makeVectorRotation(heading,{desired.x,desired.y,desired.z});
+                rotation=rotation.slerpTo(correction*rotation,d.bulletTurn);
+                rotation.normalise();
+                const auto direction=rotation.rotateVector(EGG::Vector3f::ez);
+                // Retail UpdateUps derives up from the route target and the
+                // current right axis, rather than adopting a landing lip normal.
+                auto right=rotation.rotateVector(EGG::Vector3f::ex);right.y=0;
+                EGG::Vector3f routeUp=EGG::Vector3f(offset.x,offset.y,offset.z).cross(right);
+                if(routeUp.y<0)routeUp=-routeUp;
+                if(routeUp.squaredLength()>0.0000001f)routeUp.normalise();else routeUp=EGG::Vector3f::ey;
+                kart->move()->setBulletRouteFlight(d.bulletGravity.noGravity,routeUp);
+                kart->setRot(rotation);
                 kart->move()->setDir(direction);kart->move()->setVel1Dir(direction);
                 // Steering is supplied above: no manual drift/hop state or
                 // stale human stick is inherited by the transformed driver.
@@ -392,7 +448,10 @@ uint16_t RaceGrid::bulletNoEndPlayers() const{
 }
 void RaceGrid::afterStep(){
     auto* manager=Kinoko::System::RaceManager::Instance();if(!manager)return;
+    auto* objects=Kinoko::Kart::KartObjectManager::Instance();
+    for(unsigned i=0;i<count_;++i)if(drivers_[i].bullet)supportBullet(objects->object(i));
     forwardBumps();
+    if(!battleArena_){
     std::array<unsigned,Capacity> order{};for(unsigned i=0;i<count_;++i)order[i]=i;
     std::sort(order.begin(),order.begin()+count_,[&](unsigned a,unsigned b){
         const auto& x=manager->player(a);const auto& y=manager->player(b);
@@ -402,6 +461,7 @@ void RaceGrid::afterStep(){
         return a<b;
     });
     for(unsigned rank=0;rank<count_;++rank)ranks_[order[rank]]=rank+1;
+    } // Battle receives the mode's prior-position/score ranks after scoring.
     for(unsigned i=0;i<count_;++i){const auto& p=manager->player(i);finished_[i]=p.finished();laps_[i]=unsigned(std::clamp<int>(p.currentLap(),1,3));}
 }
 void RaceGrid::forwardBumps(){

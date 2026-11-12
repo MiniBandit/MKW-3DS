@@ -17,10 +17,11 @@ struct CpuRosterRandom {
 struct CpuRoster {
  std::array<unsigned,12> choices{};
  bool ready=false;
- void characters(unsigned human,const LicenseUnlockFlags& flags,CpuRosterRandom& random){
+ void characters(unsigned human,const LicenseUnlockFlags& flags,CpuRosterRandom& random,unsigned miiWeight=1){
   std::array<unsigned,3> weights{};std::array<bool,24> used{};
-  human%=StarterDrivers.size();choices[0]=human*12;
-  used[StarterDrivers[human].character]=true;++weights[StarterDrivers[human].vehicle];
+  choices[0]=human*12;
+  if(human<StarterDrivers.size()){used[StarterDrivers[human].character]=true;++weights[StarterDrivers[human].vehicle];}
+  else ++weights[std::min(miiWeight,2u)];
   // CharacterSelect USA808241c8: sample retail IDs 0..23, reject locked,
   // duplicate and full weight classes (four of each for twelve racers).
   for(unsigned slot=1;slot<choices.size();++slot){

@@ -12,6 +12,7 @@ inline ItemSurface groundContact(ItemWorldQuery query,const ItemActor& a){
     if(length(probe.floorNormal)>.1f&&!probe.kill&&!probe.cannon){
         surface.floorNormal=probe.floorNormal;
         surface.floorTypes=probe.floorTypes;
+        surface.floorMotion=probe.floorMotion;surface.floorObject=probe.floorObject;surface.floorObjectY=probe.floorObjectY;
         surface.correction=probe.correction-inset;
     }
     return surface;

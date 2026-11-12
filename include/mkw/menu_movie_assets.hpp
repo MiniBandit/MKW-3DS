@@ -22,7 +22,7 @@ inline constexpr UiMovieStreamInfo UiMovieStreams[]={
 {"movies/cup_select.gmv",512,512,480,59.93999863f},
 {"movies/battle_select.gmv",256,128,480,59.93999863f},
 {"movies/battle_cup_select.gmv",256,512,600,59.93999863f},
-{"movies/title.gmv",512,256,4250,59.93999863f},
+{"movies/title.gmv",512,256,2125,29.96999931f},
 };
 struct UiMovieRegionInfo {const char* key;unsigned stream;float u0,v0,u1,v1;};
 inline constexpr UiMovieRegionInfo UiMovieRegions[]={

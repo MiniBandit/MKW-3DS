@@ -17,6 +17,7 @@ namespace mkw {
 struct ObjModel {
     std::unique_ptr<FirePhaseStream> firePhases;
     int fireTexture=-1,firePhase=-1;
+    int budgetClip=-2;float budgetFrame=-1;std::vector<float> budgetPalette;
 
     std::string resource,name;
     std::unique_ptr<Model> model;

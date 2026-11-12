@@ -2,7 +2,7 @@
 """Fit cooked menu UI textures to the 3DS top screen, then LZ11-compress them.
 
 The Wii layouts are authored on a 608x456 canvas; the 3DS shows them at
-400x225, so cooked RGBA8 sprites were sampled down ~0.66x0.49 by bilinear
+400x240, so cooked RGBA8 sprites are sampled down ~0.66x0.53 by bilinear
 filtering without mipmaps. This pass resamples each sprite once (premultiplied
 alpha, Lanczos) to the largest size the production composer ever draws it at
 (measured by tools/menu_sprite_scales.cpp over every page, cursor, selection,
@@ -14,7 +14,7 @@ Outputs: textures/ui_*.t3x (LZ11), and the u/v (sprites) and atlas/slice UVs in
 include/mkw/menu_assets.hpp. Re-running is idempotent; cook_menu_ui.py runs it
 after regenerating menu_assets.hpp.
 """
-import argparse, hashlib, json, math, os, re, shutil, subprocess
+import argparse, hashlib, json, math, re, subprocess
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import numpy as np
@@ -32,34 +32,10 @@ def pow2(n):
     return max(8, 1 << (max(1, n) - 1).bit_length())
 
 
-SHIPPED = ROOT / 'tools/menu_sprite_scales.json'
-
-
 def measure():
-    # The measurement depends on the menu code and the converted USA menu files.
-    # Player builds use the shipped tools/menu_sprite_scales.json on every OS,
-    # so Mac and Windows convert the same textures and a later menu code change
-    # (a quick update) does not change the converted files. Developers measure
-    # afresh with clang++ and MKW_UPDATE_SPRITE_SCALES=1, which refreshes it.
-    measuring = os.environ.get('MKW_UPDATE_SPRITE_SCALES') == '1'
-    if not measuring or not shutil.which('clang++'):
-        if not SHIPPED.is_file():
-            raise SystemExit('tools/menu_sprite_scales.json is missing (measure with clang++ and MKW_UPDATE_SPRITE_SCALES=1)')
-        print('using the shipped menu sprite measurements', flush=True)
-        # Later steps (tools/pack_menu_assets.py) read the measurement from build/.
-        out = ROOT / 'build/host-tools/sprite-scales.json'
-        out.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(SHIPPED, out)
-        return json.loads(SHIPPED.read_text())
-    exe = ROOT / 'build/host-tools/menu_sprite_scales'
-    exe.parent.mkdir(parents=True, exist_ok=True)
-    sources = ['tools/menu_sprite_scales.cpp', 'src/menu_ui.cpp', 'src/menu_state.cpp', 'src/menu_transition.cpp',
-               'src/menu_focus.cpp', 'src/menu_index.cpp', 'src/menu_text_motion.cpp']
-    subprocess.run(['clang++', '-std=c++2b', '-O2', '-I' + str(ROOT / 'include'), '-o', str(exe),
-                    *[str(ROOT / s) for s in sources]], check=True)
     out = ROOT / 'build/host-tools/sprite-scales.json'
-    subprocess.run([str(exe), str(out)], check=True)
-    shutil.copyfile(out, SHIPPED)
+    if not out.is_file():
+        raise FileNotFoundError('Compile and run tools/menu_sprite_scales.cpp manually to prepare '+str(out))
     return json.loads(out.read_text())
 
 
@@ -159,6 +135,9 @@ def rewrite_header(sprites, atlases, slice_uvs):
     lines = body.split('\n')
     pattern = re.compile(r'^\{"([^"]+)","(textures/[^"]+)",([-\d.]+)f,([-\d.]+)f,([-\d.]+)f,([-\d.]+)f,(.*)$')
     for n, line in enumerate(lines):
+        # Variable-name glyphs are independently cooked at native font size.
+        if line in ("#include <mkw/menu_name_glyphs.hpp>","#include <mkw/battle_menu_text.inc>","#include <mkw/menu_record_text.inc>","#include <mkw/menu_footer_text.inc>"):
+            continue
         m = pattern.match(line)
         if not m:
             raise ValueError('Unexpected UiSprites row: ' + line[:80])
@@ -212,9 +191,28 @@ def main():
     for index, s in enumerate(slices):
         by_atlas[s['key']].append((index, s))
     used = [k for k in screen if k in records and k not in by_atlas]
+    # Identical style variants can share one texture path. Fit the shared
+    # image once at the largest required size and propagate its UVs to every
+    # alias, including aliases selected only by animated font materials.
+    aliases = {}
+    for key, record in records.items():
+        if key not in by_atlas:
+            aliases.setdefault(record['path'], []).append(key)
+    shared = {}
+    for keys in aliases.values():
+        requested = [k for k in keys if k in used]
+        if not requested:
+            continue
+        leader = requested[0]
+        shared[leader] = keys
+        screen[leader] = [max(screen[k][axis] for k in requested) for axis in range(2)]
+    used = list(shared)
     with ThreadPoolExecutor(max_workers=a.jobs) as pool:
         sprite_results = dict(zip(used, pool.map(lambda k: fit_sprite(k, records[k], screen[k]), used)))
         atlas_results = dict(zip(atlas_keys, pool.map(lambda k: fit_atlas(k, records[k], by_atlas[k], screen.get(k)), atlas_keys)))
+    for leader, keys in shared.items():
+        for key in keys:
+            sprite_results[key] = sprite_results[leader]
     slice_uvs = {}
     for result in atlas_results.values():
         slice_uvs.update(result.pop('uvs'))

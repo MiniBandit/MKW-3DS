@@ -1,7 +1,7 @@
-# Converted assets of the 0.6.0 rebuild (Epic's race overhaul, Mii portraits
-# optional, credits movies). Every 0.5.x build has to be rebuilt.
+# Converted assets of the Redux merge (Epic's Redux became the game).
+# Every older build has to be rebuilt.
 # windows_legacy: no older Windows recipe is accepted for these files.
 # recipe records the cook/package tools reviewed for these assets.
-stamp c4943e904e92e4da0a33d20d0b252628
-windows_legacy c4943e904e92e4da0a33d20d0b252628
-recipe d6188d5ba73099a734b73ea7eab1fa3f
+stamp d4279bbf564b2e98f0512b3979ea3509
+windows_legacy d4279bbf564b2e98f0512b3979ea3509
+recipe 277603990458a5624f597676d07f3e16

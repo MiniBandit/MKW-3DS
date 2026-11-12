@@ -36,7 +36,10 @@ def version_number(text,update=False):
 def run(*args):
     subprocess.run([str(a) for a in args],check=True)
 
-def package(cci=False,version='0.1.0',output=None,update=False):
+def package(cci=False,version='0.1.0',output=None,update=False,sd_assets=False):
+    # sd_assets: the application CIA without the game files in its RomFS; the game
+    # reads the copy the builder staged for the SD card. A few MB to install
+    # instead of several GB, and the files are on the card only once (#95, #113).
     # update: the code-only CIA, the same title as the application. Its game files come from the SD card
     # (written by the builder) or the application's own RomFS when that matches;
     # its own HOME Menu art is drawn without the disc and is not what is shown.
@@ -70,6 +73,8 @@ def package(cci=False,version='0.1.0',output=None,update=False):
                 if relative.name=='README.md' or any(part.startswith('.') for part in relative.parts):continue
                 destination=Path(stage)/'overlay'/relative;destination.parent.mkdir(parents=True,exist_ok=True)
                 shutil.copyfile(f,destination)
+        elif sd_assets:
+            (Path(stage)/'sd-assets.txt').write_text('Game files are read from sdmc:/3ds/mkw-3ds (made by the builder).\n');assets={}
         else:
             assets=stage_assets(Path(stage))
             # Which converted game files these are, as on the SD card: updated
@@ -98,5 +103,6 @@ if __name__=='__main__':
     p.add_argument('--version',default=(Path(__file__).parent/'VERSION').read_text().strip())
     p.add_argument('--output',type=Path)
     p.add_argument('--update',action='store_true',help='code-only update CIA (same title, higher version): game files from the SD card, no disc needed')
+    p.add_argument('--sd-assets',action='store_true',help='application CIA whose game files stay on the SD card (not in its RomFS)')
     a=p.parse_args()
-    package(a.cci,a.version,a.output,a.update)
+    package(a.cci,a.version,a.output,a.update,a.sd_assets)

@@ -13,6 +13,7 @@ from cook_race_items import cook_image_sprite,decode_tpl,digest
 from cook_roster import ROOT
 from menu_layout import render_layout,controllers,controller_alphas,controller_animations,messages,message_font_indices,pane_nodes
 from menu_movies import extract_movies,ThpMovie
+from menu_unlock_messages import entries as unlock_entries
 OUT=ROOT/'sd-card/3ds/mkw-3ds'
 UI=ROOT/'assets/menu-ui/MenuSingle'
 records={}; evidence={}; panel_records={}; pane_records={}; node_records={}; movie_records=[]; glow_records=[]; focus_records=[]; panel_layer_records={}; border_records=[]; border_slices=[]; runtime_palette=[]
@@ -32,6 +33,11 @@ def save(name,img,p=None):
  r={'name':'ui_'+name,'path':'textures/ui_'+name+'.t3x','width':width,'height':height,'padded':padded,'u':width/padded[0],'v':height/padded[1]} if cached else cook_image_sprite(img,'ui_'+name,OUT)
  if p:source(p);r.update(source=p.relative_to(ROOT).as_posix(),source_sha256=evidence[p.relative_to(ROOT).as_posix()])
  if (native_width,native_height)!=(width,height):r.update(width=native_width,height=native_height,rasterWidth=width,rasterHeight=height)
+ if name=='background':
+  # One source row before/after content, filled periodically through POT padding.
+  # Runtime adds 1/textureHeight to V. This preserves bilinear continuity.
+  from menu_background_texture import write_wrapped_background
+  write_wrapped_background(img,OUT)
  records[name]=r
  return r
 def tpl(name,p):return save(name,decode_tpl(p),p)
@@ -350,10 +356,22 @@ def main():
  runtime_palette=[[list(struct.unpack_from('>4h',raw,0x8088fd18-BASE+slot*24+i*8)) for i in range(3)] for slot in range(6)]
  # Source audit retains every UI layout/controller/animation, including deferred pages.
  inventory={}
- for archive in ['MenuSingle','MenuSingle_U','MenuOther','MenuOther_U','Title','Title_U','Award','Award_U','Globe']:
+ for archive in ['MenuSingle','MenuSingle_U','MenuOther','MenuOther_U','Title','Title_U','Award','Award_U','Globe','Channel','Channel_U','Present','Present_U']:
   p=ROOT/'data/extracted/Scene/UI'/f'{archive}.szs';source(p)
   base=ROOT/'assets/menu-ui'/archive
   inventory[archive]={ext:len(list(base.rglob('*.'+ext))) for ext in ['brlyt','brctr','brlan','tpl','bmg']}
+ unlock_messages=unlock_entries()
+ for kind in ['Course','Driver','Vehicle','Mii']:
+  suffix=kind.lower()
+  control_root=ROOT/'assets/menu-ui/Present/control'
+  body_controller=control_root/'ctrl'/(kind+'_MessageWindowHalf.brctr')
+  title_controller=control_root/'ctrl'/(kind+'_MenuObiTitleText.brctr')
+  source(body_controller);source(title_controller)
+  body_layout=controller_animations(body_controller)['layout']
+  title_layout=controller_animations(title_controller)['layout']
+  bake_panel('unlock_'+suffix,'Present/control/blyt/'+body_layout+'.brlyt',states=('',),exclude=('text',))
+  bake_panel('unlock_title_'+suffix,'Present/control/blyt/'+title_layout+'.brlyt',states=('',),exclude=('text',),bounds=(-304,-228,304,228))
+ bake_panel('unlock_next','Present/common/blyt/common_w084_earth_delete.brlyt',exclude=('text',))
  # Each page uses its own authored button layout; no substitute rectangles.
  specs=[
   ('button','MenuSingle/button/blyt/common_w004_menu.brlyt',('text',)),
@@ -365,12 +383,15 @@ def main():
   ('class','MenuSingle/button/blyt/common_w012_class.brlyt',('text','icon','class_','kinoko_set_p')),
   ('license','Title/button/blyt/common_w076_license_icon_center.brlyt',('text','mii','cc','hatena','bronze','silver','gold','n_','r_')),
   ('option','Title/button/blyt/open_icon_option.brlyt',('text',)),
+  ('settings_button','Channel/button/blyt/common_w102_option_menu.brlyt',('text',)),
+  ('record_next','MenuOther/button/blyt/common_w084_earth_delete.brlyt',('text',)),
+  ('license_management','MenuOther/button/blyt/common_w097_license_screen_menu.brlyt',('text',)),
   ('license_edit','Title/button/blyt/open_icon_lisence.brlyt',('text','mii')),
   ('drift_help','MenuSingle/button/blyt/open_icon_rule.brlyt',('text',)),
-  ('character','MenuSingle/button/blyt/common_w006_chara.brlyt',('chara','ok_','text')),
-  ('vehicle','MenuSingle/button/blyt/common_w030_machine_12.brlyt',('machine','chara','ok_','text')),
+  ('character','MenuSingle/button/blyt/common_w006_chara.brlyt',('chara','hatena','ok_','text')),
+  ('vehicle','MenuSingle/button/blyt/common_w030_machine_12.brlyt',('machine','chara','hatena','ok_','text')),
   ('drift','MenuSingle/button/blyt/common_w110_drift_menu.brlyt',('text',)),
-  ('cup','MenuSingle/button/blyt/common_w010_cup.brlyt',('text','icon','cup','ok_')),
+  ('cup','MenuSingle/button/blyt/common_w010_cup.brlyt',('text','icon','cup','hatena','ok_')),
   ('course','MenuSingle/button/blyt/common_w087_course_movie.brlyt',('text',)),
   ('back','MenuSingle/button/blyt/common_w008_back.brlyt',('text',)),
   ('vs','MenuSingle/button/blyt/common_w115_individual_or_team_movie.brlyt',('text',)),
@@ -381,6 +402,17 @@ def main():
   ('confirm','MenuSingle/button/blyt/common_w109_go_button.brlyt',('text',)),
  ]
  for name,resource,exclude in specs:bake_panel(name,resource,exclude=exclude)
+ for team in ('red','blue'):
+  for human in (False,True):
+   bake_panel('team_'+team+('_human' if human else '_cpu'),'MenuSingle/control/blyt/common_w051_team_blue_red_chara_point.brlyt',states=('',),exclude=('mii_name','point','pts','chara_icon'),hidden=('blue_null' if team=='red' else 'red_null','point','pts'),group_states={'Select':'SelectOn' if human else 'SelectOff','Select2':'Select2On' if human else 'Select2Off'})
+ bake_panel('record_row','MenuOther/control/blyt/record_parts.brlyt',states=('',),exclude=('menu_text','score'),hidden=('grade',))
+ bake_panel('rule_base','MenuSingle/control/blyt/common_w023_rule_menu.brlyt',exclude=('text',))
+ bake_panel('rule_option','MenuSingle/control/blyt/common_w024_rule_icon.brlyt',exclude=('text',),group_states={'Choice':'ChoiceOff'})
+ bake_panel('rule_chosen','MenuSingle/control/blyt/common_w024_rule_icon.brlyt',exclude=('text',),group_states={'Choice':'ChoiceOn'})
+ bake_panel('rule_value','MenuSingle/control/blyt/common_w048_rule_rap.brlyt')
+ bake_panel('rule_count','MenuSingle/control/blyt/common_w048_rule_rap_text.brlyt',exclude=('text',),bounds=(-120,-25,120,25),group_states={'Slide':'Show'})
+ bake_panel('rule_left','MenuSingle/control/blyt/common_w134_rule_rap_yaji_l.brlyt')
+ bake_panel('rule_right','MenuSingle/control/blyt/common_w135_rule_rap_yaji_r.brlyt')
  # PressStart is a real layout/control, with a separate expanding light
  # text pane and a squash/stretch confirmation animation. The fade group is
  # evaluated live; keep an opaque reference pose for the text textures.
@@ -389,7 +421,38 @@ def main():
  # hide only the native data panes; the authored blank card stays intact.
  empty_license=['mii']+[f'{prefix}_{i:02d}' for prefix in ['cc50','cc100','cc150','cc_mirror'] for i in range(8)]
  empty_license+=['n_0_kinoko','n_1_flower','n_2_star','n_3_special','r_0_koura','r_1_banana','r_2_konoha','r_3_thunder','n_2_hatena','n_3_hatena','r_2_hatena','r_3_hatena']
+ bake_panel('license_center_empty','MenuOther/control/blyt/common_w076_license_icon_center.brlyt',states=('',),hidden=empty_license)
+ # Populated cards keep cup icons and expose trophy panes to the composer;
+ # only the earned trophy is drawn at each of the 4 x 8 source positions.
+ used_hidden=['mii']
+ trophy_prefixes=('cc50_','cc100_','cc150_','cc_mirror_','n_','r_')
+ bake_panel('license_center_used','MenuOther/control/blyt/common_w076_license_icon_center.brlyt',states=('',),hidden=used_hidden,exclude=trophy_prefixes)
+ trophy_layout=ROOT/'assets/menu-ui/Title/button/blyt/common_w076_license_icon_tex_top.brlyt'
+ nodes=pane_nodes(trophy_layout)
+ # LicenseControl::Refresh toggles these original pictures independently.
+ # Keep the card's own artwork, rather than substituting menu cup icons.
+ card_icons=['n_0_kinoko','n_1_flower','n_2_star','n_3_special','r_0_koura','r_1_banana','r_2_konoha','r_3_thunder','n_2_hatena','n_3_hatena','r_2_hatena','r_3_hatena']
+ card_nodes={n['name']:n for n in nodes}
+ for field in card_icons:
+  isolated={n['name']:{'visible':False} for n in nodes if n['kind'] in ('pic1','wnd1')}
+  parent=card_nodes[field]['parent']
+  while parent:
+   isolated[parent]={'x':0,'y':0,'sx':1,'sy':1,'alpha':1,'visible':True};parent=card_nodes[parent]['parent']
+  isolated[field]={'x':32,'y':-32,'w':64,'h':64,'sx':1,'sy':1,'alpha':1,'visible':True}
+  icon,_,_=render_layout(trophy_layout,source,bounds=(0,0,64,64),include=(field,),pane_overrides=isolated,aspect_scale=(1,1))
+  save('license_icon_'+field,icon,trophy_layout)
+ overrides={n['name']:{'visible':False} for n in nodes if n['kind'] in ('pic1','wnd1')}
+ by_name={n['name']:n for n in nodes};parent=by_name['cc50_00']['parent']
+ while parent:
+  overrides[parent]={'x':0,'y':0,'sx':1,'sy':1,'alpha':1,'visible':True};parent=by_name[parent]['parent']
+ overrides['cc50_00']={'x':32,'y':-32,'w':64,'h':64,'sx':1,'sy':1,'alpha':1,'visible':True}
+ for rank,color in enumerate(('gold','silver','bronze'),1):
+  palette=by_name[color+'_color']['materialColors']+[[255,255,255,255]]
+  icon,_,_=render_layout(trophy_layout,source,bounds=(0,0,64,64),include=('cc50_00',),pane_overrides=overrides,material_overrides={'cc50_00':palette},aspect_scale=(1,1))
+  save('license_trophy_'+str(rank),icon,trophy_layout)
+
  for position in ['top','bottom']:
+  bake_panel('license_'+position+'_used','Title/button/blyt/common_w076_license_icon_tex_'+position+'.brlyt',hidden=used_hidden,exclude=trophy_prefixes)
   bake_panel('license_'+position+'_empty','Title/button/blyt/common_w076_license_icon_tex_'+position+'.brlyt',hidden=empty_license)
  bake_panel('background','MenuSingle/bg/blyt/bg.brlyt',states=('',),bounds=(-304,-228,304,228))
  bake_panel('header','MenuSingle/bg/blyt/obi_top.brlyt',states=('',),bounds=(-304,-228,304,-125),overrides={'RootPane':{'x':2.1972661,'y':210}})
@@ -398,6 +461,8 @@ def main():
  bake_panel('confirm_top','MenuSingle/bg/blyt/obi_top_go.brlyt',states=('',),bounds=(-304,-110,304,40))
  bake_panel('confirm_bottom','MenuSingle/bg/blyt/obi_bottom_go.brlyt',states=('',),bounds=(-304,-20,304,100))
  bake_panel('confirm_back','MenuSingle/message_window/blyt/black_down_race.brlyt',states=('',),bounds=(-304,-228,304,228))
+ bake_panel('drift_message','MenuSingle/message_window/blyt/common_w017_message.brlyt',states=('',),exclude=('text',))
+ bake_panel('message_ok','MenuSingle/message_window/blyt/a_button_for_message_window.brlyt',states=('',),exclude=('a_button',),bounds=(-32,-24,32,24))
  bake_panel('cup_course','MenuSingle/control/blyt/common_w137_course_movie_text_only.brlyt',bounds=(-154,-26,154,26),exclude=('text',))
  # BattleCup::ControlStages::Load explicitly hides the noninteractive row's
  # frame; its source text boxes remain populated with the five stage names.
@@ -432,10 +497,22 @@ def main():
  for archive,name,y in [('Title','tt_title_screen_mario2_bokeboke.tpl',140),('Title_U','tt_title_screen_title_rogo_bokeboke.tpl',0)]:
   p=ROOT/'assets/menu-ui'/archive/'title/timg'/name;source(p);blur.alpha_composite(decode_tpl(p),(0,y))
  save('title_blur_scene',blur.crop((112,0,720,456)));panel_records['title_blur_scene']=[-304,-228,304,228]
+ # Retail TitleImage: default mario_luiji, then five unlocked alternatives.
+ for index,(archive,art) in enumerate([('Title_U','mario0'),('Title','mario'),('Title','mario2'),('Title','peachi'),('Title','luigi'),('Title','koopa')]):
+  for blurred in (False,True):
+   suffix='_bokeboke' if blurred else ''
+   logo='tt_title_screen_title_rogo_bokeboke.tpl' if blurred else 'tt_title_screen_title_rogo_r_only.tpl'
+   scene=Image.new('RGBA',(832,456),'white')
+   for image,y in [(ROOT/'assets/menu-ui'/archive/'title/timg'/f'tt_title_screen_{art}{suffix}.tpl',140),(ROOT/'assets/menu-ui/Title_U/title/timg'/logo,0)]:
+    source(image);scene.alpha_composite(decode_tpl(image),(0,y))
+   key=f'title_{"blur_scene" if blurred else "scene"}_{index}'
+   save(key,scene.crop((112,0,720,456)));panel_records[key]=[-304,-228,304,228]
+ tpl('locked_choice',UI/'button/timg/tt_hatena_64x64.tpl')
  drivers=['mario','luigi','peach','yoshi','baby_mario','baby_peach','kinopio','noko','wario','waluigi','donky','koopa','baby_daisy','baby_luigi','catherine','daisy','didy','karon','hone_koopa','funky','teresa','roseta','kinopico','koopa_jr','mii_suit_a','mii_suit_b']
  for i,n in enumerate(drivers):tpl('driver_'+str(i),UI/'button/timg'/f'tt_{n}_64x64.tpl')
  cups=['kinoko','flower','star','oukan','koura','banana','konoha','thunder']
  for i,n in enumerate(cups):tpl('cup_'+str(i),UI/'button/timg'/f'tt_cup_icon_{n}_00.tpl')
+ tpl('cup_mirror',ROOT/'assets/menu-ui/Present/control/timg/tt_cup_icon_mirror_00.tpl')
  for i,n in enumerate(['tt_wii_icon_128.tpl','tt_classic_icon_sphere_128.tpl']):
   tpl('battle_cup_'+str(i),UI/'button/timg'/n)
  for i,n in enumerate(['1','2','3','m']):tpl('class_'+str(i),UI/'button/timg'/f'tt_class_kinoko_{n}.tpl')
@@ -443,11 +520,12 @@ def main():
   for i,part in enumerate(['df_kart','a_kart','b_kart','df_bike','a_bike','b_bike','c_kart','d_kart','e_kart','c_bike','d_bike','e_bike']):tpl('vehicle_'+weight+str(i),UI/'control/timg'/f'st_{weight}{part}.tpl')
  for group in ['OK','SelectIn']:
   for name,resource,_ in specs:bake_ok_glows(name,resource,drivers,cups,group)
-  for position in ['top','bottom']:bake_ok_glows('license_'+position+'_empty','Title/button/blyt/common_w076_license_icon_tex_'+position+'.brlyt',drivers,cups,group)
+  for position in ['top','bottom']:
+   for kind in ['empty','used']:bake_ok_glows('license_'+position+'_'+kind,'Title/button/blyt/common_w076_license_icon_tex_'+position+'.brlyt',drivers,cups,group)
  cook_movies()
  cook_strap()
  message_sources={}
- for archive in ['Title_U','MenuSingle_U']:
+ for archive in ['Title_U','MenuSingle_U','Present_U']:
   for p in sorted((ROOT/'assets/menu-ui'/archive/'message').glob('*.bmg')):
    if p.name.startswith('._'):continue
    source(p);message_sources[p.relative_to(ROOT).as_posix()]=messages(p)
@@ -455,6 +533,8 @@ def main():
  menu_messages=message_sources['assets/menu-ui/MenuSingle_U/message/Menu.bmg']
  help_ids={'UiHelpMain':[0x7e4,0x7e5,0x7e8,0x7ea],'UiHelpMainMulti':[0x7e5,0x7e6,0x7e7],'UiHelpWfc':[0x7e8,0x7e9],'UiHelpMode':[0xbea,0xbeb,0xbec,0xbee],'UiHelpEngineClasses':[0xbf4,0xbf5,0xbf6,0xbf7],'UiHelpDrift':[0xd16,0xd17],'UiHelpVSMode':[0xd8c,0xd8b]}
  help_ids['UiHelpEngineClassesAllKartBike']=[0xbf8,0xbf9,0xbf6,0xbf7]
+ help_ids['UiDriftHelpMessage']=[0xced]
+ help_ids['UiVsRulesHelp']=[0xd57,0xd58,0xd59,0xd5a,0xd61,0xd62,0xd63,0xd64,0xd6a,0xd6b,0xd6c,0xd6c,0xd74,0xd75,0xd76,0xd76,0xd9d,0xd9e,0xd9f,0xda0,0xd89,0xd90]
  help_text={name:[menu_messages[i] for i in ids] for name,ids in help_ids.items()}
  multiline_specs={menu_messages[i]:.7 for i in range(0x8fd,0x901)}
  multiline_specs.update({menu_messages[i]:.5 for i in range(0xbbe,0xbc4)})
@@ -464,13 +544,16 @@ def main():
  # Whole labels keep glyph spacing from the original BRFNT CWDH tables.
  roster=json.loads((OUT/'models/roster.json').read_text());garage=json.loads((OUT/'models/garage.json').read_text())
  courses=json.loads((OUT/'models/course-catalog.json').read_text())['courses']
- course_names=re.findall(r'\{"([^"]+)"', (ROOT/'include/mkw/course_catalog.hpp').read_text())
- labels=['Single Player','Multiplayer','Nintendo WFC','Main Menu','Grand Prix','Time Trials','VS','Battle','Not available','Character','Character Select','Vehicle','Machine Select','Drift','Drift Type','Automatic','Manual','Cup','Select Cup','Course','Start Race','Pause','Continue','Restart','Quit','Quit this race?','Yes','No','Results','Race Again','Change Course','Change Character','Main Menu','Press A','A: Select    B: Back','A: Select    B: Cancel','A: Start    B: Back','START: Pause','A: Next    B: Back','Loading...','Race unavailable','Choose another course','Finish','Racing','12 racers','No teams','150cc','A: Accelerate   B: Brake','R: Drift   L: Item','Circle Pad: Steer','D-pad: Trick / Wheelie','Hold down + L: Throw back','A: Confirm    B: Cancel','Manual drift','Automatic drift','VS Race','Course Select','Single race','Mushroom Cup','Flower Cup','Star Cup','Special Cup','Shell Cup','Banana Cup','Leaf Cup','Lightning Cup']
+ course_names=re.findall(r'\{"([^"]+)"', (ROOT/'include/mkw/course_catalog.hpp').read_text())[:32]
+ labels=['--','0%','General','Favorites','Other Records','Next','Save failed','Erase License?','Single Player','Multiplayer','Nintendo WFC','Main Menu','Grand Prix','Time Trials','VS','Battle','Not available','Character','Character Select','Vehicle','Machine Select','Drift','Drift Type','Automatic','Manual','Cup','Select Cup','Course','Start Race','Pause','Continue','Restart','Quit','Quit this race?','Yes','No','Results','Race Again','Change Course','Change Character','Main Menu','Press A','A: Select    B: Back','A: Select    B: Cancel','A: Start    B: Back','START: Pause','A: Next    B: Back','Loading...','Race unavailable','Choose another course','Finish','Racing','12 racers','No teams','150cc','A: Accelerate   B: Brake','R: Drift   L: Item','Circle Pad: Steer','D-pad: Trick / Wheelie','Hold down + L: Throw back','A: Confirm    B: Cancel','Manual drift','Automatic drift','VS Race','Course Select','Single race','Mushroom Cup','Flower Cup','Star Cup','Special Cup','Shell Cup','Banana Cup','Leaf Cup','Lightning Cup']
  labels+=['Mario','Luigi','Peach','Yoshi','Baby Mario','Baby Peach','Toad','Koopa Troopa','Wario','Waluigi','Donkey Kong','Bowser']
- labels+=course_names+[c['name'] for c in garage['choices']]+list('0123456789:.-/')
+ labels+=course_names+[c['name'] for c in garage['choices']]+list('0123456789:.-/%')
  labels+=[text for values in help_text.values() for text in values]
  labels+=re.findall(r'\"([^\"]+)\"',(ROOT/'include/mkw/menu_ui.hpp').read_text())
  labels+=['Characters','Vehicles','Engine Classes','Cups','Courses','Select License','New','License','License 1','License 2','License 3','License 4','50cc','100cc','150cc','Mirror','Solo Race','Team Race','Balloon Battle','Coin Runners','Wii Stages','Retro Stages','Select Stage','Speed','Weight','Acceleration','Handling','Drift','Off-Road','Mini-Turbo','Karts Only','Bikes Only','Karts and Bikes','Press the A Button','OK','Back','Options','Mario Kart Channel','Grand Prix Race','Time Trial','VS Settings','Battle Settings','Unsupported race configuration','Create a license','Attach the Wii Remote wrist strap.','Press A to continue.','Please use the wrist strap.','A: Select','1 Player','2 Players','3 Players','4 Players','Race This Ghost','Watch the Replay','Solo Time Trials','Player','Players','Booster Seat','Flame Runner','Jet Bubble']
+ unlock_texts=list(dict.fromkeys(text for row in unlock_messages for text in [row['title'],row['body']]))
+ labels+=unlock_texts+[line for text in unlock_texts for line in text.split('\n')]
+ labels+=menu_messages[0xced].split('\n')
  labels=[x for x in dict.fromkeys(labels) if x and not x.startswith('mkw/')]
  # Preserve each source text pane's TEV mapping. Bake only strings used by
  # that control, with identical images sharing the same native texture.
@@ -480,7 +563,7 @@ def main():
  vehicle_labels=header_strings('UiVehicleNames[3][12]=','};')
  battle_labels=header_strings('UiBattleStageNames[]=',';')
  roles={
-  'header_text':['Main Menu','Select License','Characters','Vehicles','Engine Classes','Cups','Courses','Drift','Grand Prix','Time Trials','Single Player','VS','Battle','Stages','Ghosts','Wii Stages','Retro Stages','Select Stage','Start Race'],
+  'header_text':['Main Menu','Select License','Characters','Vehicles','Engine Classes','Cups','Courses','Drift','Grand Prix','Time Trials','Single Player','VS','Battle','Stages','Ghosts','Wii Stages','Retro Stages','Select Stage','Start Race','Rules','Teams','Settings','License Settings','Erase License?','General','Favorites','Other Records'],
   'footer_help':[v for vv in help_text.values() for v in vv],
   'main':['Single Player','Multiplayer','Nintendo WFC','Mario Kart Channel'],
   'main_button':['1','Player','1\nPlayer'],'main_multi':['2','3','4','Players','2\nPlayers','3\nPlayers','4\nPlayers'],'main_wifi':['1','2','Player','Players','1\nPlayer','2\nPlayers'],
@@ -488,8 +571,18 @@ def main():
   'class_switch':['Switch'],
   'license':['NEW','New','License','License 1','License 2','License 3','License 4','50cc','100cc','150cc','Mirror'],
   'option':['Settings'],'license_edit':['License Settings'],
-  'drift_help':['Help'],
+  'record_next':['Next'],
+  'record_row':['Overall Ranking','Distance Traveled','Total Race Count','Total Battle Count','Wii Wheel %','Tricks','Favorite Character','Favorite Vehicle','Favorite Course','Favorite Stage','First-Place Appearances','% Race Time in 1st Place','Item Hits Delivered','Item Hits Received','Ghost Races','Tournaments Played','--','0%']+course_names+[c['name'] for c in garage['choices']]+[info['name'] for info in roster['characters']]+battle_labels+list('0123456789%'),
+  'license_management':['Check Records','Change Miis','Erase License'],
+  'settings_button':['Nintendo GameCube Controller','Network Settings','Mario Kart Channel'],
+  'rule_base':['Class','CPU','CPU Vehicles','Courses','Items','Race Count'],
+  'rule_option':['50cc','100cc','150cc','Mirror','Easy','Normal','Hard','Karts','Bikes','All','Choose','Random','In Order','Balanced','Aggressive','Strategic','None'],
+  'rule_chosen':['50cc','100cc','150cc','Mirror','Easy','Normal','Hard','Karts','Bikes','All','Choose','Random','In Order','Balanced','Aggressive','Strategic','None'],
+  'rule_count':['Races: '+str(n) for n in (2,3,4,5,8,10,12,16,32)],
+  'drift_help':['Help','Rules'],'drift_message':[menu_messages[0xced]],'message_ok':['A'],
   'license_top_empty':['NEW'],'license_bottom_empty':['NEW'],
+  'license_top_used':['License 1','License 2','License 3','License 4','50cc','100cc','150cc','Mirror'],'license_bottom_used':['License 1','License 2','License 3','License 4','50cc','100cc','150cc','Mirror'],'license_center_used':['License 1','License 2','License 3','License 4','50cc','100cc','150cc','Mirror'],
+  'team_red_human':character_labels,'team_red_cpu':character_labels,'team_blue_human':character_labels,'team_blue_cpu':character_labels,
   'character_name':character_labels,'vehicle_name':vehicle_labels,
   'vehicle_ability':['Speed','Weight','Acceleration','Handling','Drift','Off-Road','Mini-Turbo'],
   'drift':['Automatic','Manual'],'cup':['Mushroom Cup','Flower Cup','Star Cup','Special Cup','Shell Cup','Banana Cup','Leaf Cup','Lightning Cup','Wii Stages','Retro Stages'], 'character':[], 'vehicle':[],
@@ -500,7 +593,11 @@ def main():
   'course':course_names+battle_labels,'vs':['Solo Race','Team Race'],'battle':['Balloon Battle','Coin Runners'],
   'confirm':['OK','Start Race','Race This Ghost','Watch the Replay','Solo Time Trials'],
   'back':['←Back','Back'],
-  'button':['Race This Ghost','Watch the Replay','Solo Time Trials','Yes','No','Continue','Restart','Quit','Race Again','Change Course','Change Character','Main Menu','Not available']}
+  'button':['Race This Ghost','Watch the Replay','Solo Time Trials','Yes','No','Continue','Restart','Quit','Race Again','Change Course','Change Character','Main Menu','Not available','OK']}
+ for kind in ['Course','Driver','Vehicle','Mii']:
+  roles['unlock_'+kind.lower()]=[row['body'] for row in unlock_messages if row['kind']==kind]
+  roles['unlock_title_'+kind.lower()]=[row['title'] for row in unlock_messages if row['kind']==kind]
+ roles['unlock_next']=['Next']
  for required in roles.values():
   for label in required:
    if label not in labels:labels.append(label)
@@ -538,6 +635,23 @@ def main():
   if font_id==0:
    # BMG 0x8fd..0x900 use font-size tag 0x0046 (70 percent); engine-class
    # messages 0xbbe..0xbc3 use 0x0032 (50 percent) after their line feed.
+   # MessageBox uses the authored line breaks in BMG 0xCED. Keep all lines
+   # in one sprite so the original pane controls alignment and fitting.
+   message=menu_messages[0xced];lines=message.split('\n')
+   line_h=max(glyphs[line].height for line in lines if line)
+   block=Image.new('RGBA',(max(glyphs[line].width for line in lines if line),line_h*len(lines)))
+   for row,line in enumerate(lines):
+    if line:block.alpha_composite(glyphs[line],(0,row*line_h))
+   glyphs[message]=block
+   for message in unlock_texts:
+    if '\n' not in message:continue
+    lines=message.split('\n')
+    if any(line and line not in glyphs for line in lines):raise ValueError('Missing unlock font glyph: '+repr(message))
+    line_h=max(glyphs[line].height for line in lines if line)
+    block=Image.new('RGBA',(max(glyphs[line].width for line in lines if line),line_h*len(lines)))
+    for row,line in enumerate(lines):
+     if line:block.alpha_composite(glyphs[line],((block.width-glyphs[line].width)//2,row*line_h))
+    glyphs[message]=block
    for label,scale in multiline_specs.items():
     first,second=label.split('\n');number=glyphs[first];word=glyphs[second]
     word=word.resize((round(word.width*scale),round(word.height*scale)),Image.Resampling.LANCZOS)
@@ -599,15 +713,27 @@ def main():
  scales=[sample(tracks[('pause_w_fade_n','RLPA',6)],i) for i in range(dur)]
  ctr={};alphas={};qualified_controllers={}
  controller_paths=[p for archive in ['Title','MenuSingle'] for p in sorted((ROOT/'assets/menu-ui'/archive).rglob('*.brctr'))]
+ controller_paths += [ROOT/'assets/menu-ui/MenuOther'/part/'ctrl'/(name+'.brctr') for part,name in [('button','LicenseManagementButton'),('control','LicenseManagement'),('control','Record'),('button','NextRecordButton')]]
+ controller_paths += [ROOT/'assets/menu-ui/Channel/button/ctrl/OptionTopButton.brctr']
+ controller_paths += [ROOT/'assets/menu-ui/Present/common/ctrl/NextButton.brctr']
+ controller_paths += list((ROOT/'assets/menu-ui/Present/control/ctrl').glob('*.brctr'))
  controller_paths += [ROOT/'assets/race-ui/Race/button/ctrl'/(name+'.brctr') for name in ['PauseMenuVS','PauseMenuGrandPrix','PauseMenuTimeAttack','PauseMenuBT']]
  for p in controller_paths:
   if p.name.startswith('._'):continue
   source(p);data=controllers(p);ctr.setdefault(p.stem,{}).update(data);alphas.setdefault(p.stem,{}).update(controller_alphas(p));qualified_controllers[p.relative_to(ROOT).as_posix()]=data
  manifest={'version':2,'canvas':{'width':608,'height':456,'artBleedWidth':832,'aspectAdjustScale':[608/832,1.0],'displayAspect':'16:9','target':'400x225 centered on top LCD; lower LCD unused'},'sprites':records,'maps':maps,'sourceHashes':evidence,'archiveInventory':inventory,'controllers':ctr,'controllerAlphas':alphas,'controllerSources':qualified_controllers,'messageSources':message_sources,'helpMessageIds':help_ids,'runtimePalette':{'source':'build/itembox-retail.rel','tableAddress':'0x8088fd18','slots':runtime_palette,'borderPane':'fuchi_pattern','basePane':'color_base'},'textStyles':text_styles,'driverStats':driver_stats,'vehicleStats':vehicle_stats,'panels':panel_records,'panes':pane_records,'paneNodes':node_records,'movies':movie_records,'glows':glow_records,'focusSprites':focus_records,'panelTails':list(panel_layer_records.values()),'borderLoops':border_records,'borderSlices':border_slices,'selectionScale60Hz':scales,'limitations':['This menu inventory uses 16 source samples across each retail loop for host previews and fallback. Full-rate streamed movies are cooked and receipted separately.','Offline pane rasterization supports 2D affine transforms and authored TEV arithmetic; live 3D preview objects are rendered separately.','Original font glyphs and spacing are retained; per-page dynamic text effects are runtime responsibilities.']}
  (OUT/'models/menu-ui.json').write_text(json.dumps(manifest,indent=2)+'\n')
+ notice_header=['#pragma once','namespace mkw {','struct UiUnlockText {unsigned condition,bit;const char* title;const char* body;const char* kind;int retailId;};','inline constexpr UiUnlockText UiUnlockTexts[]={']
+ for row in unlock_messages:notice_header.append('{'+','.join([str(row['condition']),str(row['bit']),json.dumps(row['title']),json.dumps(row['body']),json.dumps(row['kind']),str(row['retailId'])])+'},')
+ notice_header+=['};','}']
+ (ROOT/'include/mkw/menu_unlock_texts.hpp').write_text('\n'.join(notice_header)+'\n')
  lines=['#pragma once','#include <array>','namespace mkw {','struct UiSpriteInfo {const char* key;const char* path;float w,h,u,v;const char* text;unsigned font,style,gpuBytes;};','inline constexpr UiSpriteInfo UiSprites[]={']
  for n,r in records.items():lines.append('{'+','.join([json.dumps(n),json.dumps(r['path']),*(f'{float(r[k]):.8f}f' for k in ['width','height','u','v']),json.dumps(r.get('text','')),str(r.get('font',0)),str(r.get('style',0)),str(r['padded'][0]*r['padded'][1]*4)])+'},')
- lines+=['};']
+ from cook_menu_names import cook as cook_names
+ cook_names()
+ from cook_menu_record_text import cook as cook_record_text
+ cook_record_text()
+ lines+=['#include <mkw/menu_name_glyphs.hpp>','#include <mkw/battle_menu_text.inc>','#include <mkw/menu_record_text.inc>','#include <mkw/menu_footer_text.inc>','{"cup_record_rank_atlas","textures/ui_cup_record_icons.t3x",256.f,256.f,1.f,1.f,"",0,0,262144},','};']
  for name,values in help_text.items():lines.append('inline constexpr const char* '+name+'[]={'+','.join(json.dumps(v) for v in values)+'};')
  lines+=['inline constexpr unsigned UiDriverStats[27][7]={'+','.join('{'+','.join(str(v) for v in row)+'}' for row in driver_stats)+'};','inline constexpr unsigned UiVehicleStats[3][12][7]={'+','.join('{'+','.join('{'+','.join(str(v) for v in row)+'}' for row in group)+'}' for group in vehicle_stats)+'};']
  lines+=['struct UiControlPose {const char* control;const char* variant;float x,y,z,sx,sy,alpha;};','inline constexpr UiControlPose UiControlPoses[]={']
@@ -653,5 +779,5 @@ def main():
  print(f'Cooked {len(records)} source UI sprites, {len(panel_records)} layout panels, {len(movie_records)} retail movies, 32 source minimaps; {len(evidence)} hashed sources')
  # The runtime textures are fitted to the 3DS screen and LZ11-compressed from
  # these full-resolution PNGs; that pass also rewrites the header's UVs.
- subprocess.run([sys.executable,str(ROOT/'tools/optimize_menu_textures.py')],check=True)
+ # Texture fitting runs after menu movies generate its compile-time metadata.
 if __name__=='__main__':main()

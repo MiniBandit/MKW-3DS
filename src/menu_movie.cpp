@@ -23,7 +23,7 @@ constexpr unsigned TileSize=8;
 struct MenuMovie::Impl {
  LightLock lock;
  // Main thread -> stream thread.
- std::string path;bool loop=true,closing=false;
+ std::string path;bool loop=true,closing=false,paused=false;
  std::uint64_t wantedTicks=0;
  unsigned rowFirst=0,rowEnd=~0u; // tile rows
  // Stream thread -> main thread (published by status).
@@ -67,6 +67,7 @@ public:
    // Between the main thread and the general asset loader: frames stay
    // timely while page textures load, and it never preempts frame work.
    thread_=threadCreate(entry,this,32*1024,std::clamp<int>(priority+1,0x18,0x3f),-2,true);}
+  if(!thread_)stream->status.store(-1,std::memory_order_release);
   LightLock_Unlock(&lock_);wake();
  }
  void wake(){LightEvent_Signal(&event_);}
@@ -82,6 +83,9 @@ private:
    streams_.erase(std::remove_if(streams_.begin(),streams_.end(),[](const auto& s){return s->closing&&!s->file;}),streams_.end());
    LightLock_Unlock(&lock_);
    if(!worked)LightEvent_Wait(&event_);
+   // This worker outranks AssetLoader on the same core. Several active
+   // previews must not consume every idle slice while a page is loading.
+   else svcSleepThread(1000000);
   }
  }
  static bool open(MenuMovie::Impl& s,const std::string& path){
@@ -112,7 +116,7 @@ private:
    const bool ok=open(s,path);
    s.status.store(ok?1:-1,std::memory_order_release);return true;
   }
-  if(s.status.load()!=1||s.stage!=MenuMovie::Impl::Free){LightLock_Unlock(&s.lock);return false;}
+  if(s.status.load()!=1||s.stage!=MenuMovie::Impl::Free||(s.paused&&s.fullFrame)){LightLock_Unlock(&s.lock);return false;}
   const std::uint32_t frame=s.wantedFrame(s.wantedTicks);
   const unsigned rows=s.height/TileSize;
   unsigned first=s.fullFrame?std::min(s.rowFirst,rows):0,end=s.fullFrame?std::min(s.rowEnd,rows):rows;
@@ -125,7 +129,9 @@ private:
   LightLock_Lock(&s.lock);
   if(ok){s.stagedFrame=frame;s.stagedFirst=first;s.stagedRows=end-first;s.stage=MenuMovie::Impl::Ready;
    s.lastFrame=frame;s.lastFirst=first;s.lastEnd=end;s.fullFrame=true;}
-  else s.stage=MenuMovie::Impl::Free;
+  else {s.stage=MenuMovie::Impl::Free;s.status.store(-1,std::memory_order_release);}
+  // A failed frame is terminal for this stream. Retrying it in a busy loop
+  // starves lower-priority page loads and can hold the confirmation forever.
   LightLock_Unlock(&s.lock);
   return true;
  }
@@ -152,6 +158,11 @@ bool MenuMovie::open(const char* path,bool loop){
 void MenuMovie::request(std::uint64_t ticks){
  if(!impl_)return;
  LightLock_Lock(&impl_->lock);const bool changed=impl_->wantedTicks!=ticks;impl_->wantedTicks=ticks;LightLock_Unlock(&impl_->lock);
+ if(changed)Streamer::instance().wake();
+}
+void MenuMovie::setPaused(bool paused){
+ if(!impl_)return;
+ LightLock_Lock(&impl_->lock);const bool changed=impl_->paused!=paused;impl_->paused=paused;LightLock_Unlock(&impl_->lock);
  if(changed)Streamer::instance().wake();
 }
 void MenuMovie::setRows(unsigned first,unsigned end){

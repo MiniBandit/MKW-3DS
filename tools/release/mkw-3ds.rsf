@@ -1,7 +1,5 @@
-# All-in-one CIA: the program plus every cooked asset in its RomFS
-# (tools/release/package_cia.py passes APP_ROMFS, APP_CATEGORY, APP_REMASTER).
-# A quick update is the same program as a Patch title (0004000E): the system
-# runs its code over the installed application, whose HOME Menu art stays.
+# Manual makerom template. Supply APP_ROMFS and APP_REMASTER explicitly.
+# For external-SD builds, remove the RomFs block in your local working copy.
 # Platform ctr: Old 3DS and New 3DS. Old 3DS runs in the 64 MB mode the port
 # is budgeted for; New 3DS gets 124 MB, 804 MHz, L2 cache and core 2 (render
 # thread, job worker and audio). Based on 2gifts/melee-3ds port/3ds/melee.rsf.
@@ -12,7 +10,7 @@ BasicInfo:
 RomFs:
   RootPath: $(APP_ROMFS)
 TitleInfo:
-  Category: $(APP_CATEGORY)
+  Category: Application
   UniqueId: 0xF4B57
 Option:
   UseOnSD: true
@@ -117,12 +115,13 @@ AccessControlInfo:
    - gsp::Gpu
    - hid:USER
    - ir:rst
+   - mcu::HWC
    - ptm:u
    - ptm:sysm
 SystemControlInfo:
   SaveDataSize: 0KB
   RemasterVersion: $(APP_REMASTER)
-  StackSize: 0x10000 # As __stacksize__ in src/main.cpp: Old 3DS heap headroom is about 1 MB.
+  StackSize: 0x20000 # As __stacksize__ in src/main.cpp: Old 3DS heap headroom is about 1 MB.
   Dependency:
     am: 0x0004013000001502
     cfg: 0x0004013000001702

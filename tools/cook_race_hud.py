@@ -92,7 +92,7 @@ def sample(keys, frame):
     return keys[-1][1]
 
 
-def font_strings(path, labels):
+def font_strings(path, labels, *, metrics=None, full_ink=False):
     data = path.read_bytes()
     glyphs, widths, mapping = [], {}, {}
     for tag, _, start in sections(data):
@@ -121,12 +121,25 @@ def font_strings(path, labels):
     result = {}
     for label in labels:
         indices = [mapping[ord(c)] for c in label]
-        image = Image.new("RGBA", (sum(widths[i][2] for i in indices), ch))
-        x = 0
-        for i in indices:
-            left, width, advance = widths[i]
-            image.paste(glyphs[i].crop((0, 0, width, ch)), (x+left, 0))
-            x += advance
+        # Blend separate glyphs like CharWriter; transparent pixels must not
+        # erase the preceding outline. Keep the original advances, with only
+        # one source pixel of tracking (two for Pr), per the compact spacing
+        # requested after reviewing the expanded ink-bound candidate.
+        placements=[];x=0;leftmost=0;rightmost=0
+        for at,i in enumerate(indices):
+            left,width,advance=widths[i]
+            # CWDH width controls layout, but some retail cells carry outline
+            # ink past that width. Description captions retain the full cell;
+            # advances/bearings still come from the original CWDH record.
+            glyph=glyphs[i].crop((0,0,cw if full_ink else width,ch));box=glyph.getchannel("A").getbbox()
+            if box:leftmost=min(leftmost,x+left+box[0]);rightmost=max(rightmost,x+left+box[2])
+            placements.append((glyph,x+left));x+=advance
+            if at+1<len(indices):x+=2 if label[at:at+2]=="Pr" else 1
+        pad=-leftmost
+        image=Image.new("RGBA",(max(1,x,rightmost)+pad,ch))
+        for glyph,at in placements:
+            if glyph.width:image.alpha_composite(glyph,(at+pad,0))
+        if metrics is not None: metrics[label] = dict(advance=x,origin=leftmost,height=ch)
         result[label] = image
     return result
 
@@ -168,6 +181,8 @@ def cook_hud(root, output, manifest, sprite, image_sprite, digest):
     record = image_sprite(ink,"hud_ink",output)
     record.update(source=reft_path.relative_to(root).as_posix(), source_sha256=digest(reft_path), sourceTexture="gessoSumi2I4")
     extras["ink"] = record
+    for name, file in [('chase_base','tt_chase_icon.tpl'),('chase_light','tt_chase_icon_light.tpl')]:
+        extras[name] = sprite(ui/'timg'/file,'hud_'+name,output)
     curves = [bytes.fromhex(c) for c in ink_effect["curves"]]
     ink_scale = next(c for c in curves if c[:4] == bytes.fromhex("ab180303"))
     ink_alpha = next(c for c in curves if c[:4] == bytes.fromhex("ab030001"))

@@ -1,0 +1,61 @@
+#pragma once
+
+#include "game/field/RailInterpolator.hh"
+
+#include <egg/core/Allocator.hh>
+
+#include <vector>
+
+namespace Kinoko {
+
+namespace Host {
+
+class Context;
+
+} // namespace Host
+
+namespace Field {
+
+// TODO: Inherit EGG::Disposer
+class RailManager {
+    friend class Host::Context;
+
+public:
+    /// @beginGetters
+    [[nodiscard]] Rail *rail(size_t idx) {
+        ASSERT(idx < m_rails.size());
+        return m_rails[idx];
+    }
+
+    [[nodiscard]] const Rail *rail(size_t idx) const {
+        ASSERT(idx < m_rails.size());
+        return m_rails[idx];
+    }
+    /// @endGetters
+
+    static RailManager *CreateInstance();
+    static void DestroyInstance();
+
+    [[nodiscard]] static RailManager *Instance() {
+        return s_instance;
+    }
+
+private:
+    EGG_NEW_DELETE_FRIEND
+
+    RailManager();
+    ~RailManager();
+
+    void createPaths();
+
+    fixed_vector<Rail *> m_rails;
+    u16 m_totalRails;
+    u16 m_extraInterplatorCount;
+    u16 m_pointCount;
+
+    static RailManager *s_instance; ///< @addr{0x809C22B0}
+};
+
+} // namespace Field
+
+} // namespace Kinoko

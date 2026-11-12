@@ -7,10 +7,10 @@ folder) as tools/import_courses.py does, with the course material rules
 (MKW_COURSE_MATERIALS), and cooked;
 meshes identical to the shared tree are dropped. Textures and part lists must be
 unchanged (a mesh-only overlay), otherwise run the full importer instead. The
-course receipt's visuals are updated in the overlay copy. tools/package_sd.py
+course receipt's visuals are updated in the overlay copy. tools/resource_manifest.py
 overlays the result.
 
---objects also re-cooks the selected courses' placed-object meshes as
+Placed-object meshes are a separate manually invoked operation; the helper uses
 tools/cook_course_objects.py does, under the same mesh-only rule (animation
 banks are replaced only when their exported material tracks change; textures
 stay the shared tree's).
@@ -93,11 +93,11 @@ def overlay_objects(c,output,banks_only=False):
     return changed
 
 def main():
-    p=argparse.ArgumentParser(description=__doc__);p.add_argument('--ids',type=int,nargs='*');p.add_argument('--output',type=Path,default=ROOT/'build/course-materials')
-    p.add_argument('--objects',action='store_true',help="also re-cook the selected race courses' placed-object meshes")
+    p=argparse.ArgumentParser(description=__doc__);p.add_argument('--ids',type=int,nargs='+',required=True);p.add_argument('--output',type=Path,default=ROOT/'build/course-materials')
     p.add_argument('--banks-only',action='store_true',help="update animation banks for object meshes already present in the overlay")
     a=p.parse_args()
-    subprocess.run(['node','tools/bundle_cooker.mjs'],cwd=ROOT,check=True)
+    if not (ROOT/'build/export_brres.mjs').is_file():raise FileNotFoundError('Prepare the individual BRRES exporter manually; see docs/MANUAL-BUILD.md')
+    results={}
     for c in courses():
         if a.ids is not None and c['id'] not in a.ids:continue
         if a.banks_only:
@@ -109,10 +109,12 @@ def main():
         for old in [*a.output.glob(f"models/{c['prefix']}_*.gmdl"),*a.output.glob(f"models/{c['prefix']}_sky_*.gmdl"),a.output/f"models/courses/{c['id']:02d}.json"]:
             old.unlink(missing_ok=True)
         changed=overlay_course(c,a.output)
-        if a.objects and c['kind']=='race':
-            for pattern in (f"models/obj{c['id']:02d}_*.gmdl",f"models/obj{c['id']:02d}_*.dobj"):
-                for old in a.output.glob(pattern):old.unlink()
-            changed+=overlay_objects(c,a.output)
         print(c['id'],c['name'],' '.join(changed) or 'unchanged',flush=True)
+        results[c['id']]=changed
+    # Meshes matching the shared tree are dropped, so a fresh build can end with
+    # an empty overlay: the receipt is what says this step has run.
+    if not a.banks_only:
+        a.output.mkdir(parents=True,exist_ok=True)
+        (a.output/'overlay-receipt.json').write_text(json.dumps(results,indent=2)+'\n')
 
 if __name__=='__main__':main()

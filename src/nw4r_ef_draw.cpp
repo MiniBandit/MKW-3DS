@@ -369,12 +369,22 @@ struct Writer {
         }
     };
     // GX_QUADS: (v0,v1,v2) and (v0,v2,v3); corners carry texcoords (0,1),(0,0),(1,0),(1,1).
-    void quad(Vec3 a,Vec3 b,Vec3 c,Vec3 d){
-        // Reject only fully clipped geometry; particle axes/lifetimes still advance.
-        if(!visible(a,b,c)&&!visible(a,c,d))return;
-        // Shared triangle corners have identical position, UVs and colour.
+    void emitQuad(Vec3 a,Vec3 b,Vec3 c,Vec3 d,bool first,bool second){
         const DrawVertex va=make(a,0,1),vb=make(b,0,0),vc=make(c,1,0),vd=make(d,1,1);
-        triangle(va,vb,vc);triangle(va,vc,vd);
+        if(first){emit(va);emit(vb);emit(vc);}
+        if(second){emit(va);emit(vc);emit(vd);}
+    }
+    void quad(Vec3 a,Vec3 b,Vec3 c,Vec3 d){
+        const bool first=visible(a,b,c),second=visible(a,c,d);
+        if(first||second)emitQuad(a,b,c,d,first,second);
+    }
+    // Billboard geometry is known before material setup. Fully clipped
+    // particles need no TEV register/UV work, lookup texel or empty batch.
+    // Their simulation and axis history continue unchanged.
+    void quad(const Particle& p,Vec3 a,Vec3 b,Vec3 c,Vec3 d){
+        const bool first=visible(a,b,c),second=visible(a,c,d);
+        if(!first&&!second)return;
+        setup(p);emitQuad(a,b,c,d,first,second);
     }
 };
 
@@ -407,7 +417,6 @@ void drawBillboard(Writer& w,ParticleManager& pm,const Mtx34& view){
         forEachDraw(pm,[&](Particle& p){
             const float sx=sizeX(p);if(sx<Eps)return;
             const float sy=sizeY(p);if(sy<Eps)return;
-            w.setup(p);
             Vec3 ahead=transformNormal(m,calcAhead(a,p,false));
             const float len2=ahead.x*ahead.x+ahead.y*ahead.y;
             float rs=0.f,rc=1.f;
@@ -424,7 +433,7 @@ void drawBillboard(Writer& w,ParticleManager& pm,const Mtx34& view){
             const Vec3 c{pos.x+A*e0+B*e1,pos.y+(C*e0-D*e1),pos.z};
             const Vec3 d0{A*sx-stretch*B*sy,C*sx+stretch*D*sy,0.f};
             const Vec3 d1{A*sx+stretch*B*sy,C*sx-stretch*D*sy,0.f};
-            w.quad(c-d0,c-d1,c+d0,c+d1);
+            w.quad(p,c-d0,c-d1,c+d0,c+d1);
         });
         return;
     }
@@ -435,7 +444,6 @@ void drawBillboard(Writer& w,ParticleManager& pm,const Mtx34& view){
     forEachDraw(pm,[&](Particle& p){
         const float sx=sizeX(p);if(sx<Eps)return;
         const float sy=sizeY(p);if(sy<Eps)return;
-        w.setup(p);
         const Vec3 rot=drawRotate(p);
         const Vec3 pos=transformCoord(m,p.p.position);
         float sr=0.f,cr=1.f;
@@ -446,7 +454,7 @@ void drawBillboard(Writer& w,ParticleManager& pm,const Mtx34& view){
         const Vec3 c{vxrc*e0+vyrs*e1+pos.x,vxrs*e0-vyrc*e1+pos.y,pos.z};
         const Vec3 d0{vxrc*crsx-vxrc*srsy-vyrs*srsx-vyrs*crsy,vxrs*crsx-vxrs*srsy+vyrc*srsx+vyrc*crsy,0.f};
         const Vec3 d1{vxrc*crsx+vxrc*srsy-vyrs*srsx+vyrs*crsy,vxrs*crsx+vxrs*srsy+vyrc*srsx-vyrc*crsy,0.f};
-        w.quad(c-d0,c-d1,c+d0,c+d1);
+        w.quad(p,c-d0,c-d1,c+d0,c+d1);
     });
 }
 

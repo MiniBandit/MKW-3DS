@@ -1,0 +1,129 @@
+#include "KartObjectManager.hh"
+
+#include "game/kart/KartAction.hh"
+#include "game/kart/KartCollide.hh"
+#include "game/kart/KartParamFileManager.hh"
+#include "game/system/RaceConfig.hh"
+
+#include <abstract/g3d/ResFile.hh>
+
+namespace Kinoko::Kart {
+
+/// @addr{0x8058FEE0}
+void KartObjectManager::init() {
+    KartAction::ResetPowWindow(); // RMCU PlayerHolder_init 0x805896bc
+    for (size_t i = 0; i < m_count; ++i) {
+        m_objects[i]->initImpl();
+        m_objects[i]->prepare();
+    }
+}
+
+/// @addr{0x8058FFE8}
+/// Retail PlayerHolder_update (USA 0x805897C4) runs pass zero for every racer
+/// before any pass one, so racer-to-racer collision sees this frame's poses.
+void KartObjectManager::calc() {
+    for (size_t i = 0; i < m_count; ++i) {
+        KartObject *object = m_objects[i];
+        object->collide()->resetKartCollision();
+        object->collide()->setTangentOff(EGG::Vector3f::zero);
+        object->collide()->setMovement(EGG::Vector3f::zero);
+    }
+
+    for (size_t i = 0; i < m_count; ++i) {
+        m_objects[i]->calcSub();
+    }
+
+    for (size_t i = 0; i < m_count; ++i) {
+        m_objects[i]->calc();
+    }
+
+    // RMCU PlayerHolder_update 0x805897c4: the POW hit window ticks after every kart.
+    KartAction::CalcPowWindow();
+}
+
+/// @addr{0x8058FAA8}
+KartObjectManager *KartObjectManager::CreateInstance() {
+    ASSERT(!s_instance);
+    s_instance = EGG::egg_new<KartObjectManager>();
+    return s_instance;
+}
+
+/// @addr{0x8058FAF8}
+void KartObjectManager::DestroyInstance() {
+    ASSERT(s_instance);
+    auto *instance = s_instance;
+    s_instance = nullptr;
+    EGG::egg_delete(instance);
+}
+
+/// @addr{0x8058FB2C}
+KartObjectManager::KartObjectManager() {
+    const auto &raceScenario = System::RaceConfig::Instance()->raceScenario();
+    m_count = raceScenario.playerCount;
+    m_objects = static_cast<KartObject **>(EGG::egg_alloc(m_count * sizeof(KartObject *)));
+    KartParamFileManager::CreateInstance();
+
+    loadScaleAnimations();
+
+    for (size_t i = 0; i < m_count; ++i) {
+        const auto &player = raceScenario.players[i];
+        KartObject *object = KartObject::Create(player.character, player.vehicle, i);
+        object->createModel();
+        m_objects[i] = object;
+    }
+}
+
+/// @addr{0x8058FDD4}
+KartObjectManager::~KartObjectManager() {
+    if (s_instance) {
+        s_instance = nullptr;
+        WARN("KartObjectManager instance not explicitly handled!");
+    }
+
+    KartParamFileManager::DestroyInstance();
+
+    for (size_t i = 0; i < m_count; ++i) {
+        EGG::egg_delete(m_objects[i]);
+    }
+
+    EGG::egg_free(m_objects);
+
+    EGG::egg_delete(s_thunderScaleUpAnmChr);
+    EGG::egg_delete(s_thunderScaleDownAnmChr);
+    EGG::egg_delete(s_megaScaleUpAnmChr);
+    EGG::egg_delete(s_megaScaleDownAnmChr);
+    EGG::egg_delete(s_pressScaleUpAnmChr);
+
+    // If the proxy list is not cleared when we're done with the KartObjectManager, the list's
+    // destructor calls delete on all of the links remaining in the list. Since the heaps are
+    // gone by that point, this results in a segmentation fault. So, we clear the links here.
+    KartObjectProxy::proxyList().clear();
+}
+
+/// @addr{0x8056AB6C}
+void KartObjectManager::loadScaleAnimations() {
+    auto *resMgr = System::ResourceManager::Instance();
+    const void *file = resMgr->getFile("driver.brres", nullptr, System::ArchiveId::Core);
+    ASSERT(file);
+
+    // Copy construct onto the heap
+    auto resAnmChr = Abstract::g3d::ResFile(file).resAnmChr("thunder_scale_up");
+    s_thunderScaleUpAnmChr = EGG::egg_new<Abstract::g3d::ResAnmChr>(resAnmChr);
+    resAnmChr = Abstract::g3d::ResFile(file).resAnmChr("thunder_scale_down");
+    s_thunderScaleDownAnmChr = EGG::egg_new<Abstract::g3d::ResAnmChr>(resAnmChr);
+    resAnmChr = Abstract::g3d::ResFile(file).resAnmChr("kinoko_scale_up");
+    s_megaScaleUpAnmChr = EGG::egg_new<Abstract::g3d::ResAnmChr>(resAnmChr);
+    resAnmChr = Abstract::g3d::ResFile(file).resAnmChr("kinoko_scale_down");
+    s_megaScaleDownAnmChr = EGG::egg_new<Abstract::g3d::ResAnmChr>(resAnmChr);
+    resAnmChr = Abstract::g3d::ResFile(file).resAnmChr("press_scale_up");
+    s_pressScaleUpAnmChr = EGG::egg_new<Abstract::g3d::ResAnmChr>(resAnmChr);
+}
+
+Abstract::g3d::ResAnmChr *KartObjectManager::s_thunderScaleUpAnmChr = nullptr;
+Abstract::g3d::ResAnmChr *KartObjectManager::s_thunderScaleDownAnmChr = nullptr;
+Abstract::g3d::ResAnmChr *KartObjectManager::s_megaScaleUpAnmChr = nullptr;
+Abstract::g3d::ResAnmChr *KartObjectManager::s_megaScaleDownAnmChr = nullptr;
+Abstract::g3d::ResAnmChr *KartObjectManager::s_pressScaleUpAnmChr = nullptr;
+KartObjectManager *KartObjectManager::s_instance = nullptr;
+
+} // namespace Kinoko::Kart

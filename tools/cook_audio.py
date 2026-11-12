@@ -4,7 +4,7 @@
 Reads the user's retail data/extracted/sound/revo_kart.brsar and the 111
 sound/strm/*.brstm streams (extracted from the local disc by
 tools/extract_disc.py machinery) and writes, into the private overlay
-build/audio (packaged by tools/package_sd.py):
+build/audio (packaged by tools/resource_manifest.py):
   audio/sound.arc     sound/file/bank/group/player tables, per-wave RWAR
                       entries and per-sound wave reach (tools/audio_reach.py),
                       little endian, read by mkw::snd::Archive

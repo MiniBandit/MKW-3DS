@@ -2,6 +2,8 @@
 #include <algorithm>
 #include <cstdio>
 #include <string>
+#include <cerrno>
+#include <sys/stat.h>
 
 namespace mkw {
 namespace {
@@ -24,8 +26,8 @@ LicenseMiiId licenseMiiId(const NativeMii& m){
  const std::uint32_t legacy=(native&0x80000000u?0x80000000u:0x40000000u)|ticks;
  return {std::uint8_t(legacy>>24),std::uint8_t(legacy>>16),std::uint8_t(legacy>>8),std::uint8_t(legacy),m[4],m[5],m[6],m[7]};
 }
-bool loadNativeMii(const char* root,const LicenseMiiId& id,NativeMii& out){
- FILE* f=std::fopen(path(root,id).c_str(),"rb");if(!f)return false;
+static bool readNativeMii(const std::string& file,const LicenseMiiId& id,NativeMii& out){
+ FILE* f=std::fopen(file.c_str(),"rb");if(!f)return false;
  std::array<unsigned char,8> header{};NativeMii candidate{};unsigned char stored[4]{};
  bool ok=std::fread(header.data(),1,header.size(),f)==header.size()&&
   std::fread(candidate.data(),1,candidate.size(),f)==candidate.size()&&
@@ -38,18 +40,36 @@ bool loadNativeMii(const char* root,const LicenseMiiId& id,NativeMii& out){
  if(ok)out=candidate;
  return ok;
 }
+bool loadNativeMii(const char* root,const LicenseMiiId& id,NativeMii& out){
+ const auto file=path(root,id);
+ return readNativeMii(file,id,out)||readNativeMii(file+".bak",id,out);
+}
 bool writeNativeMii(const char* root,const NativeMii& m){
  if(m[0]!=3)return false;
  const auto id=licenseMiiId(m);NativeMii previous;
- if(loadNativeMii(root,id,previous)&&previous==m)return true;
- const auto file=path(root,id),temporary=file+".tmp";
+ const auto file=path(root,id),temporary=file+".tmp",backup=file+".bak";
+ const bool validPrimary=readNativeMii(file,id,previous);
+ if(validPrimary&&previous==m)return true;
  FILE* f=std::fopen(temporary.c_str(),"wb");if(!f)return false;
  const unsigned char magic[]={'M','K','W','M','I','I',1,0};const auto crc=checksum(m);
  const unsigned char stored[]={std::uint8_t(crc>>24),std::uint8_t(crc>>16),std::uint8_t(crc>>8),std::uint8_t(crc)};
  bool ok=std::fwrite(magic,1,sizeof magic,f)==sizeof magic&&std::fwrite(m.data(),1,m.size(),f)==m.size()&&std::fwrite(stored,1,4,f)==4;
  if(std::fflush(f))ok=false;if(std::fclose(f))ok=false;
  if(!ok){std::remove(temporary.c_str());return false;}
- if(std::rename(temporary.c_str(),file.c_str())){std::remove(temporary.c_str());return false;}
+ // Publish only to an absent destination. Keep the last valid appearance
+ // recoverable across a failed rename or interruption, as for rksys.dat.
+ struct stat info{};bool moved=false;
+ if(!::stat(file.c_str(),&info)){
+  if(validPrimary){
+   if(std::remove(backup.c_str())&&errno!=ENOENT){std::remove(temporary.c_str());return false;}
+   if(std::rename(file.c_str(),backup.c_str())){std::remove(temporary.c_str());return false;}
+   moved=true;
+  }else if(std::remove(file.c_str())){std::remove(temporary.c_str());return false;}
+ }else if(errno!=ENOENT){std::remove(temporary.c_str());return false;}
+ if(std::rename(temporary.c_str(),file.c_str())){
+  if(moved)std::rename(backup.c_str(),file.c_str());
+  std::remove(temporary.c_str());return false;
+ }
  return true;
 }
 }

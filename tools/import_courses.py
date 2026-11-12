@@ -127,7 +127,7 @@ def publish(receipts):
 
 def main():
     p=argparse.ArgumentParser();p.add_argument('--jobs',type=int,default=3);p.add_argument('--force',action='store_true');p.add_argument('--ids',type=int,nargs='*');a=p.parse_args()
-    subprocess.run(['node','tools/bundle_cooker.mjs'],cwd=ROOT,check=True)
+    subprocess.run(['node','tools/bundle_cooker.mjs','tools/export_brres.ts'],cwd=ROOT,check=True)
     selected=[c for c in courses() if a.ids is None or c['id'] in a.ids]
     with concurrent.futures.ThreadPoolExecutor(max_workers=a.jobs) as pool:receipts=list(pool.map(lambda c:import_one(c,a.force),selected))
     if a.ids is not None:

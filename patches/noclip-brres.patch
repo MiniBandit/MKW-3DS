@@ -1,0 +1,47 @@
+diff --git a/src/rres/brres.ts b/src/rres/brres.ts
+index a691975..5e0efde 100644
+--- a/src/rres/brres.ts
++++ b/src/rres/brres.ts
+@@ -251,20 +251,23 @@ function parseTEX0(buffer: ArrayBufferSlice): TEX0 {
+ 
+     assert(readString(buffer, 0x00, 0x04) === 'TEX0');
+     const version = view.getUint32(0x08);
+-    const supportedVersions = [0x01, 0x03];
++    const supportedVersions = [0x01, 0x02, 0x03];
+     assert(supportedVersions.includes(version));
+ 
+-    const dataOffs = view.getUint32(0x10);
+-    const nameOffs = view.getUint32(0x14);
++    // TEX0 v2 (retail draw_demo) inserts a user-data offset before the
++    // image descriptor. Offsets still refer to the TEX0 start.
++    const descriptorBias = version === 0x02 ? 4 : 0;
++    const dataOffs = view.getUint32(0x10 + descriptorBias);
++    const nameOffs = view.getUint32(0x14 + descriptorBias);
+     const name = readString(buffer, nameOffs);
+ 
+-    const flags = view.getUint32(0x18);
+-    const width = view.getUint16(0x1C);
+-    const height = view.getUint16(0x1E);
+-    const format: GX.TexFormat = view.getUint32(0x20);
+-    const mipCountRaw = view.getUint32(0x24);
+-    const minLOD = view.getFloat32(0x28);
+-    const maxLOD = view.getFloat32(0x2C);
++    const flags = view.getUint32(0x18 + descriptorBias);
++    const width = view.getUint16(0x1C + descriptorBias);
++    const height = view.getUint16(0x1E + descriptorBias);
++    const format: GX.TexFormat = view.getUint32(0x20 + descriptorBias);
++    const mipCountRaw = view.getUint32(0x24 + descriptorBias);
++    const minLOD = view.getFloat32(0x28 + descriptorBias);
++    const maxLOD = view.getFloat32(0x2C + descriptorBias);
+     const mipCount = Math.ceil(Math.min(mipCountRaw, maxLOD + 1));
+ 
+     const data = buffer.subarray(dataOffs);
+@@ -1301,7 +1304,7 @@ function sampleFloatAnimationTrackLinear(track: FloatAnimationTrackLinear, frame
+ 
+     if (frame === 0)
+         return frames[0];
+-    else if (frame > n - 1)
++    else if (frame >= n - 1)
+         return frames[n - 1];
+ 
+     // Find the first frame.

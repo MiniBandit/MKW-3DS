@@ -1,5 +1,6 @@
 #pragma once
 #include <cstdint>
+#include <array>
 #include <cstring>
 #include <mkw/math.hpp>
 
@@ -37,10 +38,14 @@ struct CourseLighting {
 // GMDL v4 per-submesh lighting word (tools/gx_material.py retail_lighting_word).
 namespace retail {
 enum : uint32_t {
+    StaticLighting=1u<<28, // immutable per-course vertex light; material animation remains live
+    FixedEnvironment=1u<<29, // load-time baked EnvCamera coordinates (bit27 belongs to road opacity)
     Retail=1u<<0,          // submesh uses retail course lighting
     Menu=1u<<21,           // racer material alpha/reflection path (menu or race)
     PrimaryEnvironment=1u<<22, // GX EnvCamera feeds texture 0; v5 stores its authored SRT
     CoplanarLayer=1u<<23, // source translucent course decal sharing an earlier surface
+    RaisedRoadLayer=1u<<25, // authored raised road detail; PICA slope/depth precision guard
+    AuthoredOpaqueBlend=1u<<26, // source DrawOpa blend layer; order only, no depth bias
     Fog=1u<<1,             // material fog index 0 (G3D fog 0)
     ChannelShift=2,        // 0 unlit (raster = vertex/register colour), 1 GX lit, 2 GX lit + light textures
     ChannelMask=3u<<2,
@@ -85,6 +90,10 @@ void retailLightTexture(const CourseLighting& course,unsigned which,const Vec3 v
 void retailLightTextureKey(const CourseLighting& course,unsigned which,const Vec3 viewDirections[16],int (&key)[12]);
 // True when light texture `which` depends on the camera (world-space lights).
 bool retailLightTextureDynamic(const CourseLighting& course,unsigned which);
+// Same GX ambient/diffuse equation evaluated at a fixed, model-space reference.
+std::array<float,4> viewLightFactor(const CourseLighting* course,uint32_t lighting,uint32_t ambient,Vec3 normal,const float view[3][3]);
+std::array<float,4> staticLightFactor(const CourseLighting* course,uint32_t lighting,uint32_t ambient,Vec3 normal);
+bool normalEnvironment(uint32_t lighting,uint32_t mode,uint32_t constant);
 // GX fog factor for a fog type at normalized eye depth ze ((z-start)/(end-start)).
 float retailFogFactor(unsigned type,float ze);
 // Fog object state (StaticR 0x805A31D0): fades from the current to a target

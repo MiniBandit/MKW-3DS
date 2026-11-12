@@ -1,8 +1,9 @@
 """Read Mario Kart 7 UI textures from the user's own decrypted cartridge dump.
 
 Only the bottom-screen map markers are taken (docs/BOTTOM_SCREEN.md): they
-are decoded into the private build/race-map overlay at cook time and never
-committed. The dump is opened read-only.
+can be decoded into the private build/race-map overlay at cook time. The eight
+original-project marker PNGs are also retained as default inputs under
+tools/release/mk7_markers. The optional dump is opened read-only.
 
 CCI (NCSD) -> NCCH partition 0 (NoCrypto) -> RomFS level 3 -> /UI/race.szs
 (Yaz0 + SARC, names hashed with key 0x65) -> BCLIM (PICA tiled ETC1A4/RGBA).

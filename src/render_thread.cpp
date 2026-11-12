@@ -55,11 +55,13 @@ struct Header {uint16_t type,reserved;uint32_t size;};
 enum : uint16_t {
     CmdBegin=1,CmdEnd,CmdProjection,CmdCourseLighting,CmdRetailFog,CmdRequestBloom,CmdApplyBloom,CmdBottom,
     CmdDraw,CmdDrawAtScreen,CmdMenuIcon,CmdEnvironmentUv,CmdUv1,CmdUvOffset,CmdClearEnvironment,
-    CmdRigid,CmdSkin,CmdOverrides,CmdShadows,CmdSparks,CmdEffects,CmdCinema,CmdFade,CmdSprite,CmdFontSprite,
-    CmdMaterialQuads,CmdText,CmdScreenDepth,CmdRequestStadium,
+    CmdRigid,CmdSkin,CmdOverrides,CmdShadows,CmdSparks,CmdEffects,CmdSceneEffects,CmdCinema,CmdFade,CmdSprite,CmdFontSprite,
+    CmdMaterialQuads,CmdText,CmdScreenDepth,CmdMenuModelLayer,CmdIntroWorldEnd,CmdRequestStadium,CmdCoinHudModel,CmdPlayerShadow,CmdSceneRegion,CmdShadowUnion,
 };
 // begun: C3D_FrameBegin already ran on the recording thread (stereo immediate frames).
-struct BeginCommand {static constexpr uint16_t Type=CmdBegin;C3D_Mtx view,projection;bool sync,begun;};
+struct ShadowUnionCommand {static constexpr uint16_t Type=CmdShadowUnion;bool active;};
+struct SceneRegionCommand {static constexpr uint16_t Type=CmdSceneRegion;unsigned mask;};
+struct BeginCommand {static constexpr uint16_t Type=CmdBegin;C3D_Mtx view,projection;unsigned lightingTick;bool sync,begun,loading;};
 struct EndCommand {static constexpr uint16_t Type=CmdEnd;};
 struct ProjectionCommand {static constexpr uint16_t Type=CmdProjection;C3D_Mtx projection;};
 struct CourseLightingCommand {static constexpr uint16_t Type=CmdCourseLighting;bool enabled;};
@@ -68,6 +70,7 @@ struct RequestBloomCommand {static constexpr uint16_t Type=CmdRequestBloom;const
 struct RequestStadiumCommand {static constexpr uint16_t Type=CmdRequestStadium;const Bounds* screens;unsigned count;};
 struct ApplyBloomCommand {static constexpr uint16_t Type=CmdApplyBloom;};
 struct BottomCommand {static constexpr uint16_t Type=CmdBottom;};
+struct IntroWorldEndCommand {static constexpr uint16_t Type=CmdIntroWorldEnd;};
 struct DrawCommand {
     static constexpr uint16_t Type=CmdDraw;
     const Model* model;const Vertex* vertices;C3D_Mtx transform;
@@ -77,18 +80,23 @@ struct DrawCommand {
 struct DrawAtScreenCommand {
     static constexpr uint16_t Type=CmdDrawAtScreen;
     const Model* model;const Vertex* vertices;C3D_Mtx transform;float x,y,brightness,scaleX,scaleY;uint32_t frame,additive;
+    Renderer::MaterialBinder material;void* context;
 };
 struct MenuIconCommand {static constexpr uint16_t Type=CmdMenuIcon;const Model* model;const Vertex* vertices;C3D_Mtx transform;const UiQuad* quad;uint32_t frame,additive;};
-struct EnvironmentUvCommand {static constexpr uint16_t Type=CmdEnvironmentUv;C3D_Mtx transform;float uv[6];bool texture2;};
+struct MenuModelLayerCommand {static constexpr uint16_t Type=CmdMenuModelLayer;const Model* model;const Vertex* vertices;C3D_Mtx transform;uint32_t frame,additive;};
+struct CoinHudModelCommand {static constexpr uint16_t Type=CmdCoinHudModel;const Model* model;const Vertex* vertices;C3D_Mtx transform;uint32_t frame,additive;bool firstColumn;};
+struct EnvironmentUvCommand {static constexpr uint16_t Type=CmdEnvironmentUv;C3D_Mtx transform;float uv[6];bool texture2;float blend;};
 struct Uv1Command {static constexpr uint16_t Type=CmdUv1;float uv[6];};
 struct UvOffsetCommand {static constexpr uint16_t Type=CmdUvOffset;float u,v;};
 struct ClearEnvironmentCommand {static constexpr uint16_t Type=CmdClearEnvironment;};
 struct RigidCommand {static constexpr uint16_t Type=CmdRigid;const RigidPose* pose;};
 struct SkinCommand {static constexpr uint16_t Type=CmdSkin;const float* palette;unsigned bones,stride;};
 struct OverridesCommand {static constexpr uint16_t Type=CmdOverrides;const SubmeshOverride* overrides;unsigned count;};
+struct PlayerShadowCommand {static constexpr uint16_t Type=CmdPlayerShadow;const Renderer::ShadowCaster* casters;unsigned count;const Model* const* receivers;unsigned receiverCount;Vec3 origin,lightDirection;float scale;const Renderer::ShadowVolume* fallback;const Renderer::ShadowReceiver* objects;unsigned objectCount;bool actor;};
 struct ShadowsCommand {static constexpr uint16_t Type=CmdShadows;const Renderer::ShadowVolume* volumes;unsigned count;float darkness;};
 struct SparksCommand {static constexpr uint16_t Type=CmdSparks;const SparkSpec* specs;unsigned specCount;const Spark* sparks;unsigned count;const Texture* textures;};
 // The NW4R EF draw list is built while the frame records (FrameList::effects).
+struct SceneEffectsCommand {static constexpr uint16_t Type=CmdSceneEffects;const RaceEffects* effects;const ef::DrawList* list;const Texture* textures;const EffectLayerBuffer* buffer;};
 struct EffectsCommand {static constexpr uint16_t Type=CmdEffects;const RaceEffects* effects;const ef::DrawList* list;const Texture* textures;};
 struct CinemaCommand {static constexpr uint16_t Type=CmdCinema;float top,bottom,opacity;};
 struct FadeCommand {static constexpr uint16_t Type=CmdFade;float opacity;bool white;};
@@ -102,7 +110,7 @@ struct FontSpriteCommand {
 };
 struct MaterialQuadsCommand {
     static constexpr uint16_t Type=CmdMaterialQuads;
-    const Texture* texture;const Renderer::MaterialQuad* quads;unsigned count;uint32_t color0,color1;int wrapS,wrapT;
+    const Texture* texture;const Renderer::MaterialQuad* quads;unsigned count;uint32_t color0,color1;int wrapS,wrapT;bool additive;
 };
 struct TextCommand {static constexpr uint16_t Type=CmdText;const char* text;float x,y,size;uint32_t rgba;};
 struct ScreenDepthCommand {static constexpr uint16_t Type=CmdScreenDepth;float parallax;};
@@ -129,11 +137,12 @@ struct Renderer::FrameList {
     DeferredWrites writes;
     // This frame's NW4R EF draw list; its vectors keep their capacity across frames.
     std::unique_ptr<ef::DrawList> effects=std::make_unique<ef::DrawList>();
+    std::vector<std::unique_ptr<ef::DrawList>> sceneEffects;unsigned sceneEffectsUsed=0;
     unsigned frame=0;
     // Recorded at begin(): both eyes are drawn when active.
-    stereo::Frame stereo{};
+    stereo::Frame stereo{};bool dualIntro=false;
     FrameList(){commands.reserve(128*1024);writes.storage_=&storage;}
-    void reset(){commands.clear();data.reset();storage.arena.reset();storage.writes.clear();stereo={};}
+    void reset(){sceneEffectsUsed=0;commands.clear();data.reset();storage.arena.reset();storage.writes.clear();stereo={};dualIntro=false;}
 };
 
 DeferredWrites* deferredWrites(){return activeRenderer?activeRenderer->writes():nullptr;}
@@ -153,9 +162,8 @@ bool Renderer::startRenderThread(){
     // the render thread's matrices and culling match an immediate frame's.
     fpscr_=__builtin_arm_get_fpscr();
     bool n3ds=false;APT_CheckNew3DS(&n3ds);
-    // The job worker's core (JobWorker::start sets Old 3DS core 1's app time
-    // limit). One step below its priority: presentation jobs, which the
-    // recording thread waits for, preempt drawing.
+    // New 3DS reserves core 2 for rendering and short audio work. Animation
+    // jobs share main core 0 at lower priority; Old 3DS retains core 1.
     s32 priority=0x30;svcGetThreadPriority(&priority,CUR_THREAD_HANDLE);
     if(!n3ds){u32 limit=0;APT_GetAppCpuTimeLimit(&limit);if(limit<80)APT_SetAppCpuTimeLimit(80);}
     thread_=threadCreate(threadEntry,this,64*1024,std::clamp<s32>(priority+1,0x1a,0x3f),n3ds?2:1,false);
@@ -185,6 +193,11 @@ void Renderer::threadLoop(){
 }
 // A local replay executes on the recording thread: binders' renderer calls draw.
 bool Renderer::recording() const {return !renderThread&&!localReplay_&&(deferred_||localRecording_);}
+bool Renderer::canRecordFrame() const{
+    if(!deferred_||!thread_)return true;
+    const unsigned frame=submitted_.load(std::memory_order_relaxed);
+    return frame<2||completed_.load(std::memory_order_acquire)+1>=frame;
+}
 Renderer::FrameList* Renderer::acquire(){
     const unsigned frame=submitted_.load(std::memory_order_relaxed);
     recordWaitMs=0;
@@ -231,7 +244,7 @@ void Renderer::drain(){
     // Each eye replays a whole stereo frame, so one being recorded is not
     // split here: callers mid-frame (effect material rebuilds) only need the
     // frames already submitted to finish.
-    if(!(writeTarget_.load(std::memory_order_relaxed)&&recording_&&recording_->stereo.active()))submit();
+    if(!(writeTarget_.load(std::memory_order_relaxed)&&recording_&&(recording_->stereo.active()||recording_->dualIntro)))submit();
     if(!thread_)return;
     const unsigned target=submitted_.load(std::memory_order_relaxed);
     while(completed_.load(std::memory_order_acquire)!=target){
@@ -260,7 +273,12 @@ void Renderer::execute(FrameList& list){
     bool began=false;
     execStereo_=targetRight_?list.stereo:stereo::Frame{};
     const unsigned eyes=execStereo_.active()?2:1;
-    for(unsigned eye=0;eye<eyes;++eye){
+    execDualScreenIntro_=list.dualIntro&&bottomTarget_;
+    const unsigned passes=eyes+unsigned(execDualScreenIntro_);
+    for(unsigned pass=0;pass<passes;++pass){
+    bottomWorldPass_=pass==eyes;
+    const unsigned eye=bottomWorldPass_?0:pass;
+    bool afterWorld=false;
     // Each eye starts from the state the frame started with.
     rigid_=nullptr;skinPalette_=nullptr;overrides_=nullptr;overrideCount_=0;eye_=eye;
     // The bottom screen (after CmdBottom) is drawn once, with the last eye.
@@ -268,24 +286,32 @@ void Renderer::execute(FrameList& list){
     const uint8_t* p=list.commands.data();const uint8_t* end=p+list.commands.size();
     while(p<end){
         const auto& h=*reinterpret_cast<const Header*>(p);const void* body=&h+1;p+=h.size;
-        if(bottom&&eye+1<eyes&&h.type!=CmdEnd)continue;
+        if(bottomWorldPass_){
+            // The world reuses its first pass's GPU data. Later 2D panes only
+            // belong on top; full-screen fades span both LCDs.
+            if(afterWorld&&h.type!=CmdFade&&h.type!=CmdEnd)continue;
+            if(h.type==CmdRequestStadium||h.type==CmdRequestBloom||h.type==CmdApplyBloom||h.type==CmdBottom)continue;
+        }else if(bottom&&(execDualScreenIntro_||eye+1<eyes)&&h.type!=CmdEnd)continue;
         switch(h.type){
         case CmdBegin:{
-            const auto& c=*static_cast<const BeginCommand*>(body);
+            const auto& c=*static_cast<const BeginCommand*>(body);execFrame_=c.lightingTick;execLoadingFrame_=c.loading;
+            if(bottomWorldPass_){beginBottomWorldNow(c.view,c.projection);break;}
             if(eye){beginEyeNow(c.view,c.projection);break;}
             beginNow(c.view,c.projection,c.sync,c.begun);
             // The GPU has finished every earlier frame.
             gpuDone_.store(list.frame,std::memory_order_release);
             runWrites(list);began=true;break;
         }
-        case CmdEnd:if(eye+1<eyes)endEyeNow();else endNow();break;
+        case CmdEnd:if(pass+1<passes)endEyeNow();else endNow();break;
+        case CmdIntroWorldEnd:afterWorld=true;break;
         case CmdProjection:projection_=eyeProjection(static_cast<const ProjectionCommand*>(body)->projection);break;
+        case CmdSceneRegion:execSceneRegion_=static_cast<const SceneRegionCommand*>(body)->mask;break;
         case CmdCourseLighting:courseLighting_=static_cast<const CourseLightingCommand*>(body)->enabled;break;
         case CmdRetailFog:retailFogNow(static_cast<const RetailFogCommand*>(body)->fog);break;
         case CmdRequestStadium:{const auto& c=*static_cast<const RequestStadiumCommand*>(body);requestStadiumScreen(c.screens,c.count);break;}
         case CmdRequestBloom:{const auto& c=*static_cast<const RequestBloomCommand*>(body);requestBloomNow(*c.settings);break;}
         case CmdApplyBloom:applyBloom();break;
-        case CmdBottom:bottom=true;if(eye+1==eyes)beginBottom();break;
+        case CmdBottom:bottom=true;if(!execDualScreenIntro_&&eye+1==eyes)beginBottom();break;
         case CmdDraw:{
             const auto& c=*static_cast<const DrawCommand*>(body);
             execFrame_=c.frame;execAdditive_=c.additive;
@@ -294,22 +320,35 @@ void Renderer::execute(FrameList& list){
         case CmdDrawAtScreen:{
             const auto& c=*static_cast<const DrawAtScreenCommand*>(body);
             execFrame_=c.frame;execAdditive_=c.additive;
-            drawAtScreenNow(*c.model,c.vertices,c.transform,c.x,c.y,c.brightness,c.scaleX,c.scaleY);break;
+            drawAtScreenNow(*c.model,c.vertices,c.transform,c.x,c.y,c.brightness,c.scaleX,c.scaleY,c.material,c.context);break;
         }
         case CmdMenuIcon:{
             const auto& c=*static_cast<const MenuIconCommand*>(body);
             execFrame_=c.frame;execAdditive_=c.additive;
             drawMenuIconNow(*c.model,c.vertices,c.transform,*c.quad);break;
         }
-        case CmdEnvironmentUv:{const auto& c=*static_cast<const EnvironmentUvCommand*>(body);setEnvironmentUv(c.transform,c.uv,c.texture2);break;}
+        case CmdMenuModelLayer:{
+            const auto& c=*static_cast<const MenuModelLayerCommand*>(body);
+            execFrame_=c.frame;execAdditive_=c.additive;
+            drawMenuModelLayerNow(*c.model,c.vertices,c.transform);break;
+        }
+        case CmdCoinHudModel:{
+            const auto& c=*static_cast<const CoinHudModelCommand*>(body);
+            execFrame_=c.frame;execAdditive_=c.additive;
+            drawCoinHudModelNow(*c.model,c.vertices,c.transform,c.firstColumn);break;
+        }
+        case CmdShadowUnion:{shadowUnionNow(static_cast<const ShadowUnionCommand*>(body)->active);break;}
+        case CmdEnvironmentUv:{const auto& c=*static_cast<const EnvironmentUvCommand*>(body);setEnvironmentUv(c.transform,c.uv,c.texture2,c.blend);break;}
         case CmdUv1:setUv1Transform(static_cast<const Uv1Command*>(body)->uv);break;
         case CmdUvOffset:{const auto& c=*static_cast<const UvOffsetCommand*>(body);setUvOffset(c.u,c.v);break;}
         case CmdClearEnvironment:clearEnvironmentUv();break;
         case CmdRigid:rigid_=static_cast<const RigidCommand*>(body)->pose;break;
         case CmdSkin:{const auto& c=*static_cast<const SkinCommand*>(body);skinPalette_=c.palette;skinBones_=c.bones;skinStride_=c.stride;break;}
         case CmdOverrides:{const auto& c=*static_cast<const OverridesCommand*>(body);overrides_=c.overrides;overrideCount_=c.overrides?c.count:0;break;}
+        case CmdPlayerShadow:{const auto& c=*static_cast<const PlayerShadowCommand*>(body);playerShadowNow(c.casters,c.count,c.receivers,c.receiverCount,c.origin,c.lightDirection,c.scale,c.fallback,c.objects,c.objectCount,c.actor);break;}
         case CmdShadows:{const auto& c=*static_cast<const ShadowsCommand*>(body);drawShadowVolumes(c.volumes,c.count,c.darkness);break;}
         case CmdSparks:{const auto& c=*static_cast<const SparksCommand*>(body);drawSparksNow(c.specs,c.specCount,c.sparks,c.count,c.textures);break;}
+        case CmdSceneEffects:{const auto& c=*static_cast<const SceneEffectsCommand*>(body);sceneEffectListNow(*c.effects,*c.list,c.textures,*c.buffer);break;}
         case CmdEffects:{const auto& c=*static_cast<const EffectsCommand*>(body);effectListNow(*c.effects,*c.list,c.textures);break;}
         case CmdCinema:{const auto& c=*static_cast<const CinemaCommand*>(body);drawCinemaBars(c.top,c.bottom,c.opacity);break;}
         case CmdFade:{const auto& c=*static_cast<const FadeCommand*>(body);drawScreenFade(c.opacity,c.white);break;}
@@ -323,14 +362,14 @@ void Renderer::execute(FrameList& list){
         }
         case CmdMaterialQuads:{
             const auto& c=*static_cast<const MaterialQuadsCommand*>(body);
-            materialQuadsNow(c.texture,c.quads,c.count,c.color0,c.color1,c.wrapS,c.wrapT);break;
+            materialQuadsNow(c.texture,c.quads,c.count,c.color0,c.color1,c.wrapS,c.wrapT,c.additive);break;
         }
         case CmdText:{const auto& c=*static_cast<const TextCommand*>(body);drawScreenText(c.text,c.x,c.y,c.size,c.rgba);break;}
         case CmdScreenDepth:screenDepthNow(static_cast<const ScreenDepthCommand*>(body)->parallax);break;
         }
     }
     }
-    eye_=0;execStereo_={};
+    eye_=0;execStereo_={};execDualScreenIntro_=false;bottomWorldPass_=false;
     if(!began&&!list.storage.writes.empty()){
         // Writes recorded outside a frame wait for the GPU like a frame's.
         if(!C3D_FrameBegin(0))std::abort();
@@ -353,7 +392,7 @@ void Renderer::releaseRetired(){
 
 // Recording side of the public calls (renderer.cpp holds the drawing side).
 void Renderer::setFov(float degrees,float nearPlane,float farPlane){
-    fov_=std::clamp(degrees,1.f,170.f);Mtx_PerspTilt(&mainProjection_,C3D_AngleFromDegrees(fov_),C3D_AspectRatioTop,std::clamp(nearPlane,1.f,100.f),std::max(farPlane,101.f),false);
+    fov_=std::clamp(degrees,1.f,170.f);Mtx_PerspTilt(&mainProjection_,C3D_AngleFromDegrees(fov_),mkw::display::Aspect,std::clamp(nearPlane,1.f,100.f),std::max(farPlane,101.f),false);
     cullProjection_=mainProjection_;
     if(recording())command<ProjectionCommand>().projection=mainProjection_;
     else projection_=mainProjection_;
@@ -381,6 +420,11 @@ void Renderer::setScreenDepth(float parallax){
     if(!frameStereo_.active())return;
     if(recording()){command<ScreenDepthCommand>().parallax=parallax;return;}
     screenDepthNow(parallax);
+}
+void Renderer::setSceneRegion(unsigned mask){
+    recordSceneRegion_=mask==1||mask==2?mask:3;
+    if(recording())command<SceneRegionCommand>().mask=recordSceneRegion_;
+    else execSceneRegion_=recordSceneRegion_;
 }
 void Renderer::setCourseLighting(bool enabled){
     if(recording())command<CourseLightingCommand>().enabled=enabled;
@@ -410,13 +454,27 @@ void Renderer::requestBloom(const CourseBloom& settings){
 void Renderer::begin(Vec3 eye,Vec3 target,Vec3 up,bool mirror){
     auto e=FVec3_New(eye.x,eye.y,eye.z),t=FVec3_New(target.x,target.y,target.z),u=FVec3_New(up.x,up.y,up.z);
     Mtx_LookAt(&mainView_,e,t,u,false);
+    // CtrlRaceChase USA807e8810..89fc: reflect the camera eye through
+    // its target in X/Z, retaining eye Y and the original up vector.
+    // This projects items approaching from behind, outside the race view.
+    const auto chaseEye=FVec3_New(2*target.x-eye.x,eye.y,2*target.z-eye.z);
+    Mtx_LookAt(&chaseView_,chaseEye,t,u,false);
+    if(mirror)for(unsigned c=0;c<4;++c)chaseView_.r[0].c[c]=-chaseView_.r[0].c[c];
+    // Reflect camera-space X, including its translation. The whole world,
+    // collision and route simulation remain in one shared source coordinate
+    // system; human steering/tricks are inverted at the input boundary.
+    // Captured in BeginCommand's view for both eyes and the deferred worker.
     if(mirror)for(unsigned c=0;c<4;++c)mainView_.r[0].c[c]=-mainView_.r[0].c[c];
     mainScreenWidth_=400.f;
+    frameDualScreenIntro_=dualScreenIntro_&&bottomTarget_;
     beginStereo(length(target-eye));
+    if(frameDualScreenIntro_)for(unsigned c=0;c<4;++c)
+        cullProjection_.r[0].c[c]=cullProjection_.r[0].c[c]*display::IntroCullScale+
+            verticalSign_*display::IntroCullOffset*cullProjection_.r[3].c[c];
     beginRecorded();
 }
 void Renderer::beginRecorded(){
-    if(!recording()&&frameStereo_.active()){
+    if(!recording()&&(frameStereo_.active()||frameDualScreenIntro_)){
         // An immediate frame in stereo: wait for the GPU now, as beginNow
         // would, so CPU writes until end() stay safe; record the draws.
         const auto waitStart=svcGetSystemTick();
@@ -425,16 +483,16 @@ void Renderer::beginRecorded(){
         stats_.previousGpuMs=C3D_GetDrawingTime();
         renderMetrics={};retired_.clear();
         if(!localList_)localList_=std::make_unique<FrameList>();
-        localList_->reset();localList_->stereo=frameStereo_;
+        localList_->reset();localList_->stereo=frameStereo_;localList_->dualIntro=frameDualScreenIntro_;
         recording_=localList_.get();localRecording_=true;
-        auto& c=command<BeginCommand>();c.view=mainView_;c.projection=mainProjection_;c.sync=frameSync;c.begun=true;
+        auto& c=command<BeginCommand>();c.view=mainView_;c.projection=mainProjection_;c.lightingTick=animationFrame;c.loading=loadingFrame;c.sync=frameSync;c.begun=true;
         return;
     }
-    if(!recording()){beginNow(mainView_,mainProjection_,frameSync);retired_.clear();return;}
+    if(!recording()){execFrame_=animationFrame;execLoadingFrame_=loadingFrame;beginNow(mainView_,mainProjection_,frameSync);retired_.clear();return;}
     renderMetrics={};
     releaseRetired();
-    auto& c=command<BeginCommand>();c.view=mainView_;c.projection=mainProjection_;c.sync=frameSync;c.begun=false;
-    recording_->stereo=frameStereo_;
+    auto& c=command<BeginCommand>();c.view=mainView_;c.projection=mainProjection_;c.lightingTick=animationFrame;c.loading=loadingFrame;c.sync=frameSync;c.begun=false;
+    recording_->stereo=frameStereo_;recording_->dualIntro=frameDualScreenIntro_;
     writeTarget_.store(recording_,std::memory_order_release);
 }
 void Renderer::beginSourceCamera(const float* view,const float* projection){
@@ -454,7 +512,11 @@ void Renderer::beginSourceCamera(const float* view,const float* projection){
     }
     mainScreenWidth_=400.f;
     // No target point: the stereo subject when set, else 1000 units.
+    frameDualScreenIntro_=dualScreenIntro_&&bottomTarget_;
     beginStereo(1000.f);
+    if(frameDualScreenIntro_)for(unsigned c=0;c<4;++c)
+        cullProjection_.r[0].c[c]=cullProjection_.r[0].c[c]*display::IntroCullScale+
+            verticalSign_*display::IntroCullOffset*cullProjection_.r[3].c[c];
     beginRecorded();
 }
 void Renderer::end(){
@@ -473,6 +535,8 @@ void Renderer::end(){
     previousGpuMs=s.previousGpuMs;beginWaitMs=s.beginWaitMs;commandUsage=s.commandUsage;renderThreadMs=s.renderMs;
     renderMetrics.flushCalls+=s.metrics.flushCalls;renderMetrics.flushBytes+=s.metrics.flushBytes;
     renderMetrics.skinnedVertices+=s.metrics.skinnedVertices;
+    renderMetrics.contactDraws=s.metrics.contactDraws;renderMetrics.contactTriangles=s.metrics.contactTriangles;
+    renderMetrics.contactMs=s.metrics.contactMs;renderMetrics.shadowSupportMs=s.metrics.shadowSupportMs;
 }
 // Draws the recorded immediate stereo frame: both eyes, then FrameEnd.
 void Renderer::endLocal(){
@@ -489,6 +553,9 @@ void Renderer::beginBottom(){
     if(recording()){mainScreenWidth_=320.f;command<BottomCommand>();return;}
     if(!renderThread)mainScreenWidth_=320.f;
     beginBottomNow();
+}
+void Renderer::markIntroWorldEnd(){
+    if(frameDualScreenIntro_&&recording())command<IntroWorldEndCommand>();
 }
 void Renderer::applyBloom(){
     if(recording()){command<ApplyBloomCommand>();return;}
@@ -509,14 +576,19 @@ void Renderer::drawWith(const Model& model,const C3D_Mtx& transform,bool backdro
     c.frame=animationFrame;c.additive=additiveColor;c.backdrop=backdrop;
 }
 void Renderer::drawAtScreen(const Model& model,const C3D_Mtx& transform,float x,float y,float brightness,float scaleX,float scaleY){
+    drawAtScreenWith(model,transform,x,y,brightness,scaleX,scaleY,nullptr,nullptr,0);
+}
+void Renderer::drawAtScreenWith(const Model& model,const C3D_Mtx& transform,float x,float y,float brightness,float scaleX,float scaleY,MaterialBinder material,const void* context,std::size_t contextSize){
     if(!recording()){
         if(!renderThread){execFrame_=animationFrame;execAdditive_=additiveColor;}
-        drawAtScreenNow(model,model.vertices,transform,x,y,brightness,scaleX,scaleY);
+        drawAtScreenNow(model,model.vertices,transform,x,y,brightness,scaleX,scaleY,material,const_cast<void*>(context));
         return;
     }
+    void* copied=nullptr;
+    if(context&&contextSize){copied=data(contextSize);std::memcpy(copied,context,contextSize);}
     auto& c=command<DrawAtScreenCommand>();
     c.model=&model;c.vertices=model.vertices;c.transform=transform;c.x=x;c.y=y;c.brightness=brightness;c.scaleX=scaleX;c.scaleY=scaleY;
-    c.frame=animationFrame;c.additive=additiveColor;
+    c.frame=animationFrame;c.additive=additiveColor;c.material=material;c.context=copied;
 }
 void Renderer::drawMenuIcon(const Model& model,const C3D_Mtx& transform,const UiQuad& quad){
     if(!recording()){
@@ -527,6 +599,22 @@ void Renderer::drawMenuIcon(const Model& model,const C3D_Mtx& transform,const Ui
     const UiQuad* q=copy(&quad,1);
     auto& c=command<MenuIconCommand>();
     c.model=&model;c.vertices=model.vertices;c.transform=transform;c.quad=q;c.frame=animationFrame;c.additive=additiveColor;
+}
+void Renderer::drawMenuModelLayer(const Model& model,const C3D_Mtx& transform){
+    if(!recording()){
+        if(!renderThread){execFrame_=animationFrame;execAdditive_=additiveColor;}
+        drawMenuModelLayerNow(model,model.vertices,transform);return;
+    }
+    auto& c=command<MenuModelLayerCommand>();
+    c.model=&model;c.vertices=model.vertices;c.transform=transform;c.frame=animationFrame;c.additive=additiveColor;
+}
+void Renderer::drawCoinHudModel(const Model& model,const C3D_Mtx& transform,bool firstColumn){
+    if(!recording()){
+        if(!renderThread){execFrame_=animationFrame;execAdditive_=additiveColor;}
+        drawCoinHudModelNow(model,model.vertices,transform,firstColumn);return;
+    }
+    auto& c=command<CoinHudModelCommand>();
+    c.model=&model;c.vertices=model.vertices;c.transform=transform;c.frame=animationFrame;c.additive=additiveColor;c.firstColumn=firstColumn;
 }
 void Renderer::drawCameraFacing(const Model& model,Vec3 anchor,float upOffset,float forwardOffset,float scale){
     // The view rotation is orthonormal: its transpose maps camera axes back
@@ -568,9 +656,9 @@ void Renderer::setOverrides(const SubmeshOverride* overrides,unsigned count){
     const SubmeshOverride* copied=copy(overrides,count);
     auto& c=command<OverridesCommand>();c.overrides=copied;c.count=copied?count:0;
 }
-void Renderer::setEnvironmentUv(const C3D_Mtx& transform,const float (&uv)[6],bool texture2){
-    if(!recording()){environmentUvNow(transform,uv,texture2);return;}
-    auto& c=command<EnvironmentUvCommand>();c.transform=transform;std::memcpy(c.uv,uv,sizeof c.uv);c.texture2=texture2;
+void Renderer::setEnvironmentUv(const C3D_Mtx& transform,const float (&uv)[6],bool texture2,float blend){
+    if(!recording()){environmentUvNow(transform,uv,texture2,blend);return;}
+    auto& c=command<EnvironmentUvCommand>();c.transform=transform;std::memcpy(c.uv,uv,sizeof c.uv);c.texture2=texture2;c.blend=blend;
 }
 void Renderer::setUv1Transform(const float (&uv)[6]){
     if(!recording()){uv1TransformNow(uv);return;}
@@ -583,6 +671,23 @@ void Renderer::setUvOffset(float u,float v){
 void Renderer::clearEnvironmentUv(){
     if(!recording()){clearEnvironmentUvNow();return;}
     command<ClearEnvironmentCommand>();
+}
+void Renderer::drawPlayerShadow(const ShadowCaster* casters,unsigned count,const Model* const* receivers,unsigned receiverCount,Vec3 origin,Vec3 lightDirection,float scale,const ShadowVolume* fallback,const ShadowReceiver* objects,unsigned objectCount,bool actor){
+    if(!count||(!receiverCount&&!objectCount)||!playerShadowTarget_){if(fallback)drawShadowVolumes(fallback,1,.5f);return;}
+    if(!recording()){playerShadowNow(casters,count,receivers,receiverCount,origin,lightDirection,scale,fallback,objects,objectCount,actor);return;}
+    auto* parts=copy(casters,count);
+    for(unsigned i=0;i<count;++i)if(parts[i].palette){
+        const unsigned stride=parts[i].stride;
+        auto* rows=static_cast<float*>(data(parts[i].bones*12*sizeof(float)));
+        for(unsigned b=0;b<parts[i].bones;++b)std::memcpy(rows+b*12,parts[i].palette+b*stride,12*sizeof(float));
+        parts[i].palette=rows;parts[i].stride=12;
+    }
+    auto& c=command<PlayerShadowCommand>();c.casters=parts;c.count=count;
+    c.receivers=copy(receivers,receiverCount);c.receiverCount=receiverCount;c.origin=origin;c.lightDirection=lightDirection;c.scale=scale;c.fallback=fallback?copy(fallback,1):nullptr;
+    auto* receiving=copy(objects,objectCount);
+    for(unsigned i=0;i<objectCount;++i)if(receiving[i].palette)
+        receiving[i].palette=copy(receiving[i].palette,receiving[i].bones*12);
+    c.objects=receiving;c.objectCount=objectCount;c.actor=actor;
 }
 void Renderer::drawShadowVolumes(const ShadowVolume* volumes,unsigned count,float darkness){
     if(!count)return;
@@ -615,6 +720,19 @@ void Renderer::drawEffects(RaceEffects& effects,const Texture* textures){
     buildEffectList(effects,mainView_,*recording_->effects);
     c.effects=&effects;c.list=recording_->effects.get();c.textures=textures;
 }
+void Renderer::drawSceneEffects(RaceEffects& effects,const Texture* textures,EffectLayerBuffer& buffer){
+    if(!effects.ready||!effects.liveParticles()||!buffer.vertices||!buffer.lookup.data||!effectProgramReady_)return;
+    updateEffectState(effects);
+    if(!recording()){
+        drawSceneEffectsImmediate(effects,textures,buffer);return;
+    }
+    // Each scene bank owns a list and GPU buffer. Reuse its allocations across
+    // frames; both LCDs replay the same list without advancing any particles.
+    const auto at=recording_->sceneEffectsUsed++;
+    if(at==recording_->sceneEffects.size())recording_->sceneEffects.push_back(std::make_unique<ef::DrawList>());
+    auto& list=*recording_->sceneEffects[at];buildEffectList(effects,mainView_,list);
+    auto& c=command<SceneEffectsCommand>();c.effects=&effects;c.list=&list;c.textures=textures;c.buffer=&buffer;
+}
 void Renderer::drawCinemaBars(float topHeight,float bottomHeight,float opacity){
     if(opacity<=0||(topHeight<=0&&bottomHeight<=0))return;
     if(!recording()){cinemaBarsNow(topHeight,bottomHeight,opacity);return;}
@@ -642,7 +760,7 @@ void Renderer::drawScreenFontSprite(const Texture& texture,float x,float y,float
     c.texture=&texture;c.x=x;c.y=y;c.width=width;c.height=height;c.u1=u1;c.v1=v1;c.alpha=alpha;
     c.gradientTop=gradientTop;c.gradientBottom=gradientBottom;c.color0=color0;c.color1=color1;
 }
-void Renderer::drawScreenMaterialQuad(const Texture* texture,const float corners[4][2],const float uv[4][2],const uint32_t vertexColors[4],uint32_t color0,uint32_t color1,float alpha){
+void Renderer::drawScreenMaterialQuad(const Texture* texture,const float corners[4][2],const float uv[4][2],const uint32_t vertexColors[4],uint32_t color0,uint32_t color1,float alpha,bool additive){
     if(alpha<=0)return;
     MaterialQuad quad;
     for(unsigned k=0;k<4;++k){
@@ -650,20 +768,20 @@ void Renderer::drawScreenMaterialQuad(const Texture* texture,const float corners
         const uint32_t rgba=vertexColors[k];
         quad.color[k]=(rgba&0xffffff00u)|uint32_t(std::lround(std::clamp(alpha,0.f,1.f)*float(rgba&0xff)));
     }
-    drawScreenMaterialQuads(texture,&quad,1,color0,color1);
+    drawScreenMaterialQuads(texture,&quad,1,color0,color1,-1,-1,additive);
 }
-void Renderer::drawScreenMaterialQuads(const Texture* texture,const MaterialQuad* quads,unsigned count,uint32_t color0,uint32_t color1,int wrapS,int wrapT){
+void Renderer::drawScreenMaterialQuads(const Texture* texture,const MaterialQuad* quads,unsigned count,uint32_t color0,uint32_t color1,int wrapS,int wrapT,bool additive){
     if((texture&&!texture->ready)||!count)return;
-    if(!recording()){materialQuadsNow(texture,quads,count,color0,color1,wrapS,wrapT);return;}
+    if(!recording()){materialQuadsNow(texture,quads,count,color0,color1,wrapS,wrapT,additive);return;}
     auto& c=command<MaterialQuadsCommand>();
-    c.texture=texture;c.quads=copy(quads,count);c.count=count;c.color0=color0;c.color1=color1;c.wrapS=wrapS;c.wrapT=wrapT;
+    c.texture=texture;c.quads=copy(quads,count);c.count=count;c.color0=color0;c.color1=color1;c.wrapS=wrapS;c.wrapT=wrapT;c.additive=additive;
 }
 void Renderer::drawScreenMaterialQuadsInPlace(const Texture* texture,const MaterialQuad* quads,unsigned count,uint32_t color0,uint32_t color1){
     if((texture&&!texture->ready)||!count||!quads)return;
     if(!recording()){materialQuadsNow(texture,quads,count,color0,color1,-1,-1);return;}
     // The caller keeps quads unchanged until this frame is drawn.
     auto& c=command<MaterialQuadsCommand>();
-    c.texture=texture;c.quads=quads;c.count=count;c.color0=color0;c.color1=color1;c.wrapS=-1;c.wrapT=-1;
+    c.texture=texture;c.quads=quads;c.count=count;c.color0=color0;c.color1=color1;c.wrapS=-1;c.wrapT=-1;c.additive=false;
 }
 void Renderer::drawScreenText(const char* text,float x,float y,float size,uint32_t rgba){
     if(!text||size<=0)return;
@@ -673,3 +791,8 @@ void Renderer::drawScreenText(const char* text,float x,float y,float size,uint32
     auto& c=command<TextCommand>();c.text=copied;c.x=x;c.y=y;c.size=size;c.rgba=rgba;
 }
 }
+
+namespace mkw { void Renderer::setShadowUnion(bool active){
+ if(!recording()){shadowUnionNow(active);return;}
+ command<ShadowUnionCommand>().active=active;
+} }

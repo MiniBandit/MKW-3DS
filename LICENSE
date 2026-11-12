@@ -2,10 +2,11 @@ MIT License
 
 Copyright (c) 2026 MiniBandit
 
-This license covers MiniBandit's changes and additions to this repository
-(everything after the commit "Import original mkw-3ds-cia-builder v0.1.0
-unchanged"). It does not cover the original port by dudewhat or the
-third-party components; see NOTICE.
+This inherited license covers MiniBandit's changes and additions to the
+upstream project. It does not cover dudewhat's original port, third-party
+components, Nintendo artwork or automatically establish terms for later Redux
+changes. This publication snapshot does not include the upstream Git history;
+see NOTICE for scope and outstanding provenance questions.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

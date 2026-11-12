@@ -1,0 +1,95 @@
+{
+  "version": 1,
+  "textures": [
+    {
+      "course": "beginner_course",
+      "resource": "MiiObj01",
+      "texture": "Mii_Faces_dummy",
+      "image": "default-faces-atlas.png"
+    },
+    {
+      "course": "beginner_course",
+      "resource": "MiiObj02",
+      "texture": "Mii_Faces_dummy",
+      "image": "default-faces-atlas.png"
+    },
+    {
+      "course": "beginner_course",
+      "resource": "MiiObj03",
+      "texture": "Mii_Faces_dummy",
+      "image": "default-faces-atlas.png"
+    },
+    {
+      "course": "shopping_course",
+      "resource": "CarA1",
+      "texture": "Mii_Faces_dummy",
+      "image": "default-car-atlas.png"
+    },
+    {
+      "course": "shopping_course",
+      "resource": "CarA2",
+      "texture": "Mii_Faces_dummy",
+      "image": "default-car-atlas.png"
+    },
+    {
+      "course": "shopping_course",
+      "resource": "CarA3",
+      "texture": "Mii_Faces_dummy",
+      "image": "default-car-atlas.png"
+    },
+    {
+      "course": "shopping_course",
+      "resource": "ShMiiObj01",
+      "texture": "Mii_Faces_dummy",
+      "image": "default-faces-atlas.png"
+    },
+    {
+      "course": "shopping_course",
+      "resource": "ShMiiObj02",
+      "texture": "Mii_Faces_dummy",
+      "image": "default-faces-atlas.png"
+    },
+    {
+      "course": "shopping_course",
+      "resource": "ShMiiObj03",
+      "texture": "Mii_Faces_dummy",
+      "image": "default-faces-atlas.png"
+    },
+    {
+      "course": "shopping_course",
+      "resource": "miiposter",
+      "texture": "Mii_Faces_dummy",
+      "image": "default-poster-atlas.png"
+    },
+    {
+      "course": "boardcross_course",
+      "resource": "dk_miiobj00",
+      "texture": "Mii_Faces_dummy",
+      "image": "default-faces-atlas.png"
+    },
+    {
+      "course": "senior_course",
+      "resource": "MiiObjD01",
+      "texture": "Mii_Faces_dummy",
+      "image": "default-faces-atlas.png"
+    },
+    {
+      "course": "senior_course",
+      "resource": "MiiObjD02",
+      "texture": "Mii_Faces_dummy",
+      "image": "default-faces-atlas.png"
+    },
+    {
+      "course": "senior_course",
+      "resource": "MiiObjD03",
+      "texture": "Mii_Faces_dummy",
+      "image": "default-faces-atlas.png"
+    },
+    {
+      "course": "ridgehighway_course",
+      "resource": "ridgemii00",
+      "texture": "Mii_Faces_dummy",
+      "image": "default-faces-atlas.png"
+    }
+  ]
+}

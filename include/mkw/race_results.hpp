@@ -52,7 +52,7 @@ public:
 
  void reset();
  // RaceHUD::BeforeControlUpdate: the local player has just finished.
- void finish();
+ void finish(bool timeTrial=false);
  // One 60 Hz tick; returns Event bits. EventFill asks for fill() at once.
  uint32_t step(const RaceFlowInput& in);
  // GPVSLeaderboardUpdate::FillRows: rows in finishing order.
@@ -66,6 +66,10 @@ public:
  float hudSlide()const;
  bool hudGone()const{return phase_>RaceFlowPhase::HudExit;}
  // Board rows currently shown (update order or totals order).
+ void setBattle(unsigned redWins,unsigned blueWins,unsigned target);
+ bool battle()const{return battle_;}
+ unsigned battleWins(RaceTeam team)const{return unsigned(team)<2?battleWins_[unsigned(team)]:0;}
+ unsigned battleTarget()const{return battleTarget_;}
  bool teams()const{return teams_;}
  RaceTeam humanTeam()const{return humanTeam_;}
  const RaceTeamScore& teamScore(RaceTeam team)const{return teamScores_[unsigned(team)<2?unsigned(team):0];}
@@ -92,6 +96,7 @@ public:
  bool menuVisible()const{return phase_>=RaceFlowPhase::MenuIn&&phase_<=RaceFlowPhase::Done;}
  // Black over the whole race screen while leaving (0 none, 1 opaque).
  float leaveFade()const{return phase_==RaceFlowPhase::Leaving?colorFaderOpacity(float(pageFrame_),false):phase_==RaceFlowPhase::Done?1.f:0.f;}
+ bool timeTrial()const{return timeTrial_;}
  bool finalRace()const{return final_;}
  unsigned buttonCount()const{return final_?1u:2u;}
  unsigned cursor()const{return cursor_;}
@@ -110,12 +115,17 @@ public:
 private:
  void enter(RaceFlowPhase phase){phase_=phase;pageFrame_=0;}
  void sortTotals();
+ void sortBattleRows(bool totals);
+ unsigned teamRowTarget(unsigned row)const;
+ void stepTeamCounts();
  RaceFlowPhase phase_=RaceFlowPhase::Racing;
  int finishFrame_=-1;unsigned pageFrame_=0,timeout_=0,count_=0,cursor_=0;int chosen_=-1;bool final_=false,filled_=false;
  bool pointsChanged_=false;
+ bool battle_=false;std::array<unsigned,2> battleWins_{};unsigned battleTarget_=2;
  bool teams_=false;RaceTeam humanTeam_=RaceTeam::None;
  std::array<RaceTeamScore,2> teamScores_{};
  std::array<float,2> teamDisplayed_{};std::array<float,12> teamRowDisplayed_{};
+ bool timeTrial_=false;
  std::array<RaceResultEntry,12> rows_{};
  std::array<RaceResultCount,12> counts_{};
 };

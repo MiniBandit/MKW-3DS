@@ -14,13 +14,10 @@ inline float bloomTapIntensity(const CourseBloom& b,unsigned band,unsigned stage
  const float value=b.intensity[band]*(stage?.5f:1.f);
  return float(unsigned(std::clamp(value,0.f,1.f)*255.f))/255.f;
 }
-// LCD adaptation requested after hardware testing: reduce the bloom veil
-// without changing scene lighting, authored blur radii or near texture detail.
-// Remove only part of a yellow tint's excess over blue; do not brighten blue
-// to neutralize it (that would wash the image out further). Red-only and cool
-// course tints keep their hue. Original PBLM data remains unchanged.
+// Restore authored PBLM tint and intensity; the previous LCD attenuation
+// removed too much of the haze requested in the latest hardware feedback.
 inline uint32_t bloomDisplayTint(const CourseBloom& b){
- constexpr float gain=.85f,warmReduction=.15f;
+ constexpr float gain=1.f,warmReduction=0.f;
  float rgb[3]={float(b.tint>>24),float((b.tint>>16)&255),float((b.tint>>8)&255)};
  if(rgb[0]>rgb[2]&&rgb[1]>rgb[2])
   for(unsigned i=0;i<2;++i)rgb[i]-=(rgb[i]-rgb[2])*warmReduction;
@@ -35,7 +32,7 @@ inline constexpr unsigned BloomFarWidth=64,BloomFarHeight=32;
 inline float bloomTapRadius(float strength,unsigned band,unsigned sourceExtent,unsigned originalExtent){
  // Restore a broader source-style halo on the small LCD, without adding
  // blur passes, changing light sets or lifting the unblurred scene itself.
- return strength*(band?2.f:1.f)*float(sourceExtent)*4.f/float(originalExtent);
+ return 1.3f*strength*(band?2.f:1.f)*float(sourceExtent)*4.f/float(originalExtent);
 }
 // PostEffectBlur's uniformly spaced ring, with angle zero at the first tap.
 inline constexpr float BloomRing[16][2]={
@@ -43,6 +40,6 @@ inline constexpr float BloomRing[16][2]={
  {1,0},{.9238795325f,-.3826834324f},{.7071067812f,-.7071067812f},{.3826834324f,-.9238795325f},
  {0,-1},{-.3826834324f,-.9238795325f},{-.7071067812f,-.7071067812f},{-.9238795325f,-.3826834324f},
  {-1,0},{-.9238795325f,.3826834324f},{-.7071067812f,.7071067812f},{-.3826834324f,.9238795325f}};
-inline constexpr unsigned BloomFullQuads=4+1+8+1+8+16+2;
+inline constexpr unsigned BloomFullQuads=4+1+4+1+4+8+2;
 inline constexpr unsigned BloomReducedQuads=4+1+4+1+4+8+2;
 }

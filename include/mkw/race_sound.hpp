@@ -17,13 +17,14 @@ class RaceSound {
 public:
  bool prepareScene();
  bool resourcesReady() const;
- struct Racer { std::uint8_t character = 0, vehicle = 0; bool local = false; };
+ struct Racer { std::uint8_t character = 0, vehicle = 0; bool local = false; std::uint8_t miiVoice = 0; };
  struct Setup {
   unsigned course = 0;        // retail course id (Kinoko::Course)
   unsigned mode = 1;          // RaceConfig game mode: 0 GP, 1 VS, 2 TT, 3 battle
   unsigned lapCount = 3;
   unsigned engineClass = 2;   // 0 50cc, 1 100cc, 2 150cc
   bool mirror = false;
+  bool coinBattle = false;
   bool preview = false;       // the course preview plays first (retail intro section)
   unsigned racers = 0;
   std::uint32_t graphicsReserve = 2048u * 1024;
@@ -33,6 +34,8 @@ public:
   unsigned stage = 0;         // Kinoko RaceManager stage (0 intro .. 4 all finished)
   unsigned timer = 0;         // RaceManager timer: countdown frames, then race frames
   int currentLap = 0;         // local player's RaceManager currentLap
+  uint8_t battleResultKind=3; //0 MVP,1 winning teammate,2 loss,3 draw.
+  uint8_t battlePointCues=0; // TotalPoint red/blue up/down bits, original231..234.
   bool resultPointsChanged = false; // CtrlRaceResult / Team displayed integer changed
   int resultSlideSound = -1; // original result control entry/exit cue
   bool finished = false;      // local player finished the race
@@ -102,7 +105,7 @@ private:
  int countdown_ = 0;           // RaceHUD countdown index (0..4)
  int maxLap_ = 1;              // Raceinfo maxLap of the local player
  bool finished_ = false;       // latched until begin(): post-finish audio is music only
- unsigned rank_ = 1;
+ unsigned rank_ = 1,battleResult_=3;
  int alteration_ = 3;          // ItemAlterationMgr state: 0 Mega, 1 Star, 2 shrunk, 3 none
  bool wasMega_ = false, wasStar_ = false;
  float wobble_ = 0;

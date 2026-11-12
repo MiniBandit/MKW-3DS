@@ -1,5 +1,6 @@
 #pragma once
 #include <mkw/math.hpp>
+#include <mkw/intro_clearance.hpp>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -36,6 +37,8 @@ public:
  float fov()const{return appliedFov_;}
  // QA: total authored length in frames, and the shot index being shown.
  unsigned frames()const;
+ unsigned frame()const{return frame_;}
+ std::vector<IntroPathFrame> previewFrames()const;
  int shot()const{return current_;}
 private:
  struct Camera {
@@ -45,6 +48,7 @@ private:
  void begin(int index);
  std::vector<Camera> cameras_;
  int opening_=-1,current_=-1;unsigned shots_=0;
+ unsigned frame_=0;
  bool active_=false;
  float elapsed_=0,fov_=60,appliedFov_=60,viewDistance_=0;
  Vec3 eye_,target_,viewOffset_;

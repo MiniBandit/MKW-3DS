@@ -3,7 +3,7 @@
 reverse board and goal flag, their CHR0 banks, joint tracks for the retail
 attachments (CON_ROD, ef_head on the body; ef_hook on the rod; USA 0x8071e0d4),
 the signal CLR0 lamp colours (TEV C2) and the lap board PAT0 digit textures.
-Output stays in build/vfx (overlaid by tools/package_sd.py).
+Output stays in build/vfx (overlaid by tools/resource_manifest.py).
 """
 import json, os, shutil, subprocess, sys
 from pathlib import Path
@@ -38,6 +38,12 @@ def export(source, model, name):
 
 def static(source, model, name, preserve=False):
     folder = export(source, model, name)
+    if model == 'jg_shadow':
+        path = folder / 'model.json'
+        data = json.loads(path.read_text())
+        assert all(s['texture'] == -1 and s['secondary'] == -1 for m in data['models'] for s in m['shapes'])
+        data['textures'] = []
+        path.write_text(json.dumps(data))
     parts = cook(folder, OUT, name, preserve_vertices=preserve)
     if len(parts) != 1:
         raise ValueError('Lakitu part needs partitioning: ' + name)
@@ -74,6 +80,7 @@ def main():
     rod = animated(COMMON / 'rod.brres', 'rod', 'lakitu_rod', 'wait')
     flag = animated(COMMON / 'jugem_flag.brres', 'jg_flag', 'lakitu_flag', 'jg_wy')
     hair = static(COMMON / 'jugemu.brres', 'jugemu_hair', 'lakitu_hair')
+    static(COMMON / 'jugemu.brres', 'jg_shadow', 'lakitu_shadow')
     signal = static(COMMON / 'jugemu_signal.brres', 'jugemu_signal', 'lakitu_signal', preserve=True)
     lap = static(COMMON / 'jugemu_lap.brres', 'jugemu_lap', 'lakitu_lap', preserve=True)
     lapf = static(COMMON / 'jugemu_lapf.brres', 'jugemu_lapf', 'lakitu_lapf')

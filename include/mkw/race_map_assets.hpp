@@ -44,23 +44,24 @@ inline constexpr std::array<RaceMapCourse,32> RaceMapCourses{{
 // The bottom-screen UI atlas (RGBA8, VRAM): pixel rectangles x,y,w,h.
 struct RaceMapRect {uint16_t x,y,w,h;};
 inline constexpr const char* RaceMapAtlasTexture="textures/race_bottom_ui.t3x";
-inline constexpr uint16_t RaceMapAtlasSize[2]={256,256};
+inline constexpr uint16_t RaceMapAtlasSize[2]={256,512};
 // st_*_32x32 by retail character id (Kinoko Character 0..23).
 inline constexpr std::array<RaceMapRect,24> RaceMapFaces{{{33,1,28,28},{63,1,28,28},{151,35,28,28},{61,65,28,28},{91,65,28,28},{121,65,28,28},{151,65,28,28},{181,65,28,28},{211,65,28,28},{1,95,28,28},{93,1,28,28},{123,1,28,28},{153,1,28,28},{183,1,28,28},{213,1,28,28},{1,35,28,28},{31,35,28,28},{61,35,28,28},{91,35,28,28},{121,35,28,28},{181,35,28,28},{211,35,28,28},{1,65,28,28},{31,65,28,28}}};
+inline constexpr std::array<RaceMapRect,24> RaceMapFaceShadows{{{31,95,28,28},{61,95,28,28},{151,125,28,28},{61,155,28,28},{91,155,28,28},{121,155,28,28},{151,155,28,28},{181,155,28,28},{211,155,28,28},{1,185,28,28},{91,95,28,28},{121,95,28,28},{151,95,28,28},{181,95,28,28},{211,95,28,28},{1,125,28,28},{31,125,28,28},{61,125,28,28},{91,125,28,28},{121,125,28,28},{181,125,28,28},{211,125,28,28},{1,155,28,28},{31,155,28,28}}};
 // Item window icons (tools/cook_race_items.py ICONS) by ItemKind; 19 = two Triple Mushrooms left (kinoko_2).
-inline constexpr std::array<RaceMapRect,21> RaceMapItems{{{227,125,20,20},{1,151,20,20},{1,173,20,20},{45,173,20,20},{67,173,20,20},{89,173,20,20},{111,173,20,20},{133,173,20,20},{155,173,20,20},{177,173,20,20},{23,151,20,20},{45,151,20,20},{67,151,20,20},{89,151,20,20},{111,151,20,20},{133,151,20,20},{155,151,20,20},{177,151,20,20},{199,151,20,20},{221,151,20,20},{23,173,20,20}}};
-inline constexpr std::array<RaceMapRect,10> RaceMapDigits{{{31,95,24,24},{57,95,24,24},{83,95,24,24},{109,95,24,24},{135,95,24,24},{161,95,24,24},{187,95,24,24},{213,95,24,24},{1,125,24,24},{27,125,24,24}}};
-inline constexpr RaceMapRect RaceMapColon{53,125,24,24},RaceMapDot{79,125,24,24};
-inline constexpr RaceMapRect RaceMapTimeLabel{105,125,120,20};
+inline constexpr std::array<RaceMapRect,21> RaceMapItems{{{227,215,20,20},{1,241,20,20},{1,263,20,20},{45,263,20,20},{67,263,20,20},{89,263,20,20},{111,263,20,20},{133,263,20,20},{155,263,20,20},{177,263,20,20},{23,241,20,20},{45,241,20,20},{67,241,20,20},{89,241,20,20},{111,241,20,20},{133,241,20,20},{155,241,20,20},{177,241,20,20},{199,241,20,20},{221,241,20,20},{23,263,20,20}}};
+inline constexpr std::array<RaceMapRect,10> RaceMapDigits{{{31,185,24,24},{57,185,24,24},{83,185,24,24},{109,185,24,24},{135,185,24,24},{161,185,24,24},{187,185,24,24},{213,185,24,24},{1,215,24,24},{27,215,24,24}}};
+inline constexpr RaceMapRect RaceMapColon{53,215,24,24},RaceMapDot{79,215,24,24};
+inline constexpr RaceMapRect RaceMapTimeLabel{105,215,120,20};
 inline constexpr RaceMapRect RaceMapSearchlight{1,1,30,32};
-inline constexpr RaceMapRect RaceMapFakeBox{161,195,16,16};
-inline constexpr RaceMapRect RaceMapWhite{109,234,4,4};
-inline constexpr RaceMapRect RaceMapRowPlayer{81,195,78,19},RaceMapRowOther{1,195,78,19};
+inline constexpr RaceMapRect RaceMapFakeBox{161,285,16,16};
+inline constexpr RaceMapRect RaceMapWhite{109,324,4,4};
+inline constexpr RaceMapRect RaceMapRowPlayer{81,285,78,19},RaceMapRowOther{1,285,78,19};
 // 1st..12th (Race.bmg 0x515..0x520), result board font.
-inline constexpr std::array<RaceMapRect,12> RaceMapOrdinals{{{89,234,18,11},{160,216,22,11},{184,216,20,11},{206,216,20,11},{228,216,20,11},{1,234,20,11},{23,234,20,11},{45,234,20,11},{67,234,20,11},{131,216,27,11},{73,216,27,11},{102,216,27,11}}};
+inline constexpr std::array<RaceMapRect,12> RaceMapOrdinals{{{89,324,18,11},{160,306,22,11},{184,306,20,11},{206,306,20,11},{228,306,20,11},{1,324,20,11},{23,324,20,11},{45,324,20,11},{67,324,20,11},{131,306,27,11},{73,306,27,11},{102,306,27,11}}};
 // Mario Kart 7 bottom-screen map markers (/UI/race.szs).
 enum class Mk7Marker : uint8_t {Banana,Bobomb,GreenShell,RedShell,SpinyShell,BlastRed,BlastBlue,StartLine,Count};
-inline constexpr std::array<RaceMapRect,8> RaceMapMk7{{{179,195,16,16},{197,195,16,16},{1,216,16,16},{19,216,16,16},{37,216,16,16},{233,195,16,16},{215,195,16,16},{55,216,16,16}}};
+inline constexpr std::array<RaceMapRect,8> RaceMapMk7{{{179,285,16,16},{197,285,16,16},{1,306,16,16},{19,306,16,16},{37,306,16,16},{233,285,16,16},{215,285,16,16},{55,306,16,16}}};
 // CtrlRaceTime (Race_U game_image_number.brlyt): pane centre (layout units,
 // y up) relative to race_null, and drawn size. Digits: race_null and time_01 the
 // minutes, time_02..03 the seconds, time_04..06 the milliseconds (CtrlRaceTime_refresh

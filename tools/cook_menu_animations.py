@@ -189,6 +189,10 @@ def main():
         raise ValueError('Page timing requires the audited original RMCU executable')
     sources[rel.relative_to(ROOT).as_posix()] = EXPECTED_HASH
     controller_paths = [path for archive in ['Title', 'MenuSingle'] for path in sorted((UI / archive).rglob('*.brctr'))]
+    controller_paths += [UI / 'MenuOther' / part / 'ctrl' / (name + '.brctr') for part, name in [('button', 'LicenseManagementButton'), ('control', 'LicenseManagement'), ('control','Record'), ('button','NextRecordButton')]]
+    controller_paths += [UI / 'Channel/button/ctrl/OptionTopButton.brctr']
+    controller_paths += [UI / 'Present/common/ctrl/NextButton.brctr']
+    controller_paths += sorted((UI / 'Present/control/ctrl').glob('*.brctr'))
     controller_paths += [ROOT / 'assets/race-ui/Race/button/ctrl' / (name + '.brctr')
                          for name in ['PauseMenuVS', 'PauseMenuGrandPrix', 'PauseMenuTimeAttack', 'PauseMenuBT']]
     for path in controller_paths:

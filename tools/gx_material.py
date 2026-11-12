@@ -123,6 +123,9 @@ def material_state(shape):
     if rop['depthTest']: flags |= 1<<23
     if rop['depthWrite']: flags |= 1<<24
     reflection = shape.get('reflection') or {}
+    if reflection.get('mode') == 25:
+        # Evaluate the original fountain's clamped intermediate alpha on PICA.
+        return flags, 1., True, None, None, extended
     stages = material['gxMaterial']['tevStages']
     if reflection.get('mode') == 18 and len(stages) == 2 and \
             [stages[0]['alphaIn'+c] for c in 'ABCD'] == [4,7,7,7] and \
@@ -165,6 +168,10 @@ def material_state(shape):
         if expression is None or len(expression)>1 or sum(expression.values())*alpha_scale>1:
             return flags, 1., True, 'Unsupported original GX alpha equation', None, extended
         expression={factors:weight*alpha_scale for factors,weight in expression.items()}
+    if reflection.get('mode') in (10,30) and expression and set(expression)=={('p','v'),('q','v')} and abs(sum(expression.values())-1)<1e-6:
+        # Background trophy wood/balloon: mixed texture opacity multiplied by
+        # the independent raster alpha. Preserve that last multiply on PICA.
+        return flags|(5<<20), 1., True, limitation, round(expression[('p','v')]*255), extended
     if expression and set(expression)=={('p',),('q',)} and abs(sum(expression.values())-1)<1e-6:
         # Colour mode 2 (without the constant lerp) weights the secondary texture
         # by the constant's alpha, so it cannot also carry the alpha mix.

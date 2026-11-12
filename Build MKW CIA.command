@@ -1,5 +1,6 @@
 #!/bin/bash
 # macOS: double-click, then drag your Mario Kart Wii (USA) ISO or WBFS into the window.
+# Linux: run  bash "Build MKW CIA.command"  and type or paste the path.
 # Works from the top of the builder folder or from tools/release.
 set -o pipefail
 cd "$(dirname "$0")" || exit 1
@@ -25,7 +26,7 @@ disc="${disc%\"}";disc="${disc#\"}";disc="${disc%\'}";disc="${disc#\'}"
 # (a marker file alone could say "installed" after a failed or partial install).
 if ! .venv/bin/python -c 'import numpy, PIL, Crypto' 2>/dev/null; then
     .venv/bin/python -m pip install -r requirements.txt || exit 1
-    .venv/bin/python -c 'import numpy, PIL, Crypto' 2>/dev/null || { echo "The Python packages did not install into .venv. Remove the .venv folder and run this again."; exit 1; }
+    .venv/bin/python -c 'import numpy, PIL, Crypto' || { echo "The Python packages above did not load. Remove the .venv folder and run this again. If it happens again, share this message in an issue."; exit 1; }
 fi
 PYTHONUNBUFFERED=1 .venv/bin/python tools/release/build_cia.py "$disc" 2>&1 | tee build-cia-log.txt || { status=$?; echo "Build failed. See build-cia-log.txt for details."; exit "$status"; }
 echo "Log: $(pwd)/build-cia-log.txt"

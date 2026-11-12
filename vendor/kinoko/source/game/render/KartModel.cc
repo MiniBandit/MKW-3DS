@@ -1,0 +1,187 @@
+#include "KartModel.hh"
+
+#include "game/kart/KartBody.hh"
+#include "game/kart/KartMove.hh"
+#include "game/kart/KartParam.hh"
+#include "game/kart/KartState.hh"
+
+#include "game/system/RaceConfig.hh"
+
+#include <egg/math/Math.hh>
+
+namespace Kinoko::Render {
+
+KartModel::KartModel() {
+    m_somethingLeft = false;
+    m_somethingRight = false;
+    _58 = 0.0f;
+    _54 = 1.0f;
+    _5c = 0.0f;
+    _64 = 0.0f;
+    _2e8 = 0.0f;
+}
+
+KartModel::~KartModel() = default;
+
+/// @addr{0x807CD32C}
+void KartModel::vf_1c() {
+    const auto &status = KartObjectProxy::status();
+
+    if (status.onBit(Kart::eStatus::Burnout)) {
+        _54 = 1.0f;
+
+        f32 pitch = move()->burnout().pitch();
+        f32 fVar2 = pitch + 75.0f * (pitch - _2e8);
+        f32 fVar4 = std::min(0.2f, 0.04f * EGG::Mathf::abs(fVar2));
+        fVar4 = fVar2 > 0.0f ? fVar4 : -fVar4;
+
+        _2e8 = pitch;
+        _58 += fVar4;
+    } else {
+        _2e8 = 0.0f;
+        _58 *= 0.9f;
+    }
+
+    bool frozenInIce =
+            System::RaceConfig::Instance()->raceScenario().course == Course::N64_Sherbet_Land &&
+            status.onBit(Kart::eStatus::InRespawn, Kart::eStatus::AfterRespawn);
+    f32 xStick = frozenInIce ? 0.0f : inputs()->currentState().stick.x;
+    bool isInCannon = status.onBit(Kart::eStatus::InCannon);
+    f32 fVar2 = isInCannon ? 0.02f : 0.1f;
+
+    f32 local_f31 = _58;
+    if (xStick <= 0.2f) {
+        if (xStick < -0.2f) {
+            _58 -= fVar2;
+        }
+    } else {
+        _58 += fVar2;
+    }
+
+    xStick = EGG::Mathf::abs(xStick);
+
+    if (isInCannon) {
+        xStick *= 0.8f;
+        fVar2 = 0.05f;
+    }
+
+    _54 += fVar2 * (xStick - _54);
+
+    if (local_f31 < -_54 || _54 < local_f31) {
+        if (-_54 <= _58) {
+            if (_54 < _58) {
+                _58 -= 0.1f;
+            }
+        } else {
+            _58 += 0.1f;
+        }
+    } else if (-_54 <= _58) {
+        _58 = std::min(_54, _58);
+    } else {
+        _58 = -_54;
+    }
+
+    f32 dVar13 = _58;
+
+    if (isBike()) {
+        if (state()->isDrifting()) {
+            dVar13 = m_isInsideDrift ? 5.0f : 20.0f;
+        } else {
+            dVar13 = 15.0f;
+        }
+    } else {
+        dVar13 = 15.0f;
+    }
+
+    f32 dVar12 = 0.0f;
+    _64 = dVar13 * 0.1f;
+
+    if (isBike()) {
+        dVar12 = -_58 * dVar13;
+
+        if (m_somethingLeft) {
+            dVar12 += m_isInsideDrift ? 5.0f : 10.0f;
+        } else if (m_somethingRight) {
+            dVar12 -= m_isInsideDrift ? 5.0f : 10.0f;
+        }
+    } else {
+        if (!m_somethingLeft && m_somethingRight) {
+            dVar12 -= 5.0f;
+        } else {
+            dVar12 += 5.0f;
+        }
+    }
+
+    if (dVar12 <= _5c) {
+        _5c -= _64;
+        _5c = std::max(_5c, dVar12);
+    } else {
+        _5c += _64;
+        _5c = std::min(_5c, dVar12);
+    }
+
+    body()->setAngle(_5c);
+}
+
+/// @addr{0x807C8758}
+void KartModel::init() {
+    FUN_807C7828(param()->playerIdx(), isBike());
+
+    _2e8 = 0.0f;
+}
+
+/// @addr{0x807CB360}
+void KartModel::calc() {
+    FUN_807CB530();
+}
+
+/// @addr{0x807CB198}
+/// @rename
+void KartModel::FUN_807CB198() {
+    m_somethingRight = false;
+    m_somethingLeft = false;
+    auto &status = KartObjectProxy::status();
+
+    bool turnInput = status.onBit(Kart::eStatus::StickLeft, Kart::eStatus::StickRight);
+    if (state()->isDrifting() || (status.onBit(Kart::eStatus::ChargingSSMT) && turnInput)) {
+        if (move()->hopStickX() == 1) {
+            m_somethingLeft = true;
+        } else {
+            if (move()->hopStickX() == -1) {
+                m_somethingRight = true;
+            } else if (status.offBit(Kart::eStatus::StickLeft)) {
+                m_somethingRight = true;
+            } else {
+                m_somethingLeft = true;
+            }
+        }
+    }
+}
+
+/// @addr{0x807CB530}
+/// @rename
+void KartModel::FUN_807CB530() {
+    FUN_807CB198();
+    vf_1c();
+}
+
+/// @addr{0x807C7828}
+/// @rename
+void KartModel::FUN_807C7828(u8 /*playerIdx*/, bool /*isBike*/) {
+    m_isInsideDrift =
+            param()->stats().driftType == Kart::KartParam::Stats::DriftType::Inside_Drift_Bike;
+}
+
+/// @addr{0x807C7364}
+KartModelKart::KartModelKart() = default;
+
+/// @addr{0x807CDD08}
+KartModelKart::~KartModelKart() = default;
+
+/// @addr{0x807CDCCC}
+KartModelBike::KartModelBike() = default;
+
+/// @addr{0x807D3F58}
+KartModelBike::~KartModelBike() = default;
+
+} // namespace Kinoko::Render

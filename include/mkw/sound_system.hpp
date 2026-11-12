@@ -16,7 +16,7 @@ namespace snd { class Engine; }
 struct SoundCommand {
  enum Type : std::uint8_t {
   Start, Hold, Stop, Pause, Volume, Pitch, Pan, SeqVariable, GlobalVariable, TrackVolume, StreamTrackVolume,
-  PlayerVolume, StopPlayer, PausePlayer, MasterVolume, Ambient, StopAll, Layer, Prepare, StartPrepared, MoveSlot
+  PlayerVolume, StopPlayer, PausePlayer, MasterVolume, Ambient, StopAll, Layer, Prepare, StartPrepared, MoveSlot, StartMusic
  };
  Type type = Start;
  std::uint8_t pad = 0;
@@ -77,12 +77,18 @@ public:
  void post(const SoundCommand& command);
  // Convenience wrappers.
  void play(std::uint32_t id, std::uint16_t slot = 0) { SoundCommand c; c.type = SoundCommand::Start; c.id = id; c.slot = slot; post(c); }
+ // Replace the music player atomically on the audio thread, including
+ // instances no longer owned by a game-facing handle.
+ void playMusic(std::uint32_t id,std::uint16_t slot) { SoundCommand c; c.type=SoundCommand::StartMusic; c.id=id; c.slot=slot; post(c); }
  void hold(std::uint32_t id, std::uint16_t slot) { SoundCommand c; c.type = SoundCommand::Hold; c.id = id; c.slot = slot; post(c); }
  void stopSlot(std::uint16_t slot, int frames) { SoundCommand c; c.type = SoundCommand::Stop; c.slot = slot; c.frames = frames; post(c); }
  // Slots below 32: whether the slot's sound (started, prepared or held) is
  // still attached, counting commands the audio thread has not run yet.
  static constexpr int TrackedSlots = 32;
  bool slotAttached(std::uint16_t slot) const;
+ // A short pulse from actual warning-note commits, independent of HUD timing.
+ bool warningLedPulse() const;
+ std::uint32_t takeLedCues();
 
  // Audio-thread layer (race/menu sound logic ported from MKW's Audio::*),
  // fed per game frame; nullptr removes it. Ownership stays with the caller.

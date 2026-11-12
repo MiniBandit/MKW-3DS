@@ -15,7 +15,16 @@ def root():
             return Path(f'{drive[1]}:/{drive[2]}')
         if env and not env.startswith('/'):
             return Path(env)
-        return Path(os.environ.get('DEVKITPRO_WIN', 'C:/devkitPro'))
+        chosen = os.environ.get('DEVKITPRO_WIN')
+        if chosen:
+            return Path(chosen)
+        # The installer lets you pick the drive and folder name (#65).
+        for drive in 'CDEFGHIJ':
+            for name in ('devkitPro', 'devkitpro'):
+                found = Path(f'{drive}:/{name}')
+                if (found / 'devkitARM').is_dir():
+                    return found
+        return Path('C:/devkitPro')
     return Path(env or '/opt/devkitpro')
 
 

@@ -2,6 +2,7 @@
 #include <cstdint>
 #include <memory>
 #include <mkw/math.hpp>
+#include <mkw/renderer.hpp>
 namespace Kinoko::Kart { class KartObject; }
 namespace mkw {
 class Renderer;
@@ -36,6 +37,8 @@ public:
     void reset();
     void step(const LakituInput&);
     void draw(Renderer&);
+    bool shadowVisible()const;
+    void drawShadow(Renderer&,const Model* const*,unsigned,Vec3,bool,const Renderer::ShadowReceiver*,unsigned);
     // Audio::ObjectActor on Lakitu::Player (+0x214): the sound held this tick
     // (UpdateRespawn 80720314 SE_JUGEM_RESCUE, UpdateBackwards 80720abc
     // SE_JUGEM_REVERSE; 0 for none), and where Lakitu is.

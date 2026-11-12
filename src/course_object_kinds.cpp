@@ -16,10 +16,16 @@
 #include <game/field/obj/ObjectCrab.hh>
 #include <game/field/obj/ObjectParasolR.hh>
 #include <game/field/obj/ObjectDossun.hh>
+#include <game/field/obj/ObjectVenice.hh>
+#include <game/field/obj/ObjectVolcanoPiece.hh>
+#include <game/field/obj/ObjectBlockStatue.hh>
+#include <game/field/obj/ObjectQuicksand.hh>
+#include <game/field/obj/ObjectTwanwan.hh>
 #include <game/field/obj/ObjectFireRing.hh>
 #include <game/field/obj/ObjectFirebar.hh>
 #include <game/field/obj/ObjectFlamePole.hh>
 #include <game/field/obj/ObjectFlamePoleFoot.hh>
+#include <game/field/obj/ObjectFlamePoleV.hh>
 #include <game/field/obj/ObjectHanachan.hh>
 #include <game/field/obj/ObjectDokan.hh>
 #include <game/field/obj/ObjectItemboxLine.hh>
@@ -37,6 +43,7 @@
 #include <game/field/obj/ObjectSanbo.hh>
 #include <game/field/obj/ObjectCannon.hh>
 #include <game/field/obj/ObjectCarB.hh>
+#include <game/field/obj/ObjectObakeBlock.hh>
 #include <game/field/obj/ObjectBGTeresa.hh>
 #include <game/field/obj/ObjectTeresa.hh>
 #include <game/field/obj/ObjectTruckWagon.hh>
@@ -106,7 +113,46 @@ void drawInseki(ObjectDraw& d,Visual& v){
     d.submit(v.main.model,matrix,loopAt(v.main,float(d.tick)*v.rate+v.phase));
     v.drawn=matrix;v.drawnValid=true;
 }
+// The four original Venice layers share the five-stage water lifecycle;
+// original main wave, dark(-260), sand(+10), and crest sheet retain SRT0.
+void drawVeniceWater(ObjectDraw& d,Visual& v){
+    const auto& water=*static_cast<const K::Field::ObjectVeniceWater*>(v.object);
+    const auto time=K::System::RaceManager::Instance()->timer();
+    auto m=liveMatrix(water);d.submit(v.main.model,m,animAt(v.main,float(d.tick)));
+    for(unsigned i=0;i<3;++i)if(v.extra[i].model){
+        m.r[1].w=water.layerHeight(i+1,time);d.submit(v.extra[i].model,m,animAt(v.extra[i],float(d.tick)));
+    }
+    v.drawn=m;v.drawnValid=true;
+}
+void drawVeniceBridge(ObjectDraw& d,Visual& v){
+    const auto& bridge=*static_cast<const K::Field::ObjectVeniceBridge*>(v.object);
+    const auto m=liveMatrix(bridge);d.submit(v.main.model,m,animAt(v.main,bridge.animationFrame()));
+    if(v.shadow.model)d.shadow(v.shadow.model,m);
+    v.drawn=m;v.drawnValid=true;
+}
+void drawBattleChomp(ObjectDraw& d,Visual& v){
+    const auto m=liveMatrix(*v.object);d.submit(v.main.model,m,{});
+    if(v.shadow.model)d.shadow(v.shadow.model,m);
+    v.drawn=m;v.drawnValid=true;
+}
+void drawObakeBlock(ObjectDraw& d,Visual& v){
+    const auto& block=*static_cast<const K::Field::ObjectObakeBlock*>(v.object);
+    using State=K::Field::ObjectObakeBlock::FallState;
+    if(block.fallState()==State::FinishedFalling)return;
+    C3D_Mtx m=v.placement;
+    if(block.fallState()==State::Falling){
+        // Manager updates position/rotation, but blocks are not in calcModel's
+        // ordinary list. Build from the same live state collision reads.
+        K::EGG::Matrix34f pose;pose.makeRT(block.rot(),block.pos());
+        m=objectMatrix(pose,block.scale());
+    }
+    d.submit(v.main.model,m,loopAt(v.main,float(d.tick)));
+}
+void drawBattleDesert(ObjectDraw& d,Visual& v);
 void drawGeneric(ObjectDraw& d,Visual& v){
+    if(v.object&&K::Field::ObjectBlockStatue::isStatue(v.geo->id())&&d.course==33&&
+       !static_cast<const K::Field::ObjectBlockStatue*>(v.object)->shown())return;
+    if(v.object&&unsigned(v.object->id())==0x20d&&!static_cast<const K::Field::ObjectVolcanoPiece*>(v.object)->shown())return;
     if(v.object&&unsigned(v.object->id())==0x176&&!static_cast<const K::Field::ObjectKarehayama*>(v.object)->shown())return;
     if(v.object&&(unsigned(v.object->id())==0x14c||unsigned(v.object->id())==0x2c0)&&
         !static_cast<const K::Field::ObjectChimney*>(v.object)->modelVisible())return;
@@ -114,6 +160,8 @@ void drawGeneric(ObjectDraw& d,Visual& v){
         !static_cast<const K::Field::ObjectWoodbox*>(v.object)->shown())return;
     if(v.object&&v.object->id()==ObjectId::DKRockGC&&
         !static_cast<const K::Field::ObjectRock*>(v.object)->visible())return;
+    if(v.object&&(v.object->id()==ObjectId::FlamePoleV||v.object->id()==ObjectId::FlamePoleVBig)&&
+        !static_cast<const K::Field::ObjectFlamePoleV*>(v.object)->modelVisible())return;
     const C3D_Mtx m=v.kinetic&&v.object?liveMatrix(*v.object):v.placement;
     const float frame=float(d.tick)*v.rate+v.phase;
     const bool far=v.low.model&&length(position(m)-d.camera)>renderQuality().objectLowDistance;
@@ -133,6 +181,8 @@ void drawGeneric(ObjectDraw& d,Visual& v){
 // Retail statues attach an additional RFL model at face_1. The 3DS path
 // uses an offline portrait instead; no head assembly or capture during a race.
 void drawMiiStatue(ObjectDraw& d,Visual& v){
+    if(v.object&&d.course==33&&K::Field::ObjectBlockStatue::isStatue(v.geo->id())&&
+       !static_cast<const K::Field::ObjectBlockStatue*>(v.object)->shown())return;
     drawGeneric(d,v);
     const auto* binding=miiStatueBinding(v.geo->id());
     const auto* source=v.main.model;
@@ -441,7 +491,7 @@ void drawPakkun(ObjectDraw& d,Visual& v){
             if(model.slots.empty())bank.slotBounds(model.slots,model.slotUsed);
             bool first=true;
             for(unsigned i=0;i<model.slots.size();++i)if(model.slotUsed[i]){
-                const auto b=transformBounds(model.slots[i],v.palette.data()+size_t(i)*12);
+                const auto b=transformBoundsPadded(model.slots[i],v.palette.data()+size_t(i)*12);
                 if(first){v.posed=b;first=false;}else{v.posed.include(b.minimum);v.posed.include(b.maximum);}
             }
             if(!first)a.bounds=&v.posed;
@@ -566,6 +616,16 @@ void drawFireSnake(ObjectDraw& d,Visual& v){
                 }
             }
             a.palette=v.palette.data();
+            // Billboard rotation changes the envelope. Cull the actual palette,
+            // not the authored flat flame's pre-rotation bounds near the camera.
+            auto& model=*v.main.model;
+            if(model.slots.empty())bank.slotBounds(model.slots,model.slotUsed);
+            bool first=true;
+            for(unsigned j=0;j<model.slots.size();++j)if(model.slotUsed[j]){
+                const auto b=transformBoundsPadded(model.slots[j],v.palette.data()+size_t(j)*12);
+                if(first){v.posed=b;first=false;}else{v.posed.include(b.minimum);v.posed.include(b.maximum);}
+            }
+            if(!first)a.bounds=&v.posed;
         }
         d.submit(v.main.model,transform,a);
     };
@@ -760,13 +820,36 @@ void poseJoint(Visual& v,const ObjectBank& b,int node,const float* parent,const 
 Anim finishPose(Visual& v,const ObjModel* m,Anim a){
     bool first=true;
     for(size_t i=0;i<m->slots.size();++i)if(m->slotUsed[i]){
-        const auto b=transformBounds(m->slots[i],&v.palette[i*12]);
+        const auto b=transformBoundsPadded(m->slots[i],&v.palette[i*12]);
         if(first){v.posed=b;first=false;}else{v.posed.include(b.minimum);v.posed.include(b.maximum);}
     }
     a.clip=-1;a.palette=v.palette.data();a.bounds=first?nullptr:&v.posed;
     return a;
 }
 int jointNode(const ObjectBank& b,const char* format,int index){char name[16];std::snprintf(name,sizeof name,format,index);return b.node(name);}
+// Retail807fd750..d9b0:20 wave joints at500-unit radial intervals.
+// Mesh displacement uses .99 of the same surface function as collision.
+void drawBattleDesert(ObjectDraw& d,Visual& v){
+    const auto& sand=*static_cast<const K::Field::ObjectQuicksand*>(v.object);
+    const auto t=K::System::RaceManager::Instance()->timer();
+    const auto m=liveMatrix(sand);Anim a=animAt(v.main,sand.animationFrame());
+    if(const auto* b=beginPose(v,v.main.model)){
+        for(int i=0;i<20;++i){
+            const int node=jointNode(*b,"wave%d",i);if(node<0)continue;
+            const int slot=b->nodes()[node].slot;if(slot<0)continue;
+            v.palette[size_t(slot)*12+7]+=.99f*sand.surfaceOffset(float(i)*500.f,t);
+        }
+        a=finishPose(v,v.main.model,a);
+    }
+    d.submit(v.main.model,m,a);
+    if(const auto* thwomp=sand.thwomp();thwomp&&v.extra[0].model){
+        const auto tm=liveMatrix(*thwomp);
+        Anim ta=animAt(v.extra[0],0.f);ta.patFrame=thwomp->anmState()==2||thwomp->anmState()==3?1.f:0.f;
+        d.submit(v.extra[0].model,tm,ta);
+        if(v.extra[1].model)d.shadow(v.extra[1].model,tm);
+    }
+    v.drawn=m;v.drawnValid=true;
+}
 // Rainbow Road's aurora road (RMCP ObjectAurora 807fac84): joints 3..38 move
 // to (416.66n, h, 0) in joint1's frame, h being the wave Kinoko collides
 // with, sampled at 416.66(n-2): a chirp from frequency 1.25 at the start to
@@ -915,6 +998,7 @@ void drawPillar(ObjectDraw& d,Visual& v){
     if(v.shadow.model)d.shadow(v.shadow.model,m);
 }
 bool hidden(const Visual& v,int course){
+    if(course>=32&&course<=41&&named(v,"coin"))return true;
     // Effects, sound sources and triggered splashes have no idle model; item
     // boxes are race items. Coconut Mall keeps its validated palm/escalator path.
     static const char* names[]={"itembox","pocha","pochaYogan","pochaMori","f_itembox","s_itembox","sin_itembox","w_itembox"};
@@ -925,18 +1009,47 @@ bool hidden(const Visual& v,int course){
 }
 bool classifyObject(Visual& v,const ObjectAssets& assets,int course){
     if(hidden(v,course))return false;
+    if(v.object&&K::Field::ObjectBlockStatue::isStatue(v.geo->id())&&course==33&&
+       !static_cast<const K::Field::ObjectBlockStatue*>(v.object)->shown())return false;
     auto* main=assets.main(v.resource);
     v.main=assets.tracks(main);
     v.low=assets.tracks(assets.low(main));
+    // Gold Mine flags already bake at load, but FlagB's far asset also has
+    // different geometry/texture state (26 vs 58 triangles). Keep one baked
+    // model at every distance so its colour cannot pop at the LOD boundary.
+    // Authored crowd/flag LODs carry different material/vertex-light data.
+    // Use the near appearance consistently; keep their animation and culling.
+    if(!std::strncmp(v.resource,"group_",6)||!std::strncmp(v.resource,"monte_",6)||
+       !std::strncmp(v.resource,"mare_",5)||!std::strncmp(v.resource,"Flag",4))v.low={};
     // DK's low asset replaces the live display with a split DK-logo atlas
     // (18 vertices); the live wl_screen1 face uses only 6. Its frame has the
     // same 570 vertices, so retaining the live mesh is also slightly cheaper.
     // Do not switch back to the baked placeholder when the monitor is distant.
     if(course==6&&named(v,"dkmonitor"))v.low={};
+    // The single-view screen loader8084bf58..c084 binds the live full model
+    // to the shared EFB copy. Its six-vertex face needs no distance fallback.
+    if(course==35&&named(v,"fks_screen_wii"))v.low={};
     v.shadow=assets.tracks(assets.shadow(main));
     v.kinetic=v.object!=nullptr;
     v.variant=-1;
     v.present=drawGeneric;
+    // These loops are named for the action, not for the MDL0/resource.
+    // Do not default every unknown object to its first CHR0 (a bridge-open
+    // or Thwomp wake-up clip must not become an ambient loop).
+    if(named(v,"moray")||named(v,"pukupuku"))v.main.clip=clip(v.main,"swim");
+    if(named(v,"casino_roulette")){
+        v.main.srt=scroll(v.main,"dushBoard");v.low.srt=scroll(v.low,"dushBoard");
+    }
+    if(named(v,"venice_nami")&&v.object){
+        v.present=drawVeniceWater;
+        const char* layers[]={"venice_dark","venice_sand","venice_tex"};
+        for(unsigned i=0;i<3;++i)v.extra[i]=find(assets,"venice_nami",layers[i],layers[i]);
+    }
+    if(named(v,"venice_hasi")&&v.object)v.present=drawVeniceBridge;
+    if(named(v,"Twanwan")&&v.object)v.present=drawBattleChomp;
+    if(named(v,"quicksand")&&v.object){
+        v.present=drawBattleDesert;v.extra[0]=find(assets,"dossun","dossun");v.extra[1]=find(assets,"dossun","dossun-shadow");
+    }
     const auto id=static_cast<ObjectId>(v.geo->id());
     const bool live=v.object!=nullptr;
     if(classifyMover(v,assets))return true;
@@ -950,7 +1063,10 @@ bool classifyObject(Visual& v,const ObjectAssets& assets,int course){
         if(v.extra[5].model)v.present=drawMiiStatue;
         return true;
     }
-    if(id==ObjectId::Kuribo&&live){
+    if((id==ObjectId::ObakeBlockSFCc||id==ObjectId::ObakeBlock2SFCc||id==ObjectId::ObakeBlock3SFCc)&&live&&course==25){
+        const char* name=id==ObjectId::ObakeBlock2SFCc?"obakeblock2SFC":id==ObjectId::ObakeBlock3SFCc?"obakeblock3SFC":"obakeblockSFC";
+        v.main=find(assets,v.resource,name);v.low=v.shadow={};v.present=drawObakeBlock;
+    }else if(id==ObjectId::Kuribo&&live){
         v.present=drawKuribo;v.clips[0]=clip(v.main,"walk_l");
     }else if(id==ObjectId::Wanwan&&live){
         v.present=drawWanwan;
@@ -1017,8 +1133,8 @@ bool classifyObject(Visual& v,const ObjectAssets& assets,int course){
     }else if(id==ObjectId::FlamePole&&live){
         v.present=drawFlamePole;v.main=find(assets,"FlamePole","FlamePole","FlamePole");
         v.extra[0]=find(assets,"FlamePole","FlamePoleEff","FlamePoleEff");
-    }else if(id==ObjectId::VolcanoPiece&&live){
-        char name[24];std::snprintf(name,sizeof name,"VolcanoPiece%d",int(int16_t(v.geo->setting(0))));
+    }else if((id==ObjectId::VolcanoPiece||unsigned(id)==0x20d)&&live){
+        char name[24];std::snprintf(name,sizeof name,unsigned(id)==0x20d?"bblock%d":"VolcanoPiece%d",int(int16_t(v.geo->setting(0))));
         v.main=find(assets,v.resource,name,name);
     }else if(id==ObjectId::VolcanoRock&&live){
         const char* name=v.geo->setting(0)?"VolcanoRock2":"VolcanoRock1";
@@ -1126,7 +1242,7 @@ bool classifyObject(Visual& v,const ObjectAssets& assets,int course){
 }
 void drawObject(ObjectDraw& d,Visual& v){if(v.present)v.present(d,v);}
 bool skyObject(const Visual& v){return v.present==drawSun;}
-bool waterObject(const Visual& v){return v.present==drawTide;}
+bool waterObject(const Visual& v){return v.present==drawTide||v.present==drawVeniceWater;}
 const K::Field::ObjectBase* reviewFocus(const Visual& v){
     if(v.present==drawTruckWagon){
         for(size_t i=0;i+1<v.parts.size();++i)if(static_cast<const K::Field::ObjectTruckWagonCart*>(v.parts[i])->isActive())return v.parts[i];

@@ -9,6 +9,7 @@
 #include <mkw/driver_vehicle_response.hpp>
 #include <mkw/driver_controller.hpp>
 namespace mkw {
+std::size_t heapSpaceFree(); // ordinary heap still available (src/animation.cpp)
 // Cooked original driver animation: local vertices, matrix palettes, visibility
 // and facial texture tracks. Only the selected character is resident.
 class DriverAnimation {
@@ -84,6 +85,8 @@ public:
     // Set on the pose worker, before apply(): the same seated matrix used to draw.
     void setBraidWorld(const C3D_Mtx& world);
     bool ready=false;
+    // Local player must never hold a pose for adaptive presentation budgeting.
+    bool fullRate=false;
 private:
     struct Clip { char name[32];unsigned duration,loop,count;const uint8_t* data; };
     struct SourceVertex {float p[3],n[3];uint32_t matrix;};

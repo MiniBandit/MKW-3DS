@@ -21,7 +21,7 @@ struct EffectTexture { char name[32]; uint16_t width,height,paddedWidth,paddedHe
 // Steps at the 60 Hz simulation rate; presentation only.
 class RaceEffects {
 public:
-    static constexpr unsigned SlotCount=1914;
+    static constexpr unsigned SlotCount=1983;
     RaceEffects();
     ~RaceEffects();
     bool load(const char* path);
@@ -32,6 +32,8 @@ public:
     int find(const char* name) const;
     // One-shot effect with its authored emission life, not tied to a slot.
     void burst(int spec,const EffectFrame& frame);
+    // Important one-shot: queue until simulation calc, ahead of decorative emission.
+    void burstBlueSmoke(int spec,const EffectFrame& frame);
     void burst(int spec,const EffectFrame& frame,float specificVelocity);
     // Persistent attachment: created when it becomes active, moved every step, and faded
     // (emitters stop, particles live on and keep following) when inactive. spec < 0 kills.
@@ -77,6 +79,10 @@ public:
     void setGroups(uint32_t calc,uint32_t draw);
     void step();
     void reset();
+    // Scene-owned object handles; released by reset/unload, never part of the
+    // permanent kart slot layout or the particle/emitter capacity.
+    unsigned allocateObjectSlots(unsigned count);
+    unsigned slotCount() const {return unsigned(slots_.size());}
     unsigned liveParticles() const;
     unsigned generation() const { return generation_; }
     ef::System& system() { return *system_; }
@@ -84,11 +90,14 @@ public:
     std::vector<EffectTexture> textures;
     bool ready=false;
 private:
+    struct PendingBurst {int spec;EffectFrame frame;};
+    std::vector<PendingBurst> pendingBlue_;
+    bool roomForBlueSmoke();
     struct Slot { ef::Effect* effect=nullptr; uint16_t serial=0; int spec=-1; bool fading=false; };
     ef::Effect* start(int spec,const EffectFrame& frame,uint8_t group=0);
     std::unique_ptr<ef::System> system_;
     std::vector<uint8_t> blob_;
-    std::array<Slot,SlotCount> slots_{};
+    std::vector<Slot> slots_=std::vector<Slot>(SlotCount);
     uint16_t serial_=0;
     unsigned generation_=0,diagnosticMask_=0;
     const char* loadError_="not loaded";
