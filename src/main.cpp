@@ -1418,6 +1418,7 @@ int main() {
     K::EGG::SceneManager scenes(&creator);
     menuAwardScenes=&scenes;
     mkw::RaceGrid raceGrid;
+    bool lookBehind=false; // X (Mario Kart 7's rear view) or ZL held: the look-behind camera
     float boostFov=0,maxFov=0;unsigned trickCount=0;bool wasTricking=false,wasBoosting=false;uint16_t lastMushroomUses=0;
     mkw::TrickPresentation trickModel; // the local driver model's trick gate (sparkle + SE_VCL_JUMP_ACTION)
     // Course preview before every race. While it plays Kinoko keeps simulating
@@ -1501,7 +1502,10 @@ int main() {
         if(!bcp||!startPan.load(bcp,size)){bcp=resources->getFile("start_camera.bcp",&size,K::System::ArchiveId::Core);if(!bcp||!startPan.load(bcp,size))startPan.defaults();}
         auto* kart=K::Kart::KartObjectManager::Instance()->object(0);
         K::EGG::Vector3f startPos,startAngles;K::System::RaceManager::Instance()->findKartStartPoint(startPos,startAngles,0);
-        chaseCamera.init(*kart);boostFov=0;fillCameraInput(cameraInput);
+        chaseCamera.setup(*kart,battleMode);chaseCamera.init(*kart);boostFov=0;
+        // RaceCamera::Init runs on a new camera: nothing the chase camera wrote last
+        // race (explosion, half-pipe, falling) carries over.
+        cameraInput=mkw::RaceCameraInput{};fillCameraInput(cameraInput);
         cameraDirector->reset(startPan,vec(startPos),vec(startAngles),cameraInput);
         flow={};flow.preview=intro.active();
         results.reset();resultsInput={};resultsReported=false;flowUi.unloadResults();
@@ -2413,8 +2417,8 @@ int main() {
                 if(rampTrick){trick=padTrick();buttons=(buttons&~10u)|(held&KEY_B?2u:0u);}
                 else if(!qaMode&&(held&KEY_Y))trick=padTrick();
             }
-            if(auto* camera=K::Render::KartCamera::Instance())
-                camera->requestLookBack(fullRace&&!qaMode&&!replay&&!raceGrid.finished()&&bool(held&(KEY_X|KEY_ZL)));
+            lookBehind=fullRace&&!qaMode&&!replay&&!raceGrid.finished()&&bool(held&(KEY_X|KEY_ZL));
+            if(auto* camera=K::Render::KartCamera::Instance())camera->requestLookBack(lookBehind);
             // Preserve the Wii input lattice used by ghost records.
             int stick=mkw::circlePadSteering(pad.dx);
             if(garageTest){buttons=1;stick=frames%fixtureFrames<32?-4:4;}
@@ -2683,10 +2687,10 @@ int main() {
                         K::Render::KartCamera::Instance()->onRespawn();
                         chaseCamera.init(*kart);
                     }
-                    chaseCamera.calc(*kart);
                     fillCameraInput(cameraInput);
                     if(battleMode)cameraInput.finished=battleTicks>=balloonBattle.durationTicks();
-                    cameraDirector->step(cameraInput);
+                    // RaceCamera::Update (PR #76): the chase states and the director's phases in retail order.
+                    chaseCamera.update(*kart,*cameraDirector,cameraInput,lookBehind);
                     // Race-flow events for presentation subscribers (audio).
                     const unsigned stage=unsigned(race->stage());
                     if(battleMode&&stage>=2&&!results.active()&&battleTicks<balloonBattle.durationTicks())++battleTicks;
@@ -2912,7 +2916,9 @@ int main() {
                 using BT=K::Kart::KartBoost::Type;
                 float boost=kart->move()->boostActive(BT::MushroomAndBoostPanel)?1.f:kart->move()->boostActive(BT::TrickAndZipper)?.85f:(kart->move()->boostActive(BT::AllMt)||kart->status().onBit(K::Kart::eStatus::RampBoost))?.5f:0.f;
                 if(effectsTest)boost=(frames>=30&&frames<60)||(frames>=280&&frames<340)?1.f:0.f;
-                boostFov+=(boost*10.f-boostFov)*(boost*10.f>boostFov?.25f:.1f);maxFov=std::max(maxFov,boostFov);
+                // Races: RaceCamera +0x120 (PR #76), 12 degrees x the last boost's factor held until
+                // the boosts end, eased into the FOV by the race director.
+                boostFov=fullRace?chaseCamera.boostFov():boostFov+(boost*10.f-boostFov)*(boost*10.f>boostFov?.25f:.1f);maxFov=std::max(maxFov,boostFov);
                 bool inTrick=kart->status().onBit(K::Kart::eStatus::InATrick,K::Kart::eStatus::ZipperTrick);
                 const bool trickStarted=inTrick&&!wasTricking;
                 if(trickStarted)++trickCount;
