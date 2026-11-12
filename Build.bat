@@ -202,6 +202,7 @@ if (-not (Test-Path "$Here\.git")) {
     if (Test-Path "$Repo\.git") {
         Say 'Updating the code'
         Invoke-Native { git -C $Repo pull --ff-only }
+        if ($LASTEXITCODE) { Fail "Couldn't update the code in $Repo. Check your internet connection. If you changed files there, undo the changes or delete that folder. Then run this again." }
     } else {
         Say 'Getting the code'
         Invoke-Native { git clone $RepoUrl $Repo }
@@ -209,7 +210,11 @@ if (-not (Test-Path "$Here\.git")) {
     }
 }
 
-if ($Repo -eq $Here -and -not $Fresh) { Say 'Updating the code'; Invoke-Native { git -C $Repo pull --ff-only } }
+if ($Repo -eq $Here -and -not $Fresh) {
+    Say 'Updating the code'
+    Invoke-Native { git -C $Repo pull --ff-only }
+    if ($LASTEXITCODE) { Fail "Couldn't update the code in $Repo. Check your internet connection, and undo any changes you made to its files. Then run this again." }
+}
 $PythonExe = Find-Python
 $cfg = "$Repo\.venv\pyvenv.cfg"
 if ((Test-Path $cfg) -and (Get-Content -Raw $cfg) -notmatch '(?m)^version\s*=\s*3\.12') {
