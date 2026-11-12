@@ -39,6 +39,22 @@ Streams neededStreams(const std::vector<UiQuad>& quads){
  for(const auto& q:quads)if(q.movie<std::size(UiMovieRegions))needed[UiMovieRegions[q.movie].stream]=true;
  return needed;
 }
+bool inVram(const Texture& t){const u32 at=reinterpret_cast<u32>(t.gpu.data);return at>=OS_VRAM_VADDR&&at<OS_VRAM_VADDR+OS_VRAM_SIZE;}
+bool fourBit(const Texture& t){const auto f=t.gpu.fmt;return f==GPU_ETC1||f==GPU_L4||f==GPU_A4;}
+// Every texel opaque (alpha 255), padding included: a backdrop drawn with it at
+// full alpha hides whatever was under it exactly. Only textures large enough
+// to back a page are scanned (on the loading thread).
+bool opaqueTexture(const Texture& t){
+ switch(t.gpu.fmt){
+ case GPU_RGB8:case GPU_RGB565:case GPU_ETC1:return true;
+ case GPU_RGBA8:{
+  if(unsigned(t.gpu.width)*t.gpu.height<256u*256u)return false;
+  const auto* p=static_cast<const std::uint8_t*>(t.gpu.data);const std::size_t n=t.bytes();
+  for(std::size_t i=0;i<n;i+=4)if(p[i]!=255)return false; // tex3ds RGBA8 texels: A,B,G,R
+  return true;}
+ default:return false;
+ }
+}
 bool loops(unsigned stream){
  for(const auto& r:UiMovieRegions)if(r.stream==stream&&!std::strcmp(r.key,"intro_movie"))return false;
  return true;
@@ -46,6 +62,8 @@ bool loops(unsigned stream){
 // Keep this much LINEAR memory free for models, movies and render buffers.
 // During a race the pause menu shares LINEAR memory with the course.
 constexpr std::uint32_t LinearReserve=3u<<20,CacheCapacity=24u<<20;
+// placeInVram: the smallest sprite worth a copy, and the most copies in one frame.
+constexpr std::size_t VramMinBytes=32*1024;constexpr unsigned VramCopiesPerFrame=4;
 struct TextureJob final:AssetJob {
  const char* path;std::unique_ptr<Texture> texture;
  explicit TextureJob(const char* p):path(p){label=p;}
@@ -53,29 +71,37 @@ struct TextureJob final:AssetJob {
  void run()override{
   // Texture::load reads from the open menu.pak when present (one seek+read).
   const auto start=svcGetSystemTick();
-  auto t=std::make_unique<Texture>();if(t->load(path))texture=std::move(t);
+  auto t=std::make_unique<Texture>();if(t->load(path)){opaque=opaqueTexture(*t);texture=std::move(t);}
 
 #ifndef MKW_RELEASE
   std::snprintf(timing,sizeof timing,"%s %.1f ms",pack::contains(path)?"pack":"file",float((svcGetSystemTick()-start)*1000.0/SYSCLOCK_ARM11));
 #endif
 
  }
- char timing[96]{};
+ char timing[96]{};bool opaque=false;
 };
 }
 struct MenuRenderer::Impl {
  std::array<std::unique_ptr<Texture>,4> portraits;
- struct Slot {std::unique_ptr<Texture> texture;std::shared_ptr<TextureJob> job;std::uint32_t used=0,lastRetry=0;unsigned failures=0;};
+ struct Slot {std::unique_ptr<Texture> texture;std::shared_ptr<TextureJob> job;std::uint32_t used=0,lastRetry=0;unsigned failures=0;bool opaque=false;};
  std::array<Slot,std::size(UiSprites)> slots;
  std::array<std::unique_ptr<MenuMovie>,std::size(UiMovieStreams)> movies;
  Residency pinned{},pinning{};Streams streamsPinned{},streamsPinning{};
  std::uint32_t frame=1,bytes=0;
+ // placeInVram: bytes copied to VRAM and back (totals), sprite bytes now in VRAM.
+ std::uint64_t vramIn=0,vramOut=0;std::uint32_t vramResident=0;
  // Synchronous (prepare) bookkeeping.
  Residency wanted{};Streams streams{};
  // loaded[i]==bool(slots[i].texture): install/remove are the only writers.
  Residency loaded{};
- void install(unsigned i,std::unique_ptr<Texture> texture){bytes+=texture->bytes();slots[i].texture=std::move(texture);loaded[i]=bool(slots[i].texture);}
- std::unique_ptr<Texture> remove(unsigned i){auto& s=slots[i];if(s.texture)bytes-=s.texture->bytes();loaded[i]=false;return std::move(s.texture);}
+ void install(unsigned i,std::unique_ptr<Texture> texture,bool opaque){
+  bytes+=texture->bytes();if(inVram(*texture))vramResident+=texture->bytes();
+  slots[i].texture=std::move(texture);slots[i].opaque=opaque;loaded[i]=bool(slots[i].texture);
+ }
+ std::unique_ptr<Texture> remove(unsigned i){
+  auto& s=slots[i];if(s.texture){bytes-=s.texture->bytes();if(inVram(*s.texture))vramResident-=s.texture->bytes();}
+  loaded[i]=false;return std::move(s.texture);
+ }
  void openStream(unsigned i){
   if(movies[i])return;
   movies[i]=std::make_unique<MenuMovie>();movies[i]->open(UiMovieStreams[i].path,loops(i));
@@ -119,17 +145,18 @@ void MenuRenderer::update(Renderer& renderer){
  for(unsigned i=0;i<s.slots.size();++i){auto& slot=s.slots[i];
   if(!slot.job||!slot.job->done())continue;
   auto job=std::move(slot.job);
-  if(job->texture){s.install(i,std::move(job->texture));slot.failures=0;}
+  if(job->texture){s.install(i,std::move(job->texture),job->opaque);slot.failures=0;}
   else if(!job->cancelled()){++slot.failures;requiredLoadFailed|=s.pinned[i];}
  }
  // Least recently requested first; never the pinned page/incoming sets.
  // Retired memory returns at the next frame, so count it as already free.
  std::uint32_t retiring=0;
- auto evict=[&](){
+ // linear: only textures in LINEAR (one in VRAM frees none of it).
+ auto evict=[&](bool linear=false){
   unsigned victim=~0u;std::uint32_t oldest=~0u;
-  for(unsigned i=0;i<s.slots.size();++i)if(s.slots[i].texture&&!s.pinned[i]&&s.slots[i].used<oldest){oldest=s.slots[i].used;victim=i;}
+  for(unsigned i=0;i<s.slots.size();++i)if(s.slots[i].texture&&!s.pinned[i]&&s.slots[i].used<oldest&&!(linear&&inVram(*s.slots[i].texture))){oldest=s.slots[i].used;victim=i;}
   if(victim==~0u)return false;
-  auto texture=s.remove(victim);retiring+=texture->bytes();renderer.retire(std::move(texture));return true;
+  auto texture=s.remove(victim);if(!inVram(*texture))retiring+=texture->bytes();renderer.retire(std::move(texture));return true;
  };
  // A failed required allocation can mean fragmentation even when the total
  // free byte count exceeds the reserve. Drop speculative/old-page textures
@@ -139,7 +166,8 @@ void MenuRenderer::update(Renderer& renderer){
   if(retiring)for(unsigned i=0;i<s.slots.size();++i)
    if(s.pinned[i]&&!s.slots[i].texture)s.slots[i].failures=0;
  }
- while((s.bytes>CacheCapacity||linearSpaceFree()+retiring<LinearReserve)&&evict()){}
+ while(s.bytes>CacheCapacity&&evict()){}
+ while(linearSpaceFree()+retiring<LinearReserve&&evict(true)){}
  for(unsigned i=0;i<s.movies.size();++i)if(s.movies[i]&&!s.streamsPinned[i])renderer.retire(std::move(s.movies[i]));
  ++s.frame;
 }
@@ -184,7 +212,7 @@ bool MenuRenderer::prepare(const std::vector<UiQuad>& quads,bool){
  for(unsigned i=0;i<needed.size();++i){auto& slot=s.slots[i];if(slot.job){slot.job->cancel();slot.job.reset();}if(!needed[i])s.remove(i);}
  for(unsigned i=0;i<streams.size();++i)if(!streams[i])s.movies[i].reset();
  bool ok=true;
- for(unsigned i=0;i<needed.size();++i)if(needed[i]&&!s.slots[i].texture){auto t=std::make_unique<Texture>();if(t->load(UiSprites[i].path))s.install(i,std::move(t));else ok=false;}
+ for(unsigned i=0;i<needed.size();++i)if(needed[i]&&!s.slots[i].texture){auto t=std::make_unique<Texture>();if(t->load(UiSprites[i].path)){const bool opaque=opaqueTexture(*t);s.install(i,std::move(t),opaque);}else ok=false;}
  for(unsigned i=0;i<streams.size();++i)if(streams[i])s.openStream(i);
  return ok;
 }
@@ -214,7 +242,7 @@ void MenuRenderer::draw(Renderer& renderer,const std::vector<UiQuad>& quads,bool
     // One wall clock for upper/lower backgrounds and every menu page. Release
     // and page/section clocks must not restart this ambient scroll.
     static const auto origin=svcGetSystemTick();
-    const double seconds=double(svcGetSystemTick()-origin)/SYSCLOCK_ARM11;
+    const double seconds=menuStripeSeconds>=0?menuStripeSeconds:double(svcGetSystemTick()-origin)/SYSCLOCK_ARM11;
     for(const auto& part:menuStripeSlices(q.y,q.h,q.v0,q.v1,seconds))if(part.h>0)
      renderer.drawScreenSpriteRegion(texture,q.x,part.y,q.w,part.h,info.u*q.u0,info.v*part.v0+1.f/texture.gpu.height,
        info.u*q.u1,info.v*part.v1+1.f/texture.gpu.height,q.alpha,q.tint,q.corners.data(),q.additive);
@@ -264,9 +292,70 @@ std::size_t MenuRenderer::moveToVram(Renderer& renderer,std::size_t reserve){
  }
  std::sort(order.rbegin(),order.rend());
  std::size_t moved=0;
- for(const auto& [bytes,i]:order)if(renderer.moveToVram(*s.slots[i].texture,reserve))moved+=bytes;
+ for(const auto& [bytes,i]:order)if(renderer.moveToVram(*s.slots[i].texture,reserve)){moved+=bytes;s.vramResident+=std::uint32_t(bytes);}
  return moved;
 }
+bool MenuRenderer::coversScreen(const std::vector<UiQuad>& quads)const{
+ if(quads.empty())return false;
+ const auto& q=quads[0];const auto& s=*impl_;
+ if(q.bottom||q.sprite>=s.slots.size()||!s.slots[q.sprite].texture||!s.slots[q.sprite].opaque)return false;
+ if(q.licensePortrait<s.portraits.size()||q.vehicleIcon<12||q.movie<std::size(UiMovieRegions)||q.fontRemap||q.affine||q.additive)return false;
+ // Full alpha everywhere: the blend then writes the texel colour alone.
+ if(!(q.alpha>=1.f)||(q.tint&255)!=255)return false;
+ for(const auto c:q.corners)if((c&255)!=255)return false;
+ if(!(q.x<=0.f&&q.y<=0.f&&q.x+q.w>=400.f&&q.y+q.h>=240.f))return false;
+ // The stripes draw nothing for an empty V span (menuStripeSlices).
+ return std::strncmp(UiSprites[q.sprite].key,"background",10)||q.v1>q.v0;
+}
+std::size_t MenuRenderer::placeInVram(Renderer& renderer,const std::vector<UiQuad>& drawn,std::size_t reserve,std::size_t budget){
+ auto& s=*impl_;
+ // Screen area each sprite covers in this frame.
+ static std::vector<float> area;area.assign(s.slots.size(),0.f);
+ for(const auto& q:drawn)if(q.sprite<s.slots.size()&&q.movie>=std::size(UiMovieRegions)&&q.vehicleIcon>=12&&q.licensePortrait>=s.portraits.size())
+  area[q.sprite]+=std::min(std::fabs(q.w*q.h),400.f*240.f)*std::clamp(q.alpha,0.f,1.f);
+ // Most screen area per byte first (the full-screen stripes and pictures).
+ // Small sprites (glyphs, captions) cost little fill: they stay.
+ std::vector<std::pair<float,unsigned>> wanted;
+ for(unsigned i=0;i<s.slots.size();++i){const auto& t=s.slots[i].texture;
+  if(t&&area[i]>0&&!inVram(*t)&&!fourBit(*t)&&t->bytes()>=VramMinBytes)wanted.push_back({area[i]/float(t->bytes()),i});}
+ if(wanted.empty())return 0;
+ std::sort(wanted.rbegin(),wanted.rend());
+ auto swap=[&](unsigned i,std::unique_ptr<Texture> copy){
+  const bool opaque=s.slots[i].opaque;auto old=s.remove(i);s.install(i,std::move(copy),opaque);renderer.retire(std::move(old));
+ };
+ // Each copy takes two entries of citro3d's 32-entry GX queue (a command list
+ // split and the copy), beside the frame's own fills and transfers: a full
+ // queue panics. A few copies a frame, whatever their size.
+ std::size_t copied=0;unsigned copies=0;
+ for(const auto& [score,i]:wanted){
+  if(copied>=budget||copies>=VramCopiesPerFrame)break;
+  const std::size_t bytes=s.slots[i].texture->bytes();
+  if(vramSpaceFree()>=bytes+reserve){
+   if(auto copy=renderer.copyTextureInFrame(*s.slots[i].texture,true,reserve)){swap(i,std::move(copy));copied+=bytes;++copies;s.vramIn+=bytes;}
+   continue;
+  }
+  // No room: sprites in VRAM that this frame doesn't draw and no shown or
+  // incoming page needs go back to LINEAR (least recently requested first).
+  // Their VRAM is free once this frame is drawn; the move waits for a later frame.
+  std::size_t freeing=0;
+  while(vramSpaceFree()+freeing<bytes+reserve&&copied<budget&&copies<VramCopiesPerFrame){
+   unsigned victim=~0u;std::uint32_t oldest=~0u;
+   for(unsigned k=0;k<s.slots.size();++k){const auto& t=s.slots[k].texture;
+    if(t&&inVram(*t)&&!s.pinned[k]&&area[k]<=0&&s.slots[k].used<oldest){oldest=s.slots[k].used;victim=k;}}
+   if(victim==~0u)break;
+   const std::size_t size=s.slots[victim].texture->bytes();
+   std::unique_ptr<Texture> copy;
+   if(linearSpaceFree()>=size+LinearReserve)copy=renderer.copyTextureInFrame(*s.slots[victim].texture,false,0);
+   if(copy){swap(victim,std::move(copy));copied+=size;++copies;s.vramOut+=size;}
+   else renderer.retire(s.remove(victim));
+   freeing+=size;
+  }
+  break;
+ }
+ return copied;
+}
+std::uint32_t MenuRenderer::vramBytes()const{return impl_->vramResident;}
+std::uint64_t MenuRenderer::vramCopied(bool toVram)const{return toVram?impl_->vramIn:impl_->vramOut;}
 std::uint32_t MenuRenderer::residentBytes()const{return impl_->bytes;}
 unsigned MenuRenderer::loadsPending()const{unsigned n=0;for(const auto& slot:impl_->slots)n+=slot.job&&!slot.job->done();return n;}
 void MenuRenderer::logPending(const std::vector<UiQuad>& resident,const char* path)const{

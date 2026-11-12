@@ -16,6 +16,7 @@ Thread spinner=nullptr;std::atomic<bool> stop{false};unsigned depth=0;
 uint8_t* framebuffer=nullptr;unsigned width=320;
 bool shown=false;
 uint64_t started=0;
+unsigned scopes=0;
 float angle(uint64_t start){return float(double(svcGetSystemTick()-start)/SYSCLOCK_ARM11*6.283185307);}
 void raster(){
  for(unsigned y=0;y<Size;++y)for(unsigned x=0;x<Size;++x)
@@ -53,6 +54,7 @@ void shutdownLoadingScreen(){
 LoadingScope::LoadingScope(){
  if(!renderer_)return;
  ++depth;owner_=true;if(depth!=1)return;
+ ++scopes;
  renderer_->waitForGpu();
  u16 w=0,h=0;framebuffer=gfxGetFramebuffer(GFX_BOTTOM,GFX_LEFT,&w,&h);
  width=h; // libctru returns the rotated lower LCD buffer (240 x 320).
@@ -77,6 +79,7 @@ LoadingScope::~LoadingScope(){
  }
  shown=false;framebuffer=nullptr;
 }
+unsigned loadingScopes(){return scopes;}
 void drawLoadingWheel(Renderer& renderer,uint64_t waitStarted){
  if(!wheel||!wheel->ready||!waitStarted||svcGetSystemTick()-waitStarted<=SYSCLOCK_ARM11/2)return;
  const float a=angle(waitStarted),c=std::cos(a),s=std::sin(a);

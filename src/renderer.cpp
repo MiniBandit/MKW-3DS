@@ -1084,12 +1084,14 @@ void Renderer::beginFrame(){
     if(!eye_&&!bottomWorldPass_){
         // A merged bloom composite writes every LCD pixel (applyBloomNow).
         // Both eyes replay the frame's bloom request.
-        const auto lcd=bloomFrame_&&bloomMerge?C3D_CLEAR_DEPTH:C3D_CLEAR_ALL;
+        // So does a menu backdrop drawn opaque over the whole LCD (setFrameCover).
+        const auto lcd=(bloomFrame_&&bloomMerge)||execTopCovered_?C3D_CLEAR_DEPTH:C3D_CLEAR_ALL;
         C3D_RenderTargetClear(target_,lcd,0x071326FF,0);
         if(execStereo_.active())C3D_RenderTargetClear(targetRight_,lcd,0x071326FF,0);
         // A race map covers the whole lower LCD opaquely and nothing there
         // reads depth: no clear (RaceBottomScreen::draw, bottomCovered()).
-        if(bottomTarget_&&!execBottomCovered_)C3D_RenderTargetClear(bottomTarget_,C3D_CLEAR_ALL,0x071326FF,0);
+        // A menu frame that keeps the lower LCD's last picture neither clears nor draws it.
+        if(bottomTarget_&&!execBottomCovered_&&!execBottomKept_)C3D_RenderTargetClear(bottomTarget_,C3D_CLEAR_ALL,0x071326FF,0);
     }
     // Only the left eye captures. The right eye must render directly to its
     // LCD target unless its own bloom pass needs the shared scene scratch.
