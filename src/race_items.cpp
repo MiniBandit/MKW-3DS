@@ -35,6 +35,8 @@ void RaceItems::reset(const std::vector<ItemBox>& boxes,unsigned racers,uint32_t
     blooperCaster_=MaxRacers;blooperSelectionFrame_=blooperStartFrame_=blooperBusyUntil_=0;
     powTimer_=0;powUser_=MaxRacers;powTargets_={};
     deployments_={};mushroomUses_={};
+    net_=netApplying_=false;netRemote_=0;netNextId_=0;netOutHead_=netOutCount_=0;netAction_=-1;netHeldVeto_={};netHeldVetoTicks_={};netHeldRaw_={};
+    lastStarted_=-1;lastDirection_={};
     karts_->resetKarts();
     successfulHits_.fill(0);events_.clear();events_.reserve(64);sounds_.clear();sounds_.reserve(32);stepSounds_=0;count_=std::min(racers,MaxRacers);rng_=seed?seed:1;frame_=0;active_=contactsDone_=false;
 }
@@ -70,7 +72,7 @@ bool RaceItems::give(unsigned player,ItemKind kind){
     return true;
 }
 bool RaceItems::startRoulette(unsigned player){
-    if(player>=count_)return false;
+    if(player>=count_||netRemote(player))return false;
     // fn_1_2A9BFC (0x807ab550) also needs the slot lock (+0x78) clear.
     auto& h=hud_[player];if(h.item!=ItemKind::None||h.roulette||h.bullet||h.slotLock!=ItemKind::None)return false;
     // ItemSlot decides at contact. Passing racers during the roulette
@@ -109,7 +111,7 @@ unsigned RaceItems::courseDropWeight(unsigned slot)const{
 }
 bool RaceItems::createCourseDrop(unsigned slot,Vec3 position,Vec3 velocity,uint8_t owner,
         uint32_t randomWord,bool timeTrial){
-    if(!active_||slot!=6||!woodboxOdds_.ready())return false;
+    if(!active_||slot!=6||!woodboxOdds_.ready()||netRemote(owner))return false;
     auto w=woodboxOdds_.weights();
     if(objectCount(2)>=ItemObjectLimits[2])w[0]=0;
     if(objectCount(3)>=ItemObjectLimits[3])w[1]=0;
@@ -198,11 +200,13 @@ int RaceItems::targetAhead(unsigned player,bool leader) const{
 
 bool RaceItems::strike(unsigned player,int action,unsigned owner,Vec3 direction,bool force,ItemKind item){
     if(player>=count_||action<0)return false;
+    // Online: another console's racer is only hit when that console says so.
+    if(netRemote(player)&&!netApplying_)return false;
     const int started=karts_->startAction(player,action,force,owner,direction);
     // RMCU: the start function reports item loss to the holder at once.
     applyLoss(player,karts_->takeLoss(player));
     if(started<0)return false;
-    action=started;
+    action=started;lastStarted_=int8_t(started);lastDirection_=direction;
     const ItemEffect effect=action==KartAction::Explosion||action==KartAction::HighLaunch?ItemEffect::Explosion:
         action==KartAction::Launch||action==KartAction::LaunchSpin?ItemEffect::Launch:
         action==KartAction::StarHit||action==KartAction::Knockback||action==KartAction::BulletHit?ItemEffect::Knockback:
@@ -213,16 +217,18 @@ bool RaceItems::strike(unsigned player,int action,unsigned owner,Vec3 direction,
 }
 bool RaceItems::shrink(unsigned player,uint16_t frames,bool spinShrink,bool cloud){
     // PlayerSub10_applyLightningEffect: a Mega racer only loses the Mega (no shrink event).
+    if(netRemote(player)&&!netApplying_)return false;
     const bool mega=racers_[player].mega;
     const bool struck=karts_->lightning(player,frames,spinShrink,cloud);
     applyLoss(player,karts_->takeLoss(player));
     if(!struck)return false;
+    if(netSelf(player)){ItemNetEvent e;e.kind=ItemNetEvent::Shrink;e.a=uint8_t((spinShrink?1:0)|(cloud?2:0));e.id=frames;netEmit(e);}
     events_.push_back({ItemEffect::ElectricHit,uint8_t(player)});
     if(!mega)events_.push_back({ItemEffect::Shrink,uint8_t(player),frames,{},int8_t(spinShrink?KartAction::SpinShrink:cloud?KartAction::CloudStrike:KartAction::Lightning)});
     return true;
 }
 void RaceItems::applyLoss(unsigned player,const ItemKartLoss& loss){
-    if(player>=count_||!loss.any())return;
+    if(player>=count_||!loss.any()||netRemote(player))return;
     auto& h=hud_[player];
     if(loss.strong){
         // RMCU fn_28867C: eject the inventory unless it is the Thunder Cloud or a loss is
@@ -296,7 +302,7 @@ void RaceItems::updateHeldItems(unsigned player,ItemWorldQuery query){
             const auto surface=query&&!racer.inCannon?query(state.previous[slot],position,slotTerrain):ItemSurface{};
             // Cannon KCL destroys released actors, not items tethered to the
             // kart. Native PlayerObj and Player lockout remain distinct.
-            if(surface.kill){removeHeld(player,slot,true);break;}
+            if(surface.kill&&!netRemote(player)){removeHeld(player,slot,true);break;}
             state.trailing.correct(slot,surface.correction,length(surface.correction)>.0001f);
             state.positions[slot]=state.trailing.positions[slot];
             // 27d9b8/27da58: rear-facing traps, forward-facing shells, spring
@@ -326,7 +332,7 @@ void RaceItems::updateHeldItems(unsigned player,ItemWorldQuery query){
         const float angle=float(state.angle)*(2*Pi/65536.f)+slot*(2*Pi/3.f);
         state.positions[slot]=center+forward*(state.radiusX*std::cos(angle))+right*(state.radiusZ*std::sin(angle));
         const auto surface=query&&!racer.inCannon?query(state.previous[slot],state.positions[slot],prop.terrain*state.scales[slot]*racer.scale.y):ItemSurface{};
-        if(surface.kill){removeHeld(player,slot,false);continue;}
+        if(surface.kill&&!netRemote(player)){removeHeld(player,slot,false);continue;}
         auto& correction=state.trailing.corrections[slot];
         correction=length(surface.correction)>.0001f?lerp(correction,surface.correction,.2f):correction*.9f;
         state.positions[slot]+=correction;
@@ -398,7 +404,7 @@ void RaceItems::useLightning(unsigned player){
     // applyLightning (rank table) and applyLightningEffect gates. Respawning and
     // cannon racers are skipped first (fn_288374).
     for(unsigned i=0;i<count_;++i){
-        if(i==player||sameRaceTeam(racers_[player].team,racers_[i].team))continue;const auto& r=racers_[i];
+        if(i==player||netRemote(i)||sameRaceTeam(racers_[player].team,racers_[i].team))continue;const auto& r=racers_[i];
         if(r.damageProtected||r.unavailable||r.inCannon||r.finished)continue;
         // fn_1_288374 restarts the struck racer's bolt (KartEffect +0x4c) whatever the
         // kart's own immunity decides.
@@ -423,19 +429,41 @@ void RaceItems::use(unsigned player,bool backwards){
     }
     if(h.item==ItemKind::None||!h.charges||h.roulette)return;
     const ItemKind kind=h.item;
-    if(kind==ItemKind::Blooper)itemSpawnTimers_[2]=900;
-    if(kind==ItemKind::Pow)itemSpawnTimers_[3]=1200;
     // ItemHolderPlayerb4_use (USA 27c8d0) creates the held group first;
     // throwing an individual object is a later input, not the deployment.
     if(singleHeld(kind)||kind==ItemKind::TripleGreenShell||kind==ItemKind::TripleRedShell||kind==ItemKind::TripleBanana){
         h.deployed=true;h.heldKind=kind;h.heldCharges=h.charges;h.heldMask=uint8_t((1u<<h.charges)-1);
-        h.item=ItemKind::None;h.charges=0;deployments_[player]={};
-        auto& state=deployments_[player];
-        if(trailing(kind)){state.trailing.init(trailingPose(racers_[player]));state.positions=state.trailing.positions;}
-        else state.positions.fill(racers_[player].position);
-        // TripleTrailPrepare 8078a534 / SpinPrepare 8078b664: SE_ITM_EQUIP for the triples.
-        if(!singleHeld(kind))sound(ItemSoundCue::Equip,player,kind,racers_[player].position);
-        state.previous=state.positions;state.ups.fill(racers_[player].up);state.forwards.fill(racers_[player].forward);return;
+        h.item=ItemKind::None;h.charges=0;beginHeld(player,kind);return;
+    }
+    if(!useEffect(player,kind)){
+        spawn(player,kind,backwards);
+        // ItemHolderPlayer_useBlueShell 0x807a3c00 flags the tethered Blue (+0x154), so
+        // ItemHolderPlayerb4_use sets +0x78 = 7 until the next update releases it (0x80789c5c).
+        if(kind==ItemKind::BlueShell)h.slotLock=ItemKind::BlueShell;
+    }
+    // A Golden Mushroom stays for its window.
+    if(kind==ItemKind::GoldenMushroom)return;
+    if(--h.charges==0)h.item=ItemKind::None;
+}
+void RaceItems::beginHeld(unsigned player,ItemKind kind){
+    deployments_[player]={};
+    auto& state=deployments_[player];
+    if(trailing(kind)){state.trailing.init(trailingPose(racers_[player]));state.positions=state.trailing.positions;}
+    else state.positions.fill(racers_[player].position);
+    // TripleTrailPrepare 8078a534 / SpinPrepare 8078b664: SE_ITM_EQUIP for the triples.
+    if(!singleHeld(kind))sound(ItemSoundCue::Equip,player,kind,racers_[player].position);
+    state.previous=state.positions;state.ups.fill(racers_[player].up);state.forwards.fill(racers_[player].forward);
+}
+// The items that act at once instead of becoming an object; false for the others.
+bool RaceItems::useEffect(unsigned player,ItemKind kind){
+    auto& h=hud_[player];
+    if(kind==ItemKind::Blooper)itemSpawnTimers_[2]=900;
+    if(kind==ItemKind::Pow)itemSpawnTimers_[3]=1200;
+    // Online: the other consoles play this use. (The Bullet and the Thunder Cloud
+    // travel with the kart's state instead.)
+    if(netSelf(player)&&(kind==ItemKind::Mushroom||kind==ItemKind::TripleMushroom||kind==ItemKind::GoldenMushroom||kind==ItemKind::Star||
+            kind==ItemKind::MegaMushroom||kind==ItemKind::Lightning||kind==ItemKind::Blooper||kind==ItemKind::Pow)){
+        ItemNetEvent e;e.kind=ItemNetEvent::Use;e.a=uint8_t(kind);netEmit(e);
     }
     switch(kind){
     case ItemKind::Mushroom:case ItemKind::TripleMushroom:
@@ -444,8 +472,8 @@ void RaceItems::use(unsigned player,bool backwards){
     case ItemKind::GoldenMushroom:
         // RMCU useGolden 0x8079f2bc: a 450-frame window of mushrooms every 12 frames.
         // Each use is a new press (no repeat while held).
-        if(!h.golden)h.golden=GoldenDuration;
-        karts_->activateMushroom(player);events_.push_back({ItemEffect::Mushroom,uint8_t(player)});h.ink=h.inkDelay=0;++mushroomUses_[player];return;
+        if(!h.golden&&!netRemote(player))h.golden=GoldenDuration;
+        karts_->activateMushroom(player);events_.push_back({ItemEffect::Mushroom,uint8_t(player)});h.ink=h.inkDelay=0;++mushroomUses_[player];break;
     case ItemKind::Star:
         // RMCU useStar 0x807a860c: the kart may refuse (action, Bullet); the item is spent
         // either way. An accepted Star clears Blooper ink (activateStar bit 92).
@@ -485,14 +513,9 @@ void RaceItems::use(unsigned player,bool backwards){
         }
         break;
     case ItemKind::ThunderCloud:h.cloud=CloudDuration;karts_->setThunderCloud(player,true);sound(ItemSoundCue::CloudOn,player);break;
-    default:
-        spawn(player,kind,backwards);
-        // ItemHolderPlayer_useBlueShell 0x807a3c00 flags the tethered Blue (+0x154), so
-        // ItemHolderPlayerb4_use sets +0x78 = 7 until the next update releases it (0x80789c5c).
-        if(kind==ItemKind::BlueShell)h.slotLock=ItemKind::BlueShell;
-        break;
+    default:return false;
     }
-    if(--h.charges==0)h.item=ItemKind::None;
+    return true;
 }
 void RaceItems::updateCloud(unsigned i){
     // RMCU ItemObjKumo update 0x807d71c0: after 30 updates a carrier with a Star, Mega or Bullet,
@@ -516,9 +539,17 @@ void RaceItems::cloudBump(unsigned attacker,unsigned victim,const ItemRacer& tar
     // a cannon and not respawning. The cooldown restarts at 45 and the timer is held to at most
     // 480, so the new carrier always gets 120 frames. (One cloud per racer here.)
     if(attacker>=count_||victim>=count_||attacker==victim||!active_)return;
+    // Online: a cloud is passed on by its carrier's console only.
+    if(netRemote(attacker)||(netRemote(victim)&&!netSelf(attacker)))return;
     auto& from=hud_[attacker];auto& to=hud_[victim];
     if(!from.cloud||cloudTransfer_[attacker]||CloudDuration-from.cloud>=CloudLastTransfer)return;
     if(target.star||target.mega||target.bullet||to.bullet||target.inCannon||target.unavailable||to.cloud)return;
+    if(netRemote(victim)){
+        // The new carrier's console takes it from here.
+        ItemNetEvent e;e.kind=ItemNetEvent::Cloud;e.other=uint8_t(victim);e.id=std::max<uint16_t>(from.cloud,CloudDuration-CloudTransferTimerCap);
+        e.v[0]=float(cloudAge_[attacker]);netEmit(e);
+        from.cloud=0;karts_->setThunderCloud(attacker,false);return;
+    }
     to.cloud=std::max<uint16_t>(from.cloud,CloudDuration-CloudTransferTimerCap);from.cloud=0;
     cloudTransfer_[victim]=CloudTransferCooldown;cloudAge_[victim]=cloudAge_[attacker];to.cloudFrom=uint8_t(attacker);
     karts_->setThunderCloud(attacker,false);karts_->setThunderCloud(victim,true);
@@ -540,9 +571,10 @@ void RaceItems::powStomp(unsigned stomp){
     // the stomp's camera shake; targets are lifted at stomps 1 and 2; stomp 3 opens the
     // window in which a grounded target starts the POW action (KartMove 0x8057a844).
     for(unsigned i=0;i<count_;++i){
-        karts_->setPowTarget(i,powTargets_[i]);
+        // Online: another console's racer is squashed when its console says so.
+        karts_->setPowTarget(i,powTargets_[i]&&!netRemote(i));
         if(i==powUser_||powTargets_[i])events_.push_back({ItemEffect::PowStomp,uint8_t(i),uint16_t(stomp),{},int8_t(powTargets_[i]?1:0)});
-        if(powTargets_[i]&&stomp<3)karts_->powHop(i,stomp==1?PowStompLift[0]:PowStompLift[1]);
+        if(powTargets_[i]&&stomp<3&&!netRemote(i))karts_->powHop(i,stomp==1?PowStompLift[0]:PowStompLift[1]);
     }
     sound(ItemSoundCue::Pow,powUser_,uint8_t(stomp));
     if(stomp==3){
@@ -571,6 +603,8 @@ void RaceItems::updateHolder(unsigned i){
         if(frame_>=inkReadyFrame_[i]){h.inkDelay=0;inkReadyFrame_[i]=0;h.ink=BlooperInkDuration;events_.push_back({ItemEffect::Ink,uint8_t(i),BlooperInkDuration});sound(ItemSoundCue::Ink,i);}
         else h.inkDelay=uint16_t(inkReadyFrame_[i]-frame_);
     }
+    // Online: the rest is decided on the racer's own console.
+    if(netRemote(i)){netHolder(i);return;}
     if(h.bullet){
         auto& bullet=bullets_[i];
         // Retail KartKiller a5c14: 180f minimum, target-rank or 480f
@@ -709,7 +743,7 @@ void RaceItems::afterStep(const ItemRacer* racers,unsigned count,ItemWorldQuery 
     }
     updatePow();
     updateActors(query);
-    for(unsigned i=0;i<count_;++i){updateHolder(i);updateHeldItems(i,query);resolveHeldCourseObjects(i);}
+    for(unsigned i=0;i<count_;++i){updateHolder(i);updateHeldItems(i,query);if(!netRemote(i))resolveHeldCourseObjects(i);}
     // Re-read the kart's power-up state after this step's item effects (host models overlay it
     // on the racers the caller supplied).
     for(unsigned i=0;i<count_;++i){
@@ -720,6 +754,7 @@ void RaceItems::afterStep(const ItemRacer* racers,unsigned count,ItemWorldQuery 
     // Requested colour fade: 15 ticks in, 29 ticks out, including early cures.
     for(unsigned i=0;i<count_;++i){auto& h=hud_[i];
         h.inkShade=uint8_t(h.ink&&!h.inkDelay?std::min(255,int(h.inkShade)+17):std::max(0,int(h.inkShade)-9));}
+    if(net_)netAfterStep();
     stepSounds_=sounds_.size();
 }
 }

@@ -12,6 +12,7 @@
 #include <malloc.h>
 #include <algorithm>
 #include <cstdarg>
+#include <cstddef>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -23,6 +24,7 @@ constexpr size_t SocBufferSize=0x20000; // libctru's minimum page-aligned pool; 
 // Polls are frames (60 a second).
 constexpr unsigned HelloEvery=20,LobbyEvery=30,PingEvery=30,ReadyEvery=10,GoRepeats=6,StunEvery=30,StunTries=8;
 constexpr unsigned HeardWithin=180,LobbyTimeout=300,ReadyTimeout=30*60,AskHostAfter=600;
+constexpr unsigned LostAfter=300,EventsEvery=4;
 constexpr uint32_t StunCookie=0x2112A442;
 // Public STUN servers: they only tell a console the address the internet sees.
 // sd:/3ds/mkw-3ds/stun.txt ("host port" per line) replaces them, for testing.
@@ -250,7 +252,7 @@ void Session::lobbyStep(unsigned garage,bool autoDrift,unsigned course,unsigned 
 bool Session::canStart() const{return mode_==Mode::Host&&count_>=2&&!started_;}
 void Session::start(){
     if(!canStart())return;
-    started_=true;lastRound_=round_;ready_={};ready_[0]=true;goRepeats_=0;readyPolls_=0;
+    started_=true;lastRound_=round_;ready_={};ready_[0]=true;goRepeats_=0;readyPolls_=0;resetEvents();
     for(unsigned s=0;s<MaxPlayers;++s){hasFrame_[s]=false;left_[s]=false;silent_[s]=0;}
     for(unsigned n=0;n<4;++n)sendLobby();
     note("> Starting with %u players",count_);
@@ -271,13 +273,47 @@ bool Session::readyStep(){
 }
 
 void Session::sendFrame(uint32_t tick,uint16_t buttons,int8_t stickX,uint8_t trick,uint8_t flags,const float pos[3],const float fullRot[4],
-                        const float mainRot[4],const float extVel[3],const float intVel[3]){
+                        const float mainRot[4],const float extVel[3],const float intVel[3],const FrameState& state){
     // Above four players, every other tick: the inputs carry the kart in between.
     if(count_>4&&(tick&1))return;
     Frame f{};f.h=header(Type::Frame);f.tick=tick;f.buttons=buttons;f.stickX=stickX;f.trick=trick;f.flags=flags;f.reach=reachMask();
     std::memcpy(f.pos,pos,sizeof f.pos);std::memcpy(f.fullRot,fullRot,sizeof f.fullRot);std::memcpy(f.mainRot,mainRot,sizeof f.mainRot);
     std::memcpy(f.extVel,extVel,sizeof f.extVel);std::memcpy(f.intVel,intVel,sizeof f.intVel);
+    f.item=state.item;f.charges=state.charges;f.heldKind=state.heldKind;f.heldMask=state.heldMask;f.itemFlags=state.itemFlags;f.round=round_;f.finish=state.finish;
+    for(unsigned s=0;s<MaxPlayers;++s)f.ack[s]=uint8_t(expected_[s]);
     sendAll(&f,sizeof f);
+}
+
+void Session::resetEvents(){
+    nextSeq_=1;acked_.fill(1);expected_.fill(1);inboxHead_=inboxCount_=0;eventQuiet_=0;eventNew_=false;
+}
+void Session::sendEvent(RaceEvent event){
+    if(socket_<0||!started_)return;
+    // A full ring drops its oldest event: receivers skip the gap (Events.oldest).
+    event.seq=nextSeq_;event.reserved=0;outbox_[nextSeq_%OutboxSize]=event;++nextSeq_;eventNew_=true;
+}
+void Session::eventStep(){
+    if(socket_<0||!started_)return;
+    ++eventQuiet_;
+    // The oldest event a console still racing has not acknowledged.
+    uint16_t lowest=nextSeq_;
+    for(unsigned s=0;s<count_;++s)if(s!=slot_&&!left_[s]&&silent_[s]<LostAfter)lowest=std::min(lowest,acked_[s]);
+    const uint16_t oldest=uint16_t(nextSeq_-lowest>OutboxSize?nextSeq_-OutboxSize:lowest);
+    if(oldest==nextSeq_||(!eventNew_&&eventQuiet_<EventsEvery))return;
+    // Everything outstanding, in order, eight to a packet (one packet unless
+    // a console has fallen behind), so the others never wait for the slowest.
+    Events packet{};packet.h=header(Type::Events);packet.round=round_;
+    packet.oldest=uint16_t(nextSeq_-std::min<unsigned>(OutboxSize,nextSeq_-1u));
+    for(uint16_t at=oldest;at!=nextSeq_;at=uint16_t(at+packet.count)){
+        packet.count=uint8_t(std::min<unsigned>(EventsPerPacket,nextSeq_-at));
+        for(unsigned n=0;n<packet.count;++n)packet.events[n]=outbox_[(at+n)%OutboxSize];
+        sendAll(&packet,offsetof(Events,events)+packet.count*sizeof(RaceEvent));
+    }
+    eventQuiet_=0;eventNew_=false;
+}
+bool Session::takeRaceEvent(unsigned& slot,RaceEvent& out){
+    if(!inboxCount_)return false;
+    slot=inbox_[inboxHead_].slot;out=inbox_[inboxHead_].event;inboxHead_=(inboxHead_+1)%InboxSize;--inboxCount_;return true;
 }
 
 void Session::poll(){
@@ -339,7 +375,7 @@ void Session::receive(const uint8_t* data,size_t size,uint32_t address,uint16_t 
         direct_[0]=0;silent_[0]=0;
         if(first)note("> In the lobby as player %u",slot_+1);
         if(lobby.started){
-            started_=true;lastRound_=round_;goSeen_=false;
+            started_=true;lastRound_=round_;goSeen_=false;resetEvents();
             for(unsigned s=0;s<MaxPlayers;++s){hasFrame_[s]=false;left_[s]=false;silent_[s]=0;}
             note("> The host started the race: %u players",count_);
         }
@@ -361,9 +397,26 @@ void Session::receive(const uint8_t* data,size_t size,uint32_t address,uint16_t 
     case Type::Go:{if(size<sizeof(Go))return;Go go;std::memcpy(&go,data,sizeof go);if(mode_==Mode::Join&&go.round==round_)goSeen_=true;break;}
     case Type::Frame:{
         if(size<sizeof(Frame))return;
-        Frame frame;std::memcpy(&frame,data,sizeof frame);reach_[s]=frame.reach;
+        Frame frame;std::memcpy(&frame,data,sizeof frame);if(frame.round!=round_)return;reach_[s]=frame.reach;
         // UDP can reorder: keep only the newest tick.
         if(!hasFrame_[s]||frame.tick>=latest_[s].tick){latest_[s]=frame;hasFrame_[s]=true;}
+        // Which of this console's events the sender has: the newest number at
+        // or below the next one with that low byte.
+        if(slot_<MaxPlayers){const uint16_t has=uint16_t(nextSeq_-((nextSeq_-frame.ack[slot_])&0xffu));if(has>acked_[s])acked_[s]=has;}
+        relay();break;
+    }
+    case Type::Events:{
+        if(size<offsetof(Events,events))return;
+        Events packet;std::memcpy(&packet,data,std::min(size,sizeof packet));if(packet.round!=round_)return;
+        const unsigned count=std::min<unsigned>({packet.count,EventsPerPacket,unsigned((size-offsetof(Events,events))/sizeof(RaceEvent))});
+        // In order, each once. Events older than the sender still keeps are lost.
+        if(expected_[s]<packet.oldest)expected_[s]=packet.oldest;
+        for(unsigned n=0;n<count&&inboxCount_<InboxSize;++n){
+            const RaceEvent& event=packet.events[n];
+            if(event.seq!=expected_[s])continue;
+            expected_[s]=uint16_t(event.seq+1);
+            inbox_[(inboxHead_+inboxCount_++)%InboxSize]={uint8_t(s),event};
+        }
         relay();break;
     }
     case Type::Bye:if(!left_[s])note("> Player %u left",s+1);left_[s]=true;relay();break;
@@ -372,7 +425,7 @@ void Session::receive(const uint8_t* data,size_t size,uint32_t address,uint16_t 
 }
 
 void Session::newRound(){
-    goSeen_=false;goRepeats_=0;readyPolls_=0;ready_={};announcedWait_=false;failed_=false;
+    goSeen_=false;goRepeats_=0;readyPolls_=0;ready_={};announcedWait_=false;failed_=false;resetEvents();
     for(unsigned s=0;s<MaxPlayers;++s){hasFrame_[s]=false;left_[s]=false;silent_[s]=0;}
     if(mode_==Mode::Host){
         // Joiners call again from their own menus; the lobby fills up anew.

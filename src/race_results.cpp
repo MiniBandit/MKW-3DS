@@ -169,7 +169,7 @@ uint32_t RaceResultsFlow::step(const RaceFlowInput& in){
  const unsigned slideDone=battle_?unsigned((totals()?FlowTeamColumns[1]:FlowBattleColumns[1]).delay+FlowTeamRows[5].delay)+SlideFrames:55+SlideFrames;
  switch(phase_){
  case RaceFlowPhase::Finished:
-  if(pageFrame_>=FinishCountFrames+FinishHoldFrames){enter(RaceFlowPhase::HudExit);events|=EventHudExit;}
+  if(pageFrame_>=FinishCountFrames+FinishHoldFrames&&!hold_){enter(RaceFlowPhase::HudExit);events|=EventHudExit;}
   break;
  case RaceFlowPhase::HudExit:
   if(pageFrame_>=HudExitFrames){

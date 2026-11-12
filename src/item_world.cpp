@@ -399,8 +399,9 @@ void RaceItems::resolveActorPair(ItemActor& a,ItemActor& b){
     apply(b,responseB,-normal,oldAVelocity);
 }
 void RaceItems::resolveActorHeld(ItemActor& actor,unsigned owner,unsigned slot){
-    if(!actor.active||owner>=count_||slot>=3)return;
+    if(!actor.active||owner>=count_||slot>=3||netRemote(owner))return;
     auto& h=hud_[owner];auto& state=deployments_[owner];
+    const bool wasBlast=actor.explosion;
     if(!(h.heldMask&(1u<<slot))||state.scales[slot]<HeldContactMinimumScale)return;
     if(actor.owner==int(owner)||racers_[owner].unavailable)return;
     if(blueFlight(actor)||(actor.kind==ItemKind::RedShell&&actor.guidance.phase==5&&!actor.scattered))return;
@@ -417,6 +418,8 @@ void RaceItems::resolveActorHeld(ItemActor& actor,unsigned owner,unsigned slot){
     }
     if(heldResponse==2&&(h.heldMask&(1u<<slot)))destroyHeld(owner,slot);
     else if(heldResponse==1)state.positions[slot]=state.positions[slot]-normal*.25f;
+    // Online: this console's tethered items decide what becomes of an object that meets them.
+    if(netSelf(owner))netActorChanged(actor,wasBlast);
 }
 
 // ---- Kart pass -------------------------------------------------------------------------
@@ -485,6 +488,8 @@ void RaceItems::heldKartContacts(unsigned player){
     if(r.inAction||r.damageAction>=0)return;
     for(unsigned owner=0;owner<count_;++owner){
         if(owner==player)continue;
+        // Online: only this console's racer runs into the other consoles' items here.
+        if(netRemote(owner)&&!netSelf(player))continue;
         auto& h=hud_[owner];auto& state=deployments_[owner];
         for(unsigned slot=0;slot<3;++slot){
             if(!(h.heldMask&(1u<<slot))||state.scales[slot]<HeldContactMinimumScale)continue;
@@ -497,6 +502,13 @@ void RaceItems::heldKartContacts(unsigned player){
             const int action=kind==ItemKind::Bobomb?-1:handlerAction(probe,r);
             const Vec3 away=normalized(r.position-state.positions[slot],racers_[owner].forward);
             contactSounds(kind,player);
+            if(netRemote(owner)){
+                // The owner's console removes (or detonates) it once it hears of this.
+                lastStarted_=-1;
+                if(action>=0)strike(player,action,owner,away,false,kind);
+                netHeldContact(player,owner,slot,kind,lastStarted_,away);
+                continue;
+            }
             destroyHeld(owner,slot); // A Bob-omb detonates where it trailed; its blast hits.
             if(action>=0)strike(player,action,owner,away,false,kind);
         }
@@ -513,16 +525,26 @@ void RaceItems::boxContacts(unsigned player){
         box.active=false;box.respawn=ItemBoxRespawn;
         sound(ItemSoundCue::BoxBreak,player,ItemKind::None,box.position);
         const auto& h=hud_[player];
-        if(h.item==ItemKind::None&&!h.roulette&&!h.bullet&&!r.controlLocked)startRoulette(player);
+        if(h.item==ItemKind::None&&!h.roulette&&!h.bullet&&!r.controlLocked&&!netRemote(player))startRoulette(player);
     }
 }
 void RaceItems::kartContacts(unsigned player){
     if(!active_||player>=count_)return;
     const auto& r=racers_[player];
     boxContacts(player);
+    // Online: another console's racer meets items on its own console, which reports the
+    // hit. A Red Shell that has caught it here waits for that word, but not for ever.
+    if(netRemote(player)){
+        for(auto& a:actors_)if(a.active&&a.kind==ItemKind::RedShell&&!a.scattered&&!a.netGrace&&a.target==int(player)&&itemTouchesKart(a,player))a.netGrace=NetRedGrace;
+        return;
+    }
     if(r.finished)return;
     // Actor pool order stands in for the retail entity search order.
-    for(auto& a:actors_)if(a.active&&itemTouchesKart(a,player))actorKartContact(a,player);
+    for(auto& a:actors_)if(a.active&&itemTouchesKart(a,player)){
+        const bool wasBlast=a.explosion;lastStarted_=-1;
+        actorKartContact(a,player);
+        if(netSelf(player))netContact(player,a,wasBlast,lastStarted_,lastDirection_);
+    }
     heldKartContacts(player);
 }
 }

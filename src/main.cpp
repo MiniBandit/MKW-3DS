@@ -225,6 +225,10 @@ static std::array<uint8_t,12> selectedStartPositions{};
 // Online and LAN play (src/net_session.cpp): a VS race against other consoles.
 // Each console is racer 0 on its own screen; netGlobal maps local racers to lobby slots.
 static bool netRace=false,netWaiting=false;static uint32_t netRemoteMask=0,netLostMask=0;static unsigned netCount=0;
+// netLocal: lobby slot -> local racer. netFinishKey: each racer's own finishing report
+// (net_session.hpp FinishKey, 0 none yet); netFirstFinish: the step the first one was known.
+static std::array<uint8_t,12> netLocal{},netItemSeen{};static std::array<uint32_t,12> netFinishKey{};static uint32_t netFirstFinish=0;
+static uint8_t netPlayerOf(unsigned slot){return slot<12?netLocal[slot]:uint8_t(255);}
 static std::array<unsigned,12> netRoster{};static std::array<uint8_t,12> netGlobal{};static std::array<uint32_t,12> netAppliedTick{};
 // Time Trials ghost (Race/TimeAttack on the SD card): racer 1 replays it.
 static bool ghostRace=false,watchReplay=false;
@@ -282,6 +286,22 @@ static void report(const char* text) {
 }
 #define LOGF(...) do{char logLine_[256];snprintf(logLine_,sizeof logLine_,__VA_ARGS__);report(logLine_);}while(0)
 #endif
+// One line per race event, the same on the console that sent it and those that played it.
+static void netLogEvent(unsigned slot,const mkw::net::RaceEvent& e){
+    using Kind=mkw::net::EventKind;
+    const char* item=mkw::itemName(mkw::ItemKind(e.kind==uint8_t(Kind::Hit)?e.c:e.a));
+    switch(Kind(e.kind)){
+    case Kind::Spawn:LOGF("online: player %u item #%u %s%s at %.0f,%.0f,%.0f",slot+1,unsigned(e.id),item,e.c&4?" blast":e.c&2?" dropped":e.c&1?" backwards":"",e.v[0],e.v[1],e.v[2]);break;
+    case Kind::Use:LOGF("online: player %u used %s",slot+1,item);break;
+    case Kind::Hit:LOGF("online: player %u hit: action %d by player %d item #%u %s fate %u",slot+1,e.a==255?-1:int(e.a),e.b==255?0:int(e.b)+1,unsigned(e.id),e.c<19?item:"-",unsigned(e.d));break;
+    case Kind::Shrink:LOGF("online: player %u struck by lightning for %u frames",slot+1,unsigned(e.id));break;
+    case Kind::Take:LOGF("online: player %u took player %d's %s #%u",slot+1,e.b==255?0:int(e.b)+1,item,unsigned(e.id));break;
+    case Kind::Item:LOGF("online: player %u's tethered item met player %d's item #%u fate %u",slot+1,e.b==255?0:int(e.b)+1,unsigned(e.id),unsigned(e.a));break;
+    case Kind::Cloud:LOGF("online: player %u passed its Thunder Cloud to player %d",slot+1,e.b==255?0:int(e.b)+1);break;
+    default:break;
+    }
+    (void)item;
+}
 // Narrow pause regression trace, written only at a START/menu transition.
 // Keep the last transition even in release packages; no per-frame SD writes.
 static void recordPauseStage(const char* stage,bool begin=false){
@@ -1346,7 +1366,7 @@ int main() {
                 // Local racer 0 is this console; the others follow in lobby order.
                 const unsigned me=net.slot();netRemoteMask=0;netRoster=selectedRoster.choices;
                 for(unsigned g=0,i=1;g<netCount;++g){
-                    const unsigned local=g==me?0:i++;netGlobal[local]=uint8_t(g);
+                    const unsigned local=g==me?0:i++;netGlobal[local]=uint8_t(g);netLocal[g]=uint8_t(local);
                     if(local){netRoster[local]=net.garage(g);netRemoteMask|=1u<<local;}
                 }
                 LOGF("online: race course=%u players=%u as player %u",courseChoice,netCount,me+1);
@@ -1516,6 +1536,12 @@ int main() {
             if(kQa&&length>0&&size_t(length)<sizeof line)length+=snprintf(line+length,sizeof line-size_t(length)," %u:%u+%u",i,unsigned(r.previous),unsigned(r.gain));
         }
         report(line);
+        if(netRace){
+            // The same line on every console: lobby players in finishing order.
+            int at=snprintf(line,sizeof line,"online: results");
+            for(unsigned p=0;p<n&&at>0&&size_t(at)<sizeof line;++p)at+=snprintf(line+at,sizeof line-size_t(at)," %u:player %u",p+1,unsigned(netGlobal[order[p]])+1);
+            LOGF("%s",line);
+        }
         // Time Trials: Next returns to the course choice; no set to finish.
         results.fill(rows.data(),n,battleMode?battleSession.complete():(!timeTrial&&vsSet.race>=raceCount()));
         if(battleMode)results.setBattle(battleSession.wins(mkw::RaceTeam::Red),battleSession.wins(mkw::RaceTeam::Blue),battleSession.target());
@@ -1830,6 +1856,8 @@ int main() {
         if(!raceGrid.reset()){trackLoadFailed=true;report("FAIL course CPU route: race suspended; choose another map");}
         raceGrid.remoteMask=netRace?netRemoteMask:ghostRace?2u:0u;
         raceItems->resetFromCourse(raceGrid.count());
+        raceItems->setNet(netRace,uint16_t(netRace?netRemoteMask:0));
+        netFinishKey={};netFirstFinish=0;netItemSeen.fill(20);raceGrid.setNetFinish(netRace,netFinishKey,netGlobal);
         if(battleMode&&!raceGrid.ai().setBattleSources(*raceItems,coinRunnersMode?&coinBattle:nullptr)){
             trackLoadFailed=true;report("FAIL original battle search graph");
         }
@@ -2476,16 +2504,30 @@ int main() {
                         for(unsigned i=1;i<raceGrid.count();++i){
                             const unsigned g=netGlobal[i];
                             // A lost console that speaks again takes its kart back from the CPU.
-                            if((netLostMask>>i&1u)&&!net.left(g)&&net.silence(g)<30){raceGrid.remoteMask|=1u<<i;netLostMask&=~(1u<<i);LOGF("online: player %u is back",g+1);}
+                            if((netLostMask>>i&1u)&&!net.left(g)&&net.silence(g)<30){raceGrid.remoteMask|=1u<<i;netLostMask&=~(1u<<i);raceItems->setNet(true,uint16_t(raceGrid.remoteMask));LOGF("online: player %u is back",g+1);}
                             if(!(raceGrid.remoteMask>>i&1u))continue;
                             // Five seconds without a word, or a goodbye: that kart races on as a CPU.
                             if(!netWaiting&&(net.left(g)||net.silence(g)>300)){
-                                raceGrid.remoteMask&=~(1u<<i);netLostMask|=1u<<i;LOGF("online: lost player %u; racer %u is now a CPU",g+1,i);continue;
+                                raceGrid.remoteMask&=~(1u<<i);netLostMask|=1u<<i;raceItems->setNet(true,uint16_t(raceGrid.remoteMask));LOGF("online: lost player %u; racer %u is now a CPU",g+1,i);continue;
                             }
                             // The other console's latest inputs drive its kart here between state corrections.
                             mkw::net::Frame peer;auto* remotePad=K::System::KPadDirector::Instance()->hostController(i);
-                            if(net.frame(g,peer))remotePad->setInputsRawStick(peer.buttons,unsigned(std::clamp(int(peer.stickX),-7,7)+7),7,K::System::Trick(std::min<unsigned>(peer.trick,4)));
-                            else remotePad->setInputsRawStick(0,7,7,K::System::Trick::None);
+                            if(net.frame(g,peer)){
+                                remotePad->setInputsRawStick(peer.buttons,unsigned(std::clamp(int(peer.stickX),-7,7)+7),7,K::System::Trick(std::min<unsigned>(peer.trick,4)));
+                                // Its item window and tethered items are what its console says.
+                                raceItems->applyNetState(i,{peer.item,peer.charges,peer.heldKind,peer.heldMask,peer.itemFlags});
+                                if(peer.item!=netItemSeen[i]){netItemSeen[i]=peer.item;if(peer.item<19)LOGF("online: player %u got %s",g+1,mkw::itemName(mkw::ItemKind(peer.item)));}
+                            }else remotePad->setInputsRawStick(0,7,7,K::System::Trick::None);
+                        }
+                        // What the other consoles decided for their racers: objects thrown, items used, hits taken.
+                        unsigned from;mkw::net::RaceEvent wire;
+                        while(net.takeRaceEvent(from,wire)){
+                            const unsigned i=netPlayerOf(from);
+                            if(i>=raceGrid.count()||!(raceGrid.remoteMask>>i&1u))continue;
+                            mkw::ItemNetEvent event;event.kind=wire.kind;event.a=wire.a;event.other=netPlayerOf(wire.b);event.c=wire.c;event.d=wire.d;event.e=wire.e;event.id=wire.id;
+                            std::copy(std::begin(wire.v),std::end(wire.v),event.v);
+                            raceItems->applyNetEvent(i,event);
+                            netLogEvent(from,wire);
                         }
                     }
                     raceGrid.beforeStep(raceItems->bulletPlayers());
@@ -2545,8 +2587,33 @@ int main() {
                         const auto& ev=d->extVel();const auto& iv=d->intVel();
                         const float pos[3]={p.x,p.y,p.z},full[4]={fr.v.x,fr.v.y,fr.v.z,fr.w},main[4]={mr.v.x,mr.v.y,mr.v.z,mr.w};
                         const float ext[3]={ev.x,ev.y,ev.z},in[3]={iv.x,iv.y,iv.z};
-                        net.sendFrame(physicsSteps,lanButtons,lanStick,lanTrick,lanItemFlags,pos,full,main,ext,in);
+                        // This console's finish: its race time at the line, or, 30 seconds after
+                        // the first finisher, how far it got. Every console ranks by these reports.
+                        const auto& me=K::System::RaceManager::Instance()->player(0);
+                        if(!netFinishKey[0]){
+                            if(me.finished()){const auto& t=me.raceTimer();netFinishKey[0]=mkw::net::FinishKey::time(uint32_t(t.min)*60000u+uint32_t(t.sec)*1000u+uint32_t(t.mil));}
+                            else if(netFirstFinish&&physicsSteps-netFirstFinish>=mkw::net::FinishKey::WaitFrames)netFinishKey[0]=mkw::net::FinishKey::unfinished(me.raceCompletion());
+                            if(netFinishKey[0])LOGF("online: player %u finish %u",unsigned(netGlobal[0])+1,unsigned(netFinishKey[0]));
+                        }
+                        const auto items=raceItems->netState();
+                        if(items.item!=netItemSeen[0]){netItemSeen[0]=items.item;if(items.item<19)LOGF("online: player %u got %s",unsigned(netGlobal[0])+1,mkw::itemName(mkw::ItemKind(items.item)));}
+                        net.sendFrame(physicsSteps,lanButtons,lanStick,lanTrick,lanItemFlags,pos,full,main,ext,in,
+                            {items.item,items.charges,items.heldKind,items.heldMask,items.flags,netFinishKey[0]});
                     }
+                    bool waiting=false;
+                    for(unsigned i=1;i<raceGrid.count();++i){
+                        mkw::net::Frame peer;
+                        if(!netFinishKey[i]&&net.frame(netGlobal[i],peer)&&peer.finish){netFinishKey[i]=peer.finish;LOGF("online: player %u finish %u",unsigned(netGlobal[i])+1,unsigned(peer.finish));}
+                        if(!netFinishKey[i]&&!(netLostMask>>i&1u))waiting=true;
+                    }
+                    if(!netFirstFinish)for(unsigned i=0;i<raceGrid.count();++i)if(netFinishKey[i]){netFirstFinish=physicsSteps?physicsSteps:1;break;}
+                    // The results wait for every console still racing (they give up 30 seconds after the
+                    // first finisher; ten more cover a console that never says). One that has gone ranks last.
+                    if(netFinishKey[0]&&waiting&&physicsSteps-netFirstFinish>=mkw::net::FinishKey::WaitFrames+600)waiting=false;
+                    if(netFinishKey[0]&&!waiting)for(unsigned i=1;i<raceGrid.count();++i)if(!netFinishKey[i]){
+                        netFinishKey[i]=mkw::net::FinishKey::gone(netGlobal[i]);LOGF("online: player %u did not report a finish",unsigned(netGlobal[i])+1);}
+                    results.hold(waiting);
+                    raceGrid.setNetFinish(true,netFinishKey,netGlobal);
                     for(unsigned i=1;i<raceGrid.count();++i){
                         mkw::net::Frame peer;if(!(raceGrid.remoteMask>>i&1u)||!net.frame(netGlobal[i],peer)||peer.tick==netAppliedTick[i])continue;
                         auto* other=objects->object(i);if(!other)continue;
@@ -2567,6 +2634,16 @@ int main() {
                 if(intro.active()&&!raceWarmupFrames){intro.step();++introTick;if(!intro.active())endIntro();}
                 if(fullRace){
                     raceGrid.afterStep();raceItems->afterStepNative(raceGrid.count());
+                    if(netRace){
+                        // What this console decided for its own racer this tick, for the others to play.
+                        auto& net=mkw::net::session();mkw::ItemNetEvent event;
+                        while(raceItems->takeNetEvent(event)){
+                            mkw::net::RaceEvent wire{};wire.kind=event.kind;wire.a=event.a;wire.b=event.other<raceGrid.count()?netGlobal[event.other]:uint8_t(255);wire.c=event.c;wire.d=event.d;wire.e=event.e;wire.id=event.id;
+                            std::copy(std::begin(event.v),std::end(event.v),wire.v);
+                            net.sendEvent(wire);netLogEvent(netGlobal[0],wire);
+                        }
+                        net.eventStep();
+                    }
                     if(coinRunnersMode){
                         const auto* race=K::System::RaceManager::Instance();
                         coinBattle.step(race->isStageReached(K::System::RaceManager::Stage::Race)&&
@@ -2766,7 +2843,7 @@ int main() {
                         if(battleMode)audio.battleResultKind=uint8_t(battleOutcome.kind(mkw::RaceTeam(K::System::RaceConfig::Instance()->raceScenario().players[0].team),battleScore(0)));
                         audio.resultPointsChanged=results.pointsChanged();
                         audio.resultSlideSound=results.slideSound();
-                        audio.finished=roundFinished;audio.rank=battleMode?battleRank(0):me.finishOrder()?me.finishOrder():raceGrid.rank();
+                        audio.finished=roundFinished;audio.rank=battleMode?battleRank(0):me.finishOrder()&&!netRace?me.finishOrder():raceGrid.rank();
                         audio.star=st.onBit(St::Star);audio.mega=st.onBit(St::Mega);audio.shocked=st.onBit(St::Shocked);
                         audio.introShot=intro.active()?intro.shot():-1;audio.hudRank=fullRace&&!battleMode&&!intro.active()?raceGrid.rank():0;
                         const uint16_t coinCues=coinBattle.takeCues(),coinArrivalCues=coinBattle.takeArrivalCues();

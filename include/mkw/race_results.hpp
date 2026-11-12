@@ -53,6 +53,8 @@ public:
  void reset();
  // RaceHUD::BeforeControlUpdate: the local player has just finished.
  void finish(bool timeTrial=false);
+ // Online: FINISH stays up until every console's result is in.
+ void hold(bool wait){hold_=wait;}
  // One 60 Hz tick; returns Event bits. EventFill asks for fill() at once.
  uint32_t step(const RaceFlowInput& in);
  // GPVSLeaderboardUpdate::FillRows: rows in finishing order.
@@ -125,7 +127,7 @@ private:
  bool teams_=false;RaceTeam humanTeam_=RaceTeam::None;
  std::array<RaceTeamScore,2> teamScores_{};
  std::array<float,2> teamDisplayed_{};std::array<float,12> teamRowDisplayed_{};
- bool timeTrial_=false;
+ bool timeTrial_=false,hold_=false;
  std::array<RaceResultEntry,12> rows_{};
  std::array<RaceResultCount,12> counts_{};
 };
