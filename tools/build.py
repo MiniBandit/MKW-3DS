@@ -141,6 +141,14 @@ def main():
     # consoles race only others built from the same source.
     from build_id import build_id
     version_stamp += f'#define MKW_BUILD_ID "{build_id(ROOT)}"\n'
+    # A test build shows a warning at start-up and a TEST BUILD label on the menus:
+    # tools/release/TEST_BUILD holds its label (e.g. "0.8.0 test 1"); delete the
+    # file for a release.
+    test_file = ROOT / "tools/release/TEST_BUILD"
+    test_label = test_file.read_text().strip().splitlines()[0].strip() if test_file.is_file() and test_file.read_text().strip() else ""
+    if any(c in test_label for c in '"\\'):
+        raise SystemExit("TEST_BUILD: no quotes or backslashes")
+    version_stamp += f'#define MKW_TEST_BUILD "{test_label}"\n'
     # The GitHub update build (MKW_QUICK_UPDATE=1, .github/workflows/update-cia.yml).
     quick_update = "1" if os.environ.get("MKW_QUICK_UPDATE") == "1" else "0"
     version_stamp += f"#define MKW_QUICK_UPDATE {quick_update}\n"

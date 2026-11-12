@@ -392,10 +392,10 @@ static bool sdContentReady(){
     if(!found[0]){
         printf("  This is a code update, not the whole game.\n  It needs the game files you build\n  yourself, on your computer, from your\n  own Mario Kart Wii disc.\n\n");
         printf("  Builder and instructions:\n  %s\n\n",ProjectUrl);
-        printf("  Copy build/release/sd-card/3ds to the\n  root of your SD card, or install your\n  full CIA.\n");
+        printf("  Copy the mkw-3ds folder from build/\n  release/sd-card/3ds into sd:/3ds, or\n  install your full CIA.\n");
     }else{
         printf("  Your game files are from a different\n  builder than this update needs.\n\n");
-        printf("  Download the latest builder and build the\n  game again, then copy build/release/\n  sd-card/3ds to your SD card.\n\n");
+        printf("  Download the latest builder and build the\n  game again, then copy the mkw-3ds folder\n  from build/release/sd-card/3ds into sd:/3ds.\n\n");
         printf("  Help: %s\n",ProjectUrl);
     }
     printf("\n  Press any button to exit.");
@@ -1161,6 +1161,8 @@ int main() {
             }
             if(!incomingReady)mkw::drawLoadingWheel(renderer,loadWaitStart);
             if(selectionSave)mkw::drawLoadingWheel(renderer,saveStarted);
+            // Test builds (tools/release/TEST_BUILD): a label in the lower screen's corner.
+            if(MKW_TEST_BUILD[0])renderer.drawScreenText("TEST BUILD",236,5,1.f,0xffd040e0u);
             menuProfile->mark(MenuStage::Foreground);
             renderer.end();
             menuProfile->mark(MenuStage::Submit);menuProfile->end(renderer,unsigned(quads.size()));
@@ -1373,6 +1375,24 @@ int main() {
             }
         }
     };
+    // Test builds (tools/release/TEST_BUILD): say so once at start-up, until A.
+    if(MKW_TEST_BUILD[0]&&fullRace&&!autoplay){
+        static const char* const lines[]={
+            "This is an unfinished test version.","It may crash, freeze or lose saves.",
+            "Back up sd:/3ds/mkw-3ds first.","",
+            "Online: race only players who have","this same test build.","",
+            "If it crashes, keep the file in","sd:/luma/dumps and report it on","GitHub or Discord."};
+        while(aptMainLoop()){
+            hidScanInput();if(hidKeysDown()&KEY_A)break;
+            renderer.begin({0,0,1000},{0,0,0},{0,1,0});renderer.drawScreenFade(1.f,false);
+            renderer.drawScreenText("TEST BUILD",16,14,1.7f,0xffd040ffu);
+            renderer.drawScreenText("MKW 3DS " MKW_TEST_BUILD,16,44,1.3f,0xffffffffu);
+            for(unsigned i=0;i<std::size(lines);++i)renderer.drawScreenText(lines[i],16,74+float(i)*15.f,1.1f,0xffffffffu);
+            renderer.beginBottom();renderer.drawScreenFade(1.f,false);
+            renderer.drawScreenText("Press A to continue",64,110,1.3f,0xffffffffu);
+            renderer.end();
+        }
+    }
     if(fullRace){if(runMenu()!=mkw::UiAction::StartRace){finishAutoplay();renderer.waitForGpu();menuModels.reset(renderer);menuIcons.reset(renderer);menuRenderer.release();mkw::SoundSystem::instance().stop();mkw::MenuMovieAudio::shutdown();mkw::shutdownLoadingScreen();renderer.shutdown();gfxExit();return 0;}applySelection();menu.raceStarted();raceLoadStart=svcGetSystemTick();}
     bool dataReady=exists("Race/Common.szs")&&courseAvailable(courseChoice);
     if(dataReady&&(kQa&&exists("sdmc:/3ds/mkw-3ds/trace-test.txt"))) {
