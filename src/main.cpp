@@ -1375,23 +1375,26 @@ int main() {
             }
         }
     };
-    // Test builds (tools/release/TEST_BUILD): say so once at start-up, until A.
+    // Test builds (tools/release/TEST_BUILD): at start-up, "TEST" flashes red in the
+    // four corners of both screens while the item warning alarm sounds, then the game goes on.
     if(MKW_TEST_BUILD[0]&&fullRace&&!autoplay){
-        static const char* const lines[]={
-            "This is an unfinished test version.","It may crash, freeze or lose saves.",
-            "Back up sd:/3ds/mkw-3ds first.","",
-            "Online: race only players who have","this same test build.","",
-            "If it crashes, keep the file in","sd:/luma/dumps and report it on","GitHub or Discord."};
-        while(aptMainLoop()){
-            hidScanInput();if(hidKeysDown()&KEY_A)break;
+        constexpr unsigned AlarmStart=30,Frames=180;constexpr std::uint16_t AlarmSlot=3;
+        auto corners=[&](float width){
+            constexpr float Size=2.f,W=23*Size,H=7*Size,M=4;
+            for(float x:{M,width-W-M})for(float y:{M,240-H-M})renderer.drawScreenText("TEST",x,y,Size,0xff2020ffu);
+        };
+        menuSound.preloadUi(true);
+        for(unsigned frame=0;frame<Frames&&aptMainLoop();++frame){
+            hidScanInput();
+            if(frame==AlarmStart)mkw::SoundSystem::instance().play(mkw::snd::id::SE_ITM_ALARM,AlarmSlot);
+            const bool lit=(frame/15)%2==0;
             renderer.begin({0,0,1000},{0,0,0},{0,1,0});renderer.drawScreenFade(1.f,false);
-            renderer.drawScreenText("TEST BUILD",16,14,1.7f,0xffd040ffu);
-            renderer.drawScreenText("MKW 3DS " MKW_TEST_BUILD,16,44,1.3f,0xffffffffu);
-            for(unsigned i=0;i<std::size(lines);++i)renderer.drawScreenText(lines[i],16,74+float(i)*15.f,1.1f,0xffffffffu);
+            if(lit)corners(400);
             renderer.beginBottom();renderer.drawScreenFade(1.f,false);
-            renderer.drawScreenText("Press A to continue",64,110,1.3f,0xffffffffu);
+            if(lit)corners(320);
             renderer.end();
         }
+        mkw::SoundSystem::instance().stopSlot(AlarmSlot,5);
     }
     if(fullRace){if(runMenu()!=mkw::UiAction::StartRace){finishAutoplay();renderer.waitForGpu();menuModels.reset(renderer);menuIcons.reset(renderer);menuRenderer.release();mkw::SoundSystem::instance().stop();mkw::MenuMovieAudio::shutdown();mkw::shutdownLoadingScreen();renderer.shutdown();gfxExit();return 0;}applySelection();menu.raceStarted();raceLoadStart=svcGetSystemTick();}
     bool dataReady=exists("Race/Common.szs")&&courseAvailable(courseChoice);

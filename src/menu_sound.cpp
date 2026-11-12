@@ -205,6 +205,8 @@ void MenuSound::startBgm(UiPage page) {
  if (layer == 5 || unavailable_) volume_.set(0.55f, 30);
 }
 
+void MenuSound::preloadUi(bool race) { loadSections(race ? std::uint32_t(id::group::GRP_RACE) : 0xFFFFFFFFu, 0xFFFFFFFF, 0); }
+
 void MenuSound::enterSection(Section next, UiPage page) {
  auto& sound = SoundSystem::instance();
  // MenuRSARPlayer::Stop (8070e198): the old BGM fades over 20 frames.

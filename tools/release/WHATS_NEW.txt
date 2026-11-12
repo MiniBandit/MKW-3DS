@@ -4,4 +4,9 @@ Online: race up to 12 players.
   code. No server needed.
 Time Trials: your best run is
   saved as a ghost to race or watch.
+Camera: the original game's
+  chase camera; look behind with
+  X or ZL.
+Graphics option in License
+  Settings.
 Old 3DS: fewer races fail to load.

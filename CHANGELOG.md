@@ -11,6 +11,20 @@ Needs a new build: the builder now copies the staff ghosts from your disc, and t
 - **Licence:** the new online code is under the MKW 3DS Online Licence (see NOTICE); the rest stays as it was.
 - **Time Trial ghosts** (ThePhilosophicalOne's retail-accuracy work, brought across from their pull request): your best run on each course is saved as a ghost (`sd:/3ds/mkw-3ds/ghosts`). Choose **Race This Ghost** or **Watch the Replay**, and browse with left/right between your ghost, ghosts you copy into that folder (a friend's, or a Wii or Dolphin save's) and the staff and expert staff ghosts. Ghosts are see-through, start with you, never draft or collide, and slow down and fade out after their finish. A run replays exactly as it was driven.
 - Old 3DS: an opponent that runs out of memory loading in full detail is retried in low detail instead of failing the race.
+- **Retail race camera** (from ThePhilosophicalOne's pull request): the original game's chase camera, with its wall avoidance, the field of view widening on boosts, the lag when you're blown up, the half-pipe swing and the look-behind view (X or ZL); Bullet Bill and cannon views as before.
+- **Closer to the original game** (also from ThePhilosophicalOne's work): racers respawn on the original grid of places around the respawn point; CPUs far from every player skip most course objects, as on the Wii; objects only react to a kart that isn't already spinning or tumbling; Rainbow Road's star rings; the original stuck-recovery and moving-road rules.
+- The lap counter and Lakitu use the highest lap reached: reversing over the finish line no longer takes a lap off.
+- Wario's Gold Mine: the item boxes on the minecart line move at the carts' speeds.
+- The course preview skips on A only, from its second second, so a press carried over from the menus can't skip it.
+- **Graphics** in License Settings: Auto, Quality or Performance (Performance turns off the dynamic shadow: about 38% less drawing work on New 3DS).
+- Circle Pad: a released pad resting slightly off centre no longer keeps steering.
+- Notification LED: Waluigi's second colour is purple.
+- Builder (Windows): a C++ compiler installed with winget, MSYS2, llvm-mingw or w64devkit is found even when it isn't on PATH; the menu movie step no longer fails when a virus scanner holds its files.
+- Install instructions: copy the `mkw-3ds` folder into your SD card's `3ds` folder (copying the `3ds` folder itself can replace your card's whole `3ds` folder on a Mac).
+
+Known issues in this test:
+- The Wii's staff ghosts can drift from their run (the expert staff ghost goes off course on some tracks). Ghosts you record on the 3DS replay exactly.
+- Online play has only been tested with two consoles.
 
 # 0.7.0: Redux merge
 

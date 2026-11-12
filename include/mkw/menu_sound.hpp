@@ -10,6 +10,9 @@
 namespace mkw {
 class MenuSound {
 public:
+ // The common UI group (GRP_CMN), and with `race` the race group (its item warning
+ // alarm), before any menu section: the test-build notice. The first section releases them.
+ void preloadUi(bool race=false);
  static constexpr std::uint16_t RaceConfirmSlot=31;
  // After MenuTransition::input: the logical state before and after this
  // frame's accepted input, and the input itself. Do not call while the
