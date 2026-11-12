@@ -2,6 +2,7 @@
 #include <mkw/menu_renderer.hpp>
 #include <mkw/menu_background_motion.hpp>
 #include <mkw/menu_assets.hpp>
+#include <mkw/menu_glyph_atlas.hpp>
 #include <mkw/menu_index.hpp>
 #include <mkw/menu_movie.hpp>
 #include <mkw/menu_movie_assets.hpp>
@@ -25,9 +26,9 @@ Residency neededSprites(const std::vector<UiQuad>& quads){
  // Keep every brightness digit resident even on the synchronous/recovery path.
  const bool options=std::any_of(quads.begin(),quads.end(),[](const auto& q){return q.menu.page==UiPage::LicenseSettings;});
  if(options)for(unsigned i=0;i<needed.size();++i){const char* key=UiSprites[i].key;
-  if(!std::strcmp(key,"name_glyph_0025")||(!std::strncmp(key,"name_glyph_003",14)&&key[14]>='0'&&key[14]<='9'&&!key[15]))needed[i]=true;
+  if(!std::strcmp(key,"name_glyph_0025")||(!std::strncmp(key,"name_glyph_003",14)&&key[14]>='0'&&key[14]<='9'&&!key[15]))needed[uiTextureSprite(i)]=true;
  }
- for(const auto& q:quads)if(q.vehicleIcon>=12&&q.movie>=std::size(UiMovieRegions)&&q.sprite<needed.size())needed[q.sprite]=true;
+ for(const auto& q:quads)if(q.vehicleIcon>=12&&q.movie>=std::size(UiMovieRegions)&&q.sprite<needed.size())needed[uiTextureSprite(q.sprite)]=true;
  // composeMenu(preload=true) already emits every atlas a page can draw,
  // including later animation frames. Do not add all atlases of a base panel:
  // some authored strips are clipped for this control/page placement, and
@@ -234,8 +235,11 @@ void MenuRenderer::draw(Renderer& renderer,const std::vector<UiQuad>& quads,bool
   else if(q.movie<std::size(UiMovieRegions)){
    const auto& r=UiMovieRegions[q.movie];const auto& movie=impl_->movies[r.stream];
    if(movie&&movie->texture())renderer.drawScreenSpriteRegion(*movie->texture(),q.x,q.y,q.w,q.h,r.u0+(r.u1-r.u0)*q.u0,r.v0+(r.v1-r.v0)*q.v0,r.u0+(r.u1-r.u0)*q.u1,r.v0+(r.v1-r.v0)*q.v1,q.alpha,q.tint,q.corners.data(),q.additive);
-  }else if(q.sprite<impl_->slots.size()&&impl_->slots[q.sprite].texture){
-   const auto& info=UiSprites[q.sprite];const auto& texture=*impl_->slots[q.sprite].texture;
+  }else if(q.sprite<impl_->slots.size()&&impl_->slots[uiTextureSprite(q.sprite)].texture){
+   const auto& info=UiSprites[q.sprite];const auto& texture=*impl_->slots[uiTextureSprite(q.sprite)].texture;
+   // A name glyph's place in its atlas page.
+   const auto origin=uiTexelOrigin(q.sprite);
+   const float u0=float(origin.x)/texture.gpu.width,v0=float(origin.y)/texture.gpu.height;
    // The stripes: "background" (dark), "background_lines" (stripes alone,
    // over the title picture) and "background_option" (the Settings page).
    if(!std::strncmp(info.key,"background",10)){
@@ -249,12 +253,12 @@ void MenuRenderer::draw(Renderer& renderer,const std::vector<UiQuad>& quads,bool
    }else if(q.fontRemap||q.affine){
     float corners[4][2]={{q.x,q.y},{q.x+q.w,q.y},{q.x,q.y+q.h},{q.x+q.w,q.y+q.h}};
     if(q.affine)for(unsigned k=0;k<4;++k)for(unsigned axis=0;axis<2;++axis)corners[k][axis]=q.positions[k][axis];
-    const float uv[4][2]={{info.u*q.u0,info.v*q.v0},{info.u*q.u1,info.v*q.v0},{info.u*q.u0,info.v*q.v1},{info.u*q.u1,info.v*q.v1}};
+    const float uv[4][2]={{u0+info.u*q.u0,v0+info.v*q.v0},{u0+info.u*q.u1,v0+info.v*q.v0},{u0+info.u*q.u0,v0+info.v*q.v1},{u0+info.u*q.u1,v0+info.v*q.v1}};
     uint32_t colors[4];
     for(unsigned k=0;k<4;++k){colors[k]=0;for(unsigned shift:{24u,16u,8u,0u})
      colors[k]|=((((q.corners[k]>>shift)&255)*((q.tint>>shift)&255)+127)/255)<<shift;}
     renderer.drawScreenMaterialQuad(&texture,corners,uv,colors,q.fontColor0,q.fontColor1,q.alpha,q.additive);
-   }else renderer.drawScreenSpriteRegion(texture,q.x,q.y,q.w,q.h,info.u*q.u0,info.v*q.v0,info.u*q.u1,info.v*q.v1,q.alpha,q.tint,q.corners.data(),q.additive);
+   }else renderer.drawScreenSpriteRegion(texture,q.x,q.y,q.w,q.h,u0+info.u*q.u0,v0+info.v*q.v0,u0+info.u*q.u1,v0+info.v*q.v1,q.alpha,q.tint,q.corners.data(),q.additive);
   }
  }
 }
@@ -298,7 +302,7 @@ std::size_t MenuRenderer::moveToVram(Renderer& renderer,std::size_t reserve){
 bool MenuRenderer::coversScreen(const std::vector<UiQuad>& quads)const{
  if(quads.empty())return false;
  const auto& q=quads[0];const auto& s=*impl_;
- if(q.bottom||q.sprite>=s.slots.size()||!s.slots[q.sprite].texture||!s.slots[q.sprite].opaque)return false;
+ if(q.bottom||q.sprite>=s.slots.size()||uiTextureSprite(q.sprite)!=q.sprite||!s.slots[q.sprite].texture||!s.slots[q.sprite].opaque)return false;
  if(q.licensePortrait<s.portraits.size()||q.vehicleIcon<12||q.movie<std::size(UiMovieRegions)||q.fontRemap||q.affine||q.additive)return false;
  // Full alpha everywhere: the blend then writes the texel colour alone.
  if(!(q.alpha>=1.f)||(q.tint&255)!=255)return false;
@@ -312,7 +316,7 @@ std::size_t MenuRenderer::placeInVram(Renderer& renderer,const std::vector<UiQua
  // Screen area each sprite covers in this frame.
  static std::vector<float> area;area.assign(s.slots.size(),0.f);
  for(const auto& q:drawn)if(q.sprite<s.slots.size()&&q.movie>=std::size(UiMovieRegions)&&q.vehicleIcon>=12&&q.licensePortrait>=s.portraits.size())
-  area[q.sprite]+=std::min(std::fabs(q.w*q.h),400.f*240.f)*std::clamp(q.alpha,0.f,1.f);
+  area[uiTextureSprite(q.sprite)]+=std::min(std::fabs(q.w*q.h),400.f*240.f)*std::clamp(q.alpha,0.f,1.f);
  // Most screen area per byte first (the full-screen stripes and pictures).
  // Small sprites (glyphs, captions) cost little fill: they stay.
  std::vector<std::pair<float,unsigned>> wanted;
