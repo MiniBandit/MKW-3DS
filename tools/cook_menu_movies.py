@@ -152,25 +152,30 @@ def encode(spec, quality, force):
     destination.parent.mkdir(parents=True, exist_ok=True)
     partial = destination.with_suffix('.gmv.partial')
     movie = ThpMovie(ROOT/spec['source'])
-    with tempfile.TemporaryDirectory(prefix='mkw-gmv-') as directory:
+    # Windows virus scanners briefly lock files just written: give each frame its
+    # own names, retry a locked file, and let cleanup skip one still held.
+    with tempfile.TemporaryDirectory(prefix='mkw-gmv-', ignore_cleanup_errors=True) as directory:
         workers = max(1, min(6, int(spec.get('workers', 6 if spec['name'] == 'title' else 1))))
         chunk_size = (spec['frames']+workers-1)//workers
         def chunk(worker):
             first = worker*chunk_size
             last = min(spec['frames'], first+chunk_size)
-            png, raw = Path(directory)/f'frame{worker}.png', Path(directory)/f'frame{worker}.raw'
             encoded = Path(directory)/f'chunk{worker}.etc1'
             with encoded.open('wb') as output:
                 for frame in range(first, last):
+                    png, raw = Path(directory)/f'frame{worker}-{frame}.png', Path(directory)/f'frame{worker}-{frame}.raw'
                     image = movie.frame(frame*spec.get('sourceFrameStep',1)).convert('RGB').resize(tuple(spec['size']), Image.Resampling.LANCZOS)
                     atlas = Image.new('RGB', tuple(spec['textureSize']))
                     atlas.paste(image)
                     w, h = image.size
                     if w < atlas.width: atlas.paste(image.crop((w-1, 0, w, h)).resize((atlas.width-w, h)), (w, 0))
                     if h < atlas.height: atlas.paste(atlas.crop((0, h-1, atlas.width, h)).resize((atlas.width, atlas.height-h)), (0, h))
-                    atlas.save(png, compress_level=1)
-                    run_tex3ds(['-f', 'etc1', '-q', quality, '-r', '-z', 'none', '-o', str(raw), str(png)])
-                    output.write(strip_tex3ds_header(raw.read_bytes(), spec['frameBytes']))
+                    retry_locked(lambda: atlas.save(png, compress_level=1))
+                    retry_locked(lambda: run_tex3ds(['-f', 'etc1', '-q', quality, '-r', '-z', 'none', '-o', str(raw), str(png)]))
+                    output.write(strip_tex3ds_header(retry_locked(raw.read_bytes), spec['frameBytes']))
+                    for done in (png, raw):
+                        try: done.unlink()
+                        except OSError: pass
                     if (frame-first+1) % 240 == 0: print(f'{spec["name"]}: chunk {worker+1}/{workers}, {frame-first+1}/{last-first} source frames', flush=True)
             return encoded
         with ThreadPoolExecutor(max_workers=workers) as pool:
@@ -185,6 +190,16 @@ def encode(spec, quality, force):
               'sha256': digest_file(destination), 'bytes': expected, 'seconds': round(time.monotonic()-start, 2)}
     receipt.write_text(json.dumps(record, indent=2)+'\n')
     return record
+
+
+def retry_locked(action, attempts=40):
+    """Runs action again while Windows reports a file locked (EACCES/EINVAL)."""
+    for attempt in range(attempts):
+        try: return action()
+        except (OSError, subprocess.CalledProcessError) as error:
+            locked = isinstance(error, (PermissionError, subprocess.CalledProcessError)) or getattr(error, 'errno', None) in (13, 22)
+            if attempt == attempts-1 or not locked: raise
+            time.sleep(0.05*(attempt+1))
 
 
 def cook_audio(path, relative_destination='movies/title.wav'):
