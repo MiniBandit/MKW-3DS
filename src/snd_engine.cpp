@@ -578,7 +578,6 @@ struct Engine::Impl {
     left = panRatio(pan, info.curve, info.centerZero, info.zeroClamp);
     right = panRatio(-pan, info.curve, info.centerZero, info.zeroClamp);
    }
-   const f32 front = surroundRatio(span, info.curve), rear = surroundRatio(2.0f - span, info.curve);
    const f32 main = v.mainOutVolume * v.mainSend;
    // AX mix volume u16 (0x8000 == 1.0, clamped at 0xFFFF).
    auto mix = [&](f32 x) { return std::min(main * x, 65535.0f / 32768.0f) * baseVolume; };
@@ -590,7 +589,11 @@ struct Engine::Impl {
     // the music's ambience; 3DS surround has only this mix. Spread the front
     // pair into the rear (music more than effects) at equal power, so music
     // and front sounds fill the field; sounds behind keep their rear-only mix.
-    const f32 k = v.stream ? SurroundSpreadMusic : SurroundSpreadEffects, n = 1.0f / std::sqrt(1.0f + k * k);
+    // The surround ratios only here; the spread's equal-power factors once.
+    const f32 front = surroundRatio(span, info.curve), rear = surroundRatio(2.0f - span, info.curve);
+    static const f32 nMusic = 1.0f / std::sqrt(1.0f + SurroundSpreadMusic * SurroundSpreadMusic),
+                     nEffects = 1.0f / std::sqrt(1.0f + SurroundSpreadEffects * SurroundSpreadEffects);
+    const f32 k = v.stream ? SurroundSpreadMusic : SurroundSpreadEffects, n = v.stream ? nMusic : nEffects;
     const f32 fl = left * front, fr = right * front;
     g.left = mix(fl * n); g.right = mix(fr * n);
     g.rearLeft = mix(left * rear + fl * (n * k)); g.rearRight = mix(right * rear + fr * (n * k));
