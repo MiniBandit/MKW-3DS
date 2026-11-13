@@ -4471,7 +4471,11 @@ int main() {
                     const unsigned long frames=renderer.courseDrawFrames-courseFrames;
                     LOGF("course draws step=%u render_ms=%.3f per frame over %lu frames",physicsSteps,
                          frames?double(renderer.courseDrawTicks-courseTicks)*1000.0/SYSCLOCK_ARM11/double(frames):0.0,frames);
-                    courseTicks=renderer.courseDrawTicks;courseFrames=renderer.courseDrawFrames;}}
+                    courseTicks=renderer.courseDrawTicks;courseFrames=renderer.courseDrawFrames;
+                    {const auto pc=mkw::CourseObjects::precullTotals();
+                    LOGF("render switches step=%u state cache=%d hits=%u/%u setups (last frame) verified=%lu mismatches=%lu quad merge=%d merged=%lu volume rects=%d frames=%lu rects=%lu saved px=%llu precull eligible=%lu tested=%lu culled=%lu violations=%lu",
+                         physicsSteps,int(renderer.stateCache),renderer.stateHits,renderer.drawSetups,renderer.stateVerified,renderer.stateMismatches,int(renderer.quadMerge),renderer.quadMerges,
+                         int(renderer.volumeRects),renderer.volumeRectFrames,renderer.volumeRectsDrawn,(unsigned long long)renderer.volumeRectSaved,pc.eligible,pc.tested,pc.culled,pc.violations);}}}
 #endif
             if(fullRace)renderer.drawScreenFade(lightningFlash.opacity(),lightningFlash.white);
             profiler->mark(Profile::Effects);
