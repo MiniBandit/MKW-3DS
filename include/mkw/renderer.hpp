@@ -4,6 +4,7 @@
 #include <atomic>
 #include <cstdint>
 #include <cstddef>
+#include <cstdio>
 #include <cstring>
 #include <string>
 #include <memory>
@@ -659,6 +660,17 @@ public:
     // DIAG (render thread): ticks spent in the course pass's model draws
     // (first eye of frames with pass markers) and the frames that drew any.
     uint64_t courseDrawTicks=0;unsigned long courseDrawFrames=0;
+    // DIAG draw-timing.txt: drawNow's time split into material setup,
+    // C3D_DrawElements and end-of-draw resets (the last drawn frame, ms).
+    bool drawTiming=false;
+    float drawSetupMs=0,drawCallMs=0,drawResetMs=0,drawNowMs=0;
+    unsigned drawSetups=0,stateHits=0;
+    // DIAG cmd-hash.txt: each frame's GPU command words hashed (FNV-1a) into
+    // cmd-hash.csv; cmd-dump.txt lists animation ticks whose words are saved
+    // as cmd-dump-<tick>-<frame>.bin.
+    bool cmdHash=false;
+    // Reads this file's switches from the SD card (init()).
+    void readSwitches();
     // moveToVram widens texture-unit-1 ETC1 textures to ETC1A4 (opaque
     // alpha) instead of leaving them in LINEAR. A/B: no-unit1-vram.txt.
     bool unitOneEtc1a4=false;
@@ -684,7 +696,8 @@ private:
     // Recording (src/render_thread.cpp).
     struct FrameList;
     // pixels (DIAG): screen area of 2D quads (sprites, text, fades), clipped to the screen.
-    struct Stats {uint32_t triangles=0,drawCalls=0,culledTriangles=0,culledSubmeshes=0;uint64_t pixels=0;float previousGpuMs=0,beginWaitMs=0,commandUsage=0,renderMs=0,hookMs=0,gpuGapMs=0;RenderMetrics metrics{};};
+    struct Stats {uint32_t triangles=0,drawCalls=0,culledTriangles=0,culledSubmeshes=0;uint64_t pixels=0;float previousGpuMs=0,beginWaitMs=0,commandUsage=0,renderMs=0,hookMs=0,gpuGapMs=0;RenderMetrics metrics{};
+        uint64_t setupTicks=0,callTicks=0,resetTicks=0,drawNowTicks=0;uint32_t setups=0,stateHits=0;};
     bool recording() const;
     // The 3D slider's position (0..1), or its QA override.
     float slider() const;
@@ -929,6 +942,23 @@ private:
     // Combiners/textures of a retail submesh after the generic setup; returns
     // true when it owns the environment rows (light textures).
     bool retailCombiners(const Submesh& s,const C3D_Mtx& modelView,bool backdrop,bool additive,uint32_t additiveRgb,uint32_t constant);
+    // drawSetupMs..stateHits from a drawn frame's stats.
+    void takeDrawTimes(const Stats& s){
+        const double ms=1000.0/SYSCLOCK_ARM11;
+        drawSetupMs=float(double(s.setupTicks)*ms);drawCallMs=float(double(s.callTicks)*ms);drawResetMs=float(double(s.resetTicks)*ms);
+        drawNowMs=float(double(s.drawNowTicks)*ms);drawSetups=s.setups;stateHits=s.stateHits;
+    }
+#ifndef MKW_RELEASE
+    // DIAG cmd-hash.txt (render_thread.cpp).
+    void cmdHashBegin();
+    void cmdHashUpdate();
+    static void cmdHashFrameEnd(void* self);
+    bool cmdHashActive_=false,cmdHashValid_=false,cmdHashDumping_=false;
+    uint32_t cmdHashValue_=0,cmdHashWords_=0,cmdHashFrame_=0,cmdHashTick_=0;
+    const uint32_t* cmdHashAt_=nullptr;
+    std::vector<uint32_t> cmdDumpTicks_,cmdDumpWords_;
+    FILE* cmdHashFile_=nullptr;
+#endif
     void retailEnvironment(const C3D_Mtx& modelView);
     void retailEndSubmesh();
     const RigidPose* rigid_=nullptr;

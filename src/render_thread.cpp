@@ -405,6 +405,53 @@ static bool diagLeaveOut(uint8_t skip,uint8_t region,uint16_t type,bool& bottom)
     default:return false;
     }
 }
+#ifndef MKW_RELEASE
+// DIAG cmd-hash.txt: a hash of every GPU command word a frame writes from its
+// FrameBegin to its FrameEnd (cmd-hash.csv: frame, animation tick, words,
+// hash, 0 when a full buffer restarted the frame's list). Same binary only:
+// the words hold LINEAR and VRAM addresses.
+void Renderer::cmdHashBegin(){
+    if(!cmdHash)return;
+    cmdHashActive_=cmdHashValid_=true;cmdHashValue_=2166136261u;cmdHashWords_=0;cmdHashTick_=execFrame_;
+    cmdHashAt_=gpuCmdBuf?gpuCmdBuf+gpuCmdBufOffset:nullptr;
+    cmdHashDumping_=std::find(cmdDumpTicks_.begin(),cmdDumpTicks_.end(),execFrame_)!=cmdDumpTicks_.end();
+    cmdDumpWords_.clear();
+}
+void Renderer::cmdHashUpdate(){
+    if(!cmdHashActive_||!gpuCmdBuf)return;
+    const uint32_t* now=gpuCmdBuf+gpuCmdBufOffset;
+    // Splits move gpuCmdBuf on through the same buffer; only a restart goes back.
+    if(!cmdHashAt_||now<cmdHashAt_){cmdHashValid_=false;cmdHashAt_=now;return;}
+    uint32_t h=cmdHashValue_;
+    for(const uint32_t* w=cmdHashAt_;w<now;++w){h=(h^*w)*16777619u;h^=h>>15;}
+    if(cmdHashDumping_)cmdDumpWords_.insert(cmdDumpWords_.end(),cmdHashAt_,now);
+    cmdHashWords_+=uint32_t(now-cmdHashAt_);cmdHashValue_=h;cmdHashAt_=now;
+}
+void Renderer::cmdHashFrameEnd(void* self){
+    auto& r=*static_cast<Renderer*>(self);
+    if(!r.cmdHashActive_)return;
+    r.cmdHashUpdate();r.cmdHashActive_=false;
+    if(!r.cmdHashFile_){
+        r.cmdHashFile_=std::fopen("sdmc:/3ds/mkw-3ds/cmd-hash.csv","w");
+        if(r.cmdHashFile_)std::fputs("frame,tick,words,hash,valid,buffers\n",r.cmdHashFile_);
+    }
+    if(r.cmdHashFile_){
+        // buffers: which of the two sets of per-frame buffers (swapFrameBuffers)
+        // the frame wrote; their addresses are in the words.
+        std::fprintf(r.cmdHashFile_,"%lu,%lu,%lu,%08lx,%d,%d\n",(unsigned long)r.cmdHashFrame_,(unsigned long)r.cmdHashTick_,(unsigned long)r.cmdHashWords_,(unsigned long)r.cmdHashValue_,int(r.cmdHashValid_),
+            r.spritesAlt_?int(r.sprites_<r.spritesAlt_):2);
+        if(r.cmdHashFrame_%120==0)std::fflush(r.cmdHashFile_);
+    }
+    if(r.cmdHashDumping_){
+        char path[96];std::snprintf(path,sizeof path,"sdmc:/3ds/mkw-3ds/cmd-dump-%05lu-%06lu.bin",(unsigned long)r.cmdHashTick_,(unsigned long)r.cmdHashFrame_);
+        if(FILE* f=std::fopen(path,"wb")){std::fwrite(r.cmdDumpWords_.data(),4,r.cmdDumpWords_.size(),f);std::fclose(f);}
+        // One dump per listed tick.
+        r.cmdDumpTicks_.erase(std::remove(r.cmdDumpTicks_.begin(),r.cmdDumpTicks_.end(),r.cmdHashTick_),r.cmdDumpTicks_.end());
+        r.cmdHashDumping_=false;r.cmdDumpWords_.clear();
+    }
+    ++r.cmdHashFrame_;
+}
+#endif
 void Renderer::execute(FrameList& list){
     const auto start=svcGetSystemTick();
     if(!localReplay_)stats_.beginWaitMs=0;
@@ -565,6 +612,9 @@ void Renderer::execute(FrameList& list){
             if(tally)diag::drawCount(model,at,stats_.drawCalls-drawsBefore,stats_.triangles-trianglesBefore,stats_.pixels-pixelsBefore);
             if(grid)diag::gridCount(model,at,stats_.drawCalls-drawsBefore,stats_.triangles-trianglesBefore,stats_.pixels-pixelsBefore);
         }
+#ifndef MKW_RELEASE
+        if(cmdHashActive_)cmdHashUpdate();
+#endif
     }
     }
     if(tally){diag::passCount(passDraws,passTriangles);diag::drawFrame();}
@@ -815,7 +865,7 @@ void Renderer::end(){
     if(!recording()){
         immediateOpen_=false;endNow();gpuIdle_=false;
         triangles=stats_.triangles;drawCalls=stats_.drawCalls;culledTriangles=stats_.culledTriangles;culledSubmeshes=stats_.culledSubmeshes;
-        previousGpuMs=stats_.previousGpuMs;beginWaitMs=stats_.beginWaitMs;commandUsage=stats_.commandUsage;renderThreadMs=0;hookMs=gpuGapMs=0;
+        previousGpuMs=stats_.previousGpuMs;beginWaitMs=stats_.beginWaitMs;commandUsage=stats_.commandUsage;renderThreadMs=0;hookMs=gpuGapMs=0;takeDrawTimes(stats_);
         return;
     }
     command<EndCommand>();
@@ -823,7 +873,7 @@ void Renderer::end(){
     // The last frame the render thread finished (one frame behind).
     LightLock_Lock(&publishLock_);const Stats s=published_;LightLock_Unlock(&publishLock_);
     triangles=s.triangles;drawCalls=s.drawCalls;culledTriangles=s.culledTriangles;culledSubmeshes=s.culledSubmeshes;
-    previousGpuMs=s.previousGpuMs;beginWaitMs=s.beginWaitMs;commandUsage=s.commandUsage;renderThreadMs=s.renderMs;hookMs=s.hookMs;gpuGapMs=s.gpuGapMs;
+    previousGpuMs=s.previousGpuMs;beginWaitMs=s.beginWaitMs;commandUsage=s.commandUsage;renderThreadMs=s.renderMs;hookMs=s.hookMs;gpuGapMs=s.gpuGapMs;takeDrawTimes(s);
     renderMetrics.flushCalls+=s.metrics.flushCalls;renderMetrics.flushBytes+=s.metrics.flushBytes;
     renderMetrics.skinnedVertices+=s.metrics.skinnedVertices;
     renderMetrics.contactDraws=s.metrics.contactDraws;renderMetrics.contactTriangles=s.metrics.contactTriangles;
@@ -836,7 +886,7 @@ void Renderer::endLocal(){
     execute(*localList_);
     localReplay_=false;gpuIdle_=false;
     triangles=stats_.triangles;drawCalls=stats_.drawCalls;culledTriangles=stats_.culledTriangles;culledSubmeshes=stats_.culledSubmeshes;
-    previousGpuMs=stats_.previousGpuMs;beginWaitMs=stats_.beginWaitMs;commandUsage=stats_.commandUsage;renderThreadMs=0;hookMs=gpuGapMs=0;
+    previousGpuMs=stats_.previousGpuMs;beginWaitMs=stats_.beginWaitMs;commandUsage=stats_.commandUsage;renderThreadMs=0;hookMs=gpuGapMs=0;takeDrawTimes(stats_);
 }
 void Renderer::beginBottom(){
     // The target exists only between a race's load and its release (main thread).

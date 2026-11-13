@@ -662,7 +662,19 @@ bool Scene::load(const char* path){
     }
     bool valid=std::fgetc(f)==EOF;std::fclose(f);return valid;
 }
+void Renderer::readSwitches(){
+#ifndef MKW_RELEASE
+    auto exists=[](const char* path){FILE* f=std::fopen(path,"r");if(f)std::fclose(f);return f!=nullptr;};
+    drawTiming=exists("sdmc:/3ds/mkw-3ds/draw-timing.txt");
+    cmdHash=exists("sdmc:/3ds/mkw-3ds/cmd-hash.txt");
+    if(cmdHash){
+        if(FILE* f=std::fopen("sdmc:/3ds/mkw-3ds/cmd-dump.txt","r")){unsigned tick;while(std::fscanf(f,"%u",&tick)==1)cmdDumpTicks_.push_back(tick);std::fclose(f);}
+        C3D_FrameEndHook(cmdHashFrameEnd,this);
+    }
+#endif
+}
 bool Renderer::init(){
+    readSwitches();
     if(!C3D_Init(0x100000))return false;
     deviceReady_=true;
     auto fail=[this](){shutdown();return false;};
@@ -987,6 +999,9 @@ void Renderer::beginNow(const C3D_Mtx& view,const C3D_Mtx& projection,bool sync,
         const auto waitStart=svcGetSystemTick();
         if(!C3D_FrameBegin((sync?C3D_FRAME_SYNCDRAW:0)|(execPipelined_?C3D_FRAME_PIPELINE:0)))std::abort();
         stats_.beginWaitMs=float((svcGetSystemTick()-waitStart)*1000.0/SYSCLOCK_ARM11);
+#ifndef MKW_RELEASE
+        cmdHashBegin();
+#endif
         if(execPipelined_){
             // The GPU may still draw the previous frame: its time and this
             // frame's writes wait for previousFrameDone().
@@ -1144,7 +1159,8 @@ void Renderer::beginFrame(){
     for(int i=0;i<6;++i)C3D_TexEnvInit(C3D_GetTexEnv(i));
     auto* env=C3D_GetTexEnv(0);C3D_TexEnvSrc(env,C3D_Both,GPU_TEXTURE0,GPU_PRIMARY_COLOR);C3D_TexEnvFunc(env,C3D_Both,GPU_MODULATE);
     C3D_DepthTest(true,GPU_GEQUAL,GPU_WRITE_ALL);C3D_AlphaBlend(GPU_BLEND_ADD,GPU_BLEND_ADD,GPU_SRC_ALPHA,GPU_ONE_MINUS_SRC_ALPHA,GPU_ONE,GPU_ONE_MINUS_SRC_ALPHA);
-    if(!eye_&&!bottomWorldPass_)stats_.triangles=stats_.drawCalls=stats_.culledTriangles=stats_.culledSubmeshes=0;
+    if(!eye_&&!bottomWorldPass_){stats_.triangles=stats_.drawCalls=stats_.culledTriangles=stats_.culledSubmeshes=0;
+        stats_.setupTicks=stats_.callTicks=stats_.resetTicks=stats_.drawNowTicks=0;stats_.setups=stats_.stateHits=0;}
 }
 C3D_Mtx ViewFrustum::cameraFacing(Vec3 position,float scale) const {
     C3D_Mtx transform;Mtx_Identity(&transform);
@@ -1374,6 +1390,13 @@ uint64_t trianglePixels(const C3D_Mtx& clip,const Vertex* vertices,const uint16_
 }
 }
 void Renderer::drawNow(const Model& model,const Vertex* vertices,const C3D_Mtx& transform,bool backdrop,MaterialBinder material,void* context,ShapeVisible visible){
+    // DIAG draw-timing.txt: the call's ticks, and below its setups, draws and resets.
+    struct DrawTimer {uint64_t& sum;uint64_t start;~DrawTimer(){if(start)sum+=svcGetSystemTick()-start;}} drawTimer{stats_.drawNowTicks,drawTiming?svcGetSystemTick():0};
+    auto drawElements=[this](unsigned count,const uint16_t* indices){
+        const uint64_t start=drawTiming?svcGetSystemTick():0;
+        C3D_DrawElements(GPU_TRIANGLES,count,C3D_UNSIGNED_SHORT,indices);
+        if(start)stats_.callTicks+=svcGetSystemTick()-start;
+    };
     const bool behind=backdrop&&execBehind_;
     // Later draws (effects, sprites) don't all set a depth mapping.
     struct RestoreDepthMap {bool on;~RestoreDepthMap(){if(on)C3D_DepthMap(true,-1.f,0.f);}} restoreDepthMap{behind};
@@ -1527,6 +1550,7 @@ void Renderer::drawNow(const Model& model,const Vertex* vertices,const C3D_Mtx& 
         }
         bool retail=lastRetail,retailEnvironment=lastEnvironment;
         if(!repeat){
+        const uint64_t setupStart=drawTiming?svcGetSystemTick():0;++stats_.setups;
         if(pendingEnd){retailEndSubmesh();pendingEnd=false;}
         const uint32_t constant=o&&(o->flags&SubmeshOverride::Constant)?o->constant:s.constant;
         const GPU_TEVSCALE scales[]={GPU_TEVSCALE_1,GPU_TEVSCALE_2,GPU_TEVSCALE_4,GPU_TEVSCALE_1};
@@ -2091,6 +2115,7 @@ void Renderer::drawNow(const Model& model,const Vertex* vertices,const C3D_Mtx& 
             C3D_AlphaBlend(GPU_BLEND_ADD,GPU_BLEND_ADD,GPU_CONSTANT_ALPHA,GPU_ONE_MINUS_CONSTANT_ALPHA,GPU_ZERO,GPU_ONE);
         }
         last=o?nullptr:&s;lastRetail=retail;lastEnvironment=retailEnvironment;
+        if(setupStart)stats_.setupTicks+=svcGetSystemTick()-setupStart;
         } // !repeat
         C3D_BoolUnifSet(GPU_VERTEX_SHADER,projectedWaterLoc_,s.menuReflection==11||s.menuReflection==22);
         if(s.menuReflection==11||s.menuReflection==22){
@@ -2158,7 +2183,7 @@ void Renderer::drawNow(const Model& model,const Vertex* vertices,const C3D_Mtx& 
                     C3D_BoolUnifSet(GPU_VERTEX_SHADER,environmentMappedLoc_,true);
                     uvPlainNow(true);
                 }
-                C3D_DrawElements(GPU_TRIANGLES,part.count,C3D_UNSIGNED_SHORT,model.indices+part.first);
+                drawElements(part.count,model.indices+part.first);
                 stats_.triangles+=part.count/3;++stats_.drawCalls;
                 if(diag::modelPixels){C3D_Mtx partClip;Mtx_Multiply(&partClip,&projection_,&partView);stats_.pixels+=trianglePixels(partClip,vertices,model.indices+part.first,part.count,screenWidth_);}
             }
@@ -2178,7 +2203,7 @@ void Renderer::drawNow(const Model& model,const Vertex* vertices,const C3D_Mtx& 
             if(const uint16_t* list=facingIndicesNow(model,unsigned(i),clip,kept)){
                 ++facingDraws;facingKept+=kept/3;facingTotal+=s.count/3;
                 if(kept){
-                    C3D_DrawElements(GPU_TRIANGLES,kept,C3D_UNSIGNED_SHORT,list);
+                    drawElements(kept,list);
                     stats_.triangles+=kept/3;++stats_.drawCalls;
                     if(diag::modelPixels)stats_.pixels+=trianglePixels(clip,vertices,list,kept,screenWidth_);
                 }
@@ -2187,7 +2212,7 @@ void Renderer::drawNow(const Model& model,const Vertex* vertices,const C3D_Mtx& 
         }
         for(unsigned n=0;n<ranges.count;++n){
             const auto range=ranges.ranges[n];
-            C3D_DrawElements(GPU_TRIANGLES,range.count,C3D_UNSIGNED_SHORT,subIndices+range.first);
+            drawElements(range.count,subIndices+range.first);
             stats_.triangles+=range.count/3;++stats_.drawCalls;
             if(diag::modelPixels&&!skinPalette_){C3D_Mtx clip;Mtx_Multiply(&clip,&projection_,&mv);stats_.pixels+=trianglePixels(clip,vertices,subIndices+range.first,range.count,screenWidth_);}
         }
@@ -2195,6 +2220,7 @@ void Renderer::drawNow(const Model& model,const Vertex* vertices,const C3D_Mtx& 
         if(menuEnvironment||(s.lighting&retail::FixedEnvironment))clearEnvironmentUvNow();
         pendingEnd=retail;
     }
+    struct ResetTimer {uint64_t& sum;uint64_t start;~ResetTimer(){if(start)sum+=svcGetSystemTick()-start;}} resetTimer{stats_.resetTicks,drawTiming?svcGetSystemTick():0};
     if(pendingEnd)retailEndSubmesh();
     uvPlainNow(false);
     sceneDepthMap(projection_);
