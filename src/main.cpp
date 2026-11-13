@@ -729,6 +729,7 @@ int main() {
     if(kQa)if(FILE* f=fopen("sdmc:/3ds/mkw-3ds/blue-test.txt","r")){char mode[8]={};if(fscanf(f,"%u %7s",&blueTestEvery,mode)<1)blueTestEvery=600;blueTestOld=!strcmp(mode,"old");fclose(f);}
     // Bottom screen: no background fill under the opaque map (A/B: no-bottom-cover.txt).
     mkw::RaceBottomScreen::skipCoveredFill=!exists("sdmc:/3ds/mkw-3ds/no-bottom-cover.txt");
+    mkw::RaceBottomScreen::fillCover=!exists("sdmc:/3ds/mkw-3ds/no-bottom-fill-cover.txt");
     // Shadow volumes shade only their projected rectangle (A/B: no-shadow-rect.txt).
     renderer.shadowRects=!exists("sdmc:/3ds/mkw-3ds/no-shadow-rect.txt");
     renderer.effectStateSkip=!exists("sdmc:/3ds/mkw-3ds/no-effect-state-skip.txt");

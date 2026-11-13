@@ -104,6 +104,8 @@ struct RaceBottomScreen::Impl {
                     topFirst=0,topCount=0,fadeFirst=0,mii=0,outline=~0u;const Texture* mapTexture=nullptr;bool covered=false,atlas=false;} b;
     // One frame's quads, in three in-place batches.
     Renderer::MaterialQuad* base=nullptr;unsigned count=0;
+    // recordingFrame()'s parity: this frame's half of quads and miiQuads.
+    unsigned half=0;
     bool add(const RaceMapRect& r,float x0,float y0,float x1,float y1,uint32_t color=0xffffffffu,bool mirrorU=false,bool mirrorV=false){
         if(count>=QuadCapacity||!r.w)return false;
         const float aw=ui->size[0],ah=ui->size[1];
@@ -349,7 +351,7 @@ bool RaceBottomScreen::compose(Renderer& renderer,const BottomView& view){
     const float mapWidth=ScreenW,mapCenterX=ScreenW*.5f;
     // CtrlRaceBase's authored 20-tick entrance: -1 -> 0 in .05 steps.
     m.timerSlide=view.timerVisible?std::min(0.f,m.timerSlide+float(elapsed)*.05f):-1.f;
-    m.base=m.quads.get()+(renderer.recordingFrame()&1)*QuadCapacity;m.count=0;
+    m.half=renderer.recordingFrame()&1;m.base=m.quads.get()+m.half*QuadCapacity;m.count=0;
     const bool atlas=m.atlas.ready;
 
     // 1. Opaque fills: the whole screen, then the standings column (no clear).
@@ -513,7 +515,7 @@ bool RaceBottomScreen::compose(Renderer& renderer,const BottomView& view){
                 portrait(art,face*.53f,tint);if(tint&0xffffff00u)m.outline=m.count-1;
             }
             portrait(art,hf,0xffffff00u|alpha);
-            if(native){auto& q=m.miiQuads[view.tick&1][0];q=m.base[--m.count];for(unsigned k=0;k<4;++k){q.u[k]=(k&1)?1.f:0.f;q.v[k]=(k&2)?1.f:0.f;}m.miiMap=true;}
+            if(native){auto& q=m.miiQuads[m.half][0];q=m.base[--m.count];for(unsigned k=0;k<4;++k){q.u[k]=(k&1)?1.f:0.f;q.v[k]=(k&2)?1.f:0.f;}m.miiMap=true;}
         }
     }
     unsigned overlayCount=m.count-overlayFirst;
@@ -542,14 +544,17 @@ bool RaceBottomScreen::compose(Renderer& renderer,const BottomView& view){
                 m.add(ord,x+R.ordinalX,oy,x+R.ordinalX+ord.w,oy+ord.h);
             }else{
                 // Battle: the score where the ordinal goes, in the team's colour.
-                char text[4];const unsigned n=unsigned(std::snprintf(text,sizeof text,"%u",std::min(unsigned(r.score),999u)));
+                const unsigned v=std::min(unsigned(r.score),999u);char text[4];unsigned n=0;
+                if(v>=100)text[n++]=char('0'+v/100);
+                if(v>=10)text[n++]=char('0'+v/10%10);
+                text[n++]=char('0'+v%10);
                 const uint32_t color=r.team==RaceTeam::Red?0xff3030ffu:r.team==RaceTeam::Blue?0x4080ffffu:0xffffffffu;
                 float dx=x+R.ordinalX;
                 for(unsigned j=0;j<n;++j){const auto& d=R.scoreDigits[text[j]-'0'];const float dy=y+std::floor((R.rowH-d.h)*.5f);
                     m.add(d,dx,dy,dx+d.w,dy+d.h,color);dx+=d.w;}
             }
             m.add(R.rowFaces[std::min<unsigned>(r.character,23)],x+R.faceX,iy,x+R.faceX+icon,iy+icon);
-            if(r.character>=24&&m.mii.ready){auto& q=m.miiQuads[view.tick&1][1];q=m.base[--m.count];for(unsigned k=0;k<4;++k){q.u[k]=(k&1)?1.f:0.f;q.v[k]=(k&2)?1.f:0.f;}m.miiRow=true;}
+            if(r.character>=24&&m.mii.ready){auto& q=m.miiQuads[m.half][1];q=m.base[--m.count];for(unsigned k=0;k<4;++k){q.u[k]=(k&1)?1.f:0.f;q.v[k]=(k&2)?1.f:0.f;}m.miiRow=true;}
             if(r.item<R.items.size()&&R.items[r.item].w)m.add(R.items[r.item],x+R.itemX,iy,x+R.itemX+icon,iy+icon);
         };
         for(unsigned i=0;i<std::min(view.racers,12u);++i)if(!view.racer[i].local)drawRow(i);
@@ -587,7 +592,7 @@ bool RaceBottomScreen::compose(Renderer& renderer,const BottomView& view){
     // race maps and overviews are ETC1 (no alpha), drawn in white. Battle
     // maps are RGBA4 and keep all three.
     const bool covered=skipCoveredFill&&mapCount&&m.course<32;
-    m.b={fills,mapFirst,mapCount,objectFirst,objectCount,overlayFirst,overlayCount,topFirst,topCount,fadeFirst,view.tick&1,m.outline,mapTexture,covered,atlas};
+    m.b={fills,mapFirst,mapCount,objectFirst,objectCount,overlayFirst,overlayCount,topFirst,topCount,fadeFirst,m.half,m.outline,mapTexture,covered,atlas};
     return true;
 }
 
@@ -595,6 +600,9 @@ void RaceBottomScreen::submit(Renderer& renderer){
     auto& m=*impl_;const auto& b=m.b;
     if(b.atlas&&b.fills&&!b.covered)renderer.drawScreenMaterialQuadsInPlace(&m.atlas,m.base,b.fills,0x00000000u,0xffffffffu);
     if(!b.atlas&&!b.covered)renderer.drawScreenMaterialQuadsInPlace(nullptr,m.base,b.fills,0,0xffffffffu);
+    // That fill is opaque over the whole screen (battle arenas, whose maps
+    // keep it): the frame's clear is hidden too (A/B: no-bottom-fill-cover.txt).
+    if(!b.covered&&b.fills&&fillCover)renderer.bottomCovered();
     if(b.mapCount)renderer.drawScreenMaterialQuadsInPlace(b.mapTexture,m.base+b.mapFirst,b.mapCount,0x00000000u,0xffffffffu,b.covered);
     if(b.covered)renderer.bottomCovered();
     if(b.objectCount)renderer.drawScreenMaterialQuadsInPlace(&m.objects,m.base+b.objectFirst,b.objectCount,0x00000000u,0xffffffffu);
