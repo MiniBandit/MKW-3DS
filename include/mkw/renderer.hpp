@@ -80,6 +80,9 @@ public:
     // loaded that way, the texture is listed for forEachLoaded (a copy is not).
     char name[40]{};
     uint32_t serial=0; // loadSerial() when it was loaded
+    // Moved to VRAM by the race's spare-VRAM placement (main.cpp); a texture kept
+    // past the race goes back to LINEAR (Renderer::moveToLinear) when it ends.
+    bool raceVram=false;
     // Every texture currently loaded from a file, under a lock: f must not load
     // or reset textures. Race VRAM placement and DIAG texture-use.txt use it.
     static void forEachLoaded(const std::function<void(Texture&)>& f);
@@ -355,6 +358,9 @@ public:
     // `left`, when given, tallies the textures that stay in LINEAR.
     struct VramLeft {unsigned count=0,unitOne=0;std::size_t bytes=0,unitOneBytes=0;};
     bool moveToVram(Texture& texture,std::size_t reserve,VramLeft* left=nullptr);
+    // The reverse, for a VRAM texture that outlives the race that placed it:
+    // copies it into LINEAR and frees its VRAM. The GPU must be idle.
+    bool moveToLinear(Texture& texture);
     // The VRAM bytes moveToVram would take: twice the LINEAR size for a
     // widened unit-1 ETC1 texture, 0 for one that must stay in LINEAR.
     std::size_t vramCost(const Texture& texture)const;

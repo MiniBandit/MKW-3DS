@@ -2441,7 +2441,7 @@ int main() {
                 return std::strcmp(a->name,b->name)<0;});
             unsigned moved=0,left=0;std::size_t movedBytes=0,leftBytes=0;
             for(auto* t:candidates){const std::size_t bytes=t->bytes();
-                if(renderer.moveToVram(*t,mkw::RenderQuality::raceVramReserve)){++moved;movedBytes+=bytes;}else{++left;leftBytes+=bytes;}
+                if(renderer.moveToVram(*t,mkw::RenderQuality::raceVramReserve)){t->raceVram=true;++moved;movedBytes+=bytes;}else{++left;leftBytes+=bytes;}
                 if(kQa)LOGF("race texture %s %ux%u fmt=%u bytes=%lu unit1=%d %s",t->name,unsigned(t->gpu.width),unsigned(t->gpu.height),unsigned(t->gpu.fmt),(unsigned long)bytes,int(t->unitOne),
                             reinterpret_cast<std::uintptr_t>(t->gpu.data)>=0x1F000000u&&reinterpret_cast<std::uintptr_t>(t->gpu.data)<0x1F600000u?"vram":"linear");}
             LOGF("race textures in VRAM moved=%u/%luKB left=%u/%luKB vram_free=%lu linear_free=%lu",moved,(unsigned long)(movedBytes>>10),left,(unsigned long)(leftBytes>>10),(unsigned long)vramSpaceFree(),(unsigned long)linearSpaceFree());
@@ -2559,6 +2559,12 @@ int main() {
         // drawing when this runs, so the menu renderer keeps them).
         pauseResident.clear();pausePinned=false;renderer.releasePauseControls();
         writePauseTrace();
+        // Textures the race moved to VRAM (moveRaceTexturesToVram) and something kept
+        // past it go back to LINEAR: the next course places its textures first.
+        unsigned returned=0;std::vector<mkw::Texture*> kept;
+        mkw::Texture::forEachLoaded([&](mkw::Texture& t){if(t.raceVram)kept.push_back(&t);});
+        for(auto* t:kept)returned+=renderer.moveToLinear(*t);
+        if(!kept.empty())LOGF("race textures back in LINEAR %u of %u, vram_free=%lu",returned,unsigned(kept.size()),(unsigned long)vramSpaceFree());
     };
     decltype(driverController) pausedDriverController;
     decltype(driverPose) pausedDriverPose;

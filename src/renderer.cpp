@@ -920,6 +920,21 @@ bool Renderer::moveToVram(Texture& texture,std::size_t reserve,VramLeft* left){
     C3D_TexDelete(&t);t=moved;
     return true;
 }
+bool Renderer::moveToLinear(Texture& texture){
+    auto& t=texture.gpu;
+    const u32 at=reinterpret_cast<u32>(t.data);
+    if(!texture.ready||!t.data||!(at>=OS_VRAM_VADDR&&at<OS_VRAM_VADDR+OS_VRAM_SIZE))return false;
+    C3D_Tex moved{};
+    const C3D_TexInitParams params{t.width,t.height,t.maxLevel,t.fmt,GPU_TEX_2D,false};
+    if(!C3D_TexInitWithParams(&moved,nullptr,params))return false;
+    const std::size_t bytes=C3D_TexCalcTotalSize(t.size,t.maxLevel);
+    // The GX copy writes LINEAR behind the CPU's cache; drop any stale lines first.
+    GSPGPU_InvalidateDataCache(moved.data,u32(bytes));
+    C3D_SyncTextureCopy(static_cast<u32*>(t.data),0,static_cast<u32*>(moved.data),0,u32(bytes),8);
+    moved.param=t.param;moved.border=t.border;moved.lodParam=t.lodParam;
+    C3D_TexDelete(&t);t=moved;texture.raceVram=false;
+    return true;
+}
 bool Renderer::allocateFrameBuffers(){
     overlayAlt_=static_cast<Vertex*>(linearAlloc(2*kOverlayCapacity*sizeof(Vertex)));
     spritesAlt_=static_cast<Vertex*>(linearAlloc(kSpriteCapacity*6*sizeof(Vertex)));
