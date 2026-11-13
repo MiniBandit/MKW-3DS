@@ -187,10 +187,10 @@ For the CIA, remove the `RomFs` block from a copy of
 then:
 
 ```sh
-makerom -f cia -target t -exefslogo -elf mkw-3ds.elf -rsf external-sd.rsf -icon icon.icn -banner banner-startgrid.bnr -ver 1024 -DAPP_REMASTER=0 -o MKW-3DS-REDUX-v1.0.0.cia
+makerom -f cia -target t -exefslogo -elf mkw-3ds.elf -rsf external-sd.rsf -icon icon.icn -banner banner-startgrid.bnr -ver 1040 -DAPP_REMASTER=0 -o MKW-3DS-REDUX-v1.1.0.cia
 ```
 
-The title version is `major << 10 | minor << 4 | micro`, so 1.0.0 is 1024.
+The title version is `major << 10 | minor << 4 | micro`, so 1.1.0 is 1040.
 Some makerom builds write 14 instead because of an internal macro clash;
 `tools/build.py` corrects the Ticket and TMD version fields, then checks
 every TMD and content hash (`check_cia`).
