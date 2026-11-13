@@ -266,6 +266,10 @@ effects count 0). Slow; for Azahar runs.
 textures in LINEAR; by default they take the VRAM the course left after the
 opponents load, down to the race reserve (`runtime.log`: `race textures in
 VRAM moved=…`, and a `race texture` line for each).
+`racer-vram-4bit.txt` lets that move take 4-bit textures (ETC1, L4, A4) too,
+except those marked as sampled on texture units 1 or 2 (`Texture::unitOne`):
+check `gpu-guard.log` has no `4-BIT VRAM` line, and run it on the console
+through kart select and a race load before making it the default.
 `stereo-slider.txt` (a number from 0 to 1) pins the 3D slider for comparable
 runs. As with the slider, the right eye turns on above 0.03 and off at or below 0.01.
 `lod-bias.txt` (a number from -2 to 0, default 0) is added to the LOD of every

@@ -743,6 +743,9 @@ int main() {
     // New 3DS: once opponents, items, HUD and effects have loaded, their textures
     // take the VRAM the course left (A/B: no-racer-vram.txt).
     const bool racerTexturesVram=!exists("sdmc:/3ds/mkw-3ds/no-racer-vram.txt");
+    // DIAG racer-vram-4bit.txt: 4-bit race textures move too unless Texture::unitOne
+    // (needs a console run through kart select before it can be the default).
+    const bool racerVramFourBit=kQa&&exists("sdmc:/3ds/mkw-3ds/racer-vram-4bit.txt");
     // Course objects past retail's draw distance are not drawn (A/B: no-draw-distance.txt).
     renderer.drawDistance=!exists("sdmc:/3ds/mkw-3ds/no-draw-distance.txt");
     renderer.spatialCourse=!exists("sdmc:/3ds/mkw-3ds/no-spatial-course.txt");
@@ -2095,6 +2098,9 @@ int main() {
             bool vram=false;
             for(const char* slip:{"fx_rk_wave0","fx_rk_wave5_5","fx_rk_wave2"})vram|=!std::strcmp(name,slip);
             if(!(vram?texture.loadVram(path):texture.load(path))){char failure[96];snprintf(failure,sizeof failure,"FAIL effect texture %s",path);report(failure);return false;}
+            // Either GX layer may land on unit 1 (Material::swapUnits) and particles
+            // animate through the textures: any effect texture can be sampled there.
+            texture.unitOne=true;
         }
         fx=EffectIds{
         raceEffects.find("rk_miniTurbo"),raceEffects.find("rk_miniTurbo1T"),raceEffects.find("rk_wheelie"),raceEffects.find("rk_itemBox"),
@@ -2430,9 +2436,10 @@ int main() {
         std::vector<mkw::Texture*> candidates;
         mkw::Texture::forEachLoaded([&](mkw::Texture& t){
             const auto at=reinterpret_cast<std::uintptr_t>(t.gpu.data);
-            // No 4-bit formats: item boxes, effects and other draws bind these to
-            // units 1 and 2 without Texture::unitOne (gpu-guard caught ETC1 there).
-            const bool fourBit=t.gpu.fmt==GPU_ETC1||t.gpu.fmt==GPU_L4||t.gpu.fmt==GPU_A4;
+            // No 4-bit formats by default. Item boxes and effects once bound some to
+            // units 1 and 2 without Texture::unitOne (gpu-guard caught ETC1 there);
+            // they are marked now, and moveToVram refuses marked 4-bit textures.
+            const bool fourBit=!racerVramFourBit&&(t.gpu.fmt==GPU_ETC1||t.gpu.fmt==GPU_L4||t.gpu.fmt==GPU_A4);
             if(t.ready&&(t.serial>since||t.raceKept)&&t.gpu.data&&!fourBit&&!(at>=0x1F000000u&&at<0x1F600000u)&&!course.count(&t))candidates.push_back(&t);});
         if(move){
             renderer.waitForGpu();

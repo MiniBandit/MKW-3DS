@@ -209,6 +209,10 @@ C3D_Mtx questionBillboard(const Renderer& renderer,const C3D_Mtx& model){
     return result;
 }
 void bakeBoxEnvironment(Model& model,const ItemBoxLayout& layout){
+    // bindBox samples these on texture units 1 and 2: Renderer::moveToVram keeps
+    // them out of VRAM if they are 4-bit (Texture::unitOne).
+    for(int index:{layout.rainbowTexture,layout.innerTexture,layout.shell,layout.noise})
+        if(index>=0&&std::size_t(index)<model.textures.size()&&model.textures[index])model.textures[index]->unitOne=true;
     for(unsigned shape:{unsigned(layout.inner),unsigned(layout.outer)}){
         const auto& sub=model.submeshes[shape];
         for(unsigned j=sub.first;j<sub.first+sub.count;++j){auto& v=model.vertices[model.indices[j]];const auto n=normalized(v.normal);
@@ -468,6 +472,7 @@ bool RaceHud::load(){
     }
     if(impl_->models[14]&&impl_->animations[14]){
         valid&=impl_->cloudMaterials.load("models/item_14.dobj");
+        impl_->cloudMaterials.markUnitOneTextures(*impl_->models[14]);
         impl_->cloudColor=impl_->cloudMaterials.color("kumo");valid&=impl_->cloudColor>=0;
         impl_->cloudOverrides.resize(impl_->models[14]->submeshes.size());
         auto& bank=*impl_->animations[14];auto& cloud=*impl_->models[14];
@@ -507,6 +512,7 @@ bool RaceHud::load(){
         if(scenario.battleType==1){
             impl_->coinStack=model("models/battle_hud_coin_stack.gmdl");
             valid&=bool(impl_->coinStack)&&impl_->coinStackBank.load("models/battle_hud_coin_stack.dobj");
+            if(impl_->coinStack)impl_->coinStackBank.markUnitOneTextures(*impl_->coinStack);
             const int srt=impl_->coinStackBank.scroll("pile_coin");
             valid&=srt>=0;
             if(impl_->coinStack&&srt>=0){

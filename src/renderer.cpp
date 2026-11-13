@@ -619,6 +619,9 @@ return false;}
                     const int32_t p=int16_t(materialData[offset+k]&0xffff),q=int16_t(materialData[offset+k]>>16);
                     if(p< -1||q< -1||p>=int32_t(textures.size())||q>=int32_t(textures.size()))return false;
                     if(q>=0)textures[q]->unitOne=true;
+                    // Projected water samples its primary on unit 1 (drawNow).
+                    const auto reflection=submeshes[t[0]].menuReflection;
+                    if(p>=0&&(reflection==11||reflection==22))textures[p]->unitOne=true;
                 }
                 materialTracks.push_back({t[0],uint16_t(kind),uint16_t(flags),frames,t[3],uint32_t(offset)});
             }
