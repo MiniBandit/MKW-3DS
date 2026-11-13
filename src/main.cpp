@@ -811,6 +811,7 @@ int main() {
     renderer.stadiumClearSkip=!exists("sdmc:/3ds/mkw-3ds/no-stadium-clear-skip.txt");
     mkw::Renderer::clipReuse(!exists("sdmc:/3ds/mkw-3ds/no-clip-reuse.txt"));
     renderer.shadeBatch=!exists("sdmc:/3ds/mkw-3ds/no-shade-batch.txt");
+    mkw::diag::softWallSkip=!exists("sdmc:/3ds/mkw-3ds/no-soft-wall-skip.txt");
     // The startup save read also needs an RGB8 lower LCD (the debug console
     // otherwise leaves RGB565 active until the first menu).
     if(!renderer.enableBottom()){renderer.shutdown();return startupFailure("Lower LCD initialization failed.");}

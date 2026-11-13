@@ -33,6 +33,7 @@ public:
  Vec3 pivot(bool backward=false)const{const auto& s=state_[backward];return {s.targetPos.x,s.targetPos.y,s.targetPos.z};}
 private:
  using V3=Kinoko::EGG::Vector3f;
+ bool softWalls_=true; // the course KCL has a soft weak wall (init)
  // KartCameraState (0xcc bytes; retail offsets).
  struct State {
   V3 pos,prevPos,targetPos;                // +0x00, +0x38, +0xac

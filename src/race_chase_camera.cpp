@@ -1,5 +1,6 @@
 #include <mkw/race_chase_camera.hpp>
 #include <mkw/race_camera.hpp>
+#include <mkw/diag.hpp>
 #include <game/field/CourseColMgr.hh>
 #include <game/field/KColData.hh>
 #include <game/kart/KartAction.hh>
@@ -119,6 +120,14 @@ void RaceChaseCamera::resetState(State& s){
 // cleared, both states reset, the forward one recomputed at rate 1.
 void RaceChaseCamera::init(const K::Kart::KartObject& kart){
  driftYaw_=0;explosion_=cannonLock_=false;
+ // The soft-wall pass can only hit a weak-wall triangle with the soft-wall
+ // bit (its record starts at -FLT_MIN otherwise); a course with none skips it.
+ softWalls_=true;
+ if(const auto* mgr=K::Field::CourseColMgr::Instance();mgr&&mgr->data()&&mkw::diag::softWallSkip){
+  softWalls_=false;
+  for(const auto& p:mgr->data()->prisms())
+   if((KCL_ATTRIBUTE_TYPE_BIT(p.attribute)&WeakWallMask)&&(p.attribute&KCL_SOFT_WALL_MASK)){softWalls_=true;break;}
+ }
  for(auto& s:state_){resetState(s);s.dist=param_.dist;}
  calcForward(1.0f,kart);
  calcCamera(1.0f,1.0f,1.0f,state_[0],false,kart,kart.pos(),kart.pos());
@@ -570,7 +579,7 @@ bool RaceChaseCamera::wallCheck(State& s,const K::Kart::KartObject& kart,bool* f
    }
   }
  }
- if(!hit&&!rev){
+ if(!hit&&!rev&&softWalls_){
   // The soft-wall pass: weak walls only, their no-bounce normal.
   SoftWall soft;
   if(courseSphere(80.f,at,probe,WeakWallMask,info,mask,&soft)&&soft.dist>-1.1754944e-38f){ // 0x808923F4

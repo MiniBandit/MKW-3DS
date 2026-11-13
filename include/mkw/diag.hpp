@@ -111,6 +111,9 @@ inline unsigned long long composeTicks[std::size(ComposeNames)]{};inline unsigne
 inline unsigned long long miiLoadStamps[3]{};
 struct MiiPublish {int id=-1;unsigned long long wait=0,init=0,build=0,finalize=0,total=0;};
 inline MiiPublish miiPublish{};inline unsigned miiPublishCount=0;
+// The chase camera skips its soft-wall pass on courses with no soft weak wall
+// (exact: cmd-hash.txt equal either way). A/B: no-soft-wall-skip.txt.
+inline bool softWallSkip=true;
 struct ComposeTimer {
  static inline unsigned depth=0;static inline unsigned long long child[64]{};
  unsigned category;unsigned long long start;
