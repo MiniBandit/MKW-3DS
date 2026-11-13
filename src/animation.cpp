@@ -8,6 +8,8 @@
 #include "mkw/pose_blend.hpp"
 #include <3ds.h>
 #include <malloc.h>
+#include <algorithm>
+#include <string>
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
@@ -18,28 +20,53 @@ namespace mkw {
 const char* driverBankFailure="";
 // Animation banks are CPU-only. Prefer LINEAR while it has spare capacity,
 // but reserve room for GPU resources and allow banks to use the ordinary heap.
-void DriverAnimation::reset(){resetLook();bodyLook_={};lookCount_=0;lookYaw_=lookPitch_=0;beforeLookPalette_.clear();hasBraids_=braidsRacing_=false;braids_.reset();braidWorld_={1,0,0,0,0,1,0,0,0,0,1,0,1,0,0,0,1,0,0,0,1};effectRootSlot_=-2;effectRootReady_=false;effectRootTracks_={};effectRoot_=previousEffectRoot_={};releaseData();dataLinear_=true;ready=false;rigidParts_.clear();count_=faceCount_=hairNodeCount_=hairClipCount_=uvClipCount_=0;baseUV_.clear();lastClip_=-1;hasPreviousPose_=false;cachedVertices_=cachedVertices2_=nullptr;cachedSettled_=false;poseBoundsValid_=false;usedMatrices_.fill(false);neutralUv_=nullptr;uvBuffer_=nullptr;uvNeutral_=true;shared_={};handleDrive_=dash_=shake_=-1;gpu_=false;shapeHidden_.fill(false);}
+void DriverAnimation::reset(){resetLook();bodyLook_={};lookCount_=0;lookYaw_=lookPitch_=0;beforeLookPalette_.clear();hasBraids_=braidsRacing_=false;braids_.reset();braidWorld_={1,0,0,0,0,1,0,0,0,0,1,0,1,0,0,0,1,0,0,0,1};effectRootSlot_=-2;effectRootReady_=false;effectRootTracks_={};effectRoot_=previousEffectRoot_={};releaseData();dataLinear_=true;ready=false;rigidParts_.clear();count_=faceCount_=hairNodeCount_=hairClipCount_=uvClipCount_=0;baseUV_.clear();lastClip_=-1;hasPreviousPose_=false;cachedVertices_=cachedVertices2_=nullptr;cachedSettled_=false;poseBoundsValid_=false;usedMatrices_.fill(false);neutralUv_=nullptr;shared_={};handleDrive_=dash_=shake_=-1;gpu_=false;gpuBuffers_={};}
+void DriverAnimation::gpuLayout(Model& model,bool lit){
+    for(unsigned i=0;i<vertices_;++i){
+        const auto& v=source_[i];
+        model.vertices[i].position={v.p[0],v.p[1],v.p[2]};
+        if(lit){model.vertices[i].normal={v.n[0],v.n[1],v.n[2]};model.skinBoneIndices[i]=float(v.matrix*3);}
+        else model.vertices[i].normal={float(v.matrix*3),0,0};
+    }
+    if(lit)flushGpuData(model.skinBoneIndices,vertices_*sizeof(float));
+    flushGpuData(model.vertices,vertices_*sizeof(Vertex));
+    // Every shape shown, UV0 state unknown.
+    for(auto& b:gpuBuffers_)if(!b.vertices||b.vertices==model.vertices){b={};b.vertices=model.vertices;break;}
+}
+DriverAnimation::GpuBuffer& DriverAnimation::gpuBuffer(const Vertex* vertices){
+    for(auto& b:gpuBuffers_)if(b.vertices==vertices)return b;
+    // Not laid out by gpuLayout: every shape and UV0 are written.
+    auto& b=gpuBuffers_.back();b={};b.vertices=vertices;b.hiddenKnown=false;return b;
+}
+bool DriverAnimation::gpuSkinModels(Model& first,Model* second){
+    if(!ready||gpu_||matrices_>Renderer::MaxSkinBones||vertices_!=first.vertexCount||(second&&(second->vertexCount!=vertices_||second->vertices==first.vertices)))return false;
+    // The layout Renderer::drawNow reads for a skinned draw of this model (litSkin).
+    auto lit=[](const Model& m){return !m.fixedLighting&&(!m.staticLightingBaked||m.liveDiffuse);};
+    for(Model* m:{&first,second})if(m&&lit(*m)&&!m->skinBoneIndices&&!(m->skinBoneIndices=static_cast<float*>(linearAlloc(vertices_*sizeof(float)))))return false;
+    gpuBuffers_={};
+    for(Model* m:{&first,second})if(m)gpuLayout(*m,lit(*m));
+    skinNormals_=lit(first)||(second&&lit(*second));shared_={};
+    gpuReady();
+    return gpu_=true;
+}
 bool DriverAnimation::gpuSkin(Model& model){
     if(!ready||gpu_||matrices_>Renderer::MaxSkinBones||vertices_!=model.vertexCount)return false;
     if(skinNormals_){
         if(!model.skinBoneIndices)model.skinBoneIndices=static_cast<float*>(linearAlloc(vertices_*sizeof(float)));
         if(!model.skinBoneIndices)return false;
     }
-    for(unsigned i=0;i<vertices_;++i){
-        const auto& v=source_[i];
-        model.vertices[i].position={v.p[0],v.p[1],v.p[2]};
-        if(skinNormals_){model.vertices[i].normal={v.n[0],v.n[1],v.n[2]};model.skinBoneIndices[i]=float(v.matrix*3);}
-        else model.vertices[i].normal={float(v.matrix*3),0,0};
-    }
-    if(skinNormals_)flushGpuData(model.skinBoneIndices,vertices_*sizeof(float));
-    flushGpuData(model.vertices,vertices_*sizeof(Vertex));
-    shapeHidden_.fill(false);cachedVertices_=cachedVertices2_=nullptr;cachedSettled_=false;uvBuffer_=nullptr;uvNeutral_=true;
+    gpuBuffers_={};
+    gpuLayout(model,skinNormals_);
+    gpuReady();
+    return gpu_=true;
+}
+void DriverAnimation::gpuReady(){
+    cachedVertices_=cachedVertices2_=nullptr;cachedSettled_=false;
     uvDisjoint_=true;
     for(unsigned i=0;i<shapes_;++i)for(unsigned j=i+1;j<shapes_;++j)
         if(ranges_[i].count&&ranges_[j].count&&ranges_[i].first<ranges_[j].first+ranges_[j].count&&ranges_[j].first<ranges_[i].first+ranges_[i].count)uvDisjoint_=false;
     // A draw before the first apply() still has a pose (the first clip's first frame).
     evaluate(clips_[0],0,0,0.f,0,1.f);poseBoundsValid_=false;
-    return gpu_=true;
 }
 unsigned DriverAnimation::shareDrawVertices(Model& model){
     if(!ready||!gpu_||vertices_!=model.vertexCount)return 0;
@@ -492,6 +519,20 @@ bool DriverAnimation::apply(Model& model,int clip,float frame,unsigned tick,int 
             uv=reinterpret_cast<const float*>(uc.data+unsigned(sample(uc,expressionFrame))*shapes_*24);break;
         }
     }
+#ifndef MKW_RELEASE
+    // DIAG: each bank posed on the CPU, once (cpu-pose-banks.txt).
+    if(!gpu_){
+        static std::vector<std::string> seen;
+        if(std::find(seen.begin(),seen.end(),path_)==seen.end()){
+            seen.push_back(path_);
+            if(FILE* f=std::fopen("sdmc:/3ds/mkw-3ds/cpu-pose-banks.txt","a")){
+                std::fprintf(f,"%s matrices=%u vertices=%u model_vertices=%u skin_normals=%d baked=%d bone_indices=%d\n",path_.c_str(),matrices_,vertices_,
+                             unsigned(model.vertexCount),int(skinNormals_),int(model.staticLightingBaked),int(model.skinBoneIndices!=nullptr));
+                std::fclose(f);
+            }
+        }
+    }
+#endif
     if(auto* deferred=deferredWrites()){
         // Bank data is immutable; the CPU path's pose is copied.
         // CPU path: the skinning arithmetic runs when the render thread starts
@@ -535,14 +576,16 @@ void DriverAnimation::write(Model& model,const uint32_t* shown,const int32_t* te
         // The GPU applies palette_. Hidden shapes collapse to one point (no
         // fragments, as the CPU path's zeroed positions); writes only on change.
         unsigned lo=vertices_,hi=0;
+        auto& buffer=gpuBuffer(model.vertices);
         auto touch=[&](unsigned first,unsigned count){if(count){lo=std::min(lo,first);hi=std::max(hi,first+count);}};
         for(unsigned i=0;i<shapes_;++i){
-            const bool hide=!shown[i];if(hide==shapeHidden_[i])continue;
+            const bool hide=!shown[i];if(buffer.hiddenKnown&&hide==buffer.hidden[i])continue;
             for(unsigned j=ranges_[i].first;j<ranges_[i].first+ranges_[i].count;++j){
                 const auto& v=source_[j];model.vertices[j].position=hide?Vec3{0,0,0}:Vec3{v.p[0],v.p[1],v.p[2]};
             }
-            shapeHidden_[i]=hide;touch(ranges_[i].first,ranges_[i].count);
+            buffer.hidden[i]=hide;touch(ranges_[i].first,ranges_[i].count);
         }
+        buffer.hiddenKnown=true;
         // UV0 = baseUV_ outside the shape ranges and each shape's transform of
         // baseUV_ inside its range (later shapes win). A buffer whose state
         // is known rewrites only shapes whose 2x3 transform bits changed.
@@ -552,19 +595,18 @@ void DriverAnimation::write(Model& model,const uint32_t* shown,const int32_t* te
             }
             touch(ranges_[j].first,ranges_[j].count);
         };
-        const bool known=uvBuffer_==model.vertices;
-        if(!known||(!uv&&!uvNeutral_)){
+        if(!buffer.uvKnown||(!uv&&!buffer.uvNeutral)){
             for(unsigned i=0;i<baseUV_.size();++i){model.vertices[i].uv[0]=baseUV_[i][0];model.vertices[i].uv[1]=baseUV_[i][1];}
             touch(0,unsigned(baseUV_.size()));
             if(uv)for(unsigned j=0;j<shapes_;++j)transform(j);
-        }else if(uv&&uvNeutral_){
+        }else if(uv&&buffer.uvNeutral){
             for(unsigned j=0;j<shapes_;++j)transform(j);
         }else if(uv){
-            if(uvDisjoint_){for(unsigned j=0;j<shapes_;++j)if(std::memcmp(appliedUv_.data()+j*6,uv+j*6,24))transform(j);}
-            else if(std::memcmp(appliedUv_.data(),uv,shapes_*24))for(unsigned j=0;j<shapes_;++j)transform(j);
+            if(uvDisjoint_){for(unsigned j=0;j<shapes_;++j)if(std::memcmp(buffer.appliedUv.data()+j*6,uv+j*6,24))transform(j);}
+            else if(std::memcmp(buffer.appliedUv.data(),uv,shapes_*24))for(unsigned j=0;j<shapes_;++j)transform(j);
         }
-        if(uv)std::memcpy(appliedUv_.data(),uv,shapes_*24);
-        uvBuffer_=model.vertices;uvNeutral_=!uv;
+        if(uv)std::memcpy(buffer.appliedUv.data(),uv,shapes_*24);
+        buffer.uvKnown=true;buffer.uvNeutral=!uv;
         for(unsigned i=0;i<model.submeshes.size();++i){auto& sub=model.submeshes[i];sub.texture=baseTextures_[i];if(textures)for(unsigned j=0;j<shapes_;++j)if(sub.first>=ranges_[j].first&&sub.first<ranges_[j].first+ranges_[j].count&&textures[j]>=0&&unsigned(textures[j])<model.textures.size()){sub.texture=textures[j];break;}}
         if(hi>lo)flushGpuData(model.vertices+lo,(hi-lo)*sizeof(Vertex));
         return;

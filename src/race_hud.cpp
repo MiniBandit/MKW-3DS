@@ -394,10 +394,14 @@ bool RaceHud::load(){
         if(HudItems[i].path)valid&=impl_->icons[i].load(HudItems[i].path);
         if((i==6||i==7||i==12||i==13||i==14||i==15)&&impl_->models[i]){
             char path[96];std::snprintf(path,sizeof path,"models/item_%u.dskm",i);
-            // Unlit and never environment-mapped, these meshes do not read
-            // normals: skin positions only (the same position arithmetic).
+            // GPU skinning poses the lit and the baked copy from one palette
+            // (drawWorld binds it per draw); otherwise both are CPU-skinned
+            // each frame. The Thunder Cloud (14) is set up below.
             auto animation=std::make_unique<DriverAnimation>();
-            if(animation->load(path,*impl_->models[i])){animation->skinNormals(true);impl_->animations[i]=std::move(animation);}
+            if(animation->load(path,*impl_->models[i])){
+                if(i==14||!DriverAnimation::gpuPoses||!animation->gpuSkinModels(*impl_->models[i],impl_->staticModels[i].get()))animation->skinNormals(true);
+                impl_->animations[i]=std::move(animation);
+            }
             else valid=false;
         }
     }
@@ -558,6 +562,16 @@ void RaceHud::stepWorld(const RaceItems& items,Vec3 cameraBackward,bool started)
     advance(b.state,b.slide);
 }
 void RaceHud::drawWorld(Renderer& renderer,const RaceItems& items,Vec3 viewer,unsigned tick){
+    // A GPU-skinned item model (gpuSkinModels) draws with its kind's palette;
+    // drawPosed binds it around the draw.
+    auto posed=[&](unsigned kind,const Model& model){
+        if(kind>=impl_->animations.size()||kind==14||!impl_->animations[kind]||!impl_->animations[kind]->gpuSkinned())return false;
+        if(&model!=impl_->models[kind].get()&&&model!=impl_->staticModels[kind].get())return false;
+        const auto& a=*impl_->animations[kind];renderer.setSkinPalette(a.palette(),a.matrixCount(),21);return true;
+    };
+    auto drawPosed=[&](unsigned kind,const Model& model,const C3D_Mtx& t){
+        const bool palette=posed(kind,model);renderer.draw(model,t);if(palette)renderer.setSkinPalette(nullptr,0,12);
+    };
     std::array<bool,21> needed{};
     // Live slots only (forEachActorSlotRead): every loop here needs actor.active.
     const auto& actors=items.actors();
@@ -681,7 +695,7 @@ void RaceHud::drawWorld(Renderer& renderer,const RaceItems& items,Vec3 viewer,un
         t.r[2].x=x.z;t.r[2].y=y.z;t.r[2].z=z.z;t.r[2].w=position.z;
         if(!quality.tooSmall({model->minimum,model->maximum},t,camera)){
             if(blast&&impl_->blastMaterials)blast::drawBlast(renderer,*model,t,actor.age,actor.kind==ItemKind::BlueShell);
-            else renderer.draw(*model,t);
+            else drawPosed(unsigned(actor.kind),*model,t);
         }
         model->vertices=originalVertices;
         return true;});
@@ -709,13 +723,15 @@ void RaceHud::drawWorld(Renderer& renderer,const RaceItems& items,Vec3 viewer,un
         transform.r[0].x=x.x;transform.r[0].y=y.x;transform.r[0].z=scaledZ.x;transform.r[0].w=position.x;
         transform.r[1].x=x.y;transform.r[1].y=y.y;transform.r[1].z=scaledZ.y;transform.r[1].w=position.y;
         transform.r[2].x=x.z;transform.r[2].y=y.z;transform.r[2].z=scaledZ.z;transform.r[2].w=position.z;
-        renderer.draw(*impl_->staticModels[12],transform);
+        drawPosed(12,*impl_->staticModels[12],transform);
     }
     if(items.hud(0).pow&&items.hud(0).pow<=158&&impl_->models[13]){
         const auto& pose=Kinoko::Kart::KartObjectManager::Instance()->object(0)->pose();
         // Retail PowObj uses inverse-view up250, back-30 (=look forward30),
         // uniform1.3 scale. Its authored CHR0 performs the three block stomps.
+        const bool palette=posed(13,*impl_->staticModels[13]);
         renderer.drawCameraFacing(*impl_->staticModels[13],{pose[0,3],pose[1,3],pose[2,3]},250.f,30.f,1.3f);
+        if(palette)renderer.setSkinPalette(nullptr,0,12);
     }
     for(unsigned i=0;i<Kinoko::System::RaceConfig::Instance()->raceScenario().playerCount;++i){
         const auto& effect=items.hud(i);
@@ -727,7 +743,7 @@ void RaceHud::drawWorld(Renderer& renderer,const RaceItems& items,Vec3 viewer,un
             const auto& p=kart->pos();
             const Vec3 position=bulletVisualPosition({p.x,p.y,p.z},impl_->bulletUp[i],kart->bsp().initialYPos);
             auto t=body;t.r[0].w=position.x;t.r[1].w=position.y;t.r[2].w=position.z;
-            renderer.draw(*(i==0||diag::liveLight?impl_->models[15]:impl_->staticModels[15]),t);
+            drawPosed(15,*(i==0||diag::liveLight?impl_->models[15]:impl_->staticModels[15]),t);
         }
         if(effect.cloud&&impl_->models[14]&&impl_->animations[14]){
             const auto& cloud=impl_->clouds[i];
@@ -765,7 +781,7 @@ void RaceHud::drawWorld(Renderer& renderer,const RaceItems& items,Vec3 viewer,un
             t.r[0].x=x.x;t.r[0].y=y.x;t.r[0].z=z.x;t.r[0].w=position.x;
             t.r[1].x=x.y;t.r[1].y=y.y;t.r[1].z=z.y;t.r[1].w=position.y;
             t.r[2].x=x.z;t.r[2].y=y.z;t.r[2].z=z.z;t.r[2].w=position.z;
-            renderer.draw(*heldModel,t);
+            drawPosed(orbitModel,*heldModel,t);
         }
     }
 }

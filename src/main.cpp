@@ -774,6 +774,7 @@ int main() {
     // The top LCD's depth shares bloom's scene depth buffer while it exists.
     renderer.shareDepth=!exists("sdmc:/3ds/mkw-3ds/no-shared-depth.txt");if(!renderer.shareDepth)report("shared depth off");
     mkw::DriverAnimation::sharePose=!exists("sdmc:/3ds/mkw-3ds/no-pose-share.txt");
+    mkw::DriverAnimation::gpuPoses=!exists("sdmc:/3ds/mkw-3ds/no-gpu-pose.txt");if(!mkw::DriverAnimation::gpuPoses)report("gpu poses off");
     // CPU skins computed and fire phases staged when the render thread starts a frame, not on its hook.
     mkw::DeferredWrites::prepareWrites=!exists("sdmc:/3ds/mkw-3ds/no-hook-prep.txt");if(!mkw::DeferredWrites::prepareWrites)report("hook prepare off");
     mkw::VehicleAnimation::lazyParts=!exists("sdmc:/3ds/mkw-3ds/no-lazy-parts.txt");
@@ -1470,7 +1471,7 @@ int main() {
             if(menuProfile->enabled())loader.drainSlow([](const char* label,const char* detail,float run,float wait,void* profile){char text[256];snprintf(text,sizeof text,"slow job %.1f ms (queued %.1f ms): %s %s",run,wait,label,detail);static_cast<mkw::MenuProfile*>(profile)->event(text);},menuProfile.get());
             menuProfile->mark(MenuStage::Resident);
             if(!revealed){revealed=menuRenderer.ready(visualResident)&&menuModels.ready(visual)&&menuIcons.ready(mkw::MenuVehicleIcons::driverFor(visual));
-                if(revealed&&visual.page==mkw::UiPage::Pause)recordPauseStage("menu-shown");}
+                if(revealed&&visual.page==mkw::UiPage::Pause){recordPauseStage("menu-shown");writePauseTrace();}}
             menuProfile->mark(MenuStage::Textures);
             // The engine plays the title wave (W_BGM_TITLE) and every other menu sound;
             // the THP opening keeps its own stream (its original DSP ADPCM).

@@ -167,7 +167,11 @@ bool Lakitu::load(){
         if(!bank)return true;
         p.bank=std::make_unique<DriverAnimation>();if(!p.bank->load(bank,*p.model)){p.bank.reset();p.model.reset();return false;}
         p.bank->skinNormals(!p.model->staticLightingBaked);
-        p.rigid=p.bank->makeRigid(*p.model);return true;
+        p.rigid=p.bank->makeRigid(*p.model);
+        // Other parts: GPU skinning (palette bound per draw) instead of a CPU
+        // pose each frame; without it (or on failure) the CPU path stays.
+        if(!p.rigid&&DriverAnimation::gpuPoses)p.bank->prepareLitSkinning(*p.model);
+        return true;
     };
     m.ready=part(m.body,LakituBody,LakituBodyBank)&&part(m.rod,LakituRod,LakituRodBank)&&part(m.flag,LakituFlag,LakituFlagBank)&&
             part(m.signal,LakituSignal,nullptr)&&part(m.lap,LakituLap,nullptr)&&part(m.lapFinal,LakituLapFinal,nullptr)&&
@@ -360,8 +364,9 @@ void Lakitu::draw(Renderer& renderer){
         const unsigned f=m.clipFrame>=0?unsigned(m.clipFrame):elapsed;
         return std::pair<int,unsigned>{clip,bank.loop(clip)?f%duration:std::min(f,duration-1)};
     };
-    auto append=[&](const Model* model,const C3D_Mtx& transform,unsigned first=0,unsigned count=0){
+    auto append=[&](const Model* model,const C3D_Mtx& transform,unsigned first=0,unsigned count=0,const DriverAnimation* bank=nullptr){
         Renderer::ShadowCaster c;c.model=model;c.transform=transform;c.first=first;c.count=count;
+        if(bank&&bank->gpuSkinned()){c.palette=bank->palette();c.bones=bank->matrixCount();}
         m.shadowCasters.push_back(c);
     };
     auto drawPart=[&](Impl::Part& p,const char* name,const C3D_Mtx& transform){
@@ -374,7 +379,14 @@ void Lakitu::draw(Renderer& renderer){
                 C3D_Mtx bone,world;store(bone,pose.palette+part.matrix*pose.stride);Mtx_Multiply(&world,&transform,&bone);
                 append(p.model.get(),world,part.first,part.count);
             }
-        }else{p.bank->apply(*p.model,clip,float(frame),m.tick);renderer.draw(*p.model,transform);append(p.model.get(),transform);}
+        }else{
+            p.bank->apply(*p.model,clip,float(frame),m.tick);
+            const bool gpu=p.bank->gpuSkinned();
+            if(gpu)renderer.setSkinPalette(p.bank->palette(),p.bank->matrixCount(),21);
+            renderer.draw(*p.model,transform);
+            if(gpu)renderer.setSkinPalette(nullptr,0,12);
+            append(p.model.get(),transform,0,0,p.bank.get());
+        }
     };
     drawPart(m.body,m.bodyClip,m.world);
     auto [bodyClip,bodyFrame]=frameOf(*m.body.bank,m.bodyClip);

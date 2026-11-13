@@ -135,6 +135,12 @@ accessory matrices together with its chassis matrix instead of on their first
 read (the same values). `no-pose-share.txt` evaluates an animation bank's pose
 again for each model it is applied to (race items pose a lit and an unlit
 copy) instead of reusing the pose its other model already holds.
+`no-gpu-pose.txt` poses race items (Bob-omb, Blue Shell, Blooper, POW, Bullet Bill)
+and Lakitu's non-rigid parts on the CPU each frame again instead of skinning them on
+the GPU from one palette (the hook-writes CSV's `driver pose cpu` rows). Every DIAG
+run also writes `cpu-pose-banks.txt`: each animation bank posed on the CPU, once,
+with its bone and vertex counts. `pause-transition.txt` is written when the pause
+menu appears (and again when the race unloads).
 `runtime.log` also lists `course draws step=… render_ms=…` every 600 steps: the render
 thread's time in the course pass's model draws per profiled frame (first eye), the
 share a recorded course command list could save.

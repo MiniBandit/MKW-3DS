@@ -92,6 +92,11 @@ public:
     // the index in normal.x. apply() only writes visibility, UVs and textures;
     // draw with palette(). The GPU needs just the first 12 affine floats.
     bool gpuSkin(Model& model);
+    // GPU skinning for a model and a second copy of it (race items' lit and
+    // baked models), each in the layout its draw uses (lit: normals and a
+    // bone-index attribute; otherwise the index in normal.x). One palette
+    // poses both. False changes nothing: the CPU path stays.
+    bool gpuSkinModels(Model& first,Model* second);
     bool gpuSkinned() const {return gpu_;}
     unsigned shareDrawVertices(Model& model);
     const float* palette() const {return palette_.data();}
@@ -116,6 +121,9 @@ public:
     // A second model applied with the inputs of the last evaluation reuses its
     // pose instead of evaluating again (the same pose). A/B: no-pose-share.txt.
     static inline bool sharePose=true;
+    // Race items' and Lakitu's poses skinned on the GPU (palette per draw)
+    // instead of on the CPU each frame. A/B: no-gpu-pose.txt.
+    static inline bool gpuPoses=true;
 private:
     // stepLook's head query: only the slots it reads (see animation.cpp).
     const float* lookPose(int clip,float frame,unsigned tick);
@@ -182,14 +190,21 @@ private:
     int lastClip_=-1;
     int handleDrive_=-1,dash_=-1,shake_=-1,throw_=-1;
     bool gpu_=false;
-    std::array<bool,64> shapeHidden_{};
     bool skinNormals_=true;
     SharedPositions shared_;
     // Vertex buffer whose UV0 currently holds the neutral (untransformed) UVs.
     const Vertex* neutralUv_=nullptr;
-    // GPU path: uvBuffer_'s UV0 holds baseUV_ under appliedUv_ (or neutral).
-    const Vertex* uvBuffer_=nullptr;bool uvNeutral_=true,uvDisjoint_=true;
-    std::array<float,64*6> appliedUv_{};
+    // GPU path, per vertex buffer (one bank may pose two copies of a model,
+    // gpuSkinModels): its collapsed shapes, and whether its UV0 holds
+    // baseUV_ under appliedUv (or neutral); uvKnown false: unknown.
+    struct GpuBuffer {const Vertex* vertices=nullptr;std::array<bool,64> hidden{};bool hiddenKnown=true,uvKnown=false,uvNeutral=true;std::array<float,64*6> appliedUv{};};
+    std::array<GpuBuffer,2> gpuBuffers_{};
+    GpuBuffer& gpuBuffer(const Vertex* vertices);
+    bool uvDisjoint_=true;
+    // Rest positions (and normals with a separate bone-index attribute when
+    // lit) for GPU skinning of one model.
+    void gpuLayout(Model& model,bool lit);
+    void gpuReady();
     // Cache only an identical completed pose on the same destination buffer.
     // Secondary hair keeps its independent tick; clip transitions never skip.
     const Vertex* cachedVertices_=nullptr;
