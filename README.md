@@ -29,7 +29,8 @@ See [CHANGELOG.md](CHANGELOG.md) for the full list.
   Convert RVZ or NKit dumps to ISO in Dolphin first.
 - About **30 GB** of free space and an internet connection
 
-The following dependencies are only needed if you **DON'T** want to use Docker to build:
+The following dependencies are only needed if you **DON'T** want to use Docker to build.
+**On Windows you can skip them:** the builder offers to install whatever is missing.
 - [devkitPro](https://devkitpro.org/wiki/Getting_Started) with the 3DS tools (`3ds-dev`)
 - [Python 3.11–3.14](https://www.python.org/downloads/) and [Node.js LTS](https://nodejs.org) (Python 3.15 is not supported yet)
 - [Git](https://git-scm.com)
@@ -43,8 +44,10 @@ The following dependencies are only needed if you **DON'T** want to use Docker t
 **macOS:** double-click `Build MKW CIA.command`, drag your disc image into the
 window and press Return.
 
-**Windows:** double-click `Build MKW CIA.bat`, drag your disc image into the
-window and press Enter.
+**Windows:** double-click `Build MKW CIA.bat`. If Python, Git, Node.js, a C++
+compiler or devkitPro is missing, it lists them and installs them when you press
+Enter (Windows asks for permission; in devkitPro's installer, tick *3DS
+Development*). Then drag your disc image into the window and press Enter.
 
 **Linux** (Intel or AMD computers only, including Chromebooks with Linux turned on):
 install Python, Node.js, Git and `g++` with your package manager, then devkitPro.
