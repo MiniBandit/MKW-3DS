@@ -768,6 +768,45 @@ bool Renderer::enableBottom(){
     C3D_RenderTargetSetOutput(bottomTarget_,GFX_BOTTOM,GFX_LEFT,TopTransfer);
     return true;
 }
+bool Renderer::shareBottomDepth(bool shared){
+    if(!bottomTarget_)return false;
+    auto& fb=bottomTarget_->frameBuf;
+    if(shared==(fb.depthBuf==nullptr))return true;
+    const size_t bytes=C3D_CalcDepthBufSize(fb.width,fb.height,GPU_RB_DEPTH24_STENCIL8);
+    // The top LCD's buffer must hold the lower view's (the depth grid reads all of it).
+    if(shared&&(depthGrid||!target_||!target_->frameBuf.depthBuf||target_->frameBuf.depthFmt!=GPU_RB_DEPTH24_STENCIL8||
+                C3D_CalcDepthBufSize(target_->frameBuf.width,target_->frameBuf.height,GPU_RB_DEPTH24_STENCIL8)<bytes))return false;
+    // No queued frame still uses the buffer.
+    waitForGpu();
+    if(shared){
+        if(bottomTarget_->ownsDepth)vramFree(fb.depthBuf);
+        fb.depthBuf=nullptr;bottomTarget_->ownsDepth=false;
+    }else{
+        // As C3D_RenderTargetCreate places it: opposite the colour's bank first.
+        const auto colour=addrGetVRAMBank(fb.colorBuf);
+        void* own=vramAllocAt(bytes,colour==VRAM_ALLOC_A?VRAM_ALLOC_B:VRAM_ALLOC_A);
+        if(!own)own=vramAlloc(bytes);
+        if(!own)return false;
+        C3D_FrameBufDepth(&fb,own,GPU_RB_DEPTH24_STENCIL8);bottomTarget_->ownsDepth=true;
+    }
+    C3Di_GetContext()->flags|=C3DiF_FrameBuf;
+    return true;
+}
+void Renderer::bottomWorldDepthNow(bool clear){
+    if(!bottomTarget_||bottomTarget_->frameBuf.depthBuf)return;
+    if(clear){
+        // Queue order: the upper screen's commands (flushed), the probe's
+        // rows, then the clear the lower view starts from.
+        C3D_FrameSplit(GX_CMDLIST_FLUSH);
+        if(probeExec_.valid&&probeExec_.depth==target_->frameBuf.depthBuf)keepProbeRowsNow();
+        C3D_FrameBuf fb=bottomTarget_->frameBuf;
+        fb.depthBuf=target_->frameBuf.depthBuf;fb.depthFmt=GPU_RB_DEPTH24_STENCIL8;
+        C3D_FrameBufClear(&fb,C3D_CLEAR_DEPTH,0,0);
+        return;
+    }
+    // After C3D_FrameDrawOn(bottomTarget_): bind the borrowed buffer instead.
+    if(auto* fb=C3D_GetFrameBuf()){fb->depthBuf=target_->frameBuf.depthBuf;fb->depthFmt=GPU_RB_DEPTH24_STENCIL8;fb->depthMask=0x3;}
+}
 void Renderer::releaseBottom(){
     if(!bottomTarget_)return;
     // No queued frame or transfer still reads the target (or the framebuffers).
@@ -1029,6 +1068,8 @@ void Renderer::beginEyeNow(const C3D_Mtx& view,const C3D_Mtx& projection){
     beginFrame();
 }
 void Renderer::beginBottomWorldNow(const C3D_Mtx& view,const C3D_Mtx& projection){
+    // Every eye of the upper screen is drawn: the lower view may take its depth.
+    bottomWorldDepthNow(true);
     // Camera axes stay identical, so models, sparks and EF view-space vertices
     // can be read again without writes while the top draws are queued.
     view_=view;projection_=eyeProjection(projection);
@@ -1098,7 +1139,8 @@ void Renderer::beginFrame(){
         // A race map covers the whole lower LCD opaquely and nothing there
         // reads depth: no clear (RaceBottomScreen::draw, bottomCovered()).
         // A menu frame that keeps the lower LCD's last picture neither clears nor draws it.
-        if(bottomTarget_&&!execBottomCovered_&&!execBottomKept_)C3D_RenderTargetClear(bottomTarget_,C3D_CLEAR_ALL,0x071326FF,0);
+        if(bottomTarget_&&!execBottomCovered_&&!execBottomKept_)
+            C3D_RenderTargetClear(bottomTarget_,bottomTarget_->frameBuf.depthBuf?C3D_CLEAR_ALL:C3D_CLEAR_COLOR,0x071326FF,0);
     }
     // Only the left eye captures. The right eye must render directly to its
     // LCD target unless its own bloom pass needs the shared scene scratch.
@@ -1124,7 +1166,7 @@ void Renderer::beginFrame(){
             C3D_RenderTargetClear(sceneTarget_,C3D_CLEAR_ALL,0x071326FF,0);
         }
         C3D_FrameDrawOn(sceneTarget_);C3D_SetViewport(0,0,240,400);
-    }else C3D_FrameDrawOn(bottomWorldPass_?bottomTarget_:topTarget());
+    }else{C3D_FrameDrawOn(bottomWorldPass_?bottomTarget_:topTarget());if(bottomWorldPass_)bottomWorldDepthNow(false);}
     C3D_BindProgram(&program_);
     sceneDepthMap(projection_);
     uploadProjection(projectionLoc_,projection_);
@@ -3231,18 +3273,20 @@ void Renderer::topDepthAfterSceneNow(){
     const bool copy=probeExec_.valid&&probeExec_.depth==sceneTarget_->frameBuf.depthBuf&&(sharedDepth_||execStereo_.active());
     if(!sharedDepth_&&!copy)return;
     topDepthCleared_=true;
-    if(copy&&!probeCopy_)probeCopy_=static_cast<uint32_t*>(linearAlloc(2*(256/8)*64*sizeof(uint32_t)));
     // Queue order: the scene's commands (flushed), the probe copy, the
     // clear, then the top's draws.
     C3D_FrameSplit(GX_CMDLIST_FLUSH);
-    if(copy&&probeCopy_){
-        const int cx=int(probeExec_.x);
-        const unsigned y0=399u-unsigned(std::clamp(cx+1,0,399)),y1=399u-unsigned(std::clamp(cx-1,0,399));
-        const unsigned first=y0>>3,rows=(y1>>3)-first+1,rowWords=probeExec_.stride*64;
-        C3D_SyncTextureCopy(const_cast<u32*>(probeExec_.depth)+size_t(first)*rowWords,0,reinterpret_cast<u32*>(probeCopy_),0,rows*rowWords*4,8);
-        probeExec_.depth=probeCopy_;probeExec_.firstRow=first;probeExec_.rows=rows;
-    }
+    if(copy)keepProbeRowsNow();
     if(sharedDepth_)C3D_RenderTargetClear(target_,C3D_CLEAR_DEPTH,0,0);
+}
+void Renderer::keepProbeRowsNow(){
+    if(!probeCopy_)probeCopy_=static_cast<uint32_t*>(linearAlloc(2*(256/8)*64*sizeof(uint32_t)));
+    if(!probeCopy_)return;
+    const int cx=int(probeExec_.x);
+    const unsigned y0=399u-unsigned(std::clamp(cx+1,0,399)),y1=399u-unsigned(std::clamp(cx-1,0,399));
+    const unsigned first=y0>>3,rows=(y1>>3)-first+1,rowWords=probeExec_.stride*64;
+    C3D_SyncTextureCopy(const_cast<u32*>(probeExec_.depth)+size_t(first)*rowWords,0,reinterpret_cast<u32*>(probeCopy_),0,rows*rowWords*4,8);
+    probeExec_.depth=probeCopy_;probeExec_.firstRow=first;probeExec_.rows=rows;
 }
 void Renderer::freeBloom(){
     bloomListValid_=false;

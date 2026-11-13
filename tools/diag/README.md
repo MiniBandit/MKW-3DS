@@ -254,6 +254,10 @@ keep: course=… kept=… drawn=…` for each race.
 `no-bottom-depth-off.txt` binds the lower target with depth reads and writes
 on again for the race's 2D lower screen; by default it is bound without them
 (nothing there tests or writes depth). The intro's 3D lower view keeps depth.
+`no-bottom-depth-free.txt` gives the lower target its own depth buffer in races
+again; by default it has none there (300 KB more VRAM for the course textures),
+and the intro's 3D lower view uses the top LCD's depth buffer once the upper
+screen is drawn, cleared first (`runtime.log`: `bottom screen … vram_free=…`).
 The Settings page's options are in `settings.dat`, not in the license:
 Dynamic Shadows for benchmarks is set there (or on the Settings page).
 

@@ -318,6 +318,7 @@ void Renderer::playerShadowNow(const ShadowCaster* casters,unsigned count,const 
  // The original scene's depth/stencil stays intact across the auxiliary pass.
  auto* target=bottomWorldPass_?bottomTarget_:(bloomFrame_||stadiumFrame_)?sceneTarget_:topTarget();
  C3D_FrameDrawOn(target);
+ if(bottomWorldPass_)bottomWorldDepthNow(false);
  C3D_SetViewport(0,0,240,bottomWorldPass_?320:400);
  C3D_SetScissor(GPU_SCISSOR_DISABLE,0,0,240,bottomWorldPass_?320:400);
  C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER,projectionLoc_,&projection_);

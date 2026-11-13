@@ -86,6 +86,9 @@ struct RaceBottomScreen::Impl {
     // LCD's picture: no draw, no clear, no transfer (A/B: no-race-bottom-keep.txt).
     // The race's 2D lower screen binds no depth buffer (A/B: no-bottom-depth-off.txt).
     bool depthOff=true;
+    // Its depth buffer only exists as the top LCD's, borrowed by the intro's
+    // 3D lower view (A/B: no-bottom-depth-free.txt).
+    bool depthFree=true;
     bool keep=true,shownValid=false;uint64_t shownHash=0;uint32_t shownSerial=0;unsigned shownApt=0,shownScopes=0;
     unsigned keptFrames=0,drawnFrames=0;uint32_t miiGeneration=0;
     // The composed frame's draws (compose -> submit).
@@ -265,7 +268,7 @@ static bool sdFile(const char* name){
 bool RaceBottomScreen::load(Renderer& renderer,unsigned course){
     auto& m=*impl_;
     m.mapClip=!sdFile("no-map-clip.txt");
-    endRace();m.keep=!sdFile("no-race-bottom-keep.txt");m.depthOff=!sdFile("no-bottom-depth-off.txt");
+    endRace();m.keep=!sdFile("no-race-bottom-keep.txt");m.depthOff=!sdFile("no-bottom-depth-off.txt");m.depthFree=!sdFile("no-bottom-depth-free.txt");
     const auto* art=raceMapCourse(course);
     if(!art){unload(renderer);return false;}
     if(m.target&&m.course==course){
@@ -275,6 +278,8 @@ bool RaceBottomScreen::load(Renderer& renderer,unsigned course){
     }
     unload(renderer);
     if(!renderer.enableBottom())return false;
+    // Before the course textures take the VRAM that is left.
+    renderer.shareBottomDepth(m.depthFree);
     m.target=true;m.course=course;
     m.quads.reset(new(std::nothrow) Renderer::MaterialQuad[2*QuadCapacity]);
     if(!m.quads){unload(renderer);return false;}

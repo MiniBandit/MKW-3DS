@@ -295,6 +295,11 @@ public:
     // lower LCD framebuffers, so menus keep their black lower screen.
     bool enableBottom();
     void releaseBottom();
+    // Race loads (render thread idle): the lower target gives up its own depth
+    // buffer (300 KB of VRAM). Only the intro's 3D lower view uses depth there:
+    // it borrows the top LCD's once the upper screen is drawn, cleared again
+    // first. false: the target gets its own buffer back. A/B: no-bottom-depth-free.txt.
+    bool shareBottomDepth(bool shared);
     bool bottomEnabled() const {return bottomTarget_!=nullptr;}
     // Later sprites, font sprites and material quads of this frame go to the
     // bottom screen (2D: no parallax; drawn once, with the last eye), at most
@@ -954,6 +959,10 @@ private:
     void shareTopDepth(bool inFrame);
     void unshareTopDepth();
     void topDepthAfterSceneNow();
+    // Copies the depth probe's tile rows to LINEAR before its buffer is reused (after a FrameSplit).
+    void keepProbeRowsNow();
+    // The intro's 3D lower view on a target without its own depth: the top LCD's.
+    void bottomWorldDepthNow(bool clear);
     void* sharedDepth_=nullptr;
     uint32_t* probeCopy_=nullptr;
     bool topDepthCleared_=false;
