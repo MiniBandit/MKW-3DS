@@ -94,6 +94,10 @@ without bloom clear the left LCD's colour again, although the capture then cover
 instead of as one batch of pixel-space quads), `no-clip-reuse.txt` (the clip fuse
 multiplies projection x modelView on every upload again instead of reusing an unchanged
 product or drawNow's culling product; exact: `cmd-hash.txt` equal either way),
+`no-soft-wall-skip.txt` (the chase camera runs its soft-wall pass on every course again,
+also those whose KCL has no soft weak wall; exact: `cmd-hash.txt` equal either way),
+`no-bottom-fill-cover.txt` (the race lower screen clears under its opaque full-screen fill
+again when no map covers it: battle arenas),
 `no-box-precull.txt` (Item Box / Fake Item Box shells are drawn whole
 again instead of without the triangles their cull mode removes; runtime.log
 `box precull` counts the triangles kept), `no-fast-yaz0.txt` (course archives decode
