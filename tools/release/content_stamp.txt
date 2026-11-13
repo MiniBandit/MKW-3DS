@@ -1,4 +1,4 @@
-# Converted assets of 0.8.0 test 2 (staff ghosts, Online and ghost menu labels, the online menu pages).
+# Converted assets of 0.8.0 (staff ghosts, Online and ghost menu labels, the online menu pages).
 # Every older build has to be rebuilt.
 # windows_legacy: no older Windows recipe is accepted for these files.
 # recipe records the cook/package tools reviewed for these assets.

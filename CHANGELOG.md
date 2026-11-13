@@ -23,9 +23,9 @@ Needs a new build: the builder now copies the staff ghosts from your disc, and t
 - Builder (Windows): a C++ compiler installed with winget, MSYS2, llvm-mingw or w64devkit is found even when it isn't on PATH; the menu movie step no longer fails when a virus scanner holds its files.
 - Install instructions: copy the `mkw-3ds` folder into your SD card's `3ds` folder (copying the `3ds` folder itself can replace your card's whole `3ds` folder on a Mac).
 
-Known issues in this test:
+Known issues:
 - The Wii's staff ghosts can drift from their run (the expert staff ghost goes off course on some tracks). Ghosts you record on the 3DS replay exactly.
-- Online play has only been tested with two consoles.
+- Online play has been tested with two consoles; races with more players are new.
 
 # 0.7.0: Redux merge
 
