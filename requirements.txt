@@ -1,4 +1,6 @@
-numpy==2.5.3
+# NumPy 2.5 requires Python 3.12; retain support for Python 3.11.
+numpy==2.4.3; python_version < "3.12"
+numpy==2.5.3; python_version >= "3.12"
 Pillow==12.3.0
 pycryptodome==3.23.0
 -e ./vendor/gclib

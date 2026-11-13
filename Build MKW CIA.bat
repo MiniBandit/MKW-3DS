@@ -4,6 +4,9 @@ rem Needs devkitPro (3DS tools), Python 3.11-3.14, Node.js LTS and Git; see READ
 setlocal
 cd /d "%~dp0"
 
+rem Use the repo's portable C++ compiler only in this build's environment.
+if exist "%~dp0.toolchain\llvm-mingw\bin\clang++.exe" set "PATH=%~dp0.toolchain\llvm-mingw\bin;%PATH%"
+
 set "PY="
 where py >nul 2>nul || goto :python_path
 set "PY=py -3.14"
@@ -18,7 +21,8 @@ if not errorlevel 1 goto :python_ready
 set "PY=py -3.11"
 call :checkpython
 if not errorlevel 1 goto :python_ready
-goto :nopython
+rem The launcher may not see a Python installation that is available on PATH.
+goto :python_path
 
 :python_path
 where python >nul 2>nul || goto :nopython
@@ -41,10 +45,10 @@ if not exist ".venv\Scripts\python.exe" (%PY% -m venv .venv || goto :end)
 ".venv\Scripts\python.exe" -c "import sys; sys.exit(not ((3, 11) <= sys.version_info[:2] < (3, 15)))" || (echo The existing .venv uses an unsupported Python version. Delete .venv and rerun with Python 3.11 through 3.14. & goto :end)
 rem Install the packages whenever the build environment cannot import them
 rem (a marker file alone could say "installed" after a failed or partial install).
-".venv\Scripts\python.exe" -c "import numpy, PIL, Crypto" >nul 2>nul || (
+".venv\Scripts\python.exe" -c "import numpy, PIL, Crypto, unicorn" >nul 2>nul || (
     ".venv\Scripts\python.exe" -m pip install -r requirements.txt || goto :end
 )
-".venv\Scripts\python.exe" -c "import numpy, PIL, Crypto" || (echo The Python packages above did not load. Delete the .venv folder and run this again. If it happens again, share this message in an issue. & goto :end)
+".venv\Scripts\python.exe" -c "import numpy, PIL, Crypto, unicorn" || (echo The Python packages above did not load. Delete the .venv folder and run this again. If it happens again, share this message in an issue. & goto :end)
 rem Show the build and keep a copy in build-cia-log.txt. UTF-8 text on Windows too.
 set "PYTHONUTF8=1"
 set "MKW_DISC=%disc%"

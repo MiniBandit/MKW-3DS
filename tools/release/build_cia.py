@@ -243,7 +243,7 @@ def stage_tools():
     if any(part.lower().startswith(('onedrive','icloud','dropbox','google drive')) for part in ROOT.parts):
         raise SystemExit(f'The builder is inside a synced folder ({ROOT}). Move the MKW-3DS-Builder folder somewhere '
                          'that is not synced (for example C:\\MKW-3DS-Builder) and run it again.')
-    missing=[m for m in ('numpy','PIL','Crypto') if not __import__('importlib.util').util.find_spec(m)]
+    missing=[m for m in ('numpy','PIL','Crypto','unicorn') if not __import__('importlib.util').util.find_spec(m)]
     if missing:raise SystemExit(f'Missing Python packages {", ".join(missing)} in {sys.executable}: run "{sys.executable}" -m pip install -r requirements.txt')
     if not shutil.which('node'):raise SystemExit('Missing Node.js (https://nodejs.org), used by the model exporters')
     # The two small helper programs are compiled for this computer at step 11:

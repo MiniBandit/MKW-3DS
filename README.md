@@ -37,6 +37,11 @@ The following dependencies are only needed if you **DON'T** want to use Docker t
   - Windows: `winget install MartinStorsjo.LLVM-MinGW.UCRT`, then open a new window
   - Linux: `g++` or `clang++` from your package manager
 
+On Windows, you can also unpack a portable LLVM-MinGW toolchain into
+`.toolchain/llvm-mingw`, with `bin/clang++.exe` directly inside it. The Windows
+launcher uses that compiler for the build window only; your system PATH is
+unchanged. The `.toolchain` folder is excluded from Git.
+
 ## Building
 
 **macOS:** double-click `Build MKW CIA.command`, drag your disc image into the
