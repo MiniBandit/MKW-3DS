@@ -46,6 +46,24 @@ def nine_slice(src, width, height, corner=8, drawn=BORDER):
     return out
 
 
+def digit_images(height):
+    """0..9 in the result board's kart_kanji_font, drawn as ordinal_images draws
+    1st..12th (lerp(black, white, intensity)) at the same scale: battle scores."""
+    import cook_race_map as maps
+    from cook_race_flow import font_glyphs
+    info, glyphs = font_glyphs(maps.UI / 'Font/kart_kanji_font.brfnt', '0123456789st')
+    scale = height / info['cellH']
+    out = []
+    for d in '0123456789':
+        g = glyphs[d]
+        a = np.asarray(g['image'].convert('RGBA'), dtype=np.float32)
+        rgba = np.zeros_like(a)
+        rgba[..., :3] = a[..., :1]
+        rgba[..., 3] = a[..., 3]
+        out.append(maps.resize(maps.trim(Image.fromarray(rgba.astype(np.uint8), 'RGBA')), scale))
+    return out
+
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument('--root', type=Path, default=TOOLS.parent,
@@ -77,6 +95,8 @@ def main():
     _, ordinals = maps.ordinal_images(ORDINAL_H)
     for i, im in enumerate(ordinals):
         images[('ordinal', i)] = im
+    for d, im in enumerate(digit_images(ORDINAL_H)):
+        images[('digit', d)] = im
     ordinal_w = max(im.width for im in ordinals)
     face_x = ORDINAL_X + ordinal_w + 2
     item_x = face_x + ICON + 2
@@ -119,12 +139,13 @@ def main():
              '    std::array<RaceMapRect,12> ordinals;  // 1st..12th, result board font',
              '    std::array<RaceMapRect,24> faces;     // st_*_32x32 by retail character id',
              '    std::array<RaceMapRect,21> items;     // by ItemKind; 19 = two Triple Mushrooms left',
+             '    std::array<RaceMapRect,10> digits;    // battle scores in the ordinal font and size (tinted by team)',
              '    uint8_t rowW,rowH,ordinalX,faceX,itemX,icon;',
              '};',
              'inline constexpr RaceRowsAtlas RaceRowsUi{"textures/race_bottom_rows.t3x",'
              f'{{{atlas.width},{atlas.height}}},{rect(("row", "player"))},{rect(("row", "other"))},'
              f'{array([("ordinal", i) for i in range(12)])},{array([("face", i) for i in range(24)])},'
-             f'{array([("item", k) for k in range(21)])},{row_w},{ROW_H},{ORDINAL_X},{face_x},{item_x},{ICON}}};',
+             f'{array([("item", k) for k in range(21)])},{array([("digit", d) for d in range(10)])},{row_w},{ROW_H},{ORDINAL_X},{face_x},{item_x},{ICON}}};',
              '}', '']
     header.parent.mkdir(parents=True, exist_ok=True)
     header.write_text('\n'.join(lines), encoding='utf-8', newline='\n')

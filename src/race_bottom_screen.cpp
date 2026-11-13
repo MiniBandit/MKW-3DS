@@ -127,14 +127,14 @@ struct RaceBottomScreen::Impl {
         return true;
     }
     // A quad over rectangle r of the rows texture (RaceRowsUi).
-    bool addRow(const RaceMapRect& r,float x0,float y0,float x1,float y1){
+    bool addRow(const RaceMapRect& r,float x0,float y0,float x1,float y1,uint32_t color=0xffffffffu){
         if(count>=QuadCapacity||!r.w)return false;
         const float aw=RaceRowsUi.size[0],ah=RaceRowsUi.size[1];
         const float u0=r.x/aw,u1=(r.x+r.w)/aw,v0=r.y/ah,v1=(r.y+r.h)/ah;
         auto& q=base[count++];
         q.x[0]=x0;q.y[0]=y0;q.x[1]=x1;q.y[1]=y0;q.x[2]=x0;q.y[2]=y1;q.x[3]=x1;q.y[3]=y1;
         q.u[0]=u0;q.v[0]=v0;q.u[1]=u1;q.v[1]=v0;q.u[2]=u0;q.v[2]=v1;q.u[3]=u1;q.v[3]=v1;
-        for(auto& c:q.color)c=0xffffffffu;
+        for(auto& c:q.color)c=color;
         return true;
     }
     // A quad with free corners (TL, TR, BL, BR) over atlas rectangle r.
@@ -579,12 +579,20 @@ bool RaceBottomScreen::compose(Renderer& renderer,const BottomView& view){
         }
         auto drawRow=[&](unsigned i){
             const auto& r=view.racer[i];
-            const float x=RowX+slide,y=floatRowY(m.row[i]),icon=R.icon,iy=y+std::floor((R.rowH-icon)*.5f);
+            // Faces and items sit 1 px above the box's centre: its border is heavier below.
+            const float x=RowX+slide,y=floatRowY(m.row[i]),icon=R.icon,iy=y+std::floor((R.rowH-icon)*.5f)-1;
             m.addRow(r.local?R.player:R.other,x,y,x+R.rowW,y+R.rowH);
             if(!view.battle){
                 const auto& ord=R.ordinals[std::clamp<unsigned>(r.rank,1,12)-1];
                 const float oy=y+std::floor((R.rowH-ord.h)*.5f);
                 m.addRow(ord,x+R.ordinalX,oy,x+R.ordinalX+ord.w,oy+ord.h);
+            }else{
+                // Battle: the score where the ordinal goes, in the team's colour.
+                char text[4];const unsigned n=unsigned(std::snprintf(text,sizeof text,"%u",std::min(unsigned(r.score),999u)));
+                const uint32_t color=r.team==RaceTeam::Red?0xff3030ffu:r.team==RaceTeam::Blue?0x4080ffffu:0xffffffffu;
+                float dx=x+R.ordinalX;
+                for(unsigned j=0;j<n;++j){const auto& d=R.digits[text[j]-'0'];const float dy=y+std::floor((R.rowH-d.h)*.5f);
+                    m.addRow(d,dx,dy,dx+d.w,dy+d.h,color);dx+=d.w;}
             }
             m.addRow(R.faces[std::min<unsigned>(r.character,23)],x+R.faceX,iy,x+R.faceX+icon,iy+icon);
             if(r.character>=24&&m.mii.ready){auto& q=m.miiQuads[view.tick&1][1];q=m.base[--m.count];for(unsigned k=0;k<4;++k){q.u[k]=(k&1)?1.f:0.f;q.v[k]=(k&2)?1.f:0.f;}m.miiRow=true;}
@@ -657,7 +665,7 @@ bool RaceBottomScreen::compose(Renderer& renderer,const BottomView& view){
     // Battle scores use original-font glyphs baked at their actual LCD size,
     // with no padded 3D timer sprite squeezed down to a few visible pixels.
     const unsigned scoreFirst=m.count;
-    if(view.battle&&m.scores.ready&&m.standings>0){
+    if(view.battle&&m.scores.ready&&m.standings>0&&!floatRows){
         const float slide=(1-smooth(m.standings))*-(Column+4);
         for(unsigned i=0;i<std::min(view.racers,12u);++i){
             const auto& r=view.racer[i];char text[4];
