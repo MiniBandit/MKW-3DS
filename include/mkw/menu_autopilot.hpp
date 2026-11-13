@@ -73,7 +73,7 @@ public:
   if(menuFrames_>36000){fail("menu script timed out");return key;}
   const std::string* token=current();if(!token)return key;
   if((*token)[0]=='w'){if(++wait_>=unsigned(std::atoi(token->c_str()+1))){wait_=0;++cursor_;}return key;}
-  if(!token->compare(0,5,"race:")||!token->compare(0,5,"auto:")||*token=="skip"){if(++raceWait_>1800)fail("race did not start");return key;}
+  if(!token->compare(0,5,"race:")||!token->compare(0,5,"auto:")||!token->compare(0,4,"cpu:")||*token=="skip"){if(++raceWait_>1800)fail("race did not start");return key;}
   if(*token=="end"){done_=true;return key;}
   if(!idle||state.page==UiPage::Race)return key;
   if(++gap_<8)return key;gap_=0;
@@ -105,12 +105,16 @@ public:
   // Diagnostic overlay: "next" starts the following race while the old one's
   // results still fade out (finished stays true); its race:/auto: token must
   // not begin, and end at once, before that race is gone.
-  if(leaving_){if(finished||(token->compare(0,5,"race:")&&token->compare(0,5,"auto:"))){held=0;return;}leaving_=false;}
-  if(!token->compare(0,5,"race:")||!token->compare(0,5,"auto:")){
+  // cpu:N (test only): as auto:N, but when N runs out the race carries on
+  // with no forced finish, so a mid-race pause (S) can follow.
+  const bool timed=!token->compare(0,4,"cpu:");
+  if(leaving_){if(finished||(token->compare(0,5,"race:")&&token->compare(0,5,"auto:")&&!timed)){held=0;return;}leaving_=false;}
+  if(!token->compare(0,5,"race:")||!token->compare(0,5,"auto:")||timed){
    if(!racing_){racing_=true;raceStart_=simulationFrames;++races_;raceWait_=0;best_=progress;bestAt_=simulationFrames;forced_=false;}
-   route_=!token->compare(0,5,"auto:");
-   const bool expired=simulationFrames-raceStart_>=unsigned(std::atoi(token->c_str()+5));
-   if(finished||(expired&&!route_)){racing_=false;route_=false;++cursor_;return;}
+   route_=token->compare(0,5,"race:")!=0;
+   const bool expired=simulationFrames-raceStart_>=unsigned(std::atoi(token->c_str()+(timed?4:5)));
+   if(finished||(expired&&(!route_||timed))){racing_=false;route_=false;++cursor_;return;}
+   if(timed)return;
    // "race:N:items" also presses L (use item) at three fixed frames, for the
    // Time Trials ghost sync check (ghost-test.txt).
    if(!route_&&token->find(":items")!=std::string::npos){
