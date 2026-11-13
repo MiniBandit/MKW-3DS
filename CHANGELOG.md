@@ -19,7 +19,12 @@ Needs a new build: the builder now copies the staff ghosts from your disc, and t
 - The lap counter and Lakitu use the highest lap reached: reversing over the finish line no longer takes a lap off.
 - Wario's Gold Mine: the item boxes on the minecart line move at the carts' speeds.
 - The course preview skips on A only, from its second second, so a press carried over from the menus can't skip it.
-- **Graphics** in License Settings: Auto, Quality or Performance (Performance turns off the dynamic shadow: about 38% less drawing work on New 3DS).
+- **Graphics** in License Settings: Auto, Quality or Performance (Performance turns off the dynamic shadow, about 38% less drawing work on New 3DS, and draws the race's lower screen at 30 FPS while the top stays at 60).
+- **Race Timer** and **Map** in License Settings: hide the race time on the lower screen, and choose a map that turns with your kart (the new default) or stays fixed. The whole-course view (tap the lower screen) and Battle stay north up.
+- **Sound** follows System Settings: mono, stereo or surround. In surround, sounds behind you come from behind.
+- Pressing A while already holding R no longer hops: R drifts when you press it with A held, and brakes otherwise.
+- New 3DS: frame jobs (the opponents' poses and course objects) run on another processor core beside the racing physics, instead of sharing its core.
+- Mirror: the lower-screen map lines up with the karts and items on it.
 - Circle Pad: a released pad resting slightly off centre no longer keeps steering.
 - Notification LED: Waluigi's second colour is purple.
 - Builder (Windows): a C++ compiler installed with winget, MSYS2, llvm-mingw or w64devkit is found even when it isn't on PATH; the menu movie step no longer fails when a virus scanner holds its files.

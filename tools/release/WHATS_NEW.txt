@@ -7,6 +7,9 @@ Time Trials: your best run is
 Camera: the original game's
   chase camera; look behind with
   X or ZL.
-Graphics option in License
-  Settings.
+License Settings: Graphics, Race
+  Timer and a map that turns.
+Sound: mono, stereo or surround,
+  as System Settings choose.
+A while holding R no longer hops.
 Old 3DS: fewer races fail to load.
