@@ -329,9 +329,10 @@ void Renderer::runWrites(FrameList& list){
     for(const auto& w:list.storage.writes)w.run(w.payload);
 #else
     // DIAG: time each write, grouped by kind (perf-race-NNN-hook-writes.csv).
-    diag::WriteEntry frame[16];unsigned kinds=0;uint64_t total=0;
+    // One clock read per write: the end of one is the start of the next.
+    diag::WriteEntry frame[16];unsigned kinds=0;uint64_t total=0;uint64_t start=svcGetSystemTick();
     for(const auto& w:list.storage.writes){
-        const uint64_t start=svcGetSystemTick();w.run(w.payload);const uint64_t ticks=svcGetSystemTick()-start;total+=ticks;
+        w.run(w.payload);const uint64_t now=svcGetSystemTick(),ticks=now-start;start=now;total+=ticks;
         const void* run=reinterpret_cast<const void*>(w.run);unsigned i=0;
         while(i<kinds&&(frame[i].run!=run||frame[i].kind!=w.kind))++i;
         if(i==kinds){if(kinds==16)continue;frame[kinds++]={w.kind,run};}
@@ -357,21 +358,21 @@ void Renderer::runPrepares(FrameList& list){
         frame[i].frameTicks+=ticks;++frame[i].frameCount;
     };
 #endif
+#ifndef MKW_RELEASE
+    uint64_t start=svcGetSystemTick(); // one clock read per prepare and upload
+#endif
     for(const auto& w:s.prepares){
 #ifdef MKW_RELEASE
         w.run(w.payload);
 #else
-        const uint64_t start=svcGetSystemTick();w.run(w.payload);tally(w.kind,reinterpret_cast<const void*>(w.run),svcGetSystemTick()-start);
+        w.run(w.payload);const uint64_t now=svcGetSystemTick();tally(w.kind,reinterpret_cast<const void*>(w.run),now-start);start=now;
 #endif
     }
     for(const auto& u:s.uploads){
-#ifndef MKW_RELEASE
-        const uint64_t start=svcGetSystemTick();
-#endif
         // copyTextureInFrame: the source is GPU memory the GX copy reads directly.
         if(u.staging[half]!=u.source){std::memcpy(u.staging[half],u.source,u.bytes);flushGpuData(u.staging[half],u.bytes);}
 #ifndef MKW_RELEASE
-        tally(u.kind,u.destination,svcGetSystemTick()-start);
+        {const uint64_t now=svcGetSystemTick();tally(u.kind,u.destination,now-start);start=now;}
 #endif
     }
 #ifndef MKW_RELEASE
@@ -486,8 +487,16 @@ void Renderer::execute(FrameList& list){
     bool bottom=false;
     uint8_t diagRegion=diag::PassNone;bool diagBottom=false;
     const uint8_t* p=list.commands.data();const uint8_t* end=p+list.commands.size();
+#ifndef MKW_RELEASE
+    // DIAG course-draw timer: a course draw right after another starts at its
+    // end (one clock read per draw instead of two).
+    uint64_t courseChain=0;
+#endif
     while(p<end){
         const auto& h=*reinterpret_cast<const Header*>(p);const void* body=&h+1;p+=h.size;
+#ifndef MKW_RELEASE
+        const uint64_t chainedStart=courseChain;courseChain=0;
+#endif
         if(h.type==CmdDiagPass){diagRegion=static_cast<const DiagPassCommand*>(body)->pass;continue;}
         if(list.diagSkip&&diagLeaveOut(list.diagSkip,diagRegion,h.type,diagBottom))continue;
         if(bottomWorldPass_){
@@ -529,11 +538,11 @@ void Renderer::execute(FrameList& list){
             execFrame_=c.frame;execAdditive_=c.additive;execBehind_=c.behind;execGhostPass_=c.ghostPass;execGhostAlpha_=c.ghostAlpha;
 #ifndef MKW_RELEASE
             const bool courseTimed=pass==0&&diagRegion==diag::PassCourse;
-            const auto drawStart=courseTimed?svcGetSystemTick():0;
+            const auto drawStart=courseTimed?(chainedStart?chainedStart:svcGetSystemTick()):0;
 #endif
             drawNow(*c.model,c.vertices,c.transform,c.backdrop,c.material,c.context,c.visible);
 #ifndef MKW_RELEASE
-            if(courseTimed){courseDrawTicks+=svcGetSystemTick()-drawStart;courseDrawn=true;}
+            if(courseTimed){const auto drawEnd=svcGetSystemTick();courseDrawTicks+=drawEnd-drawStart;courseDrawn=true;courseChain=drawEnd;}
 #endif
             execBehind_=false;execGhostPass_=0;
             if(probe&&pass==0&&diagRegion==list.diagProbe){

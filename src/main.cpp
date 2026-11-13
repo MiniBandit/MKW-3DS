@@ -478,7 +478,8 @@ static std::string pauseTrace;static u64 pauseTraceStart=0;
 static void recordPauseStage(const char* stage,bool begin=false){
 #ifndef MKW_RELEASE
     const u64 now=svcGetSystemTick();
-    if(begin){pauseTrace.clear();pauseTraceStart=now;}
+    // Every pause of a race is kept (bounded) and written at releaseRace.
+    if(begin){if(pauseTrace.size()>16384)pauseTrace.clear();pauseTraceStart=now;}
     char line[96];snprintf(line,sizeof line,"HW87 %s %.1f ms\n",stage,double(now-pauseTraceStart)*1000.0/SYSCLOCK_ARM11);
     pauseTrace+=line;
 #endif
@@ -1511,7 +1512,7 @@ int main() {
             if(menuProfile->enabled())loader.drainSlow([](const char* label,const char* detail,float run,float wait,void* profile){char text[256];snprintf(text,sizeof text,"slow job %.1f ms (queued %.1f ms): %s %s",run,wait,label,detail);static_cast<mkw::MenuProfile*>(profile)->event(text);},menuProfile.get());
             menuProfile->mark(MenuStage::Resident);
             if(!revealed){revealed=menuRenderer.ready(visualResident)&&menuModels.ready(visual)&&menuIcons.ready(mkw::MenuVehicleIcons::driverFor(visual));
-                if(revealed&&visual.page==mkw::UiPage::Pause){recordPauseStage("menu-shown");writePauseTrace();}}
+                if(revealed&&visual.page==mkw::UiPage::Pause)recordPauseStage("menu-shown");}
             menuProfile->mark(MenuStage::Textures);
             // The engine plays the title wave (W_BGM_TITLE) and every other menu sound;
             // the THP opening keeps its own stream (its original DSP ADPCM).
