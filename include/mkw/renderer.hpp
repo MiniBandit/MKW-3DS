@@ -665,6 +665,11 @@ public:
     bool drawTiming=false;
     float drawSetupMs=0,drawCallMs=0,drawResetMs=0,drawNowMs=0;
     unsigned drawSetups=0,stateHits=0;
+    // Consecutive font sprites, or material quads, with the same texture and
+    // constants draw as one draw (the same pixels). A/B: no-quad-merge.txt.
+    bool quadMerge=false;
+    // DIAG (render thread, total): draws saved by quad merging.
+    unsigned long quadMerges=0;
     // DIAG cmd-hash.txt: each frame's GPU command words hashed (FNV-1a) into
     // cmd-hash.csv; cmd-dump.txt lists animation ticks whose words are saved
     // as cmd-dump-<tick>-<frame>.bin.
@@ -872,6 +877,10 @@ private:
     void spriteNow(const Texture& texture,float x,float y,float width,float height,float u0,float v0,float u1,float v1,float alpha,uint32_t rgba,const uint32_t* corners,bool additive,float angle);
     void fontSpriteNow(const Texture& texture,float x,float y,float width,float height,float u1,float v1,float alpha,uint32_t gradientTop,uint32_t gradientBottom,uint32_t color0,uint32_t color1);
     void materialQuadsNow(const Texture* texture,const MaterialQuad* quads,unsigned count,uint32_t color0,uint32_t color1,int wrapS,int wrapT,bool additive=false,bool opaque=false);
+    // quadMerge: several lists (consecutive commands) in one draw.
+    void materialQuadsNow(const Texture* texture,const MaterialQuad* const* lists,const unsigned* counts,unsigned listCount,uint32_t color0,uint32_t color1,int wrapS,int wrapT,bool additive,bool opaque);
+    struct FontQuad {float x,y,width,height,u1,v1,alpha;uint32_t gradientTop,gradientBottom;};
+    void fontSpritesNow(const Texture& texture,const FontQuad* quads,unsigned count,uint32_t color0,uint32_t color1);
     void textNow(const char* text,float x,float y,float size,uint32_t rgba);
     Vertex* reserveOverlay(int count);
     unsigned recordSceneRegion_=3,execSceneRegion_=3;

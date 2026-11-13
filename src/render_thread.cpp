@@ -129,6 +129,8 @@ struct MaterialQuadsCommand {
     const Texture* texture;const Renderer::MaterialQuad* quads;unsigned count;uint32_t color0,color1;int wrapS,wrapT;bool additive,opaque;
 };
 struct TextCommand {static constexpr uint16_t Type=CmdText;const char* text;float x,y,size;uint32_t rgba;};
+// Renderer::quadMerge: at most this many consecutive commands in one draw.
+constexpr unsigned MaxMergedQuads=64;
 struct ScreenDepthCommand {static constexpr uint16_t Type=CmdScreenDepth;float parallax;};
 struct DepthProbeCommand {static constexpr uint16_t Type=CmdDepthProbe;float x,y,depth;};
 }
@@ -583,10 +585,39 @@ void Renderer::execute(FrameList& list){
         }
         case CmdFontSprite:{
             const auto& c=*static_cast<const FontSpriteCommand*>(body);
+            if(quadMerge&&c.texture->ready&&c.alpha>0){
+                // quadMerge: the following font sprites with this texture and
+                // these constants (nothing between them) in the same draw.
+                FontQuad quads[MaxMergedQuads];unsigned n=0;const uint8_t* next=p;
+                auto take=[&](const FontSpriteCommand& f){quads[n++]={f.x,f.y,f.width,f.height,f.u1,f.v1,f.alpha,f.gradientTop,f.gradientBottom};};
+                take(c);
+                while(n<MaxMergedQuads&&next<end){
+                    const auto& h2=*reinterpret_cast<const Header*>(next);
+                    if(h2.type!=CmdFontSprite)break;
+                    const auto& f=*reinterpret_cast<const FontSpriteCommand*>(&h2+1);
+                    if(f.texture!=c.texture||f.color0!=c.color0||f.color1!=c.color1||f.alpha<=0)break;
+                    take(f);next+=h2.size;
+                }
+                fontSpritesNow(*c.texture,quads,n,c.color0,c.color1);quadMerges+=n-1;p=next;break;
+            }
             drawScreenFontSprite(*c.texture,c.x,c.y,c.width,c.height,c.u1,c.v1,c.alpha,c.gradientTop,c.gradientBottom,c.color0,c.color1);break;
         }
         case CmdMaterialQuads:{
             const auto& c=*static_cast<const MaterialQuadsCommand*>(body);
+            if(quadMerge){
+                // quadMerge: the following material quads with the same texture,
+                // constants, wrap and blend (nothing between them) in the same draw.
+                const MaterialQuad* lists[MaxMergedQuads];unsigned counts[MaxMergedQuads];unsigned n=0;const uint8_t* next=p;
+                lists[n]=c.quads;counts[n++]=c.count;
+                while(n<MaxMergedQuads&&next<end){
+                    const auto& h2=*reinterpret_cast<const Header*>(next);
+                    if(h2.type!=CmdMaterialQuads)break;
+                    const auto& m=*reinterpret_cast<const MaterialQuadsCommand*>(&h2+1);
+                    if(m.texture!=c.texture||m.color0!=c.color0||m.color1!=c.color1||m.wrapS!=c.wrapS||m.wrapT!=c.wrapT||m.additive!=c.additive||m.opaque!=c.opaque)break;
+                    lists[n]=m.quads;counts[n++]=m.count;next+=h2.size;
+                }
+                materialQuadsNow(c.texture,lists,counts,n,c.color0,c.color1,c.wrapS,c.wrapT,c.additive,c.opaque);quadMerges+=n-1;p=next;break;
+            }
             materialQuadsNow(c.texture,c.quads,c.count,c.color0,c.color1,c.wrapS,c.wrapT,c.additive,c.opaque);break;
         }
         case CmdText:{const auto& c=*static_cast<const TextCommand*>(body);drawScreenText(c.text,c.x,c.y,c.size,c.rgba);break;}

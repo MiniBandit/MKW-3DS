@@ -663,8 +663,9 @@ bool Scene::load(const char* path){
     bool valid=std::fgetc(f)==EOF;std::fclose(f);return valid;
 }
 void Renderer::readSwitches(){
-#ifndef MKW_RELEASE
     auto exists=[](const char* path){FILE* f=std::fopen(path,"r");if(f)std::fclose(f);return f!=nullptr;};
+    quadMerge=!exists("sdmc:/3ds/mkw-3ds/no-quad-merge.txt");
+#ifndef MKW_RELEASE
     drawTiming=exists("sdmc:/3ds/mkw-3ds/draw-timing.txt");
     cmdHash=exists("sdmc:/3ds/mkw-3ds/cmd-hash.txt");
     if(cmdHash){
@@ -2924,16 +2925,25 @@ void Renderer::spriteNow(const Texture& texture,float x,float y,float width,floa
     }
 }
 void Renderer::fontSpriteNow(const Texture& texture,float x,float y,float width,float height,float u1,float v1,float alpha,uint32_t gradientTop,uint32_t gradientBottom,uint32_t color0,uint32_t color1){
+    const FontQuad quad{x,y,width,height,u1,v1,alpha,gradientTop,gradientBottom};
+    fontSpritesNow(texture,&quad,1,color0,color1);
+}
+void Renderer::fontSpritesNow(const Texture& texture,const FontQuad* quads,unsigned count,uint32_t color0,uint32_t color1){
     if(spriteCount_>=spriteCapacity_)return;
     flushSprites();
-    Vertex* vertices=spriteBase_+6*spriteCount_++;spriteRunFirst_=spriteCount_;
-    countPixels(x,y,x+width,y+height);
-    const Vec3 p[6]={{x,y,0},{x+width,y,0},{x+width,y+height,0},{x,y,0},{x+width,y+height,0},{x,y+height,0}};
-    const float uv[6][2]={{0,1},{u1,1},{u1,1-v1},{0,1},{u1,1-v1},{0,1-v1}};
-    if(writesVertices())for(unsigned i=0;i<6;++i){
-        const uint32_t rgba=(i==2||i>=4)?gradientBottom:gradientTop;
-        const auto a=uint8_t(std::round(std::clamp(alpha,0.f,1.f)*float(rgba&0xff)));
-        vertices[i]={p[i],{0,0,1},{uv[i][0],uv[i][1]},{0,0},{uint8_t(rgba>>24),uint8_t(rgba>>16),uint8_t(rgba>>8),a}};
+    // One draw for every quad (consecutive font sprites with this texture and these constants: quadMerge).
+    Vertex* vertices=spriteBase_+6*spriteCount_;unsigned drawn=0;
+    for(unsigned q=0;q<count&&spriteCount_<spriteCapacity_;++q,++drawn){
+        const auto& c=quads[q];const float x=c.x,y=c.y,width=c.width,height=c.height,u1=c.u1,v1=c.v1;
+        Vertex* quad=spriteBase_+6*spriteCount_++;spriteRunFirst_=spriteCount_;
+        countPixels(x,y,x+width,y+height);
+        const Vec3 p[6]={{x,y,0},{x+width,y,0},{x+width,y+height,0},{x,y,0},{x+width,y+height,0},{x,y+height,0}};
+        const float uv[6][2]={{0,1},{u1,1},{u1,1-v1},{0,1},{u1,1-v1},{0,1-v1}};
+        if(writesVertices())for(unsigned i=0;i<6;++i){
+            const uint32_t rgba=(i==2||i>=4)?c.gradientBottom:c.gradientTop;
+            const auto a=uint8_t(std::round(std::clamp(c.alpha,0.f,1.f)*float(rgba&0xff)));
+            quad[i]={p[i],{0,0,1},{uv[i][0],uv[i][1]},{0,0},{uint8_t(rgba>>24),uint8_t(rgba>>16),uint8_t(rgba>>8),a}};
+        }
     }
     // Sprite-buffer quads flush with the rest of it in end() (or beginBottom);
     // a mid-frame command-list split flushes all of LINEAR first.
@@ -2954,25 +2964,34 @@ void Renderer::fontSpriteNow(const Texture& texture,float x,float y,float width,
     C3D_DepthTest(false,GPU_ALWAYS,GPU_WRITE_COLOR);
     C3D_AlphaBlend(GPU_BLEND_ADD,GPU_BLEND_ADD,GPU_SRC_ALPHA,GPU_ONE_MINUS_SRC_ALPHA,GPU_ONE,GPU_ONE_MINUS_SRC_ALPHA);
     auto* buf=C3D_GetBufInfo();BufInfo_Init(buf);BufInfo_Add(buf,vertices,sizeof(Vertex),4,0x3210);
-    C3D_DrawArrays(GPU_TRIANGLES,0,6);stats_.triangles+=2;++stats_.drawCalls;
+    C3D_DrawArrays(GPU_TRIANGLES,0,6*int(drawn));stats_.triangles+=2*drawn;++stats_.drawCalls;
 }
 void Renderer::materialQuadsNow(const Texture* texture,const MaterialQuad* quads,unsigned count,uint32_t color0,uint32_t color1,int wrapS,int wrapT,bool additive,bool opaque){
-    if(!count||spriteCount_>=spriteCapacity_)return;
-    count=std::min(count,unsigned(spriteCapacity_-spriteCount_));
+    materialQuadsNow(texture,&quads,&count,1,color0,color1,wrapS,wrapT,additive,opaque);
+}
+void Renderer::materialQuadsNow(const Texture* texture,const MaterialQuad* const* lists,const unsigned* counts,unsigned listCount,uint32_t color0,uint32_t color1,int wrapS,int wrapT,bool additive,bool opaque){
+    if(!listCount||!counts[0]||spriteCount_>=spriteCapacity_)return;
     flushSprites();
-    Vertex* vertices=spriteBase_+6*spriteCount_;const int first=spriteCount_;
-    spriteCount_+=int(count);spriteRunFirst_=spriteCount_;
-    for(unsigned q=0;q<count;++q){const auto& c=quads[q];
-        countPixels(std::min({c.x[0],c.x[1],c.x[2],c.x[3]}),std::min({c.y[0],c.y[1],c.y[2],c.y[3]}),std::max({c.x[0],c.x[1],c.x[2],c.x[3]}),std::max({c.y[0],c.y[1],c.y[2],c.y[3]}));}
+    // Every list's quads in one draw (consecutive commands with this texture and these constants: quadMerge).
+    Vertex* vertices=spriteBase_+6*spriteCount_;const int first=spriteCount_;unsigned total=0;
     constexpr unsigned order[6]={0,1,3,0,3,2};
-    if(writesVertices())for(unsigned q=0;q<count;++q){
-        const auto& quad=quads[q];
-        for(unsigned i=0;i<6;++i){
-            const unsigned k=order[i];const uint32_t rgba=quad.color[k];
-            // tex3ds images are stored bottom-up.
-            vertices[q*6+i]={{quad.x[k],quad.y[k],0},{0,0,1},{quad.u[k],1-quad.v[k]},{0,0},{uint8_t(rgba>>24),uint8_t(rgba>>16),uint8_t(rgba>>8),uint8_t(rgba)}};
+    for(unsigned l=0;l<listCount&&spriteCount_<spriteCapacity_;++l){
+        const MaterialQuad* quads=lists[l];
+        const unsigned count=std::min(counts[l],unsigned(spriteCapacity_-spriteCount_));
+        spriteCount_+=int(count);spriteRunFirst_=spriteCount_;
+        for(unsigned q=0;q<count;++q){const auto& c=quads[q];
+            countPixels(std::min({c.x[0],c.x[1],c.x[2],c.x[3]}),std::min({c.y[0],c.y[1],c.y[2],c.y[3]}),std::max({c.x[0],c.x[1],c.x[2],c.x[3]}),std::max({c.y[0],c.y[1],c.y[2],c.y[3]}));}
+        if(writesVertices())for(unsigned q=0;q<count;++q){
+            const auto& quad=quads[q];
+            for(unsigned i=0;i<6;++i){
+                const unsigned k=order[i];const uint32_t rgba=quad.color[k];
+                // tex3ds images are stored bottom-up.
+                vertices[(total+q)*6+i]={{quad.x[k],quad.y[k],0},{0,0,1},{quad.u[k],1-quad.v[k]},{0,0},{uint8_t(rgba>>24),uint8_t(rgba>>16),uint8_t(rgba>>8),uint8_t(rgba)}};
+            }
         }
+        total+=count;
     }
+    const unsigned count=total;
     // Flushed with the sprite buffer in end() (see drawScreenFontSprite).
     C3D_Mtx projection=screenProjection(screenParallax_),identity;Mtx_Identity(&identity);
     C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER,projectionLoc_,&projection);
