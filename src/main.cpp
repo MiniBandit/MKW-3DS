@@ -2311,6 +2311,7 @@ int main() {
         target.y+=cameraKart->param()->camera().targetPosY-cameraKart->cameraDistY();
     };
     mkw::Job playerJob;bool playerJobQueued=false;
+    bool lowerDrewLast=false; // Performance graphics: the lower screen at 30 FPS
     const bool smoke=(kQa&&exists("sdmc:/3ds/mkw-3ds/smoke-test.txt"));
     bool capturedBlue=false;
     bool replayPass=true;unsigned finishes=0;double stepTotal=0,stepMax=0;unsigned replayHeap[2]{};
@@ -3810,7 +3811,13 @@ int main() {
             if(fullRace&&menu.page!=mkw::UiPage::Race)menuRenderer.draw(renderer,raceQuads,false);
             // Leaving after the end-of-race menu: the scene fader covers everything.
             if(fullRace)renderer.drawScreenFade(results.leaveFade(),false);
-            if(fullRace&&bottomScreen.active()&&!intro.active()){
+            // Performance graphics: the lower screen draws every other frame
+            // while the top presents at 60 (it keeps showing its last image).
+            // The first lower frame after the intro (and any fade out) always draws.
+            const bool lowerWanted=fullRace&&bottomScreen.active()&&!intro.active();
+            const bool lowerSkipped=lowerWanted&&lowerDrewLast&&mkw::renderQuality().lowerScreenHalfRate&&presentation.ticksPerSlot()==1&&results.leaveFade()<=0.f;
+            lowerDrewLast=lowerWanted&&!lowerSkipped;
+            if(lowerWanted&&!lowerSkipped){
                 // The lower LCD: the race read, never written (src/race_bottom_screen.cpp).
                 mkw::fillBottomView(bottomView,raceGrid,*raceItems,intro.active(),physicsSteps,results.leaveFade());
                 if(battleMode){

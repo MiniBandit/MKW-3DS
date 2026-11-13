@@ -13,15 +13,17 @@ bool JobWorker::start(){
     // so a job computes identical floats on either core.
     fpscr_=__builtin_arm_get_fpscr();
     bool n3ds=false;APT_CheckNew3DS(&n3ds);
-    // Old 3DS core 1 is time sliced with the system; the audio threads there
-    // already require a limit (sound_system.cpp). Higher-priority system and
-    // audio threads still preempt this one.
-    if(!n3ds){u32 limit=0;APT_GetAppCpuTimeLimit(&limit);if(limit<80)APT_SetAppCpuTimeLimit(80);}
-    // New 3DS: prepare on the main core while it waits for jobs/render slots.
-    // Keep the render core free of higher-priority animation jobs. finish()
-    // still executes unclaimed work immediately; physics preempts this worker.
+    // Core 1 on every model: time sliced with the system, so it needs an app
+    // time limit (Old 3DS audio already relies on one, sound_system.cpp).
+    // Higher-priority system threads still preempt this one. On New 3DS the
+    // jobs used to share core 0 with the physics, so they only ran while the
+    // main thread waited; on core 1 they overlap it. Core 2 stays the render
+    // and audio core. finish() still runs unclaimed work immediately.
+    u32 limit=0;APT_GetAppCpuTimeLimit(&limit);if(limit<80)APT_SetAppCpuTimeLimit(80);
     s32 priority=0x30;svcGetThreadPriority(&priority,CUR_THREAD_HANDLE);
-    thread_=threadCreate(entry,this,32*1024,std::clamp<s32>(priority+1,0x1a,0x3f),n3ds?0:1,false);
+    thread_=threadCreate(entry,this,32*1024,std::clamp<s32>(priority+1,0x1a,0x3f),1,false);
+    // New 3DS fallback: the main core, as before, if core 1 is unavailable.
+    if(!thread_&&n3ds)thread_=threadCreate(entry,this,32*1024,std::clamp<s32>(priority+1,0x1a,0x3f),0,false);
     return thread_!=nullptr;
 }
 void JobWorker::stop(){

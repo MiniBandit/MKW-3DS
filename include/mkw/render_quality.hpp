@@ -35,6 +35,10 @@ struct RenderQuality {
     // Thundercloud, POW...) advance in steps of this many ticks (4: 15 Hz),
     // so their skinned pose repeats on alternate frames; 0 every tick.
     unsigned animationStep=0;
+    // The race's lower screen draws on every other presented frame (30 FPS
+    // while the top screen presents at 60). A skipped frame leaves the lower
+    // LCD showing its last image: citro3d only transfers targets drawn to.
+    bool lowerScreenHalfRate=false;
     // Course, sky and course-object textures move from LINEAR (FCRAM) to VRAM
     // after the race's VRAM users have loaded, leaving vramReserve bytes free.
     bool vramCourseTextures=true;
@@ -46,10 +50,11 @@ struct RenderQuality {
         *this=RenderQuality{};
         if(!on)return;
         reduced=true;minScreenRatio=.015f;objectLowDistance=4000.f;
-        shadowVolumes=false;dynamicShadow=false;bloomBlurRounds=1;boxSparkleRatio=.04f;particleBudget=96;kartEffectScreens=2;animationStep=4;vramCourseTextures=true;
+        shadowVolumes=false;dynamicShadow=false;lowerScreenHalfRate=true;bloomBlurRounds=1;boxSparkleRatio=.04f;particleBudget=96;kartEffectScreens=2;animationStep=4;vramCourseTextures=true;
     }
     // License Settings > Graphics: 0 Auto (Performance on Old 3DS, Quality on
-    // New 3DS), 1 Quality, 2 Performance (reduced detail, no dynamic shadow).
+    // New 3DS), 1 Quality, 2 Performance (reduced detail, no dynamic shadow,
+    // the race's lower screen at 30 FPS).
     void setGraphics(unsigned choice,bool new3ds){
         if(choice==0)choice=new3ds?1:2;
         setReduced(choice==2);

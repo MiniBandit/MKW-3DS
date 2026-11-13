@@ -3,7 +3,7 @@
 #include <atomic>
 #include <cstdint>
 namespace mkw {
-// Frame-local work for the second CPU core (Old 3DS core 1, New 3DS core 2).
+// Frame-local work for a second CPU core (core 1 on every model).
 // A job reads state that nothing modifies until it finishes (the simulation is
 // not stepping) and writes only outputs no other job touches. The thread that
 // needs a result runs the job itself unless the worker already claimed it, so
