@@ -29,6 +29,16 @@ class RaceHud {
 public:
     RaceHud();~RaceHud();
     bool load();void reset();
+    // Set reuse (New 3DS; main.cpp no-set-reuse.txt): park() keeps the item
+    // models, their banks and the HUD textures for the next race of the set
+    // instead of releasing them. The next load() takes them when the mode and
+    // settings match (battle and its type, texture quality), bakes the item
+    // models' colours for the new course and starts every HUD state afresh;
+    // otherwise it releases them and loads as before. reset() releases them too.
+    // Parked textures stay where they were (LINEAR).
+    void park();
+    static inline bool setReuse=false;
+    bool reused()const{return reused_;}
     void resetBattleView();
     void setBattleView(BattleHudView view,unsigned tick);
     uint8_t takeBattleCues();
@@ -48,5 +58,7 @@ public:
     bool speedometer=false; // SELECT toggles it during a race
 private:
     struct Impl;std::unique_ptr<Impl> impl_;
+    std::unique_ptr<Impl> parked_;unsigned parkedKey_=0;bool reused_=false;
+    bool takeParked(unsigned key);
 };
 }

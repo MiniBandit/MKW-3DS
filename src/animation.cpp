@@ -68,6 +68,17 @@ void DriverAnimation::gpuReady(){
     // A draw before the first apply() still has a pose (the first clip's first frame).
     evaluate(clips_[0],0,0,0.f,0,1.f);poseBoundsValid_=false;
 }
+void DriverAnimation::restartRace(){
+    if(!ready)return;
+    resetLook();clearPoseTransition();
+    motionBlendWeight_=1;lookTick_=0;transitionTick_=0;
+    braidsRacing_=false;braids_.reset();braidWorld_={1,0,0,0,0,1,0,0,0,0,1,0,1,0,0,0,1,0,0,0,1};
+    effectRoot_=previousEffectRoot_={};effectRootReady_=false;
+    cachedVertices_=cachedVertices2_=nullptr;paletteApplied_=false;cachedClip_=-1;cachedExpression_=-2;
+    cachedFrame_=cachedExpressionFrame_=-1;cachedTick_=0;cachedSettled_=false;poseBoundsValid_=false;
+    // gpuReady's first pose (a draw before the first apply()).
+    if(gpu_){evaluate(clips_[0],0,0,0.f,0,1.f);poseBoundsValid_=false;}
+}
 unsigned DriverAnimation::shareDrawVertices(Model& model){
     if(!ready||!gpu_||vertices_!=model.vertexCount)return 0;
     std::vector<uint64_t> domains(vertices_,0);

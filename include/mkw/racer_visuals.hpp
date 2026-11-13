@@ -15,6 +15,18 @@ public:
     bool load();
     void reset();
     void resetAnimation();
+    // Set reuse (New 3DS; main.cpp no-set-reuse.txt): park() keeps the
+    // opponents for the next race of the set instead of releasing them. The
+    // next load() takes a parked racer for a slot with the same character,
+    // vehicle and team (settings unchanged: texture quality, opponent detail),
+    // bakes its colours for the new course and resets its state as a fresh
+    // load would; it releases the parked racers no slot takes before loading
+    // the others. reset() releases parked racers too. Their models and
+    // textures stay where they were (LINEAR) while parked.
+    void park();
+    static inline bool setReuse=false;
+    // Racers the last load() took from the parked ones.
+    unsigned reused() const;
     // drawNext false (Old 3DS): no frame is drawn before the next step, so racers
     // not shown up close keep last tick's vehicle snapshot (VehicleAnimation::step).
     void step(unsigned tick,const RaceItems& items,bool drawNext=true,std::span<const DriverCollisionLook> collisions={});

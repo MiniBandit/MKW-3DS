@@ -358,9 +358,28 @@ void Model::enableSkinCulling(unsigned bones){
         }
     }
 }
-namespace {thread_local const CourseLighting* lightingCourse=nullptr;thread_local const float (*bakeView)[3]=nullptr;}
+namespace {thread_local const CourseLighting* lightingCourse=nullptr;thread_local const float (*bakeView)[3]=nullptr;thread_local bool keepBakeSourceOn=false;}
 void Model::setBakeView(const float (*rows)[3]){bakeView=rows;}
 void Model::setLightingCourse(const CourseLighting* course){lightingCourse=course;}
+void Model::keepBakeSource(bool on){keepBakeSourceOn=on;}
+const CourseLighting* Model::lightingCourseNow(){return lightingCourse;}
+bool Model::rebakeStaticLighting(const CourseLighting* course){
+    if(!staticLightingBaked||liveDiffuse||!bakeSource||bakeSource->lighting.size()!=submeshes.size())return false;
+    if(course==bakedCourse)return true;
+    const auto& s=*bakeSource;
+    const float identityView[3][3]={{1,0,0},{0,1,0},{0,0,1}};const float (*view)[3]=s.view?s.view:identityView;
+    // bakeStaticLighting's colour step for each vertex its first submesh baked.
+    for(size_t i=0;i<s.colors.size();++i){const unsigned k=s.submesh[i];if(k==0xffff)continue;
+        const Vec3 n=normalized(s.normals[i]);
+        const Vec3 seen{view[0][0]*n.x+view[0][1]*n.y+view[0][2]*n.z,view[1][0]*n.x+view[1][1]*n.y+view[1][2]*n.z,view[2][0]*n.x+view[2][1]*n.y+view[2][2]*n.z};
+        const auto light=viewLightFactor(course,s.lighting[k],submeshes[k].ambient,seen,view);
+        auto& v=vertices[i];
+        for(unsigned c=0;c<4;++c)v.color[c]=uint8_t(std::clamp(std::lround(s.colors[i][c]*light[c]),0l,255l));
+    }
+    bakedCourse=course;
+    flushGpuData(vertices,s.colors.size()*sizeof(Vertex));
+    return true;
+}
 void Model::bakeStaticLighting(){bakeStaticLighting(lightingCourse);}
 void Model::finishStaticLighting(){
     if(!liveDiffuse)return;
@@ -378,6 +397,15 @@ void Model::finishStaticLighting(){
 }
 void Model::bakeStaticLighting(const CourseLighting* course,bool keepLiveDiffuse){
     if(staticLightingBaked)return;
+    if(keepBakeSourceOn&&!keepLiveDiffuse){
+        auto s=std::make_unique<BakeSource>();
+        s->colors.resize(vertexCount);s->normals.resize(vertexCount);s->submesh.assign(vertexCount,0xffff);s->view=bakeView;
+        for(unsigned i=0;i<vertexCount;++i){std::memcpy(s->colors[i].data(),vertices[i].color,4);s->normals[i]=vertices[i].normal;}
+        // The loop below bakes each vertex with the first submesh that uses it.
+        for(size_t k=0;k<submeshes.size();++k){const auto& sub=submeshes[k];s->lighting.push_back(sub.lighting);
+            for(unsigned j=sub.first;j<sub.first+sub.count;++j)if(s->submesh[indices[j]]==0xffff)s->submesh[indices[j]]=uint16_t(k);}
+        bakeSource=std::move(s);
+    }
     std::vector<uint8_t> done(vertexCount,0);
     // 1: a submesh the shader lights uses the vertex; 2: a baked one does.
     if(keepLiveDiffuse){

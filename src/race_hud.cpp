@@ -288,6 +288,9 @@ struct RaceHud::Impl {
     bool blastMaterials=false; // raw-UV models/bomb_blast.gmdl with the retail binder
     Vertex* bombFrames=nullptr;
     unsigned bombFrameCount=0;
+    // Set reuse: each source vertex's welded index in bombFrames (compactPoses).
+    std::vector<uint16_t> bombRemap;
+    unsigned key=0; // what load() loaded for (hudKey)
     ~Impl(){if(bombFrames)linearFree(bombFrames);}
     struct BoxUV { uint16_t index;float u,v; };
     std::vector<BoxUV> boxUV;
@@ -333,13 +336,70 @@ struct RaceHud::Impl {
 };
 RaceHud::RaceHud():impl_(std::make_unique<Impl>()){}
 RaceHud::~RaceHud()=default;
-void RaceHud::reset(){speedometer=false;impl_=std::make_unique<Impl>();}
+void RaceHud::reset(){speedometer=false;impl_=std::make_unique<Impl>();parked_.reset();}
+namespace {
+// What the item and HUD assets depend on besides the course's light.
+unsigned hudKey(){
+    const auto& scenario=Kinoko::System::RaceConfig::Instance()->raceScenario();
+    const auto& q=renderQuality();
+    return 1u|unsigned(scenario.gameMode==Kinoko::System::RaceConfig::Scenario::GameMode::Battle)<<1|unsigned(scenario.battleType)<<2|
+        unsigned(q.halfLargeTextures)<<8|unsigned(q.reduced)<<9|unsigned(shrinkHudTextures)<<10|unsigned(DriverAnimation::gpuPoses)<<11;
+}
+}
+void RaceHud::park(){
+    // The next race is configured by now: assets it can't take go at once.
+    if(!setReuse||impl_->key!=hudKey()){reset();return;}
+    parkedKey_=impl_->key;parked_=std::move(impl_);impl_=std::make_unique<Impl>();speedometer=false;
+}
+bool RaceHud::takeParked(unsigned key){
+    auto kept=std::move(parked_);
+    if(!kept||parkedKey_!=key)return false;
+    auto& k=*kept;const auto* course=Model::lightingCourseNow();
+    // Colours baked for the last course, baked again for this one.
+    bool baked=true;
+    auto rebake=[&](std::unique_ptr<Model>& m){if(m&&m->staticLightingBaked)baked&=m->rebakeStaticLighting(course);};
+    rebake(k.box);for(auto& m:k.itemShadows)rebake(m);for(auto& m:k.models)rebake(m);for(auto& m:k.staticModels)rebake(m);rebake(k.coinStack);
+    if(k.bombCore){
+        // The explosion's pre-posed frames copied the model's colours: each welded
+        // vertex takes its sources' new colour (they must agree, or load afresh).
+        const bool changed=k.bombCore->bakedCourse!=course;rebake(k.bombCore);
+        if(baked&&changed){
+            const auto* source=k.bombCore->bakeSource.get();const unsigned unique=k.bombCore->vertexCount;
+            if(!source||!k.bombFrames||k.bombRemap.size()!=source->colors.size())return false;
+            std::vector<int8_t> set(unique,0);
+            for(size_t i=0;i<k.bombRemap.size();++i){const unsigned w=k.bombRemap[i];const uint8_t* c=k.bombCore->vertices[i].color;
+                if(w>=unique)return false;
+                if(set[w]){if(std::memcmp(k.bombFrames[w].color,c,4))return false;continue;}
+                set[w]=1;for(unsigned f=0;f<k.bombFrameCount;++f)std::memcpy(k.bombFrames[f*unique+w].color,c,4);
+            }
+            flushGpuData(k.bombFrames,size_t(unique)*sizeof(Vertex)*k.bombFrameCount);
+        }
+    }
+    if(!baked)return false;
+    // Every state the race changes back to what a load leaves (a fresh Impl's
+    // values); the assets, and what load() derived from them, stay. A member
+    // added to Impl that a race changes belongs here.
+    {const auto f=std::make_unique<Impl>();
+     k.bulletUp=f->bulletUp;k.wasBullet=f->wasBullet;k.clouds=f->clouds;k.previousCloud=f->previousCloud;
+     std::fill(k.cloudOverrides.begin(),k.cloudOverrides.end(),SubmeshOverride{});
+     k.boxUV.clear();k.boxUVTick=f->boxUVTick;k.blooperEndOffset=f->blooperEndOffset;k.blooperEndAge=f->blooperEndAge;
+     const bool battle=k.battle.enabled;k.battle=f->battle;k.battle.enabled=battle;k.battleMotion=f->battleMotion;
+     k.window=f->window;k.base=f->base;k.rankSpin=f->rankSpin;k.balloons=f->balloons;k.balloonTick=f->balloonTick;
+     k.warning=f->warning;k.warningAge=f->warningAge;k.warningAlpha=f->warningAlpha;k.warningPosition=f->warningPosition;
+     k.warningMotion=f->warningMotion;k.warningAudible=f->warningAudible;k.warningPan=f->warningPan;k.warningRate=f->warningRate;}
+    for(auto& bank:k.animations)if(bank)bank->restartRace();
+    impl_=std::move(kept);
+    return true;
+}
 void RaceHud::resetBattleView(){impl_->battleMotion.reset();impl_->battle.points=impl_->battle.red=impl_->battle.blue=0;}
 void RaceHud::setBattleView(BattleHudView view,unsigned tick){impl_->battle=view;
     if(view.enabled)impl_->battleMotion.step(view.points,view.red,view.blue,tick);}
 uint8_t RaceHud::takeBattleCues(){return impl_->battleMotion.takeCues();}
 bool RaceHud::load(){
-    reset();bool valid=true;
+    reused_=false;
+    struct KeepSource {KeepSource(){Model::keepBakeSource(setReuse);}~KeepSource(){Model::keepBakeSource(false);}} keepSourceScope;
+    if(parked_&&takeParked(hudKey())){reused_=true;return true;}
+    reset();bool valid=true;impl_->key=hudKey();
     const auto& scenario=Kinoko::System::RaceConfig::Instance()->raceScenario();
     const bool battle=scenario.gameMode==Kinoko::System::RaceConfig::Scenario::GameMode::Battle;
     auto model=[](const char* path,bool dynamic=false){auto m=std::make_unique<Model>();if(!path||!m->load(path,dynamic))m.reset();return m;};
@@ -369,6 +429,7 @@ bool RaceHud::load(){
                 // own immutable pose; no animation age or triangle is removed.
                 auto& model=*impl_->bombCore;
                 const auto remap=compactPoses(impl_->bombFrames,model.vertexCount,impl_->bombFrameCount);
+                if(setReuse)impl_->bombRemap=remap;
                 const unsigned unique=*std::max_element(remap.begin(),remap.end())+1;
                 const size_t compactBytes=size_t(unique)*sizeof(Vertex)*impl_->bombFrameCount;
                 if(auto* compact=static_cast<Vertex*>(linearAlloc(compactBytes))){

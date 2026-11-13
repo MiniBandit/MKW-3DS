@@ -1,6 +1,7 @@
 #pragma once
 #include <3ds.h>
 #include <citro3d.h>
+#include <array>
 #include <atomic>
 #include <cstdint>
 #include <cstddef>
@@ -176,6 +177,18 @@ public:
     void bakeStaticLighting(const CourseLighting* course,bool keepLiveDiffuse=false);
     // Bakes what a liveDiffuse load left for the shader (models whose skinning drops normals).
     void finishStaticLighting();
+    // Set reuse (main.cpp no-set-reuse.txt): a model loaded on a thread with
+    // keepBakeSource(true) keeps what its load-time bake read (each vertex's
+    // colour, normal and first submesh, the submeshes' lighting words), so the
+    // next race of a set, on another course, bakes its colours again in place
+    // instead of loading the model again. Not for bakes that kept live diffuse.
+    struct BakeSource {std::vector<std::array<uint8_t,4>> colors;std::vector<Vec3> normals;std::vector<uint16_t> submesh;std::vector<uint32_t> lighting;const float (*view)[3]=nullptr;};
+    std::unique_ptr<BakeSource> bakeSource;
+    static void keepBakeSource(bool on);
+    static const CourseLighting* lightingCourseNow();
+    // The vertex colours the load-time bake gives for `course`, from bakeSource
+    // (the same arithmetic). False, nothing changed: no source, or not such a bake.
+    bool rebakeStaticLighting(const CourseLighting* course);
     // World-to-view rotation rows the bake evaluates view-space lights with
     // (this thread's loads; nullptr: identity, a camera facing the model's front).
     static void setBakeView(const float (*rows)[3]);
