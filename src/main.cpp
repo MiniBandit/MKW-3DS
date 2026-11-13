@@ -4600,8 +4600,7 @@ int main() {
                     bottomView.milliseconds=uint32_t(uint64_t(balloonBattle.durationTicks()-std::min(battleTicks,balloonBattle.durationTicks()))*1000/60);
                     for(unsigned i=0;i<bottomView.racers;++i){bottomView.racer[i].rank=uint8_t(battleRank(i));bottomView.racer[i].score=uint16_t(battleScore(i));}
                 }
-                renderer.beginBottom();
-                bottomScreen.draw(renderer,bottomView);
+                bottomScreen.drawRace(renderer,bottomView);
             }
             profiler->mark(Profile::Bottom);
             if(qaMode&&frames%15==0){

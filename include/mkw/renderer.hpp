@@ -340,6 +340,11 @@ public:
     // lower LCD framebuffers, so menus keep their black lower screen.
     bool enableBottom();
     void releaseBottom();
+    // Race loads (render thread idle): the lower target gives up its own depth
+    // buffer (300 KB of VRAM). Only the intro's 3D lower view uses depth there:
+    // it borrows the top LCD's once the upper screen is drawn, cleared again
+    // first. false: the target gets its own buffer back. A/B: no-bottom-depth-free.txt.
+    bool shareBottomDepth(bool shared);
     bool bottomEnabled() const {return bottomTarget_!=nullptr;}
     // Later sprites, font sprites and material quads of this frame go to the
     // bottom screen (2D: no parallax; drawn once, with the last eye), at most
@@ -610,9 +615,15 @@ public:
     // recordingFrame()'s parity). Keeps per-frame storage fixed and preallocated.
     // opaque: the quads replace every pixel they cover (blending off).
     void drawScreenMaterialQuadsInPlace(const Texture* texture,const MaterialQuad* quads,unsigned count,uint32_t color0,uint32_t color1,bool opaque=false);
-    // This frame's bottom screen is covered opaquely (the race map): its
-    // per-frame clear is skipped. Recorded frames only.
-    void bottomCovered();
+    // This frame's bottom screen is covered opaquely (the race map), or keeps
+    // its last picture: its per-frame clear is skipped. Recorded frames only
+    // (false for an immediate frame, whose clear has already run).
+    bool bottomCovered();
+    // Nothing on this frame's bottom screen tests or writes depth: its target
+    // is bound without depth access (the race's 2D lower screen). Recorded frames only.
+    void bottomNoDepth();
+    // Counts begin() and beginSourceCamera() calls: frames, immediate or recorded.
+    uint32_t frameSerial() const {return frameSerial_;}
     // Small native HUD font; geometry is batched and remains alive for the frame.
     void drawScreenText(const char* text,float x,float y,float scale,uint32_t rgba=0xffffffff);
     // Call after end(). Waits for the finished frame and copies the top-screen
@@ -867,6 +878,8 @@ private:
     bool execDualScreenIntro_=false,bottomWorldPass_=false,execBottomCovered_=false;
     // setFrameCover: the next begin()'s request, and the frame being drawn.
     bool nextTopCovered_=false,nextBottomKept_=false,execTopCovered_=false,execBottomKept_=false;
+    uint32_t frameSerial_=0;
+    bool execBottomFlat_=false;
     // An immediate frame is open on this thread (between begin() and end()).
     bool immediateOpen_=false;
     // Diagnostic vertex probe: drawNow uploads a projection that sends every vertex to one point.
@@ -1056,6 +1069,10 @@ private:
     void shareTopDepth(bool inFrame);
     void unshareTopDepth();
     void topDepthAfterSceneNow();
+    // Copies the depth probe's tile rows to LINEAR before its buffer is reused (after a FrameSplit).
+    void keepProbeRowsNow();
+    // The intro's 3D lower view on a target without its own depth: the top LCD's.
+    void bottomWorldDepthNow(bool clear);
     void* sharedDepth_=nullptr;
     uint32_t* probeCopy_=nullptr;
     bool topDepthCleared_=false;

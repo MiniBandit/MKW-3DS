@@ -60,6 +60,13 @@ to the HOME Menu (about 100 minutes).
   saved to your license. Delete both files afterwards, or the DIAG title
   autoplays every launch.
 
+`perf-race-NNN-passes.csv` leaves one pass out of one frame in eight, in
+turn, and compares that frame's GPU time with its neighbours. Its `bottom`
+row leaves out the whole lower screen (no target bind, no draws, no display
+transfer); `bottom_quads` keeps the lower target and its display transfer
+(nothing is drawn on it, so its picture stays) and drops only its draws, so `bottom` minus `bottom_quads` is the lower
+screen's fixed cost and `bottom_quads` its draws and fill.
+
 ## A/B switches
 
 Create an empty file in `sd:/3ds/mkw-3ds/` to turn one change off:
@@ -281,6 +288,28 @@ backdrop again; by default an opaque backdrop drawn at full alpha over the whole
 screen only clears depth (2D frames).
 With `menu-capture.txt`, each capture also writes `…-lcd.ppm`: the lower LCD's
 last presented picture.
+
+The race's lower screen (each file read at the race load):
+`no-map-clip.txt` draws the map over the whole screen again, under the
+standings column; by default it starts at the column's edge and markers wholly
+under the column are not drawn (the column itself slides in with the countdown
+either way).
+`no-race-bottom-keep.txt` redraws the lower screen on every race frame; by
+default a frame whose quads, textures and draws equal those of the previous
+frame, which was shown, leaves the lower LCD's picture as it is (no draw, no
+clear, no transfer), mostly through the countdown. `runtime.log` has `bottom
+keep: course=… kept=… drawn=…` for each race.
+`no-bottom-depth-off.txt` binds the lower target with depth reads and writes
+on again for the race's 2D lower screen; by default it is bound without them
+(nothing there tests or writes depth). The intro's 3D lower view keeps depth.
+`no-bottom-depth-free.txt` gives the lower target its own depth buffer in races
+again; by default it has none there (300 KB more VRAM for the course textures),
+and the intro's 3D lower view uses the top LCD's depth buffer once the upper
+screen is drawn, cleared first (`runtime.log`: `bottom screen … vram_free=…`).
+`no-bottom-atlas256.txt` loads the earlier 512 KB UI atlas
+(`textures/race_bottom_ui.t3x`, with a white silhouette of every face for the
+local player's outline) when the pack has it; by default the 256 KB atlas
+(`race_bottom_ui_256.t3x`) draws that outline from the face itself.
 The Settings page's options are in `settings.dat`, not in the license:
 Dynamic Shadows for benchmarks is set there (or on the Settings page).
 
