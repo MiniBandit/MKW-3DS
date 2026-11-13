@@ -1,6 +1,7 @@
 #include <mkw/native_mii_head.hpp>
 #include <cfl_mii.h>
 #include <mkw/retail_lighting.hpp>
+#include <mkw/diag.hpp>
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -36,8 +37,10 @@ bool NativeMiiHead::ready()const{return bool(impl_);}
 std::uint32_t NativeMiiHead::skinConstant()const{return impl_?impl_->skin:0;}
 bool NativeMiiHead::load(const NativeMii& identity,unsigned resolution){
  if(identity[0]!=3||(resolution!=64&&resolution!=128))return false;
+ diag::miiLoadStamps[0]=svcGetSystemTick();
  BuildSession session;
  if(!(session.initialized=CFL_Initialize()))return false;
+ diag::miiLoadStamps[1]=svcGetSystemTick();
  MiiData mii{};std::memcpy(&mii,identity.data(),sizeof mii);
  CFLExpressionFlag flags=0;for(auto expression:Expressions)flags|=CFL_EXPRESSION_FLAG(expression);
  auto& source=session.head;
@@ -107,7 +110,7 @@ bool NativeMiiHead::load(const NativeMii& identity,unsigned resolution){
  GSPGPU_FlushDataCache(model.vertices,vb*sizeof(Vertex));GSPGPU_FlushDataCache(model.indices,ib*2);
  // Only the resident mesh and six masks survive. The resource archive,
  // CFL construction vertices and bake shader are released by session.
- impl_=std::move(next);return true;
+ impl_=std::move(next);diag::miiLoadStamps[2]=svcGetSystemTick();return true;
 }
 NativeMiiHead::Expression NativeMiiHead::expression(const DriverPose& pose){
  if(!pose.faceName)return Normal;

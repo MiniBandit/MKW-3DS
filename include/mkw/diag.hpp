@@ -105,6 +105,12 @@ inline void describeIteration(char* text,size_t size,const char* label,unsigned 
 // Composer operation, summed per frame; main.cpp logs it per menu page.
 inline constexpr const char* ComposeNames[]={"control","group","groupPane","quad","region","focusLayers","panel","inPane","textSprite","text","mainText","licensePortrait","licenseName","icon","licenseTrophies","movie","glowGroup","selectionGlow","chrome","compose","textMotion","focusAnimation"};
 inline unsigned long long composeTicks[std::size(ComposeNames)]{};inline unsigned composeCalls[std::size(ComposeNames)]{};
+// Menu Mii publish on the main thread: NativeMiiHead::load stamps its start,
+// after CFL_Initialize and before CFL_Finalize; MenuModels' publish adds the
+// GPU wait and the total. main.cpp turns each new one into a profiler event.
+inline unsigned long long miiLoadStamps[3]{};
+struct MiiPublish {int id=-1;unsigned long long wait=0,init=0,build=0,finalize=0,total=0;};
+inline MiiPublish miiPublish{};inline unsigned miiPublishCount=0;
 struct ComposeTimer {
  static inline unsigned depth=0;static inline unsigned long long child[64]{};
  unsigned category;unsigned long long start;

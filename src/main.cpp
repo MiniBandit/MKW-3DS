@@ -1482,6 +1482,11 @@ int main() {
                 if(stable>=30&&menu.page==mkw::UiPage::Character&&menu.characterDriver(menu.cursor)<24)menuIcons.request(int(menu.characterDriver(menu.cursor)),mkw::AssetPriority::Prefetch);
             }
             menuRenderer.update(renderer);menuModels.update(renderer,visual,motion);menuIcons.update(renderer,visual);
+            // DIAG: a Mii published on the main thread this frame (GPU wait, CFL init, head build, finalize).
+            {static unsigned seenMii=0;if(mkw::diag::miiPublishCount!=seenMii){seenMii=mkw::diag::miiPublishCount;const auto& p=mkw::diag::miiPublish;
+                auto ms=[](unsigned long long t){return float(double(t)*1000.0/SYSCLOCK_ARM11);};
+                snprintf(line,sizeof line,"mii publish id=%d page=%u cursor_driver=%d wait %.1f init %.1f build %.1f finalize %.1f total %.1f ms",p.id,unsigned(visual.page),
+                         visual.page==mkw::UiPage::Character?int(visual.characterDriver(visual.cursor)):-1,ms(p.wait),ms(p.init),ms(p.build),ms(p.finalize),ms(p.total));menuProfile->event(line);}}
             if(menuProfile->enabled())loader.drainSlow([](const char* label,const char* detail,float run,float wait,void* profile){char text[256];snprintf(text,sizeof text,"slow job %.1f ms (queued %.1f ms): %s %s",run,wait,label,detail);static_cast<mkw::MenuProfile*>(profile)->event(text);},menuProfile.get());
             menuProfile->mark(MenuStage::Resident);
             if(!revealed){revealed=menuRenderer.ready(visualResident)&&menuModels.ready(visual)&&menuIcons.ready(mkw::MenuVehicleIcons::driverFor(visual));

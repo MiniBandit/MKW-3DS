@@ -9,6 +9,7 @@
 #include "mkw/mii_body.hpp"
 #include "mkw/menu_mii_materials.hpp"
 #include "mkw/render_metrics.hpp"
+#include "mkw/diag.hpp"
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -148,9 +149,13 @@ bool publishModel(Renderer& renderer,MenuModels::Entry& entry,ModelJob& job){
     if(!job.model||job.cancelled())return false;
     std::unique_ptr<NativeMiiHead> head;
     if(job.kind==Driver&&job.id>=24){
+        const auto start=svcGetSystemTick();
         renderer.waitForGpu();LoadingScope loading;
+        const auto waited=svcGetSystemTick();
         head=std::make_unique<NativeMiiHead>();
         if(!head->load(job.identity))return false;
+        {const auto now=svcGetSystemTick();const auto* s=diag::miiLoadStamps;
+         diag::miiPublish={job.id,waited-start,s[1]-s[0],s[2]-s[1],now-s[2],now-start};++diag::miiPublishCount;}
         const auto rgba=job.body.clothingRGBA;
         const auto clothing=(rgba>>24)|((rgba>>8)&0xff00)|((rgba<<8)&0xff0000)|((rgba&255)<<24);
         for(const auto& role:MenuMiiMaterials){

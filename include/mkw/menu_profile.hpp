@@ -55,6 +55,11 @@ public:
    s.holds+=r.hold;s.gpu+=r.gpu;s.gpuMax=std::max(s.gpuMax,r.gpu);s.draws+=r.draws;s.quads+=r.quads;s.skinned+=r.skinned;s.flushBytes+=r.flushBytes;
    for(unsigned i=0;i<StageCount;++i){s.ms[i]+=r.ms[i];s.msMax[i]=std::max(s.msMax[i],r.ms[i]);}
   }
+  // DIAG: every Character-page frame over two refreshes, or whose own work took
+  // over 25 ms (its stall shows in the next frame's interval).
+  if(r.page==3){float work=0;for(float v:r.ms)work+=v;
+   if(r.interval>33.f||work>25.f){char text[200];std::snprintf(text,sizeof text,"slow character frame interval %.1f ms work %.1f ms resident %.1f textures %.1f scene %.1f submit %.1f gpu %.1f transition %u",
+    r.interval,work,r.ms[Resident],r.ms[Textures],r.ms[Scene],r.ms[Submit],r.gpu,unsigned(r.transition));event(text);}}
   // The slowest frames, whole.
   if(r.interval>0){
    if(spikes_<SpikeCount)spike_[spikes_++]=r;
