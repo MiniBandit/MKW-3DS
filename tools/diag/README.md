@@ -139,8 +139,9 @@ copy) instead of reusing the pose its other model already holds.
 and Lakitu's non-rigid parts on the CPU each frame again instead of skinning them on
 the GPU from one palette (the hook-writes CSV's `driver pose cpu` rows). Every DIAG
 run also writes `cpu-pose-banks.txt`: each animation bank posed on the CPU, once,
-with its bone and vertex counts. `pause-transition.txt` is written when the pause
-menu appears (and again when the race unloads).
+with its bone and vertex counts. `pause-transition.txt` gets each pause's stages
+(appended) when its menu appears; the first pause's `pause wait frame` lines in
+`runtime.log` say what it waited for.
 `runtime.log` also lists `course draws step=… render_ms=…` every 600 steps: the render
 thread's time in the course pass's model draws per profiled frame (first eye), the
 share a recorded course command list could save.

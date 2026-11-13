@@ -466,7 +466,7 @@ static void recordPauseStage(const char* stage,bool begin=false){
 static void writePauseTrace(){
 #ifndef MKW_RELEASE
     if(pauseTrace.empty())return;
-    if(FILE* f=fopen("sdmc:/3ds/mkw-3ds/pause-transition.txt","w")){fputs(pauseTrace.c_str(),f);fclose(f);}
+    if(FILE* f=fopen("sdmc:/3ds/mkw-3ds/pause-transition.txt","a")){fputs(pauseTrace.c_str(),f);fclose(f);}
     pauseTrace.clear();
 #endif
 }
