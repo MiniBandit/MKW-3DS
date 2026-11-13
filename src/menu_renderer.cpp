@@ -313,14 +313,22 @@ bool MenuRenderer::coversScreen(const std::vector<UiQuad>& quads)const{
 }
 std::size_t MenuRenderer::placeInVram(Renderer& renderer,const std::vector<UiQuad>& drawn,std::size_t reserve,std::size_t budget){
  auto& s=*impl_;
- // Screen area each sprite covers in this frame.
- static std::vector<float> area;area.assign(s.slots.size(),0.f);
- for(const auto& q:drawn)if(q.sprite<s.slots.size()&&q.movie>=std::size(UiMovieRegions)&&q.vehicleIcon>=12&&q.licensePortrait>=s.portraits.size())
-  area[uiTextureSprite(q.sprite)]+=std::min(std::fabs(q.w*q.h),400.f*240.f)*std::clamp(q.alpha,0.f,1.f);
+ // Screen area each sprite covers in this frame. Only the entries the last
+ // frame touched are zeroed and only drawn sprites are visited (no scan of
+ // every slot); the candidates and their sorted order are the same.
+ static std::vector<float> area;static std::vector<unsigned> touched;static std::vector<char> marked;
+ if(area.size()!=s.slots.size()){area.assign(s.slots.size(),0.f);marked.assign(s.slots.size(),0);touched.clear();}
+ for(const unsigned i:touched){area[i]=0.f;marked[i]=0;}
+ touched.clear();
+ for(const auto& q:drawn)if(q.sprite<s.slots.size()&&q.movie>=std::size(UiMovieRegions)&&q.vehicleIcon>=12&&q.licensePortrait>=s.portraits.size()){
+  const unsigned k=uiTextureSprite(q.sprite);
+  if(!marked[k]){marked[k]=1;touched.push_back(k);}
+  area[k]+=std::min(std::fabs(q.w*q.h),400.f*240.f)*std::clamp(q.alpha,0.f,1.f);
+ }
  // Most screen area per byte first (the full-screen stripes and pictures).
  // Small sprites (glyphs, captions) cost little fill: they stay.
  std::vector<std::pair<float,unsigned>> wanted;
- for(unsigned i=0;i<s.slots.size();++i){const auto& t=s.slots[i].texture;
+ for(const unsigned i:touched){const auto& t=s.slots[i].texture;
   if(t&&area[i]>0&&!inVram(*t)&&!fourBit(*t)&&t->bytes()>=VramMinBytes)wanted.push_back({area[i]/float(t->bytes()),i});}
  if(wanted.empty())return 0;
  std::sort(wanted.rbegin(),wanted.rend());
@@ -342,7 +350,8 @@ std::size_t MenuRenderer::placeInVram(Renderer& renderer,const std::vector<UiQua
   // incoming page needs go back to LINEAR (least recently requested first).
   // Their VRAM is free once this frame is drawn; the move waits for a later frame.
   std::size_t freeing=0;
-  while(vramSpaceFree()+freeing<bytes+reserve&&copied<budget&&copies<VramCopiesPerFrame){
+  // No sprite in VRAM: no victim to find.
+  while(s.vramResident&&vramSpaceFree()+freeing<bytes+reserve&&copied<budget&&copies<VramCopiesPerFrame){
    unsigned victim=~0u;std::uint32_t oldest=~0u;
    for(unsigned k=0;k<s.slots.size();++k){const auto& t=s.slots[k].texture;
     if(t&&inVram(*t)&&!s.pinned[k]&&area[k]<=0&&s.slots[k].used<oldest){oldest=s.slots[k].used;victim=k;}}

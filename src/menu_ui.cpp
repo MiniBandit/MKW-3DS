@@ -82,6 +82,21 @@ struct Lookup {
  }
 };
 const Lookup& lookup(){static const Lookup value;return value;}
+// A license-name glyph's sprite by character code ("name_glyph_%04x"): codes below
+// 256 from a table built once with the same lookup, the rest as before.
+unsigned glyphSprite(unsigned code){
+ static const auto table=[]{std::array<unsigned,256> t{};for(unsigned c=0;c<256;++c){char key[32];std::snprintf(key,sizeof key,"name_glyph_%04x",c);t[c]=lookup().find(key);}return t;}();
+ if(code<256)return table[code];
+ char key[32];std::snprintf(key,sizeof key,"name_glyph_%04x",code);return lookup().find(key);
+}
+// Description captions: the footer caption with the same text, memoized per sprite.
+unsigned footerCaption(unsigned index){
+ static std::vector<unsigned> memo(std::size(UiSprites),~0u);
+ if(memo[index]==~0u){memo[index]=index;const char* caption=UiSprites[index].text;
+  for(unsigned i=0;i<std::size(UiSprites);++i)
+   if(!std::strncmp(UiSprites[i].key,"footer_caption_",15)&&!std::strcmp(UiSprites[i].text,caption)){memo[index]=i;break;}}
+ return memo[index];
+}
 class Composer {
 public:
  const MenuState& state;std::vector<UiQuad>& out;const UiTransitionView* transition;
@@ -305,9 +320,7 @@ public:
  void textSprite(unsigned index,const UiPaneInfo& pane,Pose p,uint32_t color=0xffffffff){diag::ComposeTimer diagTimer_(8);
   if(index>=std::size(UiSprites)||!pane.visible)return;
   if(layout.role==UiMenuRole::Description&&std::strncmp(UiSprites[index].key,"name_glyph_",11)){
-   const char* caption=UiSprites[index].text;
-   for(unsigned i=0;i<std::size(UiSprites);++i)
-    if(!std::strncmp(UiSprites[i].key,"footer_caption_",15)&&!std::strcmp(UiSprites[i].text,caption)){index=i;break;}
+   index=footerCaption(index);
   }
   const auto& glyphs=UiSprites[index];const auto& cell=UiFontCells[glyphs.font];
   float w=glyphs.w*(pane.fontW>0?pane.fontW/cell[0]:pane.h/cell[1])*p.sx;
@@ -459,8 +472,7 @@ public:
   unsigned indices[128]{},count=0;float widths[128]{},total=0;
   for(const unsigned char* ch=reinterpret_cast<const unsigned char*>(value);*ch&&count<128;++ch){
    if(preload){if(seen[*ch])continue;seen[*ch]=true;}
-   char key[32];std::snprintf(key,sizeof key,"name_glyph_%04x",unsigned(*ch));
-   const auto index=lookup().find(key);if(index>=std::size(UiSprites))continue;
+   const auto index=glyphSprite(unsigned(*ch));if(index>=std::size(UiSprites))continue;
    indices[count]=index;const auto& glyph=UiSprites[index];
    widths[count]=glyph.w*original.fontH/UiFontCells[0][1]*YScale/XScale;total+=widths[count++];
   }
@@ -481,8 +493,7 @@ public:
   unsigned indices[32]{},count=0;float widths[32]{},total=0;
   const float cell=UiFontCells[0][1];
   for(const unsigned char* ch=reinterpret_cast<const unsigned char*>(value);*ch&&count<32;++ch){
-   char key[32];std::snprintf(key,sizeof key,"name_glyph_%04x",unsigned(*ch));
-   const auto index=lookup().find(key);if(index>=std::size(UiSprites))continue;
+   const auto index=glyphSprite(unsigned(*ch));if(index>=std::size(UiSprites))continue;
    indices[count]=index;widths[count]=UiSprites[index].w*height/cell;total+=widths[count++];
   }
   const float left=std::round(align<0?x-total:align>0?x:x-total*.5f);
@@ -593,9 +604,8 @@ public:
   unsigned indices[10]{},count=0;float widths[10]{},total=0;
   for(auto code:name){
    if(!code)break;
-   char key[32];std::snprintf(key,sizeof key,"name_glyph_%04x",unsigned(code));
-   auto index=lookup().find(key);
-   if(index>=std::size(UiSprites))index=lookup().find("name_glyph_003f");
+   auto index=glyphSprite(unsigned(code));
+   if(index>=std::size(UiSprites))index=glyphSprite(0x3f);
    if(index>=std::size(UiSprites))continue;
    const auto& glyph=UiSprites[index];indices[count]=index;
    widths[count]=glyph.w*original->fontH/UiFontCells[0][1]*YScale/XScale;
@@ -617,8 +627,7 @@ public:
   const auto* original=pane(base,name);if(!original)return;
   unsigned indices[48]{},count=0;float widths[48]{},total=0;
   for(const unsigned char* ch=reinterpret_cast<const unsigned char*>(value);*ch&&count<48;++ch){
-   char key[32];std::snprintf(key,sizeof key,"name_glyph_%04x",unsigned(*ch));
-   const auto index=lookup().find(key);if(index>=std::size(UiSprites))continue;
+   const auto index=glyphSprite(unsigned(*ch));if(index>=std::size(UiSprites))continue;
    const auto& glyph=UiSprites[index];indices[count]=index;
    widths[count]=glyph.w*original->fontH/UiFontCells[0][1]*YScale/XScale;total+=widths[count++];
   }
