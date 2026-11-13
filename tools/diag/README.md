@@ -251,6 +251,9 @@ default a frame whose quads, textures and draws equal those of the previous
 frame, which was shown, leaves the lower LCD's picture as it is (no draw, no
 clear, no transfer), mostly through the countdown. `runtime.log` has `bottom
 keep: course=… kept=… drawn=…` for each race.
+`no-bottom-depth-off.txt` binds the lower target with depth reads and writes
+on again for the race's 2D lower screen; by default it is bound without them
+(nothing there tests or writes depth). The intro's 3D lower view keeps depth.
 The Settings page's options are in `settings.dat`, not in the license:
 Dynamic Shadows for benchmarks is set there (or on the Settings page).
 

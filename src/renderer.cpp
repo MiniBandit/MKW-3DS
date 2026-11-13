@@ -3539,6 +3539,9 @@ void Renderer::beginBottomNow(){
     // No clear: the first bottom draw covers every pixel opaquely (a memory
     // fill here would split the command list without flushing it).
     C3D_FrameDrawOn(bottomTarget_);
+    // Only for this binding: the intro's 3D lower view binds the target again,
+    // with its depth (FrameDrawOn copies the target's own buffer settings).
+    if(execBottomFlat_)if(auto* fb=C3D_GetFrameBuf())fb->depthMask=0;
 }
 void Renderer::endNow(){
     // The GPU reads batched sprite vertices only after FrameEnd submits them.

@@ -566,6 +566,9 @@ public:
     // its last picture: its per-frame clear is skipped. Recorded frames only
     // (false for an immediate frame, whose clear has already run).
     bool bottomCovered();
+    // Nothing on this frame's bottom screen tests or writes depth: its target
+    // is bound without depth access (the race's 2D lower screen). Recorded frames only.
+    void bottomNoDepth();
     // Counts begin() and beginSourceCamera() calls: frames, immediate or recorded.
     uint32_t frameSerial() const {return frameSerial_;}
     // Small native HUD font; geometry is batched and remains alive for the frame.
@@ -794,6 +797,7 @@ private:
     // setFrameCover: the next begin()'s request, and the frame being drawn.
     bool nextTopCovered_=false,nextBottomKept_=false,execTopCovered_=false,execBottomKept_=false;
     uint32_t frameSerial_=0;
+    bool execBottomFlat_=false;
     // An immediate frame is open on this thread (between begin() and end()).
     bool immediateOpen_=false;
     // Diagnostic vertex probe: drawNow uploads a projection that sends every vertex to one point.

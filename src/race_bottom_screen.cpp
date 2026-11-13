@@ -84,6 +84,8 @@ struct RaceBottomScreen::Impl {
     bool mapClip=true;
     // Race frames whose quads equal the last shown frame's keep the lower
     // LCD's picture: no draw, no clear, no transfer (A/B: no-race-bottom-keep.txt).
+    // The race's 2D lower screen binds no depth buffer (A/B: no-bottom-depth-off.txt).
+    bool depthOff=true;
     bool keep=true,shownValid=false;uint64_t shownHash=0;uint32_t shownSerial=0;unsigned shownApt=0,shownScopes=0;
     unsigned keptFrames=0,drawnFrames=0;uint32_t miiGeneration=0;
     // The composed frame's draws (compose -> submit).
@@ -263,7 +265,7 @@ static bool sdFile(const char* name){
 bool RaceBottomScreen::load(Renderer& renderer,unsigned course){
     auto& m=*impl_;
     m.mapClip=!sdFile("no-map-clip.txt");
-    endRace();m.keep=!sdFile("no-race-bottom-keep.txt");
+    endRace();m.keep=!sdFile("no-race-bottom-keep.txt");m.depthOff=!sdFile("no-bottom-depth-off.txt");
     const auto* art=raceMapCourse(course);
     if(!art){unload(renderer);return false;}
     if(m.target&&m.course==course){
@@ -649,6 +651,7 @@ void RaceBottomScreen::drawRace(Renderer& renderer,const BottomView& view){
         m.shownSerial=serial;++m.keptFrames;return;
     }
     renderer.beginBottom();
+    if(m.depthOff)renderer.bottomNoDepth();
     submit(renderer);
     m.shownValid=shown;m.shownHash=hash;m.shownSerial=serial;m.shownApt=apt;m.shownScopes=scopes;++m.drawnFrames;
 }

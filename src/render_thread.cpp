@@ -169,13 +169,13 @@ struct Renderer::FrameList {
     std::vector<std::unique_ptr<ef::DrawList>> sceneEffects;unsigned sceneEffectsUsed=0;
     unsigned frame=0;
     // Recorded at begin(): both eyes are drawn when active.
-    stereo::Frame stereo{};bool dualIntro=false,bottomCovered=false,topCovered=false,bottomKept=false;
+    stereo::Frame stereo{};bool dualIntro=false,bottomCovered=false,topCovered=false,bottomKept=false,bottomFlat=false;
     // Diagnostic overlay: the pass this frame leaves out, and whether it is a profiled race frame.
     uint8_t diagSkip=0,diagProbe=0;bool diagActive=false,diagGrid=false;
     // passSample's tag for this frame (diag::ProbeTag marks a probed pass).
     uint8_t diagTag() const {return diagSkip?diagSkip:diagProbe?uint8_t(diagProbe|diag::ProbeTag):uint8_t(0);}
     FrameList(){commands.reserve(128*1024);writes.storage_=&storage;storage.frame=true;}
-    void reset(){sceneEffectsUsed=0;commands.clear();data.reset();storage.arena.reset();storage.writes.clear();storage.prepares.clear();storage.uploads.clear();stereo={};dualIntro=false;bottomCovered=false;topCovered=false;bottomKept=false;diagSkip=0;diagProbe=0;diagActive=false;diagGrid=false;}
+    void reset(){sceneEffectsUsed=0;commands.clear();data.reset();storage.arena.reset();storage.writes.clear();storage.prepares.clear();storage.uploads.clear();stereo={};dualIntro=false;bottomCovered=false;topCovered=false;bottomKept=false;bottomFlat=false;diagSkip=0;diagProbe=0;diagActive=false;diagGrid=false;}
 };
 
 DeferredWrites* deferredWrites(){return activeRenderer?activeRenderer->writes():nullptr;}
@@ -417,7 +417,7 @@ void Renderer::execute(FrameList& list){
     execStereo_=targetRight_?list.stereo:stereo::Frame{};
     const unsigned eyes=execStereo_.active()?2:1;
     execDualScreenIntro_=list.dualIntro&&bottomTarget_;
-    execBottomCovered_=list.bottomCovered;execTopCovered_=list.topCovered;execBottomKept_=list.bottomKept;
+    execBottomCovered_=list.bottomCovered;execTopCovered_=list.topCovered;execBottomKept_=list.bottomKept;execBottomFlat_=list.bottomFlat;
     const unsigned passes=eyes+unsigned(execDualScreenIntro_);
     // Per-pass draws and triangles (diagnostic): profiled frames that leave nothing out.
     const bool tally=list.diagActive&&!list.diagSkip&&!list.diagProbe;
@@ -573,7 +573,7 @@ void Renderer::execute(FrameList& list){
     if(courseDrawn)++courseDrawFrames;
     if(grid)diag::gridFrame();
     if(diag::textureUse)diag::textureFrame();
-    eye_=0;execStereo_={};execDualScreenIntro_=false;execBottomCovered_=false;execTopCovered_=execBottomKept_=false;bottomWorldPass_=false;
+    eye_=0;execStereo_={};execDualScreenIntro_=false;execBottomCovered_=false;execTopCovered_=execBottomKept_=false;execBottomFlat_=false;bottomWorldPass_=false;
     // A pipelined frame still open here continues in the next list (drain()
     // no longer splits frames, but keep it safe): its hook needs this list,
     // which the recording thread reuses only after that frame has ended.
@@ -1086,6 +1086,7 @@ void Renderer::drawScreenMaterialQuadsInPlace(const Texture* texture,const Mater
     auto& c=command<MaterialQuadsCommand>();
     c.texture=texture;c.quads=quads;c.count=count;c.color0=color0;c.color1=color1;c.wrapS=-1;c.wrapT=-1;c.additive=false;c.opaque=opaque;
 }
+void Renderer::bottomNoDepth(){if(recording()&&recording_)recording_->bottomFlat=true;}
 bool Renderer::bottomCovered(){if(!recording()||!recording_)return false;recording_->bottomCovered=true;return true;}
 // Each copy adds a command-list split and a GX copy to citro3d's 32-entry GX
 // queue (overflowing it panics): callers keep to a few per frame.
