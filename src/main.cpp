@@ -813,6 +813,7 @@ int main() {
     renderer.bloomMerge=!exists("sdmc:/3ds/mkw-3ds/no-bloom-merge.txt");
     report(renderer.bloomMerge?"merged bloom composite on":"merged bloom composite off");
     renderer.stadiumClearSkip=!exists("sdmc:/3ds/mkw-3ds/no-stadium-clear-skip.txt");
+    mkw::Renderer::clipReuse(!exists("sdmc:/3ds/mkw-3ds/no-clip-reuse.txt"));
     // The startup save read also needs an RGB8 lower LCD (the debug console
     // otherwise leaves RGB565 active until the first menu).
     if(!renderer.enableBottom()){renderer.shutdown();return startupFailure("Lower LCD initialization failed.");}

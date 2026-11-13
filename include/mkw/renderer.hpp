@@ -670,6 +670,8 @@ public:
     // Bloom's scene copy and composite as one full-screen pass, with no LCD
     // colour clear under it (applyBloomNow). Set before the race.
     bool bloomMerge=false;
+    // Clip fuse reuses products of unchanged matrices (DIAG A/B: no-clip-reuse.txt; exact).
+    static void clipReuse(bool on);
     // Stadium capture frames without bloom skip the left LCD colour clear (A/B: no-stadium-clear-skip.txt).
     bool stadiumClearSkip=true;
     // Bloom blur rings sample three taps a quad instead of two (same sums,

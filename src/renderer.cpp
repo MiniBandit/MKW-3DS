@@ -59,18 +59,50 @@ void uploadProjection(int location,const C3D_Mtx& p){
 // the projection uniform. Every writer keeps storing the plain projection
 // there; before each upload this replaces it with the product. A slot that
 // differs from the last product written is a new projection.
-struct ClipFuse {const void* programs[2]{};int projection=-1,modelView=-1;bool have=false;C3D_Mtx projectionMatrix{},clip{},modelViewMatrix{};};
+// Products are only ever computed by Mtx_Multiply(projection,modelView), so
+// reusing one for the same two matrices gives the same bits (no-clip-reuse.txt
+// multiplies on every upload again; cmd-hash.txt must be equal either way).
+// hint: drawNow's culling product of the matrices it uploads (valid during it).
+struct ClipFuse {const void* programs[2]{};int projection=-1,modelView=-1;bool have=false;C3D_Mtx projectionMatrix{},clip{},modelViewMatrix{};
+    const C3D_Mtx *hintProjection=nullptr,*hintModelView=nullptr,*hintClip=nullptr;};
 ClipFuse clipFuse;
+bool clipReuse=true;
 void fuseClip(const void* program){
     auto& f=clipFuse;
     if(!program||(program!=f.programs[0]&&program!=f.programs[1]))return;
     const C3D_FVec* u=C3D_FVUnif[GPU_VERTEX_SHADER];
-    C3D_Mtx slot,mv;std::memcpy(&slot,&u[f.projection],sizeof slot);std::memcpy(&mv,&u[f.modelView],sizeof mv);
-    if(!f.have||std::memcmp(&slot,&f.clip,sizeof slot))f.projectionMatrix=slot;
-    else if(!std::memcmp(&mv,&f.modelViewMatrix,sizeof mv))return;
-    Mtx_Multiply(&f.clip,&f.projectionMatrix,&mv);f.modelViewMatrix=mv;f.have=true;
+    const void* slot=&u[f.projection];const void* mv=&u[f.modelView];
+    if(!clipReuse){
+        C3D_Mtx s,m;std::memcpy(&s,slot,sizeof s);std::memcpy(&m,mv,sizeof m);
+        if(!f.have||std::memcmp(&s,&f.clip,sizeof s))f.projectionMatrix=s;
+        else if(!std::memcmp(&m,&f.modelViewMatrix,sizeof m))return;
+        Mtx_Multiply(&f.clip,&f.projectionMatrix,&m);f.modelViewMatrix=m;f.have=true;
+        C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER,f.projection,&f.clip);
+        return;
+    }
+    const bool mvSame=f.have&&!std::memcmp(mv,&f.modelViewMatrix,sizeof(C3D_Mtx));
+    // Still the last product: nothing was stored over it.
+    if(f.have&&mvSame&&!std::memcmp(slot,&f.clip,sizeof(C3D_Mtx)))return;
+    if(f.have&&!std::memcmp(slot,&f.clip,sizeof(C3D_Mtx))){}        // product kept, new modelView
+    else if(f.have&&!std::memcmp(slot,&f.projectionMatrix,sizeof(C3D_Mtx))){
+        // The plain projection stored again (drawNow, HUD): same product if mv is too.
+        if(mvSame){C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER,f.projection,&f.clip);return;}
+    }else std::memcpy(&f.projectionMatrix,slot,sizeof(C3D_Mtx));
+    std::memcpy(&f.modelViewMatrix,mv,sizeof(C3D_Mtx));
+    if(f.hintClip&&!std::memcmp(&f.projectionMatrix,f.hintProjection,sizeof(C3D_Mtx))&&!std::memcmp(&f.modelViewMatrix,f.hintModelView,sizeof(C3D_Mtx)))
+        f.clip=*f.hintClip;
+    else Mtx_Multiply(&f.clip,&f.projectionMatrix,&f.modelViewMatrix);
+    f.have=true;
     C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER,f.projection,&f.clip);
 }
+struct ClipHint {
+    ClipHint(bool on,const C3D_Mtx& projection,const C3D_Mtx& mv,const C3D_Mtx& clip){if(on){clipFuse.hintProjection=&projection;clipFuse.hintModelView=&mv;clipFuse.hintClip=&clip;}}
+    ~ClipHint(){clipFuse.hintProjection=clipFuse.hintModelView=clipFuse.hintClip=nullptr;}
+};
+}
+void setClipReuseFlag(bool on){clipReuse=on;}
+void Renderer::clipReuse(bool on){setClipReuseFlag(on);}
+namespace {
 void sceneDepthMap(const C3D_Mtx&,uint32_t layer=0){
     // HW08 factorization did not fix the physical-console symptom. Keep
     // GX's finite perspective/near/far clipping, not that failed workaround.
@@ -1531,10 +1563,12 @@ void Renderer::drawNow(const Model& model,const Vertex* vertices,const C3D_Mtx& 
     C3D_Mtx mv;Mtx_Multiply(&mv,&view_,&transform);
     drawSampledLighting_=model.dynamicLightTextures;
     ClipFrustum staticFrustum;
+    // projection_ x mv when culling computes it; the clip fuse reuses it.
+    C3D_Mtx cullClip;bool haveCullClip=false;
     // Reject immutable world models before uploading matrices or lighting.
     // Player meshes never opt into static visibility.
     if(!backdrop&&!model.visibility.empty()){
-        C3D_Mtx clip;Mtx_Multiply(&clip,&projection_,&mv);float rows[16];
+        auto& clip=cullClip;Mtx_Multiply(&clip,&projection_,&mv);haveCullClip=true;float rows[16];
         for(unsigned r=0;r<4;++r)for(unsigned c=0;c<4;++c)rows[r*4+c]=clip.r[r].c[3-c];
         staticFrustum=ClipFrustum(rows);
         if(!staticFrustum.intersects({model.minimum,model.maximum})){stats_.culledTriangles+=model.indexCount/3;return;}
@@ -1587,7 +1621,7 @@ void Renderer::drawNow(const Model& model,const Vertex* vertices,const C3D_Mtx& 
     if(cull||partCull||skinCull){
         if(!backdrop&&!model.visibility.empty())frustum=staticFrustum;
         else{
-            C3D_Mtx clip;Mtx_Multiply(&clip,&projection_,&mv);float rows[16];
+            auto& clip=cullClip;Mtx_Multiply(&clip,&projection_,&mv);haveCullClip=true;float rows[16];
             for(unsigned r=0;r<4;++r)for(unsigned c=0;c<4;++c)rows[r*4+c]=clip.r[r].c[3-c];
             frustum=ClipFrustum(rows);
         }
@@ -1596,6 +1630,10 @@ void Renderer::drawNow(const Model& model,const Vertex* vertices,const C3D_Mtx& 
             if(Mtx_Inverse(&inverse)!=0.f)eye={inverse.r[0].w,inverse.r[1].w,inverse.r[2].w};else partTiny=0;
         }
     }
+    // The fuse reuses the culling product while the uploads are exactly the
+    // matrices it came from (a snapshot: binders may store other projections).
+    const C3D_Mtx hintProjection=projection_;
+    const ClipHint clipHint(haveCullClip,hintProjection,mv,cullClip);
     // The last drawn submesh whose material state is still bound, and its end
     // of submesh (retailEndSubmesh), deferred while the next one repeats it.
     const Submesh* last=nullptr;bool lastRetail=false,lastEnvironment=false,pendingEnd=false;
