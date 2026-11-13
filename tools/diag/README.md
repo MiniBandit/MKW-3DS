@@ -296,8 +296,8 @@ last presented picture.
 The race's lower screen (each file read at the race load):
 `no-map-clip.txt` draws the map over the whole screen again, under the
 standings column; by default it starts at the column's edge and markers wholly
-under the column are not drawn (the column itself slides in with the countdown
-either way).
+under the column are not drawn (the column itself slides in at GO either way;
+the map is full width until then).
 `no-race-bottom-keep.txt` redraws the lower screen on every race frame; by
 default a frame whose quads, textures and draws equal those of the previous
 frame, which was shown, leaves the lower LCD's picture as it is (no draw, no

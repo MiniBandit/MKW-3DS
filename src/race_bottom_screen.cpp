@@ -247,9 +247,9 @@ void fillBottomView(BottomView& v,const RaceGrid& grid,const RaceItems& items,bo
     const auto& me=race->player(0);
     const auto& timer=me.finished()?me.raceTimer():race->timerManager().currentTimer();
     v.milliseconds=uint32_t(timer.min)*60000u+uint32_t(timer.sec)*1000u+uint32_t(timer.mil);
-    // CtrlRaceTime shows with the HUD from the countdown; the standings slide
-    // in with it (the grid order until the race starts).
-    v.timerVisible=!introActive&&stage>=1;v.standingsVisible=!v.timeTrial&&!introActive&&stage>=1;v.tick=tick;
+    // CtrlRaceTime shows with the HUD from the countdown; Mario Kart 7 shows
+    // its standings once the race has started.
+    v.timerVisible=!introActive&&stage>=1;v.standingsVisible=!v.timeTrial&&!introActive&&stage>=2;v.tick=tick;
     // Both screens go black together when leaving after the race (Mario Kart 7).
     v.fade=std::clamp(leaveFade,0.f,1.f);
 }
