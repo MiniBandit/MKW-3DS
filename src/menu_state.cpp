@@ -310,7 +310,7 @@ UiAction MenuState::input(UiInput key){
   if(cursor==2)selection.ledMode=(selection.ledMode+(key.left?3:1))%4;
   else if(cursor==3)selection.ledBrightness=unsigned(std::clamp(int(selection.ledBrightness)+(key.left?-10:10),50,100));
   else if(cursor==4)selection.speedometer=!selection.speedometer;
-  else selection.raceTimer=!selection.raceTimer;
+  else selection.raceTimer=(selection.raceTimer+(key.left?2:1))%3;
   focusAge=0;return UiAction::None;
  }
  // Every Settings row is a two-way choice: left, right and A all switch it.
@@ -394,7 +394,7 @@ UiAction MenuState::input(UiInput key){
   else if(cursor==2)selection.ledMode=(selection.ledMode+1)%4;
   else if(cursor==3)selection.ledBrightness=selection.ledBrightness>=100?50:selection.ledBrightness+10;
   else if(cursor==4)selection.speedometer=!selection.speedometer;
-  else if(cursor==5)selection.raceTimer=!selection.raceTimer;
+  else if(cursor==5)selection.raceTimer=(selection.raceTimer+1)%3;
   break;
  case UiPage::EraseLicense:if(cursor==0){eraseLicenseRequest=int(selection.license);enter(UiPage::License);}else{enter(UiPage::LicenseSettings);cursor=1;uiFocusReset(*this);}break;
  case UiPage::MainMenu:if(cursor==0)enter(UiPage::Mode);else unavailable=true;break;

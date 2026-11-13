@@ -560,18 +560,21 @@ bool RaceBottomScreen::compose(Renderer& renderer,const BottomView& view){
         unsigned ms=view.milliseconds,minutes=ms/60000,seconds=ms/1000%60,milli=ms%1000;
         if(minutes>99){minutes=99;seconds=59;milli=999;}
         const unsigned digit[7]={minutes/10,minutes%10,seconds/10,seconds%10,milli/100,milli/10%10,milli%10};
-        // RaceTimerPanes: race_null, time_01, coron01, time_02, time_03, coron00, time_04..06
-        // (the TIME label, set_p, is left out). Right-aligned at TimerRight in every mode.
+        // RaceTimerPanes: race_null, time_01, coron01, time_02, time_03, coron00, time_04..06,
+        // then the TIME label (set_p) with Timer: Full. Right-aligned at TimerRight.
         const float right=RaceTimerPanes[8].x+RaceTimerPanes[8].w*.5f;
         const float sq=m.timerSlide*m.timerSlide;
         const float lift=400.f*1.0005f*(sq>=.1f?sq-.1f:-sq)*TimerScale*Unit;
         const float ox=TimerRight-right*TimerScale,oy=TimerTop+RaceTimerPanes[0].h*.5f*TimerScale-lift;
-        const RaceMapRect* art[9]={&m.ui->digits[digit[0]],&m.ui->digits[digit[1]],&m.ui->colon,&m.ui->digits[digit[2]],&m.ui->digits[digit[3]],
-                                   &m.ui->dot,&m.ui->digits[digit[4]],&m.ui->digits[digit[5]],&m.ui->digits[digit[6]]};
-        for(unsigned i=0;i<9&&m.count<QuadCapacity;++i){
+        const RaceMapRect* art[10]={&m.ui->digits[digit[0]],&m.ui->digits[digit[1]],&m.ui->colon,&m.ui->digits[digit[2]],&m.ui->digits[digit[3]],
+                                    &m.ui->dot,&m.ui->digits[digit[4]],&m.ui->digits[digit[5]],&m.ui->digits[digit[6]],&m.ui->timeLabel};
+        for(unsigned i=0;i<(view.timerLabel?10u:9u)&&m.count<QuadCapacity;++i){
             const auto& p=RaceTimerPanes[i];
-            const float x=ox+p.x*TimerScale,y=oy-p.y*TimerScale,hw=p.w*.5f*TimerScale,hh=p.h*.5f*TimerScale;
-            if(!m.add(*art[i],x-hw,y-hh,x+hw,y+hh))break;
+            // Each piece at its cooked pixel size, on whole pixels, centred on its pane:
+            // no resampling (the TIME pane is 17.5 px tall at this scale, its art 18).
+            const float x=ox+p.x*TimerScale,y=oy-p.y*TimerScale;
+            const float x0=std::floor(x-art[i]->w*.5f+.5f),y0=std::floor(y-art[i]->h*.5f+.5f);
+            if(!m.add(*art[i],x0,y0,x0+art[i]->w,y0+art[i]->h))break;
             auto& q=m.base[m.count-1];
             for(unsigned k=0;k<4;++k)q.color[k]=TimerGold[k];
         }

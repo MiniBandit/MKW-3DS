@@ -52,6 +52,7 @@ struct BottomView {
     bool battle=false;
     bool timeTrial=false;         // no standings; full-width map and centred timer
     bool timerVisible=false;      // CtrlRaceTime: shown once the countdown runs
+    bool timerLabel=false;        // with its TIME label (Timer: Full)
     uint32_t milliseconds=0;      // official race time (the player's own once finished)
     bool standingsVisible=false;  // Mario Kart 7: from the start of the race
     uint32_t tick=0;              // simulation step (animations advance at 60 Hz)

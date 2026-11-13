@@ -321,6 +321,8 @@ def cook_atlas(out, cci, manifest):
         images[('digit', d)] = resize(tpl(GAME_U / f'timg/tt_d_number_3d_{d:02d}.tpl'), (TIMER_PX, TIMER_PX))
     for key, name in (('dot', 'tt_d_number_3d_coron'), ('colon', 'tt_d_number_3d_coron_00')):
         images[('sep', key)] = resize(tpl(GAME_U / f'timg/{name}.tpl'), (TIMER_PX, TIMER_PX))
+    # CtrlRaceTime's TIME label (Timer: Full): 120x20 at the earlier 24 px digits.
+    images[('label', 'time')] = resize(tpl(GAME_U / 'timg/tt_time_E.tpl'), (round(120 * TIMER_PX / 24), round(20 * TIMER_PX / 24)))
     images[('light', 0)] = resize(tpl(GAME / 'timg/tt_map_chara_searchlight.tpl'), (30, 32))
     for name, array in mk7_markers(cci).items():
         images[('mk7', marker_key(name))] = Image.fromarray(array, 'RGBA')
@@ -385,7 +387,7 @@ def atlas_layout(variable, texture, size, rects, row):
     fields = [f'"{texture}"', f'{{{size[0]},{size[1]}}}',
               array([('face', i) for i in range(24)]), array([('rowface', i) for i in range(24)]),
               array([('item', k) for k in range(21)]), array([('digit', d) for d in range(10)]),
-              rect(('sep', 'colon')), rect(('sep', 'dot')), rect(('light', 0)),
+              rect(('sep', 'colon')), rect(('sep', 'dot')), rect(('label', 'time')), rect(('light', 0)),
               rect(('fake', 0)), rect(('white', 0)), rect(('row', 'player')), rect(('row', 'other')),
               array([('ordinal', i) for i in range(12)]), array([('score', d) for d in range(10)]),
               array([('mk7', n.split('.')[0].replace('_r90', '')) for n in MK7_MARKERS]),
@@ -418,7 +420,7 @@ def write_header(manifest, layouts, timer, timer_source):
               '    std::array<RaceMapRect,24> rowFaces;    // the same faces at the standings rows\' size',
               '    std::array<RaceMapRect,21> items;       // item window icons by ItemKind, row size; 19 = two Triple Mushrooms left',
               '    std::array<RaceMapRect,10> digits;      // CtrlRaceTime',
-              '    RaceMapRect colon,dot,searchlight,fakeBox,white,rowPlayer,rowOther;',
+              '    RaceMapRect colon,dot,timeLabel,searchlight,fakeBox,white,rowPlayer,rowOther;',
               '    std::array<RaceMapRect,12> ordinals;    // 1st..12th (Race.bmg 0x515..0x520), result board font, row size',
               '    std::array<RaceMapRect,10> scoreDigits; // battle scores in the ordinals\' font and size',
               '    std::array<RaceMapRect,8> mk7;          // by Mk7Marker',

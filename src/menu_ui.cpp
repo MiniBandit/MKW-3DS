@@ -989,7 +989,7 @@ static void composeMenuImpl(const MenuState& s,const UiRaceView& race,std::vecto
   std::snprintf(brightnessLabel,sizeof brightnessLabel,"LED Brightness: %u%%",s.selection.ledBrightness);
   std::snprintf(ledLabel,sizeof ledLabel,"LED: %s",modes[std::min(s.selection.ledMode,3u)]);
   const char* labels[]={"Change Miis","Erase License",ledLabel,brightnessLabel,s.selection.speedometer?"Speedometer: On":"Speedometer: Off",
-                        s.selection.raceTimer?"Race Timer: On":"Race Timer: Off"};
+                        s.selection.raceTimer==0?"Timer: Off":s.selection.raceTimer==2?"Timer: Full":"Timer: Minimal"};
   for(unsigned i=0;i<6;++i){const auto row=control("LicenseManagementButton",variants[i],i);
    c.group(UiMenuRole::Choice,i,row,"license_management_free");c.button("license_management",i,row,labels[i]);}
   // The card displays this license's saved cups; its identity stays separate
