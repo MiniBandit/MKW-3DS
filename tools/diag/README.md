@@ -98,6 +98,10 @@ product or drawNow's culling product; exact: `cmd-hash.txt` equal either way),
 also those whose KCL has no soft weak wall; exact: `cmd-hash.txt` equal either way),
 `no-bottom-fill-cover.txt` (the race lower screen clears under its opaque full-screen fill
 again when no map covers it: battle arenas),
+`no-mii-head-early.txt` (character select builds a Mii's head each time a Mii outfit's model
+arrives, prefetched or not, as before, instead of once per license on the page's first frame,
+shared by both outfits, with prefetched outfits published only when shown; menu-performance-events.txt
+logs each build as `mii publish`),
 `no-box-precull.txt` (Item Box / Fake Item Box shells are drawn whole
 again instead of without the triangles their cull mode removes; runtime.log
 `box precull` counts the triangles kept), `no-fast-yaz0.txt` (course archives decode

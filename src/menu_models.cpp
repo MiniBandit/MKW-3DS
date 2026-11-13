@@ -137,7 +137,7 @@ struct ModelJob final:AssetJob {
 struct MenuModels::Entry {
     int kind=-1,id=-1;
     std::shared_ptr<ModelJob> job;
-    std::unique_ptr<NativeMiiHead> head;MiiBodySpec body{};
+    std::shared_ptr<NativeMiiHead> head;MiiBodySpec body{};
     std::unique_ptr<Model> model;std::unique_ptr<DriverAnimation> animation;
     std::vector<uint16_t> environment;
     std::uint32_t used=0,pinned=0;bool failed=false;
@@ -145,17 +145,21 @@ struct MenuModels::Entry {
     bool resident()const{return model!=nullptr;}
 };
 namespace {
-bool publishModel(Renderer& renderer,MenuModels::Entry& entry,ModelJob& job){
+// prebuilt: the license's shared head (MenuModels::earlyHead), else built here.
+bool publishModel(Renderer& renderer,MenuModels::Entry& entry,ModelJob& job,std::shared_ptr<NativeMiiHead> prebuilt={}){
     if(!job.model||job.cancelled())return false;
-    std::unique_ptr<NativeMiiHead> head;
+    std::shared_ptr<NativeMiiHead> head;
     if(job.kind==Driver&&job.id>=24){
         const auto start=svcGetSystemTick();
+        if(prebuilt){head=std::move(prebuilt);const auto now=svcGetSystemTick();diag::miiPublish={job.id,0,0,0,0,now-start};++diag::miiPublishCount;}
+        else{
         renderer.waitForGpu();LoadingScope loading;
         const auto waited=svcGetSystemTick();
-        head=std::make_unique<NativeMiiHead>();
+        head=std::make_shared<NativeMiiHead>();
         if(!head->load(job.identity))return false;
         {const auto now=svcGetSystemTick();const auto* s=diag::miiLoadStamps;
          diag::miiPublish={job.id,waited-start,s[1]-s[0],s[2]-s[1],now-s[2],now-start};++diag::miiPublishCount;}
+        }
         const auto rgba=job.body.clothingRGBA;
         const auto clothing=(rgba>>24)|((rgba>>8)&0xff00)|((rgba<<8)&0xff0000)|((rgba&255)<<24);
         for(const auto& role:MenuMiiMaterials){
@@ -172,9 +176,25 @@ bool publishModel(Renderer& renderer,MenuModels::Entry& entry,ModelJob& job){
 }
 MenuModels::MenuModels()=default;
 MenuModels::~MenuModels()=default;
+// The license's head, built on first use (a GPU wait, CFL's resource read and
+// the expression bakes); a failed build is not retried until the identity changes.
+std::shared_ptr<NativeMiiHead> MenuModels::licenseHead(Renderer& renderer,unsigned slot){
+    if(slot>=heads_.size()||headFailed_[slot])return {};
+    if(heads_[slot])return heads_[slot];
+    if(identities_[slot][0]!=3){headFailed_[slot]=true;return {};}
+    const auto start=svcGetSystemTick();
+    renderer.waitForGpu();LoadingScope loading;
+    const auto waited=svcGetSystemTick();
+    auto head=std::make_shared<NativeMiiHead>();
+    if(!head->load(identities_[slot])){headFailed_[slot]=true;return {};}
+    {const auto now=svcGetSystemTick();const auto* s=diag::miiLoadStamps;
+     diag::miiPublish={int(24+slot*2),waited-start,s[1]-s[0],s[2]-s[1],now-s[2],now-start};++diag::miiPublishCount;}
+    heads_[slot]=head;return head;
+}
 void MenuModels::setIdentity(Renderer& renderer,unsigned slot,const NativeMii& identity){
     if(slot>=identities_.size()||identities_[slot]==identity)return;
     identities_[slot]=identity;
+    renderer.retire(std::move(heads_[slot]));headFailed_[slot]=false;
     for(auto it=entries_.begin();it!=entries_.end();){
         auto& entry=**it;
         if(entry.kind!=Driver||entry.id<24||unsigned(entry.id-24)/2!=slot){++it;continue;}
@@ -254,11 +274,19 @@ void MenuModels::update(Renderer& renderer,const MenuState& state,const UiTransi
     const bool confirm=visual.page==UiPage::Vehicle&&motion.active&&!motion.entering&&!motion.back&&motion.to==UiPage::Drift;
     machineRotation_.update(visual.page==UiPage::Vehicle&&!confirm,confirm);
     settings_.update(renderer,visual);
-    for(auto& e:entries_)if(e->job&&e->job->done()){
-        auto job=std::move(e->job);
-        if(!publishModel(renderer,*e,*job)&&!job->cancelled())e->failed=true;
-    }
     const auto w=wanted(visual);
+    // earlyHead: the license's head on the Character page's first frame (its
+    // reveal waits for the page anyway), not when a prefetched outfit arrives.
+    if(earlyHead&&visual.page==UiPage::Character)licenseHead(renderer,std::min(visual.selection.license,3u));
+    for(auto& e:entries_)if(e->job&&e->job->done()){
+        const bool mii=e->kind==Driver&&e->id>=24;
+        // A prefetched Mii outfit waits, done, until it is the one shown.
+        if(earlyHead&&mii&&e->id!=w.driver&&!e->job->cancelled())continue;
+        auto job=std::move(e->job);
+        std::shared_ptr<NativeMiiHead> head;
+        if(earlyHead&&mii)head=licenseHead(renderer,unsigned(e->id-24)/2);
+        if(!publishModel(renderer,*e,*job,std::move(head))&&!job->cancelled())e->failed=true;
+    }
     // Show the wanted model once resident; meanwhile keep the previous one.
     auto choose=[&](int kind,int id,int shown){
         if(id<0){show(renderer,kind,-1);return;}
@@ -323,7 +351,9 @@ void MenuModels::prepare(Renderer& renderer,const MenuState& state){
     request(state,AssetPriority::Urgent);
     // QA path: run this state's jobs on the calling thread.
     for(auto& e:entries_)if(e->job&&!e->job->done()){e->job->cancel();auto job=std::make_shared<ModelJob>(e->kind,e->id,e->kind==Driver&&e->id>=24?identities_[unsigned(e->id-24)/2]:NativeMii{});job->run();
-        if(!publishModel(renderer,*e,*job))e->failed=true;
+        std::shared_ptr<NativeMiiHead> head;
+        if(earlyHead&&e->kind==Driver&&e->id>=24)head=licenseHead(renderer,unsigned(e->id-24)/2);
+        if(!publishModel(renderer,*e,*job,std::move(head)))e->failed=true;
         e->job.reset();
     }
     update(renderer,state);
@@ -332,6 +362,8 @@ void MenuModels::reset(Renderer& renderer) {
     settings_.reset(renderer);
     for(auto& e:entries_){if(e->job)e->job->cancel();renderer.retire(std::move(e->head));renderer.retire(std::move(e->model));renderer.retire(std::move(e->animation));}
     entries_.clear();shownDriver_=shownBackground_=shownMachine_=-1;driverClip_=driverFace_=backgroundClip_=-1;
+    // The heads go with the menu session (rebuilt on the next Character page).
+    for(auto& head:heads_)renderer.retire(std::move(head));headFailed_={};
     machineRotation_={};
 }
 void MenuModels::begin(Renderer& renderer) {

@@ -751,6 +751,7 @@ int main() {
     // Bottom screen: no background fill under the opaque map (A/B: no-bottom-cover.txt).
     mkw::RaceBottomScreen::skipCoveredFill=!exists("sdmc:/3ds/mkw-3ds/no-bottom-cover.txt");
     mkw::RaceBottomScreen::fillCover=!exists("sdmc:/3ds/mkw-3ds/no-bottom-fill-cover.txt");
+    mkw::MenuModels::earlyHead=!exists("sdmc:/3ds/mkw-3ds/no-mii-head-early.txt");
     // Shadow volumes shade only their projected rectangle (A/B: no-shadow-rect.txt).
     renderer.shadowRects=!exists("sdmc:/3ds/mkw-3ds/no-shadow-rect.txt");
     renderer.effectStateSkip=!exists("sdmc:/3ds/mkw-3ds/no-effect-state-skip.txt");
