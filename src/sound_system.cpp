@@ -15,6 +15,8 @@
 #include <cstdio>
 #include <cstring>
 #include <deque>
+#include <malloc.h>
+#include <map>
 #include <memory>
 #include <string>
 #include <unistd.h>
@@ -562,12 +564,77 @@ template <class T, int N> struct Ring {
  bool push(const T& t) { const u32 h = head.load(std::memory_order_relaxed); if (h - tail.load(std::memory_order_acquire) >= N) return false; items[h % N] = t; head.store(h + 1, std::memory_order_release); return true; }
  bool pop(T& t) { const u32 tl = tail.load(std::memory_order_relaxed); if (tl == head.load(std::memory_order_acquire)) return false; t = items[tl % N]; tail.store(tl + 1, std::memory_order_release); return true; }
 };
+
+// Race wave RAM cache (New 3DS; off: no-sound-cache.txt). The engine stops
+// between races and frees every wave, so each race read its ~3.7 MB from
+// revo_kart.brsar again. Here every BRSAR range a load reads stays on the
+// heap across engine restarts, keyed by BRSAR offset: a later read inside a
+// kept range is a copy. The waves still go to their LINEAR buffers as before.
+// Least recently used ranges go past the limit; nothing is kept while less
+// than KeepFree of heap would be left.
+struct WaveRamCache {
+ static constexpr size_t KeepFree = 12u << 20;
+ struct Range { std::unique_ptr<u8[]> data; u32 size = 0, used = 0; };
+ LightLock lock; std::map<u32, Range> ranges; size_t bytes = 0, limit = 0; u32 clock = 0;
+ SoundSystem::RamCacheStats stats{};
+ WaveRamCache() { LightLock_Init(&lock); }
+ bool read(void* dst, u32 offset, u32 size) {
+  LightLock_Lock(&lock);
+  bool hit = false;
+  auto it = ranges.upper_bound(offset);
+  if (limit && it != ranges.begin()) {
+   --it;
+   if (u64(offset) + size <= u64(it->first) + it->second.size) {
+    std::memcpy(dst, it->second.data.get() + (offset - it->first), size);
+    it->second.used = ++clock; hit = true;
+    ++stats.hits; stats.hitBytes += size;
+   }
+  }
+  if (!hit) { ++stats.misses; stats.missBytes += size; }
+  LightLock_Unlock(&lock);
+  return hit;
+ }
+ void keep(const void* src, u32 offset, u32 size) {
+  LightLock_Lock(&lock);
+  // A longer read at a kept offset (a wave's whole RWAV header after its first
+  // 0x20 bytes) replaces the shorter range.
+  if (auto same = ranges.find(offset); same != ranges.end() && same->second.size < size) { bytes -= same->second.size; ranges.erase(same); }
+  if (limit && size && size <= limit && !ranges.count(offset)) {
+   while (bytes + size > limit && !ranges.empty()) {
+    auto oldest = ranges.begin();
+    for (auto it = ranges.begin(); it != ranges.end(); ++it) if (it->second.used < oldest->second.used) oldest = it;
+    bytes -= oldest->second.size; ranges.erase(oldest); ++stats.evicted;
+   }
+   const struct mallinfo m = mallinfo();
+   const size_t heap = envGetHeapSize(), used = size_t(m.arena) - size_t(m.fordblks);
+   if (heap > used && heap - used >= size_t(size) + KeepFree) {
+    Range r; r.data.reset(new (std::nothrow) u8[size]);
+    if (r.data) { std::memcpy(r.data.get(), src, size); r.size = size; r.used = ++clock; ranges.emplace(offset, std::move(r)); bytes += size; }
+   } else ++stats.heapLow;
+  }
+  LightLock_Unlock(&lock);
+ }
+ void configure(size_t newLimit) {
+  LightLock_Lock(&lock);
+  limit = newLimit;
+  if (!limit) { ranges.clear(); bytes = 0; }
+  LightLock_Unlock(&lock);
+ }
+ void clear() { LightLock_Lock(&lock); ranges.clear(); bytes = 0; LightLock_Unlock(&lock); }
+ bool on() { LightLock_Lock(&lock); const bool o = limit != 0; LightLock_Unlock(&lock); return o; }
+};
+WaveRamCache& waveRamCache() { static WaveRamCache c; return c; }
 }
 
 // ======================================================================
 struct SoundSystem::Impl {
  Archive archive; Engine engine; std::unique_ptr<NdspHardware> hw;
  FILE* brsar = nullptr;
+ // With the wave RAM cache on: scene reads go through it, on their own
+ // unbuffered handle (each piece one request of exactly its bytes; brsar's
+ // 32 KB buffer was refilled whole after every seek), in 256 KB pieces
+ // while no stream needs refills.
+ FILE* sceneFile = nullptr;
  Thread audioThread = nullptr, ioThread = nullptr;
  LightEvent frameEvent, ioEvent;
  std::atomic<bool> quit{false};
@@ -763,10 +830,10 @@ struct SoundSystem::Impl {
    plan[i].offset = e->offset; plan[i].size = e->size;
    if (e->size > StreamThreshold) {
     u8 rh[0x20];
-    if (std::fseek(brsar, long(f.waveOffset + e->offset), SEEK_SET) || std::fread(rh, 1, sizeof rh, brsar) != sizeof rh || std::memcmp(rh, "RWAV", 4)) return false;
+    if (!readHeader(rh, f.waveOffset + e->offset, sizeof rh) || std::memcmp(rh, "RWAV", 4)) return false;
     LoadedFile::Streamed st; st.index = i;
     st.header.resize(be32(rh + 0x18) + 8);
-    if (std::fseek(brsar, long(f.waveOffset + e->offset), SEEK_SET) || std::fread(st.header.data(), 1, st.header.size(), brsar) != st.header.size()) return false;
+    if (!readHeader(st.header.data(), f.waveOffset + e->offset, u32(st.header.size()))) return false;
     WaveData& w = streamInfo[i];
     if (!parseRwav(st.header.data(), u32(st.header.size()), w, false) || w.format != 2) return false;
     const u32 channelBytes = (w.loopEnd + 13) / 14 * 8;
@@ -815,16 +882,32 @@ struct SoundSystem::Impl {
  }
  // Large scene reads in pieces, keeping stream refills prompt in between.
  bool readChunked(void* dst, u32 offset, u32 size) {
-  std::clearerr(brsar);
-  constexpr u32 Piece = 16 * 1024;
+  if (sceneFile) {
+   auto& cache = waveRamCache();
+   if (cache.read(dst, offset, size)) return true;
+   if (!readPieces(sceneFile, dst, offset, size)) return false;
+   cache.keep(dst, offset, size);
+   return true;
+  }
+  return readPieces(brsar, dst, offset, size);
+ }
+ bool readPieces(FILE* file, void* dst, u32 offset, u32 size) {
+  std::clearerr(file);
   u8* out = static_cast<u8*>(dst);
   for (u32 done = 0; done < size;) {
-   const u32 n = std::min(Piece, size - done);
-   if (std::fseek(brsar, long(offset + done), SEEK_SET) || std::fread(out + done, 1, n, brsar) != n) return false;
+   u32 piece = 16 * 1024;
+   if (file == sceneFile) { LightLock_Lock(&streamLock); if (feeds.empty()) piece = 256 * 1024; LightLock_Unlock(&streamLock); }
+   const u32 n = std::min(piece, size - done);
+   if (std::fseek(file, long(offset + done), SEEK_SET) || std::fread(out + done, 1, n, file) != n) return false;
    done += n;
    pumpFeeds();
   }
   return true;
+ }
+ // A streamed wave's RWAV header bytes (through the RAM cache when it is on).
+ bool readHeader(void* dst, u32 offset, u32 size) {
+  if (sceneFile) return readChunked(dst, offset, size);
+  return !std::fseek(brsar, long(offset), SEEK_SET) && std::fread(dst, 1, size, brsar) == size;
  }
  void ioLoop() {
   while (!quit.load()) {
@@ -1067,6 +1150,10 @@ bool SoundSystem::start() {
   delete s; return false;
  }
  std::setvbuf(s->brsar, nullptr, _IOFBF, 32 * 1024);
+ if (waveRamCache().on()) {
+  s->sceneFile = std::fopen("audio/revo_kart.brsar", "rb");
+  if (s->sceneFile) std::setvbuf(s->sceneFile, nullptr, _IONBF, 0);
+ }
  s->files.resize(s->archive.fileCount());
  s->hw = std::make_unique<NdspHardware>();
  s->hw->addFeed = &Impl::addFeed; s->hw->retireFeed = &Impl::retireFeed; s->hw->feedCtx = s;
@@ -1103,6 +1190,7 @@ bool SoundSystem::start() {
   if (s->audioThread) { threadJoin(s->audioThread, U64_MAX); threadFree(s->audioThread); s->audioThread = nullptr; }
   if (s->ioThread) { threadJoin(s->ioThread, U64_MAX); threadFree(s->ioThread); s->ioThread = nullptr; }
   if (s->brsar) std::fclose(s->brsar);
+  if (s->sceneFile) std::fclose(s->sceneFile);
   delete s; return false;
  }
  ndspSetCallback(&Impl::dspCallback, s);
@@ -1137,6 +1225,7 @@ void SoundSystem::stop() {
  for (auto& f : s->files) if (f.data && f.data->waves) linearFree(f.data->waves);
  if (s->cache.arena) linearFree(s->cache.arena);
  if (s->brsar) std::fclose(s->brsar);
+ if (s->sceneFile) std::fclose(s->sceneFile);
  delete s; impl_ = nullptr;
 }
 
@@ -1233,6 +1322,11 @@ int SoundSystem::reserveChannel() {
  return current;
 }
 void SoundSystem::releaseChannel(int channel) { if (impl_ && channel >= 0) { impl_->releaseRequest.store(channel); impl_->reservedChannel.store(-1); } }
+void SoundSystem::setRamCache(std::size_t limit) { waveRamCache().configure(limit); }
+void SoundSystem::dropRamCache() { waveRamCache().clear(); }
+SoundSystem::RamCacheStats SoundSystem::ramCacheStats() {
+ auto& c = waveRamCache(); LightLock_Lock(&c.lock); RamCacheStats out = c.stats; out.bytes = c.bytes; LightLock_Unlock(&c.lock); return out;
+}
 SoundSystem::Stats SoundSystem::stats() const {
  Stats out; if (!impl_) return out;
  LightLock_Lock(&impl_->statLock); out = impl_->published; LightLock_Unlock(&impl_->statLock);

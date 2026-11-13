@@ -91,6 +91,10 @@ that follow it within 12 KB (128 KB among entries a repacked pack lays out in
 traced order). `no-race-cache.txt` turns off the New 3DS RAM cache that keeps
 the racers, items, effects, Lakitu and pause menu textures read by one race
 load for the next.
+`no-sound-cache.txt` reads the race sound waves from revo_kart.brsar on every
+race load, as before, instead of keeping each range read on the New 3DS heap
+(up to 8 MB) for the set's later races and reading new ranges unbuffered, in
+256 KB pieces while no stream needs refills (`runtime.log`: `sound ram cache`).
 `no-pause-keep.txt` releases the racers' graphics on every pause, as before.
 `no-bank-keep.txt` makes a race load read every animation bank again instead of
 reusing the banks the last race had loaded (`runtime.log`: `animation banks reused N, unused M`).

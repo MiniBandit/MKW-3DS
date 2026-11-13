@@ -1202,7 +1202,7 @@ int main() {
             // The logical page becomes Race while the pause exit still animates.
             // Keep the resident course for ResumeRace; only release when leaving
             // the race section for an unrelated menu or a different race.
-            if(raceResident&&!menu.retainsRaceAssets()&&!transition.visual(menu).retainsRaceAssets()){releaseRace();mkw::pack::dropCache();}
+            if(raceResident&&!menu.retainsRaceAssets()&&!transition.visual(menu).retainsRaceAssets()){releaseRace();mkw::pack::dropCache();mkw::SoundSystem::dropRamCache();}
             if(!renderer.bottomEnabled()&&!renderer.enableBottom()){report("FAIL lower menu target");return leave(mkw::UiAction::Exit);}
             if(benchmark){menu.selection.mode=mkw::UiMode::VS;menu.selection.teams=false;menu.selection.vsCourses=2;menu.selection.vsRaces=32;
                 // A resumed run starts the in-order deck at the saved course
@@ -2630,6 +2630,9 @@ int main() {
                     svcSleepThread(20*1000000LL);
                 }
                 stage("sound cache ready");
+                if(kQa){const auto c=mkw::SoundSystem::ramCacheStats();
+                    LOGF("sound ram cache KB=%u hits=%u (%u KB) misses=%u (%u KB) evicted=%u heap_low=%u",unsigned(c.bytes/1024),unsigned(c.hits),unsigned(c.hitBytes/1024),
+                         unsigned(c.misses),unsigned(c.missBytes/1024),unsigned(c.evicted),unsigned(c.heapLow));}
                 // Everything above left pauseTextureReserve free; the pause
                 // textures take it now. Course objects then keep only their own reserve.
                 // The RAM cache keeps them for the set's later loads.
@@ -2677,7 +2680,7 @@ int main() {
         // Old 3DS core-1 jobs: the worker stopped for the last award ceremony.
         if(core1Jobs&&!mkw::jobWorker().running()&&!startCore1Jobs())report("job worker unavailable: presentation jobs run on core 0");
         // A failed attempt retries with the heap the cache held.
-        const bool ok=mkw::loadRequiredResources(attempt,[&](){mkw::pack::dropCache();cleanup();mkw::DriverAnimation::dropKept();});
+        const bool ok=mkw::loadRequiredResources(attempt,[&](){mkw::pack::dropCache();mkw::SoundSystem::dropRamCache();cleanup();mkw::DriverAnimation::dropKept();});
         if(bankKeep){char text[64];snprintf(text,sizeof text,"animation banks reused %u, unused %u",mkw::DriverAnimation::reusedCount(),mkw::DriverAnimation::keptCount());report(text);}
         mkw::DriverAnimation::dropKept();
         trackLoadFailed=!ok;
@@ -2690,6 +2693,11 @@ int main() {
     const size_t raceCacheLimit=new3ds&&!exists("sdmc:/3ds/mkw-3ds/no-race-cache.txt")?mkw::pack::cacheLimitFor(envGetHeapSize()):0;
     mkw::pack::enableCache(raceCacheLimit);
     {char text[80];snprintf(text,sizeof text,"heap %lu KB, race cache limit %lu KB",(unsigned long)envGetHeapSize()/1024,(unsigned long)raceCacheLimit/1024);report(text);}
+    // Race sound waves from a heap RAM cache across the set's races (New 3DS,
+    // a third of the race cache's room at most). A/B: no-sound-cache.txt.
+    const size_t soundCacheLimit=new3ds&&!exists("sdmc:/3ds/mkw-3ds/no-sound-cache.txt")?std::min<size_t>(8u<<20,mkw::pack::cacheLimitFor(envGetHeapSize())/3):0;
+    mkw::SoundSystem::setRamCache(soundCacheLimit);
+    {char text[64];snprintf(text,sizeof text,"sound ram cache limit %lu KB",(unsigned long)soundCacheLimit/1024);report(text);}
     mkw::renderQuality().setReduced(!new3ds&&!(kQa&&exists("sdmc:/3ds/mkw-3ds/full-quality.txt")));
     if(kQa&&exists("sdmc:/3ds/mkw-3ds/bottom-half-rate.txt"))mkw::renderQuality().bottomInterval=2;
     mkw::DriverAnimation::verifyLook=kQa&&exists("sdmc:/3ds/mkw-3ds/look-verify.txt");
@@ -2911,7 +2919,7 @@ int main() {
             // race before freeing its child heap; the root keeps configuration
             // and archive/input services alive for the next menu selection.
             mkw::AssetLoader::instance().stop();renderer.waitForGpu();
-            releaseRace();mkw::pack::dropCache();menuAudio.close();menuModels.reset(renderer);menuIcons.reset(renderer);menuRenderer.release(renderer);
+            releaseRace();mkw::pack::dropCache();mkw::SoundSystem::dropRamCache();menuAudio.close();menuModels.reset(renderer);menuIcons.reset(renderer);menuRenderer.release(renderer);
             if(!mkw::SoundSystem::instance().carryingMusic())mkw::SoundSystem::instance().stop();renderer.clearUnusedTextureCache();
             results.reset();resultsInput={};nextRaceQueued=false;
             if(scenes.currentSceneId()==2){
@@ -3004,7 +3012,7 @@ int main() {
                 auto action=nextRaceQueued?mkw::UiAction::StartRace:runMenu();nextRaceQueued=false;renderer.setDeferred(deferredRace);if(action==mkw::UiAction::Exit)break;
                 if(action==mkw::UiAction::ResumeRace){
                     if(restoreRaceGraphics&&restoreRaceGraphics())raceSound.pause(false);
-                    else {report("FAIL resume graphics load");releaseRace();mkw::pack::dropCache();menu.enter(mkw::UiPage::Error);}
+                    else {report("FAIL resume graphics load");releaseRace();mkw::pack::dropCache();mkw::SoundSystem::dropRamCache();menu.enter(mkw::UiPage::Error);}
                 }
                 if(action==mkw::UiAction::StartRace||action==mkw::UiAction::RestartRace){
                     mkw::LoadingScope loading;
@@ -3068,7 +3076,7 @@ int main() {
             if(trackLoadFailed){
                 accumulator=0;
                 // Unwind the partial race before the error page's menu runs.
-                if(fullRace){renderer.waitForGpu();releaseRace();mkw::pack::dropCache();menu.enter(mkw::UiPage::Error);}
+                if(fullRace){renderer.waitForGpu();releaseRace();mkw::pack::dropCache();mkw::SoundSystem::dropRamCache();menu.enter(mkw::UiPage::Error);}
                 else if(kQa)printf("\x1b[18;1HCourse load/route failed");
                 gspWaitForVBlank();continue;
             }
