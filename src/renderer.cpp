@@ -729,6 +729,10 @@ return false;}
         }
     }
     flushGpuData(vertices,vertexCount*sizeof(Vertex));flushGpuData(indices,indexCount*sizeof(uint16_t));
+    // The first submesh drawn blended in the opaque layer (course_opaque_order.hpp),
+    // once its submeshes are final (after the road sampler split).
+    firstOpaqueOrdered=SIZE_MAX;
+    for(std::size_t i=0;i<submeshes.size();++i)if(submeshes[i].lighting&retail::AuthoredOpaqueOrder){firstOpaqueOrdered=i;break;}
     return true;
 }
 Scene::~Scene(){for(auto m:models)delete m;}

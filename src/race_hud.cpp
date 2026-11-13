@@ -282,6 +282,8 @@ struct RaceHud::Impl {
     std::array<std::unique_ptr<Model>,21> models,staticModels;
     std::array<std::unique_ptr<Model>,2> itemShadows;
     std::array<Vec3,12> bulletUp{};
+    // bulletBody's "body" joint at one pose tick, shared by every racer in a Bullet Bill.
+    const void* bulletPoseBank=nullptr;unsigned bulletPoseTick=~0u;bool bulletPoseOk=false;float bulletPose[12]{};
     std::array<bool,12> wasBullet{};
     std::array<ThunderCloudVisual,12> clouds{};
     ObjectBank cloudMaterials;int cloudColor=-1;std::vector<SubmeshOverride> cloudOverrides;
@@ -858,10 +860,17 @@ void RaceHud::drawWorld(Renderer& renderer,const RaceItems& items,Vec3 viewer,un
 bool RaceHud::bulletBody(unsigned racer,unsigned tick,Vec3& origin,Vec3& x,Vec3& y,Vec3& z){
     if(racer>=impl_->bulletUp.size()||!impl_->models[15]||!impl_->animations[15])return false;
     auto& animation=*impl_->animations[15];
-    const int clip=animation.find("wait");
     const unsigned step=renderQuality().animationStep,poseTick=step?tick/step*step:tick;
-    const float* body=animation.pose(clip<0?0:clip,float(poseTick),poseTick);
-    if(!body)return false;
+    // One pose per tick for every racer (the same clip and frame), not one each.
+    auto& k=*impl_;
+    if(k.bulletPoseBank!=&animation||k.bulletPoseTick!=poseTick){
+        const int clip=animation.find("wait");
+        const float* pose=animation.pose(clip<0?0:clip,float(poseTick),poseTick);
+        k.bulletPoseOk=pose!=nullptr;if(pose)std::copy(pose,pose+12,k.bulletPose);
+        k.bulletPoseBank=&animation;k.bulletPoseTick=poseTick;
+    }
+    if(!k.bulletPoseOk)return false;
+    const float* body=k.bulletPose;
     auto* kart=Kinoko::Kart::KartObjectManager::Instance()->object(racer);
     const auto& m=kart->pose();const auto& p=kart->pos();
     const Vec3 right{m[0,0],m[1,0],m[2,0]},up{m[0,1],m[1,1],m[2,1]},forward{m[0,2],m[1,2],m[2,2]};

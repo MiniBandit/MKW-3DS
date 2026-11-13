@@ -154,6 +154,7 @@ struct SubmeshState {
 class Model {
 public:
     bool roadSamplerPolicy=false; // executable-only static-road sampler ranges
+    std::size_t firstOpaqueOrdered=SIZE_MAX; // set by load: first AuthoredOpaqueOrder submesh
     int stadiumTexture=-1; // WLscreenGC/dkmonitor/fks_screen_wii wl_screen1 replacement.
     Vertex* vertices=nullptr;
     // Lit GPU skinning keeps the original normal/UV attributes intact.

@@ -551,11 +551,7 @@ static void drawCourseLayer(mkw::Renderer& renderer,const mkw::Model& model,
 // The first course submesh drawn blended in the opaque layer
 // (course_opaque_order.hpp), SIZE_MAX if none. Its blend needs the sky
 // behind it, so with the sky drawn last the opaque layer stops there for it.
-static std::size_t firstOpaqueOrdered(const mkw::Model& model){
-    for(std::size_t i=0;i<model.submeshes.size();++i)
-        if(model.submeshes[i].lighting&mkw::retail::AuthoredOpaqueOrder)return i;
-    return SIZE_MAX;
-}
+static std::size_t firstOpaqueOrdered(const mkw::Model& model){return model.firstOpaqueOrdered;}
 
 int main() {
 #ifndef MKW_RELEASE
@@ -3783,7 +3779,10 @@ int main() {
                     auto* karts=K::Kart::KartObjectManager::Instance();uint8_t lightIndex[12]{};
                     const unsigned kartCount=std::min<unsigned>(unsigned(karts->count()),12u);
                     if(mkw::diag::lightZones)for(unsigned i=0;i<kartCount;++i)lightIndex[i]=karts->object(i)->collide()->lightIndex();
-                    mkw::racerLightZones::step(mkw::courseLighting(Courses[courseChoice].archive),lightIndex,kartCount);
+                    // The table lookup (a strcmp scan) once per course, not per tick.
+                    static unsigned litCourse=~0u;static const mkw::CourseLighting* courseLit=nullptr;
+                    if(litCourse!=courseChoice){courseLit=mkw::courseLighting(Courses[courseChoice].archive);litCourse=courseChoice;}
+                    mkw::racerLightZones::step(courseLit,lightIndex,kartCount);
                 }
                 double us=(svcGetSystemTick()-tick)*1000000.0/SYSCLOCK_ARM11;stepTotal+=us;stepMax=std::max(stepMax,us);mkw::simprof::add(mkw::simprof::TickTotal,tick);physicsSteps++;accumulator-=1;
                 const auto postTickStart=mkw::simprof::now();
@@ -3884,8 +3883,8 @@ int main() {
                         mkw::EffectFrame f=kartFrame(kp);
                         if(pipe){
                             const float* e=exhaust.pipes[i];
-                            const float pitch=e[3]*float(M_PI)/180.f,yaw=e[4]*float(M_PI)/180.f;
-                            const float sp=std::sin(pitch),cp=std::cos(pitch),sy=std::sin(yaw),cy=std::cos(yaw);
+                            const auto& trig=mkw::exhaustTrig<1>(vehicleId,i);
+                            const float sp=trig.sp,cp=trig.cp,sy=trig.sy,cy=trig.cy;
                             // Pipe axes: Ry(yaw)*Rx(pitch) in kart space.
                             auto axis=[&](float x,float y,float z){const float y1=y*cp-z*sp,z1=y*sp+z*cp;return kx*(x*cy+z1*sy)+ky*y1+kz*(-x*sy+z1*cy);};
                             f.origin=kartFrame(kp).toWorld({e[0],e[1],e[2]});f.x=axis(1,0,0);f.y=axis(0,1,0);f.z=axis(0,0,1);f.scale=kart->scale().y*exhaust.flameScale;

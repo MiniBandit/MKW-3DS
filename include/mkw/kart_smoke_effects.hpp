@@ -3,6 +3,7 @@
 #include "mkw/race_effects.hpp"
 #include "mkw/kart_item_effects.hpp"
 #include "mkw/vehicle_exhaust.hpp"
+#include "mkw/exhaust_trig.hpp"
 #include <cmath>
 #include <array>
 #include <algorithm>
@@ -232,8 +233,8 @@ public:
             const unsigned slot=base+p;
             if(p>=exhaust.count){e.kill(slot);continue;}
             const float* q=exhaust.pipes[p];
-            constexpr float ToRadians=0.01745329251994329577f;
-            const float sp=std::sin(q[3]*ToRadians),cp=std::cos(q[3]*ToRadians),sy=std::sin(q[4]*ToRadians),cy=std::cos(q[4]*ToRadians);
+            const auto& trig=exhaustTrig<0>(std::min<unsigned>(vehicle,VehicleExhausts.size()-1),p);
+            const float sp=trig.sp,cp=trig.cp,sy=trig.sy,cy=trig.cy;
             // Pipe axes: Ry(yaw)*Rx(pitch) in kart space, as the boost flame.
             auto axis=[&](float x,float y,float z){const float y1=y*cp-z*sp,z1=y*sp+z*cp;return pose.x*(x*cy+z1*sy)+pose.y*y1+pose.z*(-x*sy+z1*cy);};
             EffectFrame frame=pose;

@@ -398,8 +398,9 @@ void RacerVisuals::Impl::drawPrepared(Renderer& renderer,unsigned i){
     if(!r||!out.draw)return;
     {
         renderer.additiveColor=out.additive;
-        // Light zones (only lit models use it: live-opponents.txt).
-        const auto* zone=racerLightZones::zone(i+1);const auto* zoneCourse=racerLightZones::course();
+        // Light zones (only lit models use it: live-opponents.txt). Baked
+        // opponents read no racer light: record no commands for it.
+        const auto* zone=diag::liveOpponents?racerLightZones::zone(i+1):nullptr;const auto* zoneCourse=racerLightZones::course();
         if(zone&&zoneCourse){const auto light=zone->light(*zoneCourse);renderer.setRacerLight(&light,zone->ambientColor());}
         if(out.bodyVisible){if(out.lod==1)drawSkinned(r->bodyAnimation.get(),*r->body,out.body);else renderer.draw(*(out.lod>=3?r->bodyLodRear:r->bodyLod),out.body);}
         if(out.lowHandleVisible)renderer.draw(*(out.lod>=3?r->handleLodRear:r->handleLod),out.lowHandle);
