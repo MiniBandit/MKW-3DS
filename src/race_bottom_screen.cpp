@@ -3,6 +3,7 @@
 #include <mkw/render_quality.hpp>
 #include <mkw/native_mii_portrait.hpp>
 #include <mkw/race_map_assets.hpp>
+#include <mkw/race_bottom_rows.hpp>
 #include <mkw/battle_map_assets.hpp>
 #include <mkw/battle_bottom_scores.hpp>
 #include <mkw/map_object_assets.hpp>
@@ -66,7 +67,7 @@ static_assert(RaceBottomScreen::QuadCapacity==276&&RaceBottomScreen::QuadCapacit
               "every quad a frame can add fits the renderer's bottom sprite region");
 
 struct RaceBottomScreen::Impl {
-    Texture map,overview,atlas,objects,scores,mii;
+    Texture map,overview,atlas,objects,scores,mii,rows;
     // The UI atlas's rectangles (RaceMapUiWithShadows: DIAG no-bottom-atlas256.txt).
     const RaceMapAtlas* ui=&RaceMapUi;
     // The local outline drawn from the face in a team colour: its own draw
@@ -102,7 +103,7 @@ struct RaceBottomScreen::Impl {
     unsigned keptFrames=0,drawnFrames=0;uint32_t miiGeneration=0;
     // The composed frame's draws (compose -> submit).
     struct Batches {unsigned fills=0,mapFirst=0,mapCount=0,objectFirst=0,objectCount=0,overlayFirst=0,overlayCount=0,
-                    topFirst=0,topCount=0,scoreFirst=0,scoreCount=0,fadeFirst=0,mii=0,outline=~0u;const Texture* mapTexture=nullptr;bool covered=false,atlas=false;} b;
+                    topFirst=0,topCount=0,rowsFirst=0,rowsCount=0,scoreFirst=0,scoreCount=0,fadeFirst=0,mii=0,outline=~0u;const Texture* mapTexture=nullptr;bool covered=false,atlas=false;} b;
     // One frame's quads, in three in-place batches.
     Renderer::MaterialQuad* base=nullptr;unsigned count=0;
     bool add(const RaceMapRect& r,float x0,float y0,float x1,float y1,uint32_t color=0xffffffffu,bool mirrorU=false,bool mirrorV=false,bool score=false){
@@ -115,6 +116,17 @@ struct RaceBottomScreen::Impl {
         q.x[0]=x0;q.y[0]=y0;q.x[1]=x1;q.y[1]=y0;q.x[2]=x0;q.y[2]=y1;q.x[3]=x1;q.y[3]=y1;
         q.u[0]=u0;q.v[0]=v0;q.u[1]=u1;q.v[1]=v0;q.u[2]=u0;q.v[2]=v1;q.u[3]=u1;q.v[3]=v1;
         for(auto& c:q.color)c=color;
+        return true;
+    }
+    // A quad over rectangle r of the rows texture (RaceRowsUi).
+    bool addRow(const RaceMapRect& r,float x0,float y0,float x1,float y1){
+        if(count>=QuadCapacity||!r.w)return false;
+        const float aw=RaceRowsUi.size[0],ah=RaceRowsUi.size[1];
+        const float u0=r.x/aw,u1=(r.x+r.w)/aw,v0=r.y/ah,v1=(r.y+r.h)/ah;
+        auto& q=base[count++];
+        q.x[0]=x0;q.y[0]=y0;q.x[1]=x1;q.y[1]=y0;q.x[2]=x0;q.y[2]=y1;q.x[3]=x1;q.y[3]=y1;
+        q.u[0]=u0;q.v[0]=v0;q.u[1]=u1;q.v[1]=v0;q.u[2]=u0;q.v[2]=v1;q.u[3]=u1;q.v[3]=v1;
+        for(auto& c:q.color)c=0xffffffffu;
         return true;
     }
     // A quad with free corners (TL, TR, BL, BR) over atlas rectangle r.
@@ -302,6 +314,9 @@ bool RaceBottomScreen::load(Renderer& renderer,unsigned course){
     if(course<32)renderer.loadVramTexture(m.map,c.texture);
     renderer.loadVramTexture(m.overview,c.overview);
     if(course>=32&&(!m.atlas.ready||!m.overview.ready||!m.scores.ready)){unload(renderer);return false;}
+    // Floating rows need their own texture; without it the column comes back.
+    if(m.floatingRows&&!renderer.loadVramTexture(m.rows,RaceRowsUi.texture,GPU_CLAMP_TO_EDGE,renderQuality().bottomRgba4)){
+        std::fprintf(stderr,"standings rows load failed: %s\n",RaceRowsUi.texture);m.floatingRows=false;}
     const auto objectArt=mapObjectAtlas(course);
     if(objectArt.texture&&!renderer.loadVramTexture(m.objects,objectArt.texture))
         std::fprintf(stderr,"minimap object atlas load failed: %s\n",objectArt.texture);
@@ -312,10 +327,10 @@ bool RaceBottomScreen::load(Renderer& renderer,unsigned course){
 void RaceBottomScreen::unload(Renderer& renderer){
     auto& m=*impl_;
     endRace();
-    if(!m.target&&!m.map.ready&&!m.overview.ready&&!m.atlas.ready&&!m.objects.ready&&!m.scores.ready&&!m.quads)return;
+    if(!m.target&&!m.map.ready&&!m.overview.ready&&!m.atlas.ready&&!m.objects.ready&&!m.scores.ready&&!m.rows.ready&&!m.quads)return;
     // Nothing recorded may still sample these textures or read the quads.
     renderer.waitForGpu();
-    m.map.reset();m.overview.reset();m.atlas.reset();m.objects.reset();m.scores.reset();
+    m.map.reset();m.overview.reset();m.atlas.reset();m.objects.reset();m.scores.reset();m.rows.reset();
     m.quads.reset();
     renderer.releaseBottom();
     m.target=false;m.course=~0u;
@@ -538,6 +553,36 @@ bool RaceBottomScreen::compose(Renderer& renderer,const BottomView& view){
         if(m.miiMap&&under(m.miiQuads[view.tick&1][0]))m.miiMap=false;
     }
 
+    // 3b. Floating standings rows (RaceRowsUi), each its own box over the map.
+    const bool floatRows=m.floatingRows&&m.rows.ready&&m.standings>0;
+    const unsigned rowsFirst=m.count;
+    if(floatRows){
+        const auto& R=RaceRowsUi;
+        const float slide=(1-smooth(m.standings))*-(Column+4);
+        if(!m.rowsSet){for(unsigned i=0;i<view.racers;++i)m.row[i]=float(std::clamp<unsigned>(view.racer[i].rank,1,12)-1);m.rowsSet=true;}
+        for(unsigned i=0;i<std::min(view.racers,12u);++i){
+            const float target=float(std::clamp<unsigned>(view.racer[i].rank,1,12)-1);
+            for(unsigned t=0;t<elapsed;++t)m.row[i]+=(target-m.row[i])*.22f;
+            if(std::fabs(target-m.row[i])<.01f)m.row[i]=target;
+        }
+        auto drawRow=[&](unsigned i){
+            const auto& r=view.racer[i];
+            const float x=RowX+slide,y=RowTop+m.row[i]*RowPitch,icon=R.icon,iy=y+std::floor((R.rowH-icon)*.5f);
+            m.addRow(r.local?R.player:R.other,x,y,x+R.rowW,y+R.rowH);
+            if(!view.battle){
+                const auto& ord=R.ordinals[std::clamp<unsigned>(r.rank,1,12)-1];
+                const float oy=y+std::floor((R.rowH-ord.h)*.5f);
+                m.addRow(ord,x+R.ordinalX,oy,x+R.ordinalX+ord.w,oy+ord.h);
+            }
+            m.addRow(R.faces[std::min<unsigned>(r.character,23)],x+R.faceX,iy,x+R.faceX+icon,iy+icon);
+            if(r.character>=24&&m.mii.ready){auto& q=m.miiQuads[view.tick&1][1];q=m.base[--m.count];for(unsigned k=0;k<4;++k){q.u[k]=(k&1)?1.f:0.f;q.v[k]=(k&2)?1.f:0.f;}m.miiRow=true;}
+            if(r.item<R.items.size()&&R.items[r.item].w)m.addRow(R.items[r.item],x+R.itemX,iy,x+R.itemX+icon,iy+icon);
+        };
+        for(unsigned i=0;i<std::min(view.racers,12u);++i)if(!view.racer[i].local)drawRow(i);
+        for(unsigned i=0;i<std::min(view.racers,12u);++i)if(view.racer[i].local)drawRow(i);
+    }
+    const unsigned rowsCount=m.count-rowsFirst;
+
     // 4. The standings column and its rows over the map's left edge, then the time.
     const unsigned topFirst=m.count;
     if(m.standings>0){
@@ -545,7 +590,7 @@ bool RaceBottomScreen::compose(Renderer& renderer,const BottomView& view){
         if(edge>0&&!m.floatingRows){m.add(m.ui->white,0,0,edge,ScreenH,0x101626ffu);
             m.add(m.ui->white,std::max(0.f,edge-1),0,edge,ScreenH,0x5a6a8aff);}
     }
-    if(atlas&&m.standings>0){
+    if(atlas&&m.standings>0&&!floatRows){
         // Rows slide in from the left once the race starts and move between
         // places when positions change (Mario Kart 7).
         const float slide=(1-smooth(m.standings))*-(Column+4);
@@ -605,7 +650,7 @@ bool RaceBottomScreen::compose(Renderer& renderer,const BottomView& view){
         for(unsigned i=0;i<std::min(view.racers,12u);++i){
             const auto& r=view.racer[i];char text[4];
             const unsigned n=unsigned(std::snprintf(text,sizeof text,"%u",std::min(unsigned(r.score),999u)));
-            const float left=RowX+slide+OrdinalX,y=RowTop+m.row[i]*RowPitch+2.f;
+            const float left=RowX+slide+(floatRows?RaceRowsUi.ordinalX:OrdinalX),y=RowTop+m.row[i]*RowPitch+2.f;
             for(unsigned j=0;j<n;++j)m.add(BattleBottomScoreDigits[text[j]-'0'],left+j*9.f,y,left+(j+1)*9.f,y+15.f,r.team==RaceTeam::Red?0xff3030ffu:r.team==RaceTeam::Blue?0x4080ffffu:0xffffffffu,false,false,true);
         }
     }
@@ -616,7 +661,7 @@ bool RaceBottomScreen::compose(Renderer& renderer,const BottomView& view){
     // race maps and overviews are ETC1 (no alpha), drawn in white. Battle
     // maps are RGBA4 and keep all three.
     const bool covered=skipCoveredFill&&mapCount&&m.course<32;
-    m.b={fills,mapFirst,mapCount,objectFirst,objectCount,overlayFirst,overlayCount,topFirst,topCount,scoreFirst,scoreCount,fadeFirst,view.tick&1,m.outline,mapTexture,covered,atlas};
+    m.b={fills,mapFirst,mapCount,objectFirst,objectCount,overlayFirst,overlayCount,topFirst,topCount,rowsFirst,rowsCount,scoreFirst,scoreCount,fadeFirst,view.tick&1,m.outline,mapTexture,covered,atlas};
     return true;
 }
 
@@ -635,6 +680,7 @@ void RaceBottomScreen::submit(Renderer& renderer){
         if(after)renderer.drawScreenMaterialQuadsInPlace(&m.atlas,m.base+b.outline+1,after,0x00000000u,0xffffffffu);
     }else if(b.overlayCount)renderer.drawScreenMaterialQuadsInPlace(&m.atlas,m.base+b.overlayFirst,b.overlayCount,0x00000000u,0xffffffffu);
     if(m.miiMap)renderer.drawScreenMaterialQuadsInPlace(&m.mii,&m.miiQuads[b.mii][0],1,0,0xffffffffu);
+    if(b.rowsCount)renderer.drawScreenMaterialQuadsInPlace(&m.rows,m.base+b.rowsFirst,b.rowsCount,0x00000000u,0xffffffffu);
     if(b.topCount){
         if(b.atlas)renderer.drawScreenMaterialQuadsInPlace(&m.atlas,m.base+b.topFirst,b.topCount,0x00000000u,0xffffffffu);
         else renderer.drawScreenMaterialQuadsInPlace(nullptr,m.base+b.topFirst,b.topCount,0,0xffffffffu);
@@ -657,7 +703,7 @@ uint64_t RaceBottomScreen::frameHash() const{
     auto word=[&](uint32_t w){a=(a^w)*16777619u;c=(c^w)*0x27d4eb2du;c^=c>>15;};
     auto bytes=[&](const void* p,size_t n){const auto* q=static_cast<const uint8_t*>(p);
         for(size_t i=0;i+4<=n;i+=4){uint32_t w;std::memcpy(&w,q+i,4);word(w);}};
-    for(uint32_t w:std::initializer_list<uint32_t>{b.fills,b.mapFirst,b.mapCount,b.objectFirst,b.objectCount,b.overlayFirst,b.overlayCount,b.topFirst,b.topCount,
+    for(uint32_t w:std::initializer_list<uint32_t>{b.fills,b.mapFirst,b.mapCount,b.objectFirst,b.objectCount,b.overlayFirst,b.overlayCount,b.topFirst,b.topCount,b.rowsFirst,b.rowsCount,
                     b.scoreFirst,b.scoreCount,b.fadeFirst,b.outline,m.count,unsigned(b.covered),unsigned(b.atlas),unsigned(m.miiMap),unsigned(m.miiRow),m.miiGeneration})word(w);
     word(uint32_t(reinterpret_cast<uintptr_t>(b.mapTexture)));
     static_assert(sizeof(Renderer::MaterialQuad)%4==0);

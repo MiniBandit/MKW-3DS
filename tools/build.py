@@ -1096,6 +1096,8 @@ class Builder:
         tool('menu-models', ['cook_menu_models.py', '--machines', '--jobs', J], 'include/mkw/menu_model_params.hpp')
         tool('runtime-audio', ['generate_runtime_tables.py', 'audio'], 'include/mkw/race_voice_tables.hpp')
         tool('menu-ui', ['cook_menu_ui.py'], 'include/mkw/menu_assets.hpp')
+        # The lower screen's standings rows take the menus' selected-button frame.
+        tool('map-rows', ['cook_race_rows.py'], 'include/mkw/race_bottom_rows.hpp', 'build/race-map/textures/race_bottom_rows.t3x')
         tool('menu-footer', ['cook_menu_footer.py'], 'include/mkw/menu_footer_text.inc')
         tool('menu-styles', ['cook_menu_styles.py'], 'include/mkw/menu_text_styles.hpp')
         tool('menu-record-text', ['cook_menu_record_text.py'], 'include/mkw/menu_record_text.inc')
