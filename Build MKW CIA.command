@@ -1,5 +1,5 @@
 #!/bin/bash
-# macOS: double-click, then drag your Mario Kart Wii (USA) ISO or WBFS into the window.
+# macOS: double-click, then drag your Mario Kart Wii (USA) ISO, WBFS or RVZ into the window.
 # Linux: run  bash "Build MKW CIA.command"  and type or paste the path.
 # Works from the top of the builder folder or from tools/release.
 set -o pipefail

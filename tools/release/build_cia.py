@@ -6,7 +6,7 @@
 Stages, each skipped when its outputs already exist (rerun to resume):
   tools    pinned makerom and bannertool; devkitPro, Python packages, Node
   sources  pinned Kinoko, noclip, gclib and citro3d with this tree's patches
-  disc     USA Mario Kart Wii (RMCE01) ISO or WBFS; extracted files must match
+  disc     USA Mario Kart Wii (RMCE01) ISO, WBFS or RVZ; extracted files must match
            tools/release/usa-disc.json
   cook     every asset, from the disc, in dependency order (COOK_STEPS)
   compile  tools/build.py
@@ -276,7 +276,7 @@ def stage_disc(disc):
             shutil.rmtree(ROOT/'data/extracted')
     if not receipt.is_file():
         if shared_data:raise SystemExit('The shared data directory has no verified disc extraction. Build from a fresh clone to avoid writing to shared data.')
-        if not disc:raise SystemExit('Give the path to your Mario Kart Wii (USA) ISO or WBFS')
+        if not disc:raise SystemExit('Give the path to your Mario Kart Wii (USA) ISO, WBFS or RVZ')
         # NKit images mark themselves "NKIT" at 0x200; their trimmed data fails the checks.
         with open(disc,'rb') as f:f.seek(0x200);nkit=f.read(4)==b'NKIT'
         if nkit:raise SystemExit('This is an NKit image. Convert it to a normal ISO in Dolphin first (right-click the game, Convert File, ISO).')
@@ -519,7 +519,7 @@ def stage_package(version,cci,keep_stage,embed_assets=False):
 
 def main():
     p=argparse.ArgumentParser(description=__doc__,formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument('disc',nargs='?',type=Path,help='your Mario Kart Wii (USA) ISO or WBFS (not needed once extracted and cooked)')
+    p.add_argument('disc',nargs='?',type=Path,help='your Mario Kart Wii (USA) ISO, WBFS or RVZ (not needed once extracted and cooked)')
     # The HOME Menu refreshes a title's cached icon and banner only when its
     # version rises: bump tools/release/VERSION for every build you share.
     p.add_argument('--version',default=(Path(__file__).parent/'VERSION').read_text().strip())

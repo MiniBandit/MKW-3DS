@@ -25,8 +25,8 @@ See [CHANGELOG.md](CHANGELOG.md) for the full list.
 
 ## What you need
 
-- **Mario Kart Wii (USA)**, game ID `RMCE01`, dumped as `.iso` or `.wbfs`.
-  Convert RVZ or NKit dumps to ISO in Dolphin first.
+- **Mario Kart Wii (USA)**, game ID `RMCE01`, dumped as `.iso`, `.wbfs` or `.rvz` (Dolphin's compressed format).
+  Convert NKit dumps to ISO in Dolphin first.
 - About **30 GB** of free space and an internet connection
 
 The following dependencies are only needed if you **DON'T** want to use Docker to build.

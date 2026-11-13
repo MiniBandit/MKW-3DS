@@ -4,11 +4,11 @@ set -Eeuo pipefail
 LOG_FILE="build-cia-log.txt"
 
 shopt -s nullglob nocaseglob
-roms=(mkw-rom/*.iso mkw-rom/*.wbfs)
+roms=(mkw-rom/*.iso mkw-rom/*.wbfs mkw-rom/*.rvz)
 shopt -u nullglob nocaseglob
 
 if (( ${#roms[@]} == 0 )); then
-    echo "Error: Put a Mario Kart Wii (USA) ISO or WBFS file inside the mkw-rom folder." >&2
+    echo "Error: Put a Mario Kart Wii (USA) ISO, WBFS or RVZ file inside the mkw-rom folder." >&2
     exit 1
 fi
 

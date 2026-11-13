@@ -7,8 +7,8 @@ your own computer.
 
 WHAT YOU NEED
 -------------
-- Your Mario Kart Wii disc, USA version (RMCE01), dumped as .iso or .wbfs.
-  RVZ or NKit dumps: convert them to ISO in Dolphin first.
+- Your Mario Kart Wii disc, USA version (RMCE01), dumped as .iso, .wbfs or .rvz
+  (Dolphin's compressed format). NKit dumps: convert them to ISO in Dolphin first.
 - A Mac, Windows or Linux computer with about 30 GB free and an internet connection.
 - These free tools, installed once (Windows: the builder installs any that are
   missing for you, so you can skip this list):

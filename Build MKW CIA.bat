@@ -1,5 +1,5 @@
 @echo off
-rem Windows: double-click, then drag your Mario Kart Wii (USA) ISO or WBFS into this window.
+rem Windows: double-click, then drag your Mario Kart Wii (USA) ISO, WBFS or RVZ into this window.
 rem Anything the build needs and this computer lacks (Python, Git, Node.js, a C++ compiler,
 rem devkitPro) is installed first, once you agree: tools\windows_setup.ps1.
 setlocal

@@ -1,6 +1,8 @@
 numpy==2.5.3
 Pillow==12.3.0
 pycryptodome==3.23.0
+# RVZ disc images: Python 3.14 has zstd built in.
+zstandard==0.23.0; python_version < "3.14"
 -e ./vendor/gclib
 
 unicorn==2.1.4
