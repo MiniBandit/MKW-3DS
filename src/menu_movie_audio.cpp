@@ -17,6 +17,7 @@ unsigned u16(const unsigned char* p){return unsigned(p[0])|(unsigned(p[1])<<8);}
 std::uint32_t u32(const unsigned char* p){return std::uint32_t(p[0])|(std::uint32_t(p[1])<<8)|(std::uint32_t(p[2])<<16)|(std::uint32_t(p[3])<<24);}
 constexpr unsigned SamplesPerBuffer=4096;
 int dspState=0; // 0 untried, 1 ready, -1 unavailable
+int systemOutput=NDSP_OUTPUT_STEREO;
 // MADP files are read in whole chunks from chunk-aligned offsets, so each
 // read is one SD request of whole sectors.
 constexpr unsigned AdpcmChunk=32u<<10;
@@ -134,12 +135,15 @@ void MenuMovieAudio::initialize(){
  // One-time DSP component load, done at boot rather than on a page change.
  if(dspState)return;
  const Result result=ndspInit();dspState=R_SUCCEEDED(result)?1:-1;
+ // Follow the System Settings sound mode (Mono/Stereo/Surround).
+ if(R_SUCCEEDED(cfguInit())){u8 mode=0;if(R_SUCCEEDED(CFGU_GetConfigInfoBlk2(sizeof mode,0x70001,&mode))&&mode<=NDSP_OUTPUT_SURROUND)systemOutput=mode;cfguExit();}
+ if(dspState>0)ndspSetOutputMode(ndspOutputMode(systemOutput));
 #ifndef MKW_RELEASE
  // A failed DSP bootstrap disables all audio. Keep its result available in
  // release test builds, without logging audio streams or writing per frame.
  if(auto* log=std::fopen("sdmc:/3ds/mkw-3ds/audio-status.txt","w")){
-  std::fprintf(log,"ndspInit=0x%08lx\nready=%s\nfirmware=sdmc:/3ds/dspfirm.cdc\n",
-      static_cast<unsigned long>(result),dspState>0?"true":"false");
+  std::fprintf(log,"ndspInit=0x%08lx\nready=%s\noutput=%d\nfirmware=sdmc:/3ds/dspfirm.cdc\n",
+      static_cast<unsigned long>(result),dspState>0?"true":"false",systemOutput);
   std::fclose(log);
  }
 #endif
@@ -148,6 +152,7 @@ void MenuMovieAudio::initialize(){
 #endif
 }
 bool MenuMovieAudio::dspReady(){return dspState>0;}
+int MenuMovieAudio::outputMode(){return systemOutput;}
 void MenuMovieAudio::close(){
  auto& s=*impl_;
  if(s.dsp){ndspChnWaveBufClear(s.channel);ndspChnReset(s.channel);s.dsp=false;}
@@ -180,7 +185,7 @@ void MenuMovieAudio::update(){
   if(!job->ok){s.failed=true;s.stream.reset();return;}
   auto& stream=*s.stream;
   const int c=s.channel;
-  ndspChnReset(c);ndspSetOutputMode(NDSP_OUTPUT_STEREO);
+  ndspChnReset(c);ndspSetOutputMode(ndspOutputMode(systemOutput));
   ndspChnSetInterp(c,NDSP_INTERP_LINEAR);ndspChnSetRate(c,float(stream.rate));
   ndspChnSetFormat(c,stream.channels==1?NDSP_FORMAT_MONO_PCM16:NDSP_FORMAT_STEREO_PCM16);
   float mix[12]={};mix[0]=mix[1]=std::clamp(s.volume,0.f,1.f);ndspChnSetMix(c,mix);

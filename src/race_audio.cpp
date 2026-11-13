@@ -2059,6 +2059,7 @@ void RaceAudioLayer::gameFrame(Engine& e) {
  const Vec3f before = m.listener.position;
  m.listener.lookAt(m.frame.eye, m.frame.target, {0, 1, 0}, 0.99f);
  m.e3d.swapPan=m.frame.mirror;
+ m.e3d.speakerMode=e.outputMode();
  m.listener.velocity = m.listenerPlaced ? Vec3f{m.listener.position.x - before.x, m.listener.position.y - before.y, m.listener.position.z - before.z} : Vec3f{};
  m.listenerPlaced = true;
  // RaceMgr::Calc -> RaceAmbienceMgr::Update: this tick's zone and intro

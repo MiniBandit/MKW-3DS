@@ -336,7 +336,7 @@ public:
   const u8* bridge = nullptr; u32 bridgeSamples = 0; const u8* body = nullptr; u32 bodySamples = 0; ndspAdpcmData bodyCtx{}, bridgeCtx{};
   // stream
   StreamFeed* feed = nullptr; int feedChannel = 0; IoFeed* ownFeed = nullptr;
-  f32 rate = -1, left = -1, right = -1, lpf = -1;
+  f32 rate = -1, lpf = -1; Gains gain{-1, -1, -1, -1};
  };
  std::array<Chan, VoiceMax> ch{};
  u8* bridgePool = nullptr; u32 bridgeUsed = 0;
@@ -399,7 +399,7 @@ public:
   Chan& c = ch[v];
   if (c.ownFeed) { if (retireFeed) retireFeed(feedCtx, c.ownFeed); else delete c.ownFeed; c.ownFeed = nullptr; }
   c.mode = Chan::Idle; c.bufCount = 0; c.lastBuf = -1; c.feed = nullptr; c.manualLoop = false; c.pendingStart = false; c.paused = false;
-  c.rate = c.left = c.right = c.lpf = -1;
+  c.rate = c.lpf = -1; c.gain = {-1, -1, -1, -1};
   for (auto& b : c.buf) b = ndspWaveBuf{};
  }
  void setupChannel(int v, u8 format, const s16* coef, u32 rate) {
@@ -517,10 +517,13 @@ public:
   for (int i = 0; i < c.bufCount; ++i) if (c.buf[i].data_vaddr && c.buf[i].status != NDSP_WBUF_FREE) { c.feed->consumed(c.feedChannel, static_cast<const u8*>(c.buf[i].data_vaddr)); c.buf[i].data_vaddr = nullptr; }
  }
  void pause(int v, bool p) override { if (!ch[v].reserved) { ch[v].paused = p; if (!ch[v].pendingStart) ndspChnSetPaused(v, p); } }
- void set(int v, f32 rate, f32 left, f32 right, f32 lpfHz) override {
+ void set(int v, f32 rate, const Gains& g, f32 lpfHz) override {
   Chan& c = ch[v]; if (c.reserved || c.mode == Chan::Idle) return;
   if (rate != c.rate) { ndspChnSetRate(v, std::clamp(rate, 1.0f, 192000.0f)); c.rate = rate; }
-  if (left != c.left || right != c.right) { float mix[12] = {}; mix[0] = left; mix[1] = right; ndspChnSetMix(v, mix); c.left = left; c.right = right; }
+  // NDSP main bus: front left, front right, back left, back right.
+  if (g.left != c.gain.left || g.right != c.gain.right || g.rearLeft != c.gain.rearLeft || g.rearRight != c.gain.rearRight) {
+   float mix[12] = {}; mix[0] = g.left; mix[1] = g.right; mix[2] = g.rearLeft; mix[3] = g.rearRight; ndspChnSetMix(v, mix); c.gain = g;
+  }
   if (lpfHz != c.lpf) {
    if (lpfHz > 0) { ndspChnIirMonoSetParamsLowPassFilter(v, lpfHz); ndspChnIirMonoSetEnable(v, true); }
    else ndspChnIirMonoSetEnable(v, false);
@@ -1070,7 +1073,10 @@ bool SoundSystem::start() {
  s->engine.setup(&s->archive, s->hw.get());
  s->engine.setStreamOpener(&Impl::openStream, s);
  s->engine.setResidency(&s->cache);
- ndspSetOutputMode(NDSP_OUTPUT_STEREO);
+ // System Settings sound: retail NW4R mixes for mono, stereo or DPL2; the
+ // 3DS surround mode takes the four DPL2 channels (front and rear pairs).
+ {const int mode=MenuMovieAudio::outputMode();ndspSetOutputMode(ndspOutputMode(mode));
+  s->engine.setOutputMode(mode==NDSP_OUTPUT_MONO?OutputMono:mode==NDSP_OUTPUT_SURROUND?OutputDpl2:OutputStereo);}
  ndspSetClippingMode(NDSP_CLIP_SOFT);
  // Threads: New 3DS core 2; Old 3DS core 1 with an explicit app time limit
  // (the system core is time sliced; docs/AUDIO_SOURCE.md); else core 0

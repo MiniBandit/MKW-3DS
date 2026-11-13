@@ -1,6 +1,7 @@
 // MKW 3D sound model. Retail: Audio::Engine3D::UpdateAmbientParam (USA
 // 806f296c) with Sound3DCalc's CalcAngleAndDistance (806f2024),
-// CalcPanStereo (806f23b0) and CalcPitch (806f1e74); constants 8089c4d0.
+// CalcPanStereo (806f23b0), CalcPanSurround (806f2180) and CalcPitch
+// (806f1e74); constants 8089c4bc.
 #include <mkw/snd_3d.hpp>
 #include <mkw/explosion_audio.hpp>
 #include <algorithm>
@@ -51,6 +52,29 @@ f32 Engine3D::panStereo(f32 angle, f32 distanceNrm) const {
  else if (angle < RearRight) pan = 1.0f;
  else pan = angle / -(Pi / 4) + 4.0f;                              // 1 at 3pi/4 .. 0 at pi
  return pan * panRange * distanceNrm;
+}
+
+// CalcPanSurround: speakers at 30 degrees front and 120 degrees rear. Pan
+// sweeps -1..1 across the front, holds at the sides and fades to 0 behind;
+// span (relative to 1) is -1 in front, 0 at the sides, 1 behind. Sounds at the
+// listener sit at the speakers' centre: 806f3174 sets the offset from
+// cos(120) and cos(30) (80510b80).
+void Engine3D::panSurround(f32 angle, f32 distanceNrm, f32& pan, f32& span) const {
+ constexpr f32 Pi6 = Pi / 6, Pi2 = Pi / 2, Pi3 = Pi / 3, TwoPi3 = 2 * Pi / 3;
+ f32 p, s;
+ if (angle < -TwoPi3) { s = 1.0f; p = angle / -Pi3 + Pi / -Pi3; }
+ else if (angle < -Pi2) { p = -1.0f; s = angle / -Pi6 + Pi2 / -Pi6; }
+ else if (angle < -Pi6) { p = -1.0f; s = angle / -Pi3 + Pi2 / -Pi3; }
+ else if (angle < Pi6) { s = -1.0f; p = (angle * -2.0f) / -Pi3; }
+ else if (angle < Pi2) { p = 1.0f; s = -angle / -Pi3 + Pi2 / -Pi3; }
+ else if (angle < TwoPi3) { p = 1.0f; s = -angle / -Pi6 + Pi2 / -Pi6; }
+ else { s = 1.0f; p = angle / -Pi3 + -Pi / -Pi3; }
+ static const f32 offset = [] {
+  const f32 mid = f32((std::cos(2.0943951023931953) + std::cos(0.5235987755982988)) * 0.5);
+  return mid / (mid - f32(std::cos(2.0943951023931953)));
+ }();
+ pan = p * panRange * distanceNrm;
+ span = 1.0f + (s * panRange * distanceNrm + offset * (1.0f - distanceNrm));
 }
 
 f32 Engine3D::doppler(f32 factor, Vec3f rel, Vec3f actorVelocity, Vec3f listenerVelocity) const {
@@ -105,10 +129,13 @@ Ambient Engine3D::update(const SoundEntry& s, u32 soundId, const Actor3D& actor,
  if (flags & 6) {
   f32 angle, nrm;
   angleAndDistance(rel, distance, Distance[(actor.userParam >> 4) & 0xf], angle, nrm);
-  f32 pan = panStereo(angle, nrm);
+  f32 pan = 0.0f, surround = 0.0f;
+  if (speakerMode == OutputSurround || speakerMode == OutputDpl2) panSurround(angle, nrm, pan, surround);
+  else if (speakerMode == OutputStereo) pan = panStereo(angle, nrm);
   if (swapPan) pan = -pan;
   if (flags & 2) { if (primed) pan = limit(pan, h->pan); a.pan = pan; if (h) h->pan = pan; }
-  if (flags & 4) { f32 surround = 0.0f; if (primed) surround = limit(surround, h->surround); a.surroundPan = surround; if (h) h->surround = surround; }
+  // 0x200 (the player's own kart): kept in front.
+  if (flags & 4) { if (h && (actor.userParam & 0x200)) surround = 0.0f; if (primed) surround = limit(surround, h->surround); a.surroundPan = surround; if (h) h->surround = surround; }
  }
  if ((flags & 0x10) && !(actor.userParam & 0x100))
   a.pitch = doppler(f32(s.dopplerFactor) * 0.03125f, sub(actor.position, l.position), actor.velocity, l.velocity);

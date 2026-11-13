@@ -53,6 +53,29 @@ f32 panRatio(f32 pan, int curve, bool centerZero, bool zeroClamp) {
  return zeroClamp ? clamp(ratio, 0.0f, 1.0f) : clamp(ratio, 0.0f, 2.0f);
 }
 namespace {
+// Util::CalcSurroundPanRatio (800ace40): span 0 front .. 2 rear, no 0 dB
+// centring, clamped to 0..2.
+f32 surroundRatio(f32 span, int curve) {
+ span = clamp(span, 0.0f, 2.0f) * 0.5f;
+ const f32* table = curve == 1 ? tables::PanSinCos : curve == 2 ? tables::PanLinear : tables::PanSqrt;
+ return clamp(table[int(span * 256 + 0.5f)], 0.0f, 2.0f);
+}
+// Voice::CalcMixParam's DPL2 pan/span adjustment (800ab520): s = span - 1
+// (front -1 .. rear 1); returns span back in 0..2.
+void dpl2PanSpan(f32 pan, f32 span, f32& outPan, f32& outSpan) {
+ const f32 a = std::fabs(pan), s = span - 1.0f;
+ if (a <= std::fabs(s)) {
+  if (s <= 0.0f) { outPan = pan; outSpan = -0.12f + 0.88f * s; }
+  else { outPan = 0.5f * pan; outSpan = -0.12f + 1.12f * s; }
+ } else if (pan >= 0.0f) {
+  if (s <= 0.0f) { outPan = (0.85f + 0.15f * (-s / pan)) * a; outSpan = -0.12f + (2.0f * s + 0.88f * pan); }
+  else { outPan = (0.85f + 0.35f * (-s / pan)) * a; outSpan = -0.12f + 1.12f * pan; }
+ } else {
+  if (s <= 0.0f) { outPan = (0.15f * (-s / pan) - 0.85f) * a; outSpan = -0.12f + (2.0f * s - 1.12f * pan); }
+  else { outPan = (0.35f * (-s / pan) - 0.85f) * a; outSpan = -0.12f + 1.12f * -pan; }
+ }
+ outSpan += 1.0f;
+}
 // Util::CalcLpfFreq: 32000 * 2^(10 * (scale - 1)); AxVoice bypasses >= 16000.
 f32 lpfFrequency(f32 scale) { scale = clamp(scale, 0.0f, 1.0f); return f32(32000 * std::pow(2.0, 10.0 * (scale - 1.0))); }
 
@@ -437,6 +460,7 @@ struct Engine::Impl {
  EngineStats stats;
  u32 warningNotes = 0, ledCues = 0;
  f32 masterVolume = 1;
+ OutputMode outputMode = OutputStereo;
  std::vector<LoadedFile*> files; // indexed by file id
  std::unique_ptr<StreamFeed> (*openStream)(void*, const char*, u32) = nullptr;
  void* openStreamCtx = nullptr;
@@ -531,30 +555,39 @@ struct Engine::Impl {
  }
  void voiceSetPriority(Voice& v, int priority) { v.priority = priority; v.order = ++voiceOrder; }
 
- // Voice::CalcMixParam (stereo output, single voice-out) -> hardware gains.
+ // Voice::CalcMixParam (800ab6c0, single voice-out) -> hardware gains for
+ // the output mode: stereo, mono (both = half of left + right), or DPL2
+ // (front and rear pairs; the 3DS surround mode's four main-bus channels).
  void voiceCommit(Voice& v) {
   if (!v.active || !v.starting) return;
   PanCurveInfo info = panInfo(v.panCurve);
   const f32 baseVolume = v.volume * masterVolume * v.veTarget;
   for (int c = 0; c < v.channels; ++c) {
    if (v.hw[c] < 0) continue;
-   f32 left, right;
+   f32 left, right, span = v.surroundPan;
    if (v.channels > 1 && v.panMode == PanBalance) {
     if (c == 0) { left = panRatio(v.pan, info.curve, info.centerZero, info.zeroClamp); right = 0; }
     else { left = 0; right = panRatio(-v.pan, info.curve, info.centerZero, info.zeroClamp); }
    } else {
     f32 voicePan = 0;
     if (v.channels == 2) voicePan = c == 0 ? -1.0f : 1.0f;
-    const f32 pan = v.pan + voicePan;
+    f32 pan = v.pan + voicePan;
+    if (outputMode == OutputDpl2) dpl2PanSpan(pan, span, pan, span);
     left = panRatio(pan, info.curve, info.centerZero, info.zeroClamp);
     right = panRatio(-pan, info.curve, info.centerZero, info.zeroClamp);
    }
+   const f32 front = surroundRatio(span, info.curve), rear = surroundRatio(2.0f - span, info.curve);
    const f32 main = v.mainOutVolume * v.mainSend;
    // AX mix volume u16 (0x8000 == 1.0, clamped at 0xFFFF).
-   auto mix = [](f32 x) { return std::min(x, 65535.0f / 32768.0f); };
-   const f32 l = mix(main * left) * baseVolume, r = mix(main * right) * baseVolume;
+   auto mix = [&](f32 x) { return std::min(main * x, 65535.0f / 32768.0f) * baseVolume; };
+   Gains g;
+   switch (outputMode) {
+   case OutputMono: g.left = g.right = mix(0.5f * (left + right)); break;
+   case OutputDpl2: g.left = mix(left * front); g.right = mix(right * front); g.rearLeft = mix(left * rear); g.rearRight = mix(right * rear); break;
+   default: g.left = mix(left); g.right = mix(right); break;
+   }
    const f32 freq = lpfFrequency(v.lpf);
-   hw->set(v.hw[c], f32(v.stream ? v.rate : v.wave.rate) * v.pitch, l, r, freq >= 16000 ? 0.0f : freq);
+   hw->set(v.hw[c], f32(v.stream ? v.rate : v.wave.rate) * v.pitch, g, freq >= 16000 ? 0.0f : freq);
   }
  }
  struct PanCurveInfo { int curve = 0; bool centerZero = false, zeroClamp = false; };
@@ -1642,6 +1675,8 @@ void Engine::stopPlayer(u32 player, int frames) { if (impl_->sounds) for (auto& 
 void Engine::pausePlayer(u32 player, bool p, int frames) { if (impl_->sounds) for (auto& s : impl_->sounds->sound) if (s.used && s.playerId == player) impl_->sounds->pause(s, p, frames); }
 int Engine::playingCount(u32 player) const { return impl_->sounds ? impl_->sounds->countPlayer(player) : 0; }
 void Engine::setMasterVolume(f32 v) { impl_->masterVolume = clamp(v, 0.0f, 1.0f); }
+void Engine::setOutputMode(OutputMode m) { impl_->outputMode = m; }
+OutputMode Engine::outputMode() const { return impl_->outputMode; }
 void Engine::updateGameFrame(bool advanceHold) { impl_->gameFrame(advanceHold); }
 void Engine::updateHoldFrame() {
  if (!impl_->sounds) return;

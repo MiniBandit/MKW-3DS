@@ -24,6 +24,10 @@ inline constexpr int VoicePriorityRelease = 1;  // Channel::PRIORITY_RELEASE
 
 enum SoundType : u8 { TypeInvalid = 0, TypeSeq = 1, TypeStrm = 2, TypeWave = 3 };
 enum PanMode : u8 { PanDual = 0, PanBalance = 1 };
+// NW4R SoundSystem output modes (AX): the voice mix differs per mode.
+enum OutputMode : u8 { OutputStereo = 0, OutputSurround = 1, OutputDpl2 = 2, OutputMono = 3 };
+// Main-bus gains for one hardware channel (AX mix 0x8000 == 1.0).
+struct Gains { f32 left = 0, right = 0, rearLeft = 0, rearRight = 0; };
 enum PanCurve : u8 { CurveSqrt, CurveSqrt0Db, CurveSqrt0DbClamp, CurveSinCos, CurveSinCos0Db, CurveSinCos0DbClamp,
                      CurveLinear, CurveLinear0Db, CurveLinear0DbClamp };
 
@@ -143,7 +147,7 @@ public:
  virtual void stop(int v) = 0;
  virtual void pause(int v, bool paused) = 0;
  // rate in Hz, gains linear (AX mix 0x8000 == 1.0), lpf 0 = bypass.
- virtual void set(int v, f32 rate, f32 left, f32 right, f32 lpfHz) = 0;
+ virtual void set(int v, f32 rate, const Gains& gains, f32 lpfHz) = 0;
  virtual bool finished(int v) = 0;
  // Called once at the end of every audio-thread pass, after all set() calls.
  virtual void commit() {}
@@ -269,6 +273,8 @@ public:
  void pausePlayer(u32 player, bool paused, int fadeFrames);
  int playingCount(u32 player) const;
  void setMasterVolume(f32 volume);
+ void setOutputMode(OutputMode mode);   // SoundSystem::SetOutputMode
+ OutputMode outputMode() const;
 
  // Game frame (60 Hz): BasicSound fades/params, player priority sorting.
  // Maintenance frames during a stalled game advance fades but cannot
