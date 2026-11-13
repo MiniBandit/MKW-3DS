@@ -625,6 +625,9 @@ int main() {
     unsigned captureRace=0,captureBase=0;bool captureLive=false;
     if(autoplay)if(kQa)if(FILE* f=fopen("sdmc:/3ds/mkw-3ds/race-capture.txt","r")){unsigned n=0,leave=0;const int got=fscanf(f,"%u %u",&n,&leave);raceCaptureEvery=got>=1&&n>1?n:20;raceCaptureLeave=got==2&&leave;fclose(f);}
     const bool raceCapture=raceCaptureEvery>0;
+    // QA capture-no-drop.txt: race captures wait for the render thread instead of dropping a
+    // frame, so the frames drawn (and what they present) do not depend on emulator pacing.
+    const bool captureNoDrop=raceCapture&&exists("sdmc:/3ds/mkw-3ds/capture-no-drop.txt");
     auto menuProfile=std::make_unique<mkw::MenuProfile>();
     // Diagnostic overlay: menu timing is always recorded (bounded, mkw/menu_profile.hpp).
     if(kQa)menuProfile->enable();
@@ -4138,6 +4141,7 @@ int main() {
                 // the newest pose, inputs and original animation clocks.
                 // The pause image frame runs no physics step but is always drawn:
                 // skipped, the pause would keep the last frame, HUD and all.
+                if(captureNoDrop&&!pauseImageFrame&&!renderer.canRecordFrame())renderer.waitForGpu();
                 if(pauseImageFrame){if(!renderer.canRecordFrame())renderer.waitForGpu();}
                 else if(!renderer.canRecordFrame()||!presentation.due(physicsSteps)){profiler->end(physicsSteps,renderer,false);continue;}
             }
