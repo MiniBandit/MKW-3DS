@@ -812,6 +812,7 @@ int main() {
     // Merged bloom composite (A/B: no-bloom-merge.txt turns it off).
     renderer.bloomMerge=!exists("sdmc:/3ds/mkw-3ds/no-bloom-merge.txt");
     report(renderer.bloomMerge?"merged bloom composite on":"merged bloom composite off");
+    renderer.stadiumClearSkip=!exists("sdmc:/3ds/mkw-3ds/no-stadium-clear-skip.txt");
     // The startup save read also needs an RGB8 lower LCD (the debug console
     // otherwise leaves RGB565 active until the first menu).
     if(!renderer.enableBottom()){renderer.shutdown();return startupFailure("Lower LCD initialization failed.");}

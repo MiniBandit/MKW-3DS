@@ -1201,6 +1201,18 @@ void Renderer::screenDepthNow(float parallax){
     flushSprites();
     screenParallax_=parallax;
 }
+void Renderer::decideStadiumFrame(){
+    // Only the left eye captures. The right eye must render directly to its
+    // LCD target unless its own bloom pass needs the shared scene scratch.
+    // captureStadiumScreenNow intentionally ignores the right eye, so sending
+    // it to scratch here would leave that LCD blank on capture frames.
+    stadiumFrame_=!eye_&&!bottomWorldPass_&&stadiumRequested_&&stadiumCaptureFrame_&&stadiumVisible_&&stadiumTex_[0].data;stadiumRequested_=false;
+    // FrameEnd submits both eyes together. Keep all post-process vertices
+    // immutable until then: the capture quad exists only in the left eye,
+    // so the two eyes do not necessarily use matching quad slots.
+    if(!eye_&&!bottomWorldPass_)bloomCount_=0;
+    if(stadiumFrame_&&!initBloom(true))stadiumFrame_=false;
+}
 void Renderer::beginFrame(){
     execSceneRegion_=3;
     // The right eye repeats the left eye's buffer offsets: its sprites, text,
@@ -1216,15 +1228,22 @@ void Renderer::beginFrame(){
     // The local SDK permits unbinding all units, including inherited samplers.
     for(int unit=0;unit<3;++unit)C3D_TexBind(unit,nullptr);
     bloomFrame_=!bottomWorldPass_&&bloomRequested_&&initBloom(true);bloomRequested_=false;
+    // stadiumClearSkip: decided before the left LCD's clear (below otherwise).
+    const bool stadiumEarly=stadiumClearSkip;
+    if(stadiumEarly)decideStadiumFrame();
     if(!eye_&&!bottomWorldPass_){
         topDepthCleared_=false;
         // A merged bloom composite writes every LCD pixel (applyBloomNow).
         // Both eyes replay the frame's bloom request.
         // So does a menu backdrop drawn opaque over the whole LCD (setFrameCover).
         const auto lcd=(bloomFrame_&&bloomMerge)||execTopCovered_?C3D_CLEAR_DEPTH:C3D_CLEAR_ALL;
+        // A stadium capture frame without bloom draws the scene off-screen,
+        // then copies it over every LCD pixel (captureStadiumScreenNow, ONE/ZERO),
+        // which clears a shared depth buffer again: only an own depth needs the clear.
+        if(stadiumEarly&&stadiumFrame_&&!bloomFrame_){if(!sharedDepth_)C3D_RenderTargetClear(target_,C3D_CLEAR_DEPTH,0x071326FF,0);}
         // A shared depth buffer holds the scene first: the left LCD's depth is
         // cleared after it (topDepthAfterSceneNow).
-        if(bloomFrame_&&sharedDepth_){if(lcd==C3D_CLEAR_ALL)C3D_RenderTargetClear(target_,C3D_CLEAR_COLOR,0x071326FF,0);}
+        else if(bloomFrame_&&sharedDepth_){if(lcd==C3D_CLEAR_ALL)C3D_RenderTargetClear(target_,C3D_CLEAR_COLOR,0x071326FF,0);}
         else C3D_RenderTargetClear(target_,lcd,0x071326FF,0);
         if(execStereo_.active())C3D_RenderTargetClear(targetRight_,lcd,0x071326FF,0);
         // A race map covers the whole lower LCD opaquely and nothing there
@@ -1233,16 +1252,7 @@ void Renderer::beginFrame(){
         if(bottomTarget_&&!execBottomCovered_&&!execBottomKept_)
             C3D_RenderTargetClear(bottomTarget_,bottomTarget_->frameBuf.depthBuf?C3D_CLEAR_ALL:C3D_CLEAR_COLOR,0x071326FF,0);
     }
-    // Only the left eye captures. The right eye must render directly to its
-    // LCD target unless its own bloom pass needs the shared scene scratch.
-    // captureStadiumScreenNow intentionally ignores the right eye, so sending
-    // it to scratch here would leave that LCD blank on capture frames.
-    stadiumFrame_=!eye_&&!bottomWorldPass_&&stadiumRequested_&&stadiumCaptureFrame_&&stadiumVisible_&&stadiumTex_[0].data;stadiumRequested_=false;
-    // FrameEnd submits both eyes together. Keep all post-process vertices
-    // immutable until then: the capture quad exists only in the left eye,
-    // so the two eyes do not necessarily use matching quad slots.
-    if(!eye_&&!bottomWorldPass_)bloomCount_=0;
-    if(stadiumFrame_&&!initBloom(true))stadiumFrame_=false;
+    if(!stadiumEarly)decideStadiumFrame();
     if(bloomFrame_||stadiumFrame_){
         if(!eye_){
             // Memory fills run in queue order, ahead of this frame's command list.

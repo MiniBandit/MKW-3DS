@@ -670,6 +670,8 @@ public:
     // Bloom's scene copy and composite as one full-screen pass, with no LCD
     // colour clear under it (applyBloomNow). Set before the race.
     bool bloomMerge=false;
+    // Stadium capture frames without bloom skip the left LCD colour clear (A/B: no-stadium-clear-skip.txt).
+    bool stadiumClearSkip=true;
     // Bloom blur rings sample three taps a quad instead of two (same sums,
     // fewer blended quads). A/B: no-bloom-triple.txt.
     bool bloomTriple=false;
@@ -906,6 +908,7 @@ private:
     void screenDepthNow(float parallax);
     // Drawing (the render thread in deferred frames).
     void beginFrame();
+    void decideStadiumFrame();
     // begun: C3D_FrameBegin already ran (stereo immediate frames begin at once).
     void beginNow(const C3D_Mtx& view,const C3D_Mtx& projection,bool sync,bool begun=false);
     void endNow();

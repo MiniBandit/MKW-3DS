@@ -88,6 +88,8 @@ phase copies run on the frame hook again instead of at frame start; runtime.log
 escalator treads are written on the frame hook into the copy the last frame drew, as
 before, instead of at frame start into a copy no unfinished frame draws; the escalators
 then also skip treads out of view or at the phase their copy already holds),
+`no-stadium-clear-skip.txt` (DK Summit, Waluigi Stadium and Funky Stadium capture frames
+without bloom clear the left LCD's colour again, although the capture then covers it),
 `no-box-precull.txt` (Item Box / Fake Item Box shells are drawn whole
 again instead of without the triangles their cull mode removes; runtime.log
 `box precull` counts the triangles kept), `no-fast-yaz0.txt` (course archives decode
