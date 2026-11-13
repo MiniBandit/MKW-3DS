@@ -57,10 +57,10 @@ constexpr float LocalScale=.8f,LocalShadowScale=.85f,OtherScale=.6f,OtherShadowS
 constexpr float LightW=60.f*1.2f*.8f*Unit,LightH=64.f*1.2f*.8f*Unit;
 constexpr uint32_t LightColor=0xffff00b4u;
 // CtrlRaceTime's digits at the top right, the retail layout uniformly scaled:
-// 0.75 draws its 32-unit digits at the atlas's 24 px; no TIME label.
+// 21/32 draws its 32-unit digits at the atlas's 21 px; no TIME label.
 constexpr float TimerRight=316.f,TimerTop=4.f;
 // DIAG timer-scale.txt overrides it for comparisons.
-static float TimerScale=.75f;
+static float TimerScale=21.f/32.f;
 // fn_1_2DBB6C (USA 0x807E2674) with flag 0: the HUD slot colour on top, then
 // +(40,130,40) clamped per lower corner, cumulatively.
 constexpr uint32_t TimerGold[4]={0xe8d400ffu,0xe8d400ffu,0xffff28ffu,0xffff50ffu};
@@ -275,7 +275,7 @@ static bool sdFile(const char* name){
 
 bool RaceBottomScreen::load(Renderer& renderer,unsigned course){
     auto& m=*impl_;
-    rowMargin=1.f;TimerScale=.75f;
+    rowMargin=1.f;TimerScale=21.f/32.f;
 #ifndef MKW_RELEASE
     if(FILE* f=std::fopen("sdmc:/3ds/mkw-3ds/timer-scale.txt","r")){float v;if(std::fscanf(f,"%f",&v)==1&&v>=.3f&&v<=1.f)TimerScale=v;std::fclose(f);}
     if(FILE* f=std::fopen("sdmc:/3ds/mkw-3ds/rows-margin.txt","r")){float v;if(std::fscanf(f,"%f",&v)==1&&v>=0&&v<=8)rowMargin=v;std::fclose(f);}

@@ -226,7 +226,9 @@ ROW_H = 19
 ROW_ORDINAL_H = 12
 ROW_ICON = 13
 ROW_ORDINAL_X = 5
-ROW_INSIDE = (10, 12, 14, 160)  # the other racers' dark see-through inside (RGBA)
+ROW_INSIDE = (10, 12, 14, 160)
+# The timer's 32-unit digit panes as drawn (src/race_bottom_screen.cpp TimerScale = TIMER_PX/32).
+TIMER_PX = 21  # the other racers' dark see-through inside (RGBA)
 MENU_BUTTON = ROOT / 'sd-card/3ds/mkw-3ds/textures/ui_button_select.png'
 
 
@@ -316,9 +318,9 @@ def cook_atlas(out, cci, manifest):
     images[('item', 19)] = resize(tpl(GAME / 'timg/tt_item_kinoko_2.tpl'), (ROW_ICON, ROW_ICON))
     images[('fake', 0)] = resize(tpl(GAME / 'timg/tt_item_dummybox.tpl'), (16, 16))
     for d in range(10):
-        images[('digit', d)] = resize(tpl(GAME_U / f'timg/tt_d_number_3d_{d:02d}.tpl'), (24, 24))
+        images[('digit', d)] = resize(tpl(GAME_U / f'timg/tt_d_number_3d_{d:02d}.tpl'), (TIMER_PX, TIMER_PX))
     for key, name in (('dot', 'tt_d_number_3d_coron'), ('colon', 'tt_d_number_3d_coron_00')):
-        images[('sep', key)] = resize(tpl(GAME_U / f'timg/{name}.tpl'), (24, 24))
+        images[('sep', key)] = resize(tpl(GAME_U / f'timg/{name}.tpl'), (TIMER_PX, TIMER_PX))
     images[('light', 0)] = resize(tpl(GAME / 'timg/tt_map_chara_searchlight.tpl'), (30, 32))
     for name, array in mk7_markers(cci).items():
         images[('mk7', marker_key(name))] = Image.fromarray(array, 'RGBA')
