@@ -70,6 +70,7 @@ struct RaceBottomScreen::Impl {
     // Animation state (60 Hz ticks).
     uint32_t lastTick=0;bool started=false;
     float blend=0;bool overviewWanted=false;     // 0 detailed .. 1 whole course
+    float mapAngle=0;bool angleSet=false;        // turning map: eased toward the kart's heading
     float timerSlide=-1.f;
     float standings=0;                           // slide-in 0..1
     std::array<float,12> row{};bool rowsSet=false;
@@ -317,20 +318,45 @@ void RaceBottomScreen::draw(Renderer& renderer,const BottomView& view){
     // Mario Kart 7 keeps its view inside the map: the player leaves the centre
     // near the course's edge instead of the view running off it.
     auto clampAxis=[](float c,float half,float lo,float hi){return hi-lo<=2*half?(lo+hi)*.5f:std::clamp(c,lo+half,hi-half);};
-    cx=clampAxis(cx,mapWidth*.5f*upp,course.x0,course.x1);cz=clampAxis(cz,ScreenH*.5f*upp,course.z0,course.z1);
+    // Turning map: the detailed view rotates about the kart so its heading
+    // points up, eased (spins and hits do not whip it round). The whole-course
+    // view (tap) blends back to north up; Battle arenas never turn.
+    const bool turns=view.mapTurns&&local&&m.course<32;
+    if(turns){
+        float hx=view.mirror?-view.headingX:view.headingX,hz=view.headingZ;const float l=std::sqrt(hx*hx+hz*hz);
+        if(l>1e-4f){
+            const float target=std::atan2(-hx/l,-hz/l);
+            if(!m.angleSet){m.mapAngle=target;m.angleSet=true;}
+            for(unsigned i=0;i<elapsed;++i)m.mapAngle+=std::remainder(target-m.mapAngle,6.2831853f)*.15f;
+            m.mapAngle=std::remainder(m.mapAngle,6.2831853f);
+        }
+    }else m.angleSet=false;
+    const float angle=turns?m.mapAngle*(1-b):0.f,rc=std::cos(angle),rs=std::sin(angle);
+    // The view stays centred on a turning kart; a fixed map keeps inside the course.
+    if(!turns){cx=clampAxis(cx,mapWidth*.5f*upp,course.x0,course.x1);cz=clampAxis(cz,ScreenH*.5f*upp,course.z0,course.z1);}
     cx+=((course.x0+course.x1)*.5f-cx)*b;cz+=((course.z0+course.z1)*.5f-cz)*b;
-    auto screenX=[&](float x){return mapCenterX+(view.mirror?-1.f:1.f)*(x-cx)/upp;};
-    auto screenY=[&](float z){return MapCY+(z-cz)/upp;};
+    // World XZ -> lower-screen pixels (mirror flips X, then the map's turn).
+    auto toScreen=[&](float x,float z){
+        const float dx=(view.mirror?-1.f:1.f)*(x-cx)/upp,dy=(z-cz)/upp;
+        return std::array<float,2>{mapCenterX+rc*dx-rs*dy,MapCY+rs*dx+rc*dy};
+    };
     const Texture* mapTexture=b>.5f&&m.overview.ready?&m.overview:m.map.ready?&m.map:nullptr;
     const unsigned mapFirst=m.count;
     if(mapTexture&&m.count<QuadCapacity){
+        // Each corner samples the world point toScreen() puts there (the
+        // inverse turn and mirror). Fixed: the screen. Turned: a square about
+        // the view centre that still covers every screen corner. Computing
+        // corners this way also keeps a mirrored map under its markers (the
+        // old U swap assumed the map centred, 82 px off beside the standings).
         auto& q=m.base[m.count++];
-        const float wx0=cx-mapCenterX*upp,wx1=cx+(ScreenW-mapCenterX)*upp,wz0=cz-ScreenH*.5f*upp,wz1=cz+ScreenH*.5f*upp;
-        const float u0=(wx0-course.x0)/frameW,u1=(wx1-course.x0)/frameW,v0=(wz0-course.z0)/frameH,v1=(wz1-course.z0)/frameH;
-        q.x[0]=0;q.y[0]=0;q.x[1]=ScreenW;q.y[1]=0;q.x[2]=0;q.y[2]=ScreenH;q.x[3]=ScreenW;q.y[3]=ScreenH;
-        q.u[0]=u0;q.v[0]=v0;q.u[1]=u1;q.v[1]=v0;q.u[2]=u0;q.v[2]=v1;q.u[3]=u1;q.v[3]=v1;
-        if(view.mirror){std::swap(q.u[0],q.u[1]);std::swap(q.u[2],q.u[3]);}
-        for(auto& c:q.color)c=0xffffffffu;
+        const float halfW=angle!=0.f?std::sqrt(std::pow(std::max(mapCenterX,ScreenW-mapCenterX),2.f)+std::pow(std::max(MapCY,ScreenH-MapCY),2.f))+2.f:0.f;
+        for(unsigned k=0;k<4;++k){
+            q.x[k]=angle!=0.f?mapCenterX+((k&1)?halfW:-halfW):((k&1)?ScreenW:0.f);
+            q.y[k]=angle!=0.f?MapCY+((k&2)?halfW:-halfW):((k&2)?ScreenH:0.f);
+            const float ox=q.x[k]-mapCenterX,oy=q.y[k]-MapCY,dx=rc*ox+rs*oy,dy=-rs*ox+rc*oy;
+            q.u[k]=(cx+(view.mirror?-1.f:1.f)*dx*upp-course.x0)/frameW;q.v[k]=(cz+dy*upp-course.z0)/frameH;
+            q.color[k]=0xffffffffu;
+        }
     }
     const unsigned mapCount=m.count-mapFirst;
 
@@ -341,7 +367,7 @@ void RaceBottomScreen::draw(Renderer& renderer,const BottomView& view){
         const auto& item=view.mapObject[i];if(item.art>=objectArt.count)continue;
         const auto& art=objectArt.art[item.art];
         float x[4],y[4];
-        for(unsigned k=0;k<4;++k){x[k]=screenX(item.x[k]);y[k]=screenY(item.z[k]);}
+        for(unsigned k=0;k<4;++k){const auto p=toScreen(item.x[k],item.z[k]);x[k]=p[0];y[k]=p[1];}
         if(*std::max_element(x,x+4)<0||*std::min_element(x,x+4)>ScreenW||
            *std::max_element(y,y+4)<0||*std::min_element(y,y+4)>ScreenH)continue;
         if(m.count>=QuadCapacity)break;
@@ -360,8 +386,8 @@ void RaceBottomScreen::draw(Renderer& renderer,const BottomView& view){
     if(atlas){
         // Start line (KMP checkpoint 0): Mario Kart 7's checker marker across the road.
         {
-            const float ax=screenX(course.startLeft[0]),ay=screenY(course.startLeft[1]);
-            const float bx=screenX(course.startRight[0]),by=screenY(course.startRight[1]);
+            const auto pa=toScreen(course.startLeft[0],course.startLeft[1]),pb=toScreen(course.startRight[0],course.startRight[1]);
+            const float ax=pa[0],ay=pa[1],bx=pb[0],by=pb[1];
             const float dx=bx-ax,dy=by-ay,length=std::sqrt(dx*dx+dy*dy);
             if(length>1.f&&(onMap(ax,ay,8)||onMap(bx,by,8))){
                 const float thick=std::clamp(length/8.f,3.f,6.f);
@@ -378,7 +404,7 @@ void RaceBottomScreen::draw(Renderer& renderer,const BottomView& view){
         // Items on the course: Mario Kart 7's map markers (the Wii fake box).
         for(unsigned i=0;i<std::min<unsigned>(view.items,BottomView::MaxItems);++i){
             const auto& it=view.item[i];
-            const float x=screenX(it.x),y=screenY(it.z);
+            const auto p=toScreen(it.x,it.z);const float x=p[0],y=p[1];
             if(it.marker==unsigned(BottomMarker::BlastRed)||it.marker==unsigned(BottomMarker::BlastBlue)){
                 // A quarter ring texture, mirrored into the four quadrants.
                 const float r=std::clamp(it.radius/upp,8.f,36.f);
@@ -402,13 +428,14 @@ void RaceBottomScreen::draw(Renderer& renderer,const BottomView& view){
         if(local)order[n++]=local;
         for(unsigned i=0;i<n;++i){
             const auto& r=*order[i];
-            const float x=screenX(r.x),y=screenY(r.z);
+            const auto p=toScreen(r.x,r.z);const float x=p[0],y=p[1];
             const float scale=r.local?LocalScale:OtherScale;
             const float face=FaceUnits*scale*Unit;
             if(!onMap(x,y,face))continue;
             if(r.local){
                 // The searchlight points along the kart, its apex on the face.
-                float hx=view.mirror?-view.headingX:view.headingX,hy=view.headingZ;const float l=std::sqrt(hx*hx+hy*hy);
+                const float fx=view.mirror?-view.headingX:view.headingX,fz=view.headingZ;
+                float hx=rc*fx-rs*fz,hy=rs*fx+rc*fz;const float l=std::sqrt(hx*hx+hy*hy);
                 if(l>1e-4f){
                     hx/=l;hy/=l;const float px=-hy,py=hx;
                     const float tx=x+hx*LightH,ty=y+hy*LightH,w=LightW*.5f;

@@ -22,6 +22,8 @@ constexpr float XScale=display::MenuScaleX,YScale=display::MenuScaleY;
 // game's own font glyphs (name_glyph_*). Lower-screen cell sizes match menuChoiceRect.
 bool onlinePage(UiPage page){return page==UiPage::OnlineMenu||page==UiPage::OnlineCode||page==UiPage::OnlineLobby;}
 std::array<float,2> onlineCell(UiPage page){return page==UiPage::OnlineMenu?std::array<float,2>{288,58}:page==UiPage::OnlineCode?std::array<float,2>{78,36}:std::array<float,2>{280,36};}
+// License Settings rows on the lower screen (eight, ending at y 209).
+constexpr float LicenseRowTop=27.f,LicenseRowPitch=23.f,LicenseRowH=21.f;
 constexpr const char* OnlineAlphabet=" !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[]_abcdefghijklmnopqrstuvwxyz";
 constexpr const char* CupNames[]={"Mushroom Cup","Flower Cup","Star Cup","Special Cup","Shell Cup","Banana Cup","Leaf Cup","Lightning Cup"};
 constexpr const char* CourseNames[]={"Luigi Circuit","Moo Moo Meadows","Mushroom Gorge","Toad's Factory","Mario Circuit","Coconut Mall","DK Summit","Wario's Gold Mine","Daisy Circuit","Koopa Cape","Maple Treeway","Grumble Volcano","Dry Dry Ruins","Moonview Highway","Bowser's Castle","Rainbow Road","GCN Peach Beach","DS Yoshi Falls","SNES Ghost Valley 2","N64 Mario Raceway","N64 Sherbet Land","GBA Shy Guy Beach","DS Delfino Square","GCN Waluigi Stadium","DS Desert Hills","GBA Bowser Castle 3","N64 DK's Jungle Parkway","GCN Mario Circuit","SNES Mario Circuit 3","DS Peach Gardens","GCN DK Mountain","N64 Bowser's Castle"};
@@ -445,7 +447,7 @@ public:
  // Existing native-font name glyphs allow runtime option values without
  // adding texture assets or using a platform/system font.
  void optionText(const char* value,const UiPaneInfo& original,Pose p,float cellW=296,float cellH=31){
-  if(transition&&transition->preload)value=onlinePage(layout.page)?OnlineAlphabet:"0123456789% Change Miis Erase License LED: Off Items + Events Drifts Dynamic Shadows On Brightness Graphics: Auto Quality Performance";
+  if(transition&&transition->preload)value=onlinePage(layout.page)||layout.page==UiPage::LicenseSettings?OnlineAlphabet:"0123456789% Change Miis Erase License LED: Off Items + Events Drifts Dynamic Shadows On Brightness Graphics: Auto Quality Performance";
   unsigned indices[128]{},count=0;float widths[128]{},total=0;
   for(const unsigned char* ch=reinterpret_cast<const unsigned char*>(value);*ch&&count<128;++ch){
    char key[32];std::snprintf(key,sizeof key,"name_glyph_%04x",unsigned(*ch));
@@ -464,7 +466,7 @@ public:
  }
  void text(const char* text,const char* base,Pose p={},uint32_t tint=0xffffffff,const char* name="text"){
   const auto* r=pane(base,name);if(!r)return;
-  if(layout.page==UiPage::LicenseSettings&&layout.role==UiMenuRole::Choice){optionText(text,*r,p);return;}
+  if(layout.page==UiPage::LicenseSettings&&layout.role==UiMenuRole::Choice){optionText(text,*r,p,296,LicenseRowH);return;}
   if(onlinePage(layout.page)&&layout.role==UiMenuRole::Choice){const auto cell=onlineCell(layout.page);optionText(text,*r,p,cell[0],cell[1]);return;}
   const auto* shadow=pane(base,"text_shadow");
   if(!shadow&&!std::strcmp(name,"text"))shadow=pane(base,"TextBox_sha");
@@ -980,16 +982,18 @@ static void composeMenuImpl(const MenuState& s,const UiRaceView& race,std::vecto
  }
  case UiPage::LicenseSettings:{
   // Reuse the original control and game-font text, including the two port options.
-  const char* variants[]={"ChangeMii","Delete","ChangeMii","ChangeMii","ChangeMii","ChangeMii"};
+  const char* variants[]={"ChangeMii","Delete","ChangeMii","ChangeMii","ChangeMii","ChangeMii","ChangeMii","ChangeMii"};
   const char* modes[]={"Off","Items","Items + Events","Items + Events + Drifts"};
-  char ledLabel[64],shadowLabel[64],brightnessLabel[48],graphicsLabel[48];
+  char ledLabel[64],shadowLabel[64],brightnessLabel[48],graphicsLabel[48],timerLabel[48],mapLabel[48];
   const char* graphicsNames[]={"Auto","Quality","Performance"};
   std::snprintf(graphicsLabel,sizeof graphicsLabel,"Graphics: %s",graphicsNames[std::min(s.selection.graphics,2u)]);
   std::snprintf(brightnessLabel,sizeof brightnessLabel,"LED Brightness: %u%%",s.selection.ledBrightness);
   std::snprintf(ledLabel,sizeof ledLabel,"LED: %s",modes[std::min(s.selection.ledMode,3u)]);
   std::snprintf(shadowLabel,sizeof shadowLabel,"Dynamic Shadows: %s",s.selection.dynamicShadows?"On":"Off");
-  const char* labels[]={"Change Miis","Erase License",ledLabel,shadowLabel,brightnessLabel,graphicsLabel};
-  for(unsigned i=0;i<6;++i){const auto row=control("LicenseManagementButton",variants[i],i);
+  std::snprintf(timerLabel,sizeof timerLabel,"Race Timer: %s",s.selection.raceTimer?"Shown":"Hidden");
+  std::snprintf(mapLabel,sizeof mapLabel,"Map: %s",s.selection.mapTurns?"Turns with Kart":"Fixed");
+  const char* labels[]={"Change Miis","Erase License",ledLabel,shadowLabel,brightnessLabel,graphicsLabel,timerLabel,mapLabel};
+  for(unsigned i=0;i<8;++i){const auto row=control("LicenseManagementButton",variants[i],i);
    c.group(UiMenuRole::Choice,i,row,"license_management_free");c.button("license_management",i,row,labels[i]);}
   // The card displays this license's saved cups; its identity stays separate
   // from whichever driver is currently selected for the next race.
@@ -1500,8 +1504,9 @@ MenuRect menuChoiceRect(const UiQuad& q,const MenuState& state){
  case UiPage::VSRules:return {0,32.f+27.f*i,304,25};
  case UiPage::BattleRules:return {0,42.f+29.f*i,304,27};
  case UiPage::Settings:return {12,46.f+54.f*i,296,44};
- // Six rows (with Graphics): tighter spacing keeps the last above the Back bar.
- case UiPage::LicenseSettings:return {12,30.f+30.f*i,296,28};
+ // Eight rows (Graphics, Race Timer, Map): tight spacing keeps the last
+ // above the Back bar, which the six-row layout ended at (y 208).
+ case UiPage::LicenseSettings:return {12,LicenseRowTop+LicenseRowPitch*i,296,LicenseRowH};
  case UiPage::TeamConfirm:return {52,95,216,48};
  case UiPage::Confirm:return {72,83,176,80};
  case UiPage::EraseLicense:return {35,65.f+75.f*i,250,52};

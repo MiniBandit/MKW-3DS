@@ -93,7 +93,7 @@ unsigned MenuState::count()const{
  switch(page){
  case UiPage::License:return 4;
  case UiPage::Drift:case UiPage::VSMode:case UiPage::Settings:return 3;
- case UiPage::LicenseSettings:return 6;
+ case UiPage::LicenseSettings:return 8;
  case UiPage::VSRules:return 7;
  case UiPage::BattleRules:return 6;
  case UiPage::Mode:return 4;
@@ -304,10 +304,12 @@ UiAction MenuState::input(UiInput key){
   if(ghosts.size()>1)selection.ghostIndex=unsigned(selection.ghostIndex+(key.left?ghosts.size()-1:1))%unsigned(ghosts.size());
   focusAge=0;return UiAction::None;
  }
- if(page==UiPage::LicenseSettings&&cursor>=2&&cursor<6&&(key.left||key.right)){
+ if(page==UiPage::LicenseSettings&&cursor>=2&&cursor<8&&(key.left||key.right)){
   if(cursor==2)selection.ledMode=(selection.ledMode+(key.left?3:1))%4;
   else if(cursor==3)selection.dynamicShadows=!selection.dynamicShadows;
   else if(cursor==5)selection.graphics=(selection.graphics+(key.left?2:1))%3;
+  else if(cursor==6)selection.raceTimer=!selection.raceTimer;
+  else if(cursor==7)selection.mapTurns=!selection.mapTurns;
   else selection.ledBrightness=unsigned(std::clamp(int(selection.ledBrightness)+(key.left?-10:10),50,100));
   focusAge=0;return UiAction::None;
  }
@@ -387,6 +389,8 @@ UiAction MenuState::input(UiInput key){
   else if(cursor==3)selection.dynamicShadows=!selection.dynamicShadows;
   else if(cursor==4)selection.ledBrightness=selection.ledBrightness>=100?50:selection.ledBrightness+10;
   else if(cursor==5)selection.graphics=(selection.graphics+1)%3;
+  else if(cursor==6)selection.raceTimer=!selection.raceTimer;
+  else if(cursor==7)selection.mapTurns=!selection.mapTurns;
   break;
  case UiPage::EraseLicense:if(cursor==0){eraseLicenseRequest=int(selection.license);enter(UiPage::License);}else{enter(UiPage::LicenseSettings);cursor=1;uiFocusReset(*this);}break;
  case UiPage::MainMenu:

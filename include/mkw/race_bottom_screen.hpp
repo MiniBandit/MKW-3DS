@@ -12,7 +12,8 @@ class RaceItems;
 // The race bottom screen (docs/BOTTOM_SCREEN.md), laid out as Mario Kart 7's:
 // the standings down the left (Wii result-board rows: position, face, held
 // item), a top-down map of the course on the right that follows the player at
-// a fixed orientation (tap the touch screen for the whole course; Battle
+// a fixed orientation, or turning so the kart points up (License Settings >
+// Map; tap the touch screen for the whole course, always north up; Battle
 // always shows the whole arena and ignores the toggle), every
 // racer's face at its live position, items on the course, and the race time
 // (Wii CtrlRaceTime) at the top right, as Mario Kart DS shows it.
@@ -48,6 +49,7 @@ struct BottomView {
     unsigned items=0;
     std::array<BottomItem,MaxItems> item{};
     float headingX=0,headingZ=-1; // the local kart's forward direction (world XZ)
+    bool mapTurns=false;          // License Settings > Map: the detailed map turns with the kart
     bool mirror=false;
     bool battle=false;
     bool timeTrial=false;         // no standings; full-width map and centred timer

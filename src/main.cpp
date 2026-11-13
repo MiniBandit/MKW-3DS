@@ -3823,6 +3823,9 @@ int main() {
             if(lowerWanted&&!lowerSkipped){
                 // The lower LCD: the race read, never written (src/race_bottom_screen.cpp).
                 mkw::fillBottomView(bottomView,raceGrid,*raceItems,intro.active(),physicsSteps,results.leaveFade());
+                // License Settings: Race Timer and Map.
+                bottomView.mapTurns=menu.selection.mapTurns;
+                if(!menu.selection.raceTimer)bottomView.timerVisible=false;
                 if(battleMode){
                     bottomView.battle=true;
                     bottomView.milliseconds=uint32_t(uint64_t(balloonBattle.durationTicks()-std::min(battleTicks,balloonBattle.durationTicks()))*1000/60);

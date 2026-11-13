@@ -43,6 +43,8 @@ struct UiSelection {
  unsigned ledMode=0,ledBrightness=100;bool dynamicShadows=true; // Per-license port options, separate from retail RKSD.
  // Graphics: 0 Auto (Old 3DS Performance, New 3DS Quality), 1 Quality, 2 Performance.
  unsigned graphics=0;
+ // Race lower screen: the race time shown, and the map turning with the kart.
+ bool raceTimer=true,mapTurns=true;
  bool operator==(const UiSelection&)const=default;
 };
 struct UiCharacterInfo {const char* name;unsigned retailId,weight;};
