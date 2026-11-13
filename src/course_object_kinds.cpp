@@ -934,7 +934,9 @@ void drawTwistedWay(ObjectDraw& d,Visual& v){
     const bool far=v.low.model&&length(position(m)-d.camera)>renderQuality().objectLowDistance;
     ObjModel* model=far?v.low.model:v.main.model;
     const ObjectBank* bank=beginPose(v,model);
-    const int root=bank?bank->node("joint1"):-1;
+    // picks (classifyObject): joint1, then joint3..joint20, of main then low.
+    const int* nodes=v.picks.size()==38?v.picks.data()+(far?19:0):nullptr;
+    const int root=bank?(nodes?nodes[0]:bank->node("joint1")):-1;
     if(root<0){d.submit(model,m,{});return;}
     uint32_t timer;
     // Retail reads the intro timer before Kinoko's calc increments it.
@@ -942,7 +944,7 @@ void drawTwistedWay(ObjectDraw& d,Visual& v){
     const float t=float((frame%120)*2);
     const float* parent=bank->nodes()[root].world;
     for(int i=1;i<19;++i){
-        const int n=jointNode(*bank,"joint%d",i+2);if(n<0)continue;
+        const int n=nodes?nodes[i]:jointNode(*bank,"joint%d",i+2);if(n<0)continue;
         const float z=-1.f+float(2*(i+1))/20.f;
         const float angle=.2f*(z+1.f)*(z+1.f)*(z-1.f)*(z-1.f)*std::sin(t*Pi/120.f+4.f*z);
         const float c=std::cos(angle),s=std::sin(angle);const float* l=bank->nodes()[n].local;
@@ -1231,6 +1233,12 @@ bool classifyObject(Visual& v,const ObjectAssets& assets,int course){
         v.present=drawAurora;
     }else if(id==ObjectId::TwistedWay&&live){
         v.present=drawTwistedWay;
+        // drawTwistedWay's joint nodes, looked up once.
+        v.picks.assign(38,-1);
+        for(unsigned k=0;k<2;++k)if(const ObjModel* model=k?v.low.model:v.main.model)if(const auto* bank=model->bank.get()){
+            v.picks[k*19]=bank->node("joint1");
+            for(int i=1;i<19;++i)v.picks[k*19+i]=jointNode(*bank,"joint%d",i+2);
+        }
     }else if(id==ObjectId::Turibashi&&live){
         v.present=drawTuribashi;
     }else if(id==ObjectId::Ami&&live){

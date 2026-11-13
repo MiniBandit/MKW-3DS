@@ -44,7 +44,10 @@ struct ObjModel {
     // frame (crowds) share one; skinKeys[i] is copy i's clip and frame. Copies
     // past skinUsed still hold the pose last written to them (writes run in
     // frame order), so a pose that repeats on a later frame needs no skinning.
-    struct SkinKey {int clip;float frame;};
+    // drawn: the frame serial that last drew the copy (0: none). With
+    // DeferredWrites::directWrites a new pose goes to a copy drawn at most
+    // by frame serial-2, which has finished when the pose is written.
+    struct SkinKey {int clip;float frame;unsigned drawn=0;};
     std::vector<std::unique_ptr<Model>> skins;
     std::vector<SkinKey> skinKeys;
     unsigned skinUsed=0;
@@ -74,6 +77,8 @@ struct ObjectAssets {
     std::unique_ptr<DriverAnimation> explosionBank;
     std::vector<std::unique_ptr<Model>> explosionPoses;
     unsigned explosionUsed=0;
+    // The serial of the frame being recorded (Renderer::frameSerial).
+    unsigned serial=0;
 };
 struct Anim {
     int clip=-1;float frame=0;

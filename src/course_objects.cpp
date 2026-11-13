@@ -110,6 +110,10 @@ void prepareSkin(void* payload){
     const auto& w=*static_cast<const SkinWrite*>(payload);
     w.bank->skinCompute(reinterpret_cast<const float*>(&w+1),*w.model,w.normals,w.clip,w.frame,w.skinned);
 }
+// directWrites: both halves at frame start, into a copy no unfinished frame draws.
+void directSkin(void* payload){
+    prepareSkin(payload);writeSkin(payload);
+}
 }
 
 ObjectAssets::~ObjectAssets()=default;
@@ -343,6 +347,14 @@ struct CourseObjects::Impl {
     std::array<std::unique_ptr<Model>,6> escalators;
     std::vector<Vertex> escalatorBase;
     std::array<bool,6> escalatorWritten{};
+    // directWrites: a second vertex copy per escalator. Each copy keeps the
+    // phase last written to it and the frame serial that last drew it; a
+    // tread mesh is written only when its phase changed and it is in view.
+    std::array<std::unique_ptr<Model>,6> escalatorsAlt;
+    struct EscalatorCopy {float phase=0;bool written=false;unsigned drawn=0;};
+    std::array<std::array<EscalatorCopy,2>,6> escalatorCopies{};
+    // Every phase's treads (escalatorLanding) lie inside these bounds.
+    Bounds escalatorBounds{};
     std::vector<C3D_Mtx> palms;
     struct LavaSplash { bool active=false;unsigned start=0;Vec3 position{};float scale=1; };
     std::array<LavaSplash,12> lavaSplashes{};
@@ -434,12 +446,12 @@ void CourseObjects::suspendGraphics(){
     d.suspendedVisuals=std::move(d.visuals);
     d.sky.clear();d.objects.clear();d.water.clear();d.shadows.clear();d.skyShadows.clear();
     d.assets.explosionPoses.clear();d.assets.explosionUsed=0;d.assets.explosion.reset();d.assets.explosionBank.reset();d.assets.models.clear();
-    d.palm.reset();for(auto& mesh:d.escalators)mesh.reset();d.escalatorBase.clear();
+    d.palm.reset();for(auto& mesh:d.escalators)mesh.reset();for(auto& mesh:d.escalatorsAlt)mesh.reset();d.escalatorBase.clear();
     d.linked=false;d.linkedReady=false;d.recorded=false;d.queued=false;d.graphicsSuspended=true;
 }
 bool CourseObjects::resumeGraphics(){
     auto& d=*impl_;if(!d.graphicsSuspended)return true;
-    d.assets.models.clear();d.palm.reset();for(auto& mesh:d.escalators)mesh.reset();
+    d.assets.models.clear();d.palm.reset();for(auto& mesh:d.escalators)mesh.reset();for(auto& mesh:d.escalatorsAlt)mesh.reset();
     if(d.course==5&&!loadCoconut())return false;
     if(!d.assets.load(d.course))return false;
     d.link();
@@ -475,6 +487,22 @@ bool CourseObjects::loadCoconut(){
     }
     d.escalatorBase.assign(d.escalators[0]->vertices,d.escalators[0]->vertices+d.escalators[0]->vertexCount);
     d.escalatorWritten={};
+    d.escalatorCopies={};
+    if(DeferredWrites::directWrites&&!renderQuality().reduced){
+        for(auto& mesh:d.escalatorsAlt){
+            mesh=std::make_unique<Model>();
+            if(!mesh->load("models/coconut_escalator_000.gmdl")){for(auto& m:d.escalatorsAlt)m.reset();break;}
+        }
+        // escalatorLanding at phase 0..20 (Kinoko's step factor): a tread's
+        // Y goes down by at most 200 (lower landing, upper landing) and its
+        // Z by at most 3 x its source depth below the lower landing.
+        auto& b=d.escalatorBounds;b={d.escalatorBase[0].position,d.escalatorBase[0].position};
+        for(const auto& v:d.escalatorBase)b.include(v.position);
+        const float low=std::min(b.minimum.y,0.f);
+        b.minimum.y=std::min(b.minimum.y,-200.f);b.minimum.z+=3.f*low;
+        // Padded for rounding in escalatorLanding.
+        b.minimum=b.minimum-Vec3{1,1,1};b.maximum=b.maximum+Vec3{1,1,1};
+    }
     const auto* map=K::System::CourseMap::Instance();
     d.palms.clear();
     for(unsigned i=0;i<map->getGeoObjCount();++i){
@@ -541,6 +569,7 @@ void CourseObjects::Impl::link(){
 void CourseObjects::Impl::begin(const Renderer& renderer,unsigned frameTick,Vec3 frameCamera){
     // Linking reads and rebuilds visuals: always on this thread, before recording.
     view=renderer.viewFrustum();tick=frameTick;camera=frameCamera;linkedReady=ready();recorded=true;
+    assets.serial=renderer.frameSerial();
     const float fov=std::min(renderer.cameraFov(),55.f)/55.f;
     distanceScale=renderer.drawDistance?fov*fov:0;
 }
@@ -572,8 +601,31 @@ void CourseObjects::Impl::recordObjects(){
             // (half of them each frame); its transform still moves every frame.
             const bool skip=renderQuality().animationStep&&escalatorWritten[slot]&&((tick/2+slot)&1);
             escalatorWritten[slot]=true;
+            auto* deferred=deferredWrites();
+            if(escalatorsAlt[slot]&&!renderQuality().animationStep&&deferred&&deferred->preparing()&&DeferredWrites::directWrites){
+                // directWrites: nothing to draw or write out of view. Else the
+                // copy that holds this phase, or one no unfinished frame draws,
+                // written when the render thread starts the frame.
+                const C3D_Mtx matrix=objectMatrix(obj->transform(),obj->scale());
+                if(!view.model(matrix).intersects(escalatorBounds))continue;
+                auto& copies=escalatorCopies[slot];
+                Model* meshes[2]={&mesh,escalatorsAlt[slot].get()};
+                int use=-1;
+                for(int c=0;c<2&&use<0;++c)if(copies[c].written&&copies[c].phase==write.phase)use=c;
+                if(use<0){
+                    for(int c=0;c<2&&use<0;++c){const unsigned d=copies[c].drawn;if(!d||d+2<=assets.serial)use=c;}
+                    // Never expected (one draw per escalator a frame): the hook writes it, as before.
+                    const bool hook=use<0;if(hook)use=0;
+                    auto* w=static_cast<EscalatorWrite*>(deferred->allocate(sizeof write));*w=write;w->mesh=meshes[use];
+                    if(hook)deferred->queue(writeEscalator,w,"escalator");else deferred->prepare(writeEscalator,w,"escalator");
+                    copies[use].phase=write.phase;copies[use].written=true;
+                }
+                copies[use].drawn=assets.serial;
+                objects.records.push_back({ObjectDrawRecord::Plain,false,0,meshes[use],nullptr,0,0,0,0,0,matrix});
+                continue;
+            }
             if(skip){}
-            else if(auto* deferred=deferredWrites()){
+            else if(deferred){
                 auto* w=static_cast<EscalatorWrite*>(deferred->allocate(sizeof write));*w=write;deferred->queue(writeEscalator,w,"escalator");
             }else writeEscalator(const_cast<EscalatorWrite*>(&write));
             objects.records.push_back({ObjectDrawRecord::Plain,false,0,&mesh,nullptr,0,0,0,0,0,objectMatrix(obj->transform(),obj->scale())});
@@ -952,24 +1004,40 @@ void ObjectDraw::submit(ObjModel* m,const C3D_Mtx& transform,const Anim& source)
             // out of the measured overlay reserve in LINEAR memory. Past that an
             // instance reuses a pose already skinned this frame.
             const size_t bytes=m->model->vertexCount*sizeof(Vertex)+m->model->indexCount*sizeof(uint16_t);
-            if(m->skinUsed>=m->skins.size()&&linearSpaceFree()>allocationReserve+bytes)
+            auto* deferred=deferredWrites();
+            // directWrites: a copy no frame after serial-2 drew (a new one if
+            // none is left), skinned when the render thread starts this frame.
+            bool direct=false;
+            if(deferred&&deferred->preparing()&&DeferredWrites::directWrites){
+                const unsigned serial=assets.serial;int idle=-1;
+                for(unsigned i=m->skinUsed;i<m->skins.size()&&idle<0;++i){const unsigned d=m->skinKeys[i].drawn;if(!d||d+2<=serial)idle=int(i);}
+                if(idle<0&&linearSpaceFree()>allocationReserve+bytes)
+                    if(auto fresh=cloneModel(*m->model)){m->skins.push_back(std::move(fresh));m->skinKeys.push_back({});idle=int(m->skins.size()-1);}
+                if(idle>=0){std::swap(m->skins[idle],m->skins[m->skinUsed]);std::swap(m->skinKeys[idle],m->skinKeys[m->skinUsed]);direct=true;}
+            }
+            // Otherwise the previous frame's copy is written on the hook, as before.
+            if(!direct&&m->skinUsed>=m->skins.size()&&linearSpaceFree()>allocationReserve+bytes)
                 if(auto fresh=cloneModel(*m->model)){m->skins.push_back(std::move(fresh));m->skinKeys.push_back({});}
             if(m->skinUsed<m->skins.size()){
                 copy=int(m->skinUsed++);m->skinKeys[copy]={anim.palette?-1:anim.clip,anim.frame};
-                if(auto* deferred=deferredWrites()){
+                if(deferred){
                     const std::size_t bytes=std::size_t(bank->matrixCount())*12*sizeof(float);
                     // The skinning arithmetic runs when the render thread starts the frame; the hook stores it.
                     const std::size_t skinnedBytes=deferred->preparing()?std::size_t(bank->skinnedCount(*m->skins[copy],m->litNormals,anim.clip))*sizeof(Vec3):0;
                     auto* w=static_cast<SkinWrite*>(deferred->allocate(sizeof(SkinWrite)+bytes+skinnedBytes));
                     *w={bank,m->skins[copy].get(),m->litNormals,anim.clip,anim.frame,
                         skinnedBytes?reinterpret_cast<Vec3*>(reinterpret_cast<uint8_t*>(w+1)+bytes):nullptr};std::memcpy(w+1,palette,bytes);
-                    if(skinnedBytes)deferred->prepare(prepareSkin,w,"object cpu skin");
-                    deferred->queue(writeSkin,w,"object cpu skin");
+                    if(direct)deferred->prepare(directSkin,w,"object cpu skin");
+                    else{
+                        if(skinnedBytes)deferred->prepare(prepareSkin,w,"object cpu skin");
+                        deferred->queue(writeSkin,w,"object cpu skin");
+                    }
                 }else bank->skin(palette,*m->skins[copy],m->litNormals,anim.clip,anim.frame);
                 renderMetrics.skinnedVertices+=m->skins[copy]->vertexCount;diag::tallySkin(m->resource,m->skins[copy]->vertexCount,false,cameraDistance);
             }else if(m->skinUsed)copy=int(m->skinUsed-1);
             else return;
         }
+        m->skinKeys[copy].drawn=assets.serial;
         target=m->skins[copy].get();
         if(m->resource=="quicksand"&&anim.bounds){
             m->skins[copy]->minimum=anim.bounds->minimum;

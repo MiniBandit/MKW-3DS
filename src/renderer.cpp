@@ -723,6 +723,7 @@ void Renderer::readSwitches(){
     stateCache=!exists("sdmc:/3ds/mkw-3ds/no-state-cache.txt");
     quadMerge=!exists("sdmc:/3ds/mkw-3ds/no-quad-merge.txt");
     volumeRects=!exists("sdmc:/3ds/mkw-3ds/no-volume-rects.txt");
+    DeferredWrites::directWrites=!exists("sdmc:/3ds/mkw-3ds/no-skin-direct.txt");
 #ifndef MKW_RELEASE
     stateCacheVerify=exists("sdmc:/3ds/mkw-3ds/state-cache-verify.txt");
     drawTiming=exists("sdmc:/3ds/mkw-3ds/draw-timing.txt");

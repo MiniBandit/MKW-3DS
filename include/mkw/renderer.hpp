@@ -292,6 +292,13 @@ public:
     // >= bytes, 16-byte multiple) when the frame starts, then a GX copy that runs
     // after every earlier frame and before this frame's draws. False: not here.
     static inline bool prepareWrites=true;
+    // A prepare() may also write GPU memory that no frame after serial-2
+    // (Renderer::frameSerial) draws: every frame up to serial-2 has finished
+    // when the render thread starts frame serial. Course objects then skin
+    // CPU copies (and Coconut Mall's escalators) straight into a copy the
+    // previous frame didn't draw, with nothing left for the hook
+    // (off: no-skin-direct.txt).
+    static inline bool directWrites=true;
     bool preparing() const;
     void prepare(void (*run)(void*),void* payload,const char* kind=nullptr);
     bool upload(void* destination,const void* source,uint32_t bytes,void* const staging[2],const char* kind=nullptr);

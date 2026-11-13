@@ -84,7 +84,11 @@ times a uniform scale take the cofactor normal path again; runtime.log `lit skin
 counts both), `no-bloom-triple.txt` (bloom blur rings back to two taps a quad instead of
 three), `no-hook-prep.txt` (CPU driver poses, object CPU skinning and fire
 phase copies run on the frame hook again instead of at frame start; runtime.log
-"hook prepare off"), `no-box-precull.txt` (Item Box / Fake Item Box shells are drawn whole
+"hook prepare off"), `no-skin-direct.txt` (course objects' CPU skins and Coconut Mall's
+escalator treads are written on the frame hook into the copy the last frame drew, as
+before, instead of at frame start into a copy no unfinished frame draws; the escalators
+then also skip treads out of view or at the phase their copy already holds),
+`no-box-precull.txt` (Item Box / Fake Item Box shells are drawn whole
 again instead of without the triangles their cull mode removes; runtime.log
 `box precull` counts the triangles kept), `no-fast-yaz0.txt` (course archives decode
 with retail's Yaz0 loop again instead of the faster one with the same bytes; runtime.log
