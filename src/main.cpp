@@ -626,6 +626,9 @@ int main() {
     unsigned captureRace=0,captureBase=0;bool captureLive=false;
     if(autoplay)if(kQa)if(FILE* f=fopen("sdmc:/3ds/mkw-3ds/race-capture.txt","r")){unsigned n=0,leave=0;const int got=fscanf(f,"%u %u",&n,&leave);raceCaptureEvery=got>=1&&n>1?n:20;raceCaptureLeave=got==2&&leave;fclose(f);}
     const bool raceCapture=raceCaptureEvery>0;
+    // QA capture-no-drop.txt: race captures wait for the render thread instead of dropping a
+    // frame, so the frames drawn (and what they present) do not depend on emulator pacing.
+    const bool captureNoDrop=raceCapture&&exists("sdmc:/3ds/mkw-3ds/capture-no-drop.txt");
     auto menuProfile=std::make_unique<mkw::MenuProfile>();
     // Diagnostic overlay: menu timing is always recorded (bounded, mkw/menu_profile.hpp).
     if(kQa)menuProfile->enable();
@@ -4220,6 +4223,7 @@ int main() {
                 // the newest pose, inputs and original animation clocks.
                 // The pause image frame runs no physics step but is always drawn:
                 // skipped, the pause would keep the last frame, HUD and all.
+                if(captureNoDrop&&!pauseImageFrame&&!renderer.canRecordFrame())renderer.waitForGpu();
                 if(pauseImageFrame){if(!renderer.canRecordFrame())renderer.waitForGpu();}
                 else if(!renderer.canRecordFrame()||!presentation.due(physicsSteps)){profiler->end(physicsSteps,renderer,false);continue;}
             }
@@ -4553,7 +4557,11 @@ int main() {
                     const unsigned long frames=renderer.courseDrawFrames-courseFrames;
                     LOGF("course draws step=%u render_ms=%.3f per frame over %lu frames",physicsSteps,
                          frames?double(renderer.courseDrawTicks-courseTicks)*1000.0/SYSCLOCK_ARM11/double(frames):0.0,frames);
-                    courseTicks=renderer.courseDrawTicks;courseFrames=renderer.courseDrawFrames;}}
+                    courseTicks=renderer.courseDrawTicks;courseFrames=renderer.courseDrawFrames;
+                    {const auto pc=mkw::CourseObjects::precullTotals();
+                    LOGF("render switches step=%u state cache=%d hits=%u/%u setups (last frame) verified=%lu mismatches=%lu quad merge=%d merged=%lu volume rects=%d frames=%lu rects=%lu saved px=%llu precull eligible=%lu tested=%lu culled=%lu violations=%lu",
+                         physicsSteps,int(renderer.stateCache),renderer.stateHits,renderer.drawSetups,renderer.stateVerified,renderer.stateMismatches,int(renderer.quadMerge),renderer.quadMerges,
+                         int(renderer.volumeRects),renderer.volumeRectFrames,renderer.volumeRectsDrawn,(unsigned long long)renderer.volumeRectSaved,pc.eligible,pc.tested,pc.culled,pc.violations);}}}
 #endif
             if(fullRace)renderer.drawScreenFade(lightningFlash.opacity(),lightningFlash.white);
             profiler->mark(Profile::Effects);

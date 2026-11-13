@@ -80,6 +80,18 @@ public:
   }
   return true;
  }
+ // b lies outside one plane by more than `slack` of that plane's summed terms:
+ // a coarse test on a box built by other float arithmetic (a world box of an
+ // object's model box) that intersects() at the object's matrix also rejects.
+ bool clearlyOutside(const Bounds& b,float slack)const{
+  for(const auto& p:planes_){
+   const float x=p[0]*(p[0]>=0?b.maximum.x:b.minimum.x);
+   const float y=p[1]*(p[1]>=0?b.maximum.y:b.minimum.y);
+   const float z=p[2]*(p[2]>=0?b.maximum.z:b.minimum.z);
+   if(x+y+z+p[3]<-slack*(std::fabs(x)+std::fabs(y)+std::fabs(z)+std::fabs(p[3])+1.f))return true;
+  }
+  return false;
+ }
  // Every point of b is inside every plane, by the same ordered float sums as
  // intersects() at b's innermost corner. Rounding is monotonic, so intersects()
  // then holds for any box inside b (NaN never qualifies).

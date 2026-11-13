@@ -180,6 +180,32 @@ beside each race-capture.txt frame).
 instead of once per drawn frame; `no-kartfx-lod-thin.txt` steps LOD racers'
 kart effects every tick instead of every 4th.
 
+Render thread and course objects (each exact; both consoles):
+`no-state-cache.txt` builds every submesh's combiners again on each draw
+instead of copying the ones its last setup built while their inputs are
+unchanged (`state-cache-verify.txt` builds them anyway and counts mismatches).
+`no-quad-merge.txt` draws each font sprite and material-quad command alone
+instead of merging consecutive ones with the same texture and constants.
+`no-volume-rects.txt` shades shadow volumes over their union rectangle only,
+instead of one rectangle per volume when those cover less.
+`no-static-precull.txt` runs every course object's presenter instead of
+skipping objects whose padded world box is clearly outside the view
+(`precull-check.txt` runs the skipped ones anyway and counts any that would
+have drawn; `object-set.txt` writes each frame's object records hashed to
+`object-set.csv`). `no-reset-skip.txt` resets overrides, rigid pose and skin
+palette after every object record again, not only after records that set
+them. `runtime.log` lists the counts every 600 steps (`render switches`).
+`draw-timing.txt` adds per-second columns for drawNow: `draw_setup_ms`
+(material setup), `draw_call_ms` (C3D_DrawElements), `draw_reset_ms`
+(end-of-draw resets), `draw_now_ms`, `draw_setups` and `state_hits`. Its
+timer calls add render-thread time: take on-time numbers from a run without it.
+`cmd-hash.txt` writes `cmd-hash.csv`: each frame's GPU command words hashed,
+with its animation tick and which of the two sets of per-frame buffers it
+used (their addresses are in the words); `cmd-dump.txt` (ticks) saves those
+frames' words as `cmd-dump-<tick>-<frame>.bin`. Compare runs of one build
+only. With race captures, `capture-no-drop.txt` waits for the render thread
+instead of dropping frames, so two runs draw the same frames.
+
 ## Repacked packs
 
 `tools/pakpack.c` (build: `gcc -O2 -o pakpack tools/pakpack.c`) rewrites an

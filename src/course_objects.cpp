@@ -49,6 +49,23 @@ C3D_Mtx basisMatrix(Vec3 x,Vec3 y,Vec3 z,Vec3 position,Vec3 scale){
 }
 namespace {
 constexpr size_t SkinReserve=2u*1024*1024;
+// Static precull switches, read at the first link: no-static-precull.txt turns
+// it off; DIAG precull-check.txt runs the culled presenters anyway and counts
+// any that add a draw; object-set.txt logs each object pass's records.
+// DIAG no-reset-skip.txt: every object record resets overrides, rigid pose and
+// skin palette again (for comparing command-word hashes).
+bool staticPrecull=true,precullCheck=false,objectSetLog=false,resetSkip=true,switchesRead=false;
+void readSwitches(){
+    if(switchesRead)return;switchesRead=true;
+    auto exists=[](const char* path){FILE* f=std::fopen(path,"r");if(f)std::fclose(f);return f!=nullptr;};
+    staticPrecull=!exists("sdmc:/3ds/mkw-3ds/no-static-precull.txt");
+#ifndef MKW_RELEASE
+    precullCheck=exists("sdmc:/3ds/mkw-3ds/precull-check.txt");
+    objectSetLog=exists("sdmc:/3ds/mkw-3ds/object-set.txt");
+    resetSkip=!exists("sdmc:/3ds/mkw-3ds/no-reset-skip.txt");
+#endif
+}
+CourseObjects::PrecullStats precullStats;
 std::unique_ptr<Model> cloneModel(const Model& source){
     auto copy=std::make_unique<Model>();
     copy->vertices=static_cast<Vertex*>(linearAlloc(source.vertexCount*sizeof(Vertex)));
@@ -350,6 +367,15 @@ struct CourseObjects::Impl {
     void link();
     // Re-links after a restarted race builds a new Kinoko scene.
     bool ready();
+    // Static precull (no-static-precull.txt): per visual whose presenter draws
+    // at one matrix (singleMatrixBounds), its models' bounds and their padded
+    // world box at the matrix last seen. A box clearly outside the view skips
+    // the presenter, whose own tests would draw nothing.
+    struct Precull {Bounds local{},world{};C3D_Mtx matrix{};bool eligible=false,valid=false;};
+    std::vector<Precull> precull;
+    // DIAG object-set.txt: each recorded object pass's records hashed (object-set.csv).
+    std::string objectSetLines;
+    void logObjectSet();
     // One frame's recorded sky pass and object pass (record), replayed in order.
     ObjectDrawList sky,objects,water;
     ViewFrustum view{};
@@ -469,6 +495,7 @@ bool CourseObjects::loadCourse(int courseId){
     return d.assets.load(courseId);
 }
 void CourseObjects::Impl::link(){
+    readSwitches();
     stadiumBoundsReady=false;stadiumScreens.clear();
     visuals.clear();drawDistances.clear();linked=true;
     palmDistance=drawDistance2(K::Field::ObjectId::PalmTree);
@@ -504,6 +531,11 @@ void CourseObjects::Impl::link(){
         v.placement=placementMatrix(*geo);
         if(classifyObject(v,assets,course)){visuals.push_back(v);drawDistances.push_back(drawDistance2(set));}
     }
+    precull.assign(visuals.size(),{});
+    unsigned eligible=0;
+    for(std::size_t i=0;i<visuals.size();++i)
+        if(!skyObject(visuals[i])&&!partsClipped(visuals[i])&&singleMatrixBounds(visuals[i],precull[i].local)){precull[i].eligible=true;++eligible;}
+    precullStats.eligible=eligible;
 
 }
 void CourseObjects::Impl::begin(const Renderer& renderer,unsigned frameTick,Vec3 frameCamera){
@@ -552,6 +584,9 @@ void CourseObjects::Impl::recordObjects(){
     assets.beginFrame();
     ObjectDraw context{view,assets,tick,camera,course,scratch,shadows,objects,false,allocationReserve};
     ObjectDraw waterContext{view,assets,tick,camera,course,scratch,shadows,water,false,allocationReserve};
+    // The static precull's one world-space frustum.
+    C3D_Mtx identity;Mtx_Identity(&identity);
+    const ClipFrustum worldView=view.model(identity);
     for(std::size_t i=0;i<visuals.size();++i){
         auto& v=visuals[i];if(skyObject(v))continue;
         auto& draw=waterObject(v)?waterContext:context;
@@ -564,6 +599,32 @@ void CourseObjects::Impl::recordObjects(){
         if(partsClipped(v)){draw.partLimit=drawDistances[i];draw.partScale=distanceScale;}
         else draw.hidden=beyond(p?Vec3{p->x,p->y,p->z}:Vec3{m.r[0].w,m.r[1].w,m.r[2].w},drawDistances[i]);
         if(draw.hidden)diag::tallyHidden(v.resource);
+        else if(staticPrecull&&i<precull.size()&&precull[i].eligible){
+            C3D_Mtx m;
+            if(singleMatrix(v,m)){
+                auto& c=precull[i];
+                if(!c.valid||std::memcmp(&m,&c.matrix,sizeof m)){
+                    // A superset of the box at m: rounding of the corners, padded.
+                    float rows[12];for(unsigned r=0;r<3;++r)for(unsigned col=0;col<4;++col)rows[r*4+col]=m.r[r].c[3-col];
+                    Bounds b=transformBounds(c.local,rows);
+                    const float extent=std::max({std::fabs(b.minimum.x),std::fabs(b.minimum.y),std::fabs(b.minimum.z),std::fabs(b.maximum.x),std::fabs(b.maximum.y),std::fabs(b.maximum.z)});
+                    const float pad=1e-4f*extent+.01f;
+                    b.minimum=b.minimum-Vec3{pad,pad,pad};b.maximum=b.maximum+Vec3{pad,pad,pad};
+                    c.matrix=m;c.world=b;c.valid=true;
+                }
+                ++precullStats.tested;
+                if(worldView.clearlyOutside(c.world,1e-3f)){
+                    ++precullStats.culled;
+                    if(precullCheck){
+                        // DIAG precull-check.txt: the presenter anyway; it must add nothing.
+                        const std::size_t records=draw.list.records.size(),volumes=shadows.size();
+                        drawObject(draw,v);
+                        if(draw.list.records.size()!=records||shadows.size()!=volumes)++precullStats.violations;
+                    }
+                    continue;
+                }
+            }
+        }
         drawObject(draw,v);draw.hidden=false;draw.partLimit=0;
     }
     // Retail owns one pochaYogan model per player and restarts all three
@@ -575,8 +636,30 @@ void CourseObjects::Impl::recordObjects(){
         const auto matrix=basisMatrix({1,0,0},{0,1,0},{0,0,1},state.position,{state.scale,state.scale,state.scale});
         waterContext.submit(splash.model,matrix,animAt(splash,float(tick-state.start)));
     }
+    if(objectSetLog)logObjectSet();
 }
+void CourseObjects::Impl::logObjectSet(){
+    // FNV-1a over each record's kind, pose, flags, model size and matrix, and
+    // each shadow volume's model size and matrix: the frame's drawn object set.
+    uint32_t h=2166136261u;
+    auto mix=[&](const void* data,std::size_t bytes){const auto* b=static_cast<const uint8_t*>(data);for(std::size_t k=0;k<bytes;++k){h^=b[k];h*=16777619u;}};
+    for(const auto* list:{&objects,&water})for(const auto& r:list->records){
+        const uint32_t words[]={uint32_t(r.kind),uint32_t(r.pose),uint32_t(r.backdrop),r.overrideCount,r.bones,r.target?r.target->indexCount:0u,r.target?r.target->vertexCount:0u};
+        mix(words,sizeof words);mix(&r.transform,sizeof r.transform);
+    }
+    for(const auto& v:shadows){const uint32_t n=v.model?v.model->indexCount:0u;mix(&n,sizeof n);mix(&v.transform,sizeof v.transform);}
+    char line[96];std::snprintf(line,sizeof line,"%u,%u,%u,%u,%08lx\n",tick,unsigned(objects.records.size()),unsigned(water.records.size()),unsigned(shadows.size()),(unsigned long)h);
+    objectSetLines+=line;
+    if(objectSetLines.size()>8192){
+        if(FILE* f=std::fopen("sdmc:/3ds/mkw-3ds/object-set.csv","a")){std::fputs(objectSetLines.c_str(),f);std::fclose(f);}
+        objectSetLines.clear();
+    }
+}
+CourseObjects::PrecullStats CourseObjects::precullTotals(){return precullStats;}
 void CourseObjects::Impl::replay(Renderer& renderer,const ObjectDrawList& list,unsigned phase){
+    // Bindings a later draw could still see (overrides 1, rigid pose 2, skin palette 4):
+    // all of them until the first record resets them, then only what a record set.
+    unsigned bound=7;
     for(const auto& r:list.records){
         if(r.kind==ObjectDrawRecord::Explosion){
             if(phase!=1)blast::drawBlast(renderer,*r.target,r.transform,unsigned(std::max(0.f,r.frame)),false);
@@ -602,9 +685,12 @@ void CourseObjects::Impl::replay(Renderer& renderer,const ObjectDrawList& list,u
         else if(r.pose==2)renderer.setSkinPalette(list.palettes.data()+r.palette,r.bones,12);
         if(r.overrideCount)renderer.setOverrides(list.overrides.data()+r.overrides,r.overrideCount);
         renderer.draw(*r.target,r.transform,r.backdrop,nullptr,context,visible);
-        renderer.setOverrides(nullptr,0);
-        renderer.setRigidPose(nullptr);
-        renderer.setSkinPalette(nullptr,0,12);
+        // Reset only what may still be bound: an empty reset is a recorded command too.
+        bound|=(r.overrideCount?1u:0u)|(r.pose==1?2u:0u)|(r.pose==2?4u:0u);
+        if(bound&1)renderer.setOverrides(nullptr,0);
+        if(bound&2)renderer.setRigidPose(nullptr);
+        if(bound&4)renderer.setSkinPalette(nullptr,0,12);
+        bound=resetSkip?0:7;
     }
 }
 void CourseObjects::prepare(const Renderer& renderer,unsigned tick,Vec3 camera){

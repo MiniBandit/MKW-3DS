@@ -715,7 +715,23 @@ bool Scene::load(const char* path){
     }
     bool valid=std::fgetc(f)==EOF;std::fclose(f);return valid;
 }
+void Renderer::readSwitches(){
+    auto exists=[](const char* path){FILE* f=std::fopen(path,"r");if(f)std::fclose(f);return f!=nullptr;};
+    stateCache=!exists("sdmc:/3ds/mkw-3ds/no-state-cache.txt");
+    quadMerge=!exists("sdmc:/3ds/mkw-3ds/no-quad-merge.txt");
+    volumeRects=!exists("sdmc:/3ds/mkw-3ds/no-volume-rects.txt");
+#ifndef MKW_RELEASE
+    stateCacheVerify=exists("sdmc:/3ds/mkw-3ds/state-cache-verify.txt");
+    drawTiming=exists("sdmc:/3ds/mkw-3ds/draw-timing.txt");
+    cmdHash=exists("sdmc:/3ds/mkw-3ds/cmd-hash.txt");
+    if(cmdHash){
+        if(FILE* f=std::fopen("sdmc:/3ds/mkw-3ds/cmd-dump.txt","r")){unsigned tick;while(std::fscanf(f,"%u",&tick)==1)cmdDumpTicks_.push_back(tick);std::fclose(f);}
+        C3D_FrameEndHook(cmdHashFrameEnd,this);
+    }
+#endif
+}
 bool Renderer::init(){
+    readSwitches();
     if(!C3D_Init(0x100000))return false;
     deviceReady_=true;
     auto fail=[this](){shutdown();return false;};
@@ -1055,6 +1071,9 @@ void Renderer::beginNow(const C3D_Mtx& view,const C3D_Mtx& projection,bool sync,
         const auto waitStart=svcGetSystemTick();
         if(!C3D_FrameBegin((sync?C3D_FRAME_SYNCDRAW:0)|(execPipelined_?C3D_FRAME_PIPELINE:0)))std::abort();
         stats_.beginWaitMs=float((svcGetSystemTick()-waitStart)*1000.0/SYSCLOCK_ARM11);
+#ifndef MKW_RELEASE
+        cmdHashBegin();
+#endif
         if(execPipelined_){
             // The GPU may still draw the previous frame: its time and this
             // frame's writes wait for previousFrameDone().
@@ -1212,7 +1231,8 @@ void Renderer::beginFrame(){
     for(int i=0;i<6;++i)C3D_TexEnvInit(C3D_GetTexEnv(i));
     auto* env=C3D_GetTexEnv(0);C3D_TexEnvSrc(env,C3D_Both,GPU_TEXTURE0,GPU_PRIMARY_COLOR);C3D_TexEnvFunc(env,C3D_Both,GPU_MODULATE);
     C3D_DepthTest(true,GPU_GEQUAL,GPU_WRITE_ALL);C3D_AlphaBlend(GPU_BLEND_ADD,GPU_BLEND_ADD,GPU_SRC_ALPHA,GPU_ONE_MINUS_SRC_ALPHA,GPU_ONE,GPU_ONE_MINUS_SRC_ALPHA);
-    if(!eye_&&!bottomWorldPass_)stats_.triangles=stats_.drawCalls=stats_.culledTriangles=stats_.culledSubmeshes=0;
+    if(!eye_&&!bottomWorldPass_){stats_.triangles=stats_.drawCalls=stats_.culledTriangles=stats_.culledSubmeshes=0;
+        stats_.setupTicks=stats_.callTicks=stats_.resetTicks=stats_.drawNowTicks=0;stats_.setups=stats_.stateHits=0;}
 }
 C3D_Mtx ViewFrustum::cameraFacing(Vec3 position,float scale) const {
     C3D_Mtx transform;Mtx_Identity(&transform);
@@ -1442,6 +1462,13 @@ uint64_t trianglePixels(const C3D_Mtx& clip,const Vertex* vertices,const uint16_
 }
 }
 void Renderer::drawNow(const Model& model,const Vertex* vertices,const C3D_Mtx& transform,bool backdrop,MaterialBinder material,void* context,ShapeVisible visible){
+    // DIAG draw-timing.txt: the call's ticks, and below its setups, draws and resets.
+    struct DrawTimer {uint64_t& sum;uint64_t start;~DrawTimer(){if(start)sum+=svcGetSystemTick()-start;}} drawTimer{stats_.drawNowTicks,drawTiming?svcGetSystemTick():0};
+    auto drawElements=[this](unsigned count,const uint16_t* indices){
+        const uint64_t start=drawTiming?svcGetSystemTick():0;
+        C3D_DrawElements(GPU_TRIANGLES,count,C3D_UNSIGNED_SHORT,indices);
+        if(start)stats_.callTicks+=svcGetSystemTick()-start;
+    };
     const bool behind=backdrop&&execBehind_;
     // Later draws (effects, sprites) don't all set a depth mapping.
     struct RestoreDepthMap {bool on;~RestoreDepthMap(){if(on)C3D_DepthMap(true,-1.f,0.f);}} restoreDepthMap{behind};
@@ -1516,6 +1543,8 @@ void Renderer::drawNow(const Model& model,const Vertex* vertices,const C3D_Mtx& 
     // The last drawn submesh whose material state is still bound, and its end
     // of submesh (retailEndSubmesh), deferred while the next one repeats it.
     const Submesh* last=nullptr;bool lastRetail=false,lastEnvironment=false,pendingEnd=false;
+    // The fog inputs of the state blocks' key.
+    const uint32_t fogKey=stateCache?retailFogKey():0;
     C3D_Tex projectedWaterTexture{};
     // DIAG texture-use.txt: the data of the textures bound to units 0-2 (diag::textureDrawn).
     const void* useData[3]{};
@@ -1595,11 +1624,40 @@ void Renderer::drawNow(const Model& model,const Vertex* vertices,const C3D_Mtx& 
         }
         bool retail=lastRetail,retailEnvironment=lastEnvironment;
         if(!repeat){
+        const uint64_t setupStart=drawTiming?svcGetSystemTick():0;++stats_.setups;
         if(pendingEnd){retailEndSubmesh();pendingEnd=false;}
         const uint32_t constant=o&&(o->flags&SubmeshOverride::Constant)?o->constant:s.constant;
         const GPU_TEVSCALE scales[]={GPU_TEVSCALE_1,GPU_TEVSCALE_2,GPU_TEVSCALE_4,GPU_TEVSCALE_1};
+        // stateCache: the combiners this submesh's last setup built, when it
+        // read the same inputs: its material (no override or binder), the Star
+        // colour, the fog and the lighting mode. Menu icon layers, ink, ghost
+        // passes and native Mii heads add stages of their own; the fog stages
+        // of light-texture and statue materials depend on the eye depth.
+        SubmeshState* block=nullptr;bool blockHit=false,blockCheck=false;
+        if(stateCache&&!o&&!material&&!menuIconLayer_&&!inkBlack&&!execGhostPass_&&!model.nativeMiiLighting){
+            const unsigned channel=(s.lighting&retail::ChannelMask)>>retail::ChannelShift;
+            if(!(fogKey&&(s.lighting&retail::Fog)&&(channel==2||s.menuReflection==8||s.menuReflection==10))){
+                if(model.stateBlockCount!=model.submeshes.size()){
+                    model.stateBlocks.reset(new(std::nothrow) SubmeshState[model.submeshes.size()]);
+                    model.stateBlockCount=model.stateBlocks?uint32_t(model.submeshes.size()):0;
+                }
+                if(i<model.stateBlockCount){
+                    block=&model.stateBlocks[i];
+                    const uint8_t lighting=uint8_t(courseLighting_)|uint8_t(uint8_t(retail_!=nullptr)<<1);
+                    const bool same=block->valid&&block->additive==additiveColor&&block->fog==fogKey&&block->mode==lighting&&sameMaterial(block->material,s);
+                    blockHit=same&&!stateCacheVerify;blockCheck=same&&stateCacheVerify;
+                    if(!same){block->valid=false;block->material=s;block->additive=additiveColor;block->fog=fogKey;block->mode=lighting;}
+                }
+            }
+        }
+        if(blockHit){
+            // The same stages the setup marks for upload: citro3d sends what differs.
+            for(int stage=0;stage<6;++stage)C3D_SetTexEnv(stage,&block->env[stage]);
+            C3D_TexEnvBufUpdate(C3D_RGB,block->bufRgb);C3D_TexEnvBufUpdate(C3D_Alpha,block->bufAlpha);
+            ++stats_.stateHits;
+        }else{
         if(!material){
-            C3D_TexEnvBufUpdate(C3D_Both,0);
+            tevBuf(C3D_Both,0);
             for(int stage=0;stage<6;++stage)C3D_TexEnvInit(C3D_GetTexEnv(stage));
             auto* e0=C3D_GetTexEnv(0);auto* e1=C3D_GetTexEnv(1);
             C3D_TexEnvSrc(e0,C3D_Both,GPU_TEXTURE0,GPU_PRIMARY_COLOR);
@@ -1700,7 +1758,7 @@ void Renderer::drawNow(const Model& model,const Vertex* vertices,const C3D_Mtx& 
             if(s.menuReflection==28){
                 // Stopwatch: clamp(C2.a*raster + (metal or raster)), then
                 // add metal.rgb * metal.a * K2.a. Keep the first clamp.
-                C3D_TexEnvBufUpdate(C3D_RGB,1);
+                tevBuf(C3D_RGB,1);
                 C3D_TexEnvColor(e0,s.reflectionConstant);
                 C3D_TexEnvSrc(e0,C3D_RGB,GPU_PRIMARY_COLOR,GPU_CONSTANT,s.reflectionAdd&1?GPU_PRIMARY_COLOR:GPU_TEXTURE1);
                 C3D_TexEnvFunc(e0,C3D_RGB,GPU_MULTIPLY_ADD);
@@ -1722,7 +1780,7 @@ void Renderer::drawNow(const Model& model,const Vertex* vertices,const C3D_Mtx& 
             }else if(s.menuReflection==30){
                 // Balloon: clamp(base*K + metal*(1-K)), then
                 // clamp(2*(previous*raster + C2 - .5)).
-                C3D_TexEnvBufUpdate(C3D_RGB,1);
+                tevBuf(C3D_RGB,1);
                 C3D_TexEnvColor(e0,constant);C3D_TexEnvSrc(e0,C3D_RGB,GPU_TEXTURE0,GPU_CONSTANT);C3D_TexEnvFunc(e0,C3D_RGB,GPU_MODULATE);
                 C3D_TexEnvColor(e1,s.reflectionConstant);C3D_TexEnvSrc(e1,C3D_RGB,GPU_TEXTURE1,GPU_CONSTANT);C3D_TexEnvFunc(e1,C3D_RGB,GPU_MODULATE);
                 auto* sum=C3D_GetTexEnv(2);C3D_TexEnvSrc(sum,C3D_RGB,GPU_PREVIOUS_BUFFER,GPU_PREVIOUS);C3D_TexEnvFunc(sum,C3D_RGB,GPU_ADD);
@@ -1737,7 +1795,7 @@ void Renderer::drawNow(const Model& model,const Vertex* vertices,const C3D_Mtx& 
                 // Award Tico's original signed yellow/metal environment layer.
                 C3D_TexEnvSrc(e0,C3D_RGB,GPU_TEXTURE0,GPU_PRIMARY_COLOR);
                 C3D_TexEnvFunc(e0,C3D_RGB,GPU_MODULATE);C3D_TexEnvScale(e0,C3D_RGB,GPU_TEVSCALE_1);
-                C3D_TexEnvBufUpdate(C3D_RGB,1);
+                tevBuf(C3D_RGB,1);
                 C3D_TexEnvColor(e1,s.reflectionConstant);
                 C3D_TexEnvSrc(e1,C3D_RGB,GPU_CONSTANT,GPU_CONSTANT,GPU_TEXTURE1);
                 C3D_TexEnvOpRgb(e1,GPU_TEVOP_RGB_SRC_ALPHA,GPU_TEVOP_RGB_SRC_COLOR,GPU_TEVOP_RGB_SRC_COLOR);
@@ -1865,7 +1923,7 @@ void Renderer::drawNow(const Model& model,const Vertex* vertices,const C3D_Mtx& 
                 // Save P in the delayed buffer so the last addition does not
                 // replace it with the second stage's interpolation result.
                 const bool halfGlow=(s.reflectionAdd&2)!=0;
-                C3D_TexEnvBufUpdate(C3D_RGB,halfGlow?2:1);
+                tevBuf(C3D_RGB,halfGlow?2:1);
                 C3D_TexEnvColor(e0,constant);
                 C3D_TexEnvSrc(e0,C3D_RGB,GPU_CONSTANT,GPU_TEXTURE0,GPU_CONSTANT);
                 C3D_TexEnvOpRgb(e0,GPU_TEVOP_RGB_ONE_MINUS_SRC_COLOR,GPU_TEVOP_RGB_SRC_COLOR,GPU_TEVOP_RGB_SRC_COLOR);
@@ -1895,7 +1953,7 @@ void Renderer::drawNow(const Model& model,const Vertex* vertices,const C3D_Mtx& 
                 // Keep albedo in the delayed TEV buffer while weighting the
                 // environment. Adding before subtracting the bias must not
                 // clamp the unbiassed sum (which may be greater than one).
-                C3D_TexEnvBufUpdate(C3D_RGB,1);
+                tevBuf(C3D_RGB,1);
                 C3D_TexEnvColor(e0,constant);
                 C3D_TexEnvSrc(e0,C3D_RGB,GPU_TEXTURE0,GPU_CONSTANT);
                 C3D_TexEnvFunc(e0,C3D_RGB,GPU_MODULATE);
@@ -2069,6 +2127,7 @@ void Renderer::drawNow(const Model& model,const Vertex* vertices,const C3D_Mtx& 
             C3D_TexEnvSrc(remap,C3D_RGB,GPU_PREVIOUS,GPU_CONSTANT);C3D_TexEnvFunc(remap,C3D_RGB,GPU_ADD);
             C3D_TexEnvSrc(remap,C3D_Alpha,GPU_PREVIOUS,GPU_CONSTANT);C3D_TexEnvFunc(remap,C3D_Alpha,GPU_MODULATE);
         }
+        } // !blockHit
         retail=(courseLighting_||(s.lighting&mkw::retail::Menu))&&retailLight(s);
         if(!retail){
             // Legacy grade: vertex colour * max(ambient floor, 0.35) * grade.
@@ -2136,8 +2195,11 @@ void Renderer::drawNow(const Model& model,const Vertex* vertices,const C3D_Mtx& 
         }
         if(diag::textureUse){useData[0]=texture->data;useData[1]=secondary->data;useData[2]=s.menuReflection==8?model.textures[(s.reflectionConstant&0xffff)-1]->gpu.data:nullptr;}
         // Retail course lighting: fog stage, light textures (after the generic setup).
+        // With a state block applied it only binds and sets uniforms (tev()).
+        tevDry_=blockHit;
         retailEnvironment=retail&&retailCombiners(s,mv,backdrop,additiveColor||((s.menuReflection!=7&&s.menuReflection!=8&&s.menuReflection!=14)&&o&&(o->flags&SubmeshOverride::Add)),
             additiveColor?(additiveColor>>24)|((additiveColor>>8)&0xff00)|((additiveColor<<8)&0xff0000):o&&(o->flags&SubmeshOverride::Add)?o->add&0xffffff:0,constant);
+        tevDry_=false;
         // A material binder owns the combiners and may replace any state above.
         drawCullSet_=false;
         if(material)material(context,i);
@@ -2158,7 +2220,19 @@ void Renderer::drawNow(const Model& model,const Vertex* vertices,const C3D_Mtx& 
             C3D_DepthTest(true,GPU_GEQUAL,GPU_WRITE_COLOR);C3D_BlendingColor(uint32_t(execGhostAlpha_)<<24);
             C3D_AlphaBlend(GPU_BLEND_ADD,GPU_BLEND_ADD,GPU_CONSTANT_ALPHA,GPU_ONE_MINUS_CONSTANT_ALPHA,GPU_ZERO,GPU_ONE);
         }
+        if(block&&!blockHit){
+            // Every stage was marked for upload by the setup (TexEnvInit of all six).
+            bool differs=block->bufRgb!=tevBufRgb_||block->bufAlpha!=tevBufAlpha_;
+            for(int stage=0;stage<6;++stage){
+                const C3D_TexEnv& built=*C3D_GetTexEnv(stage);
+                if(blockCheck&&std::memcmp(&built,&block->env[stage],sizeof built))differs=true;
+                block->env[stage]=built;
+            }
+            if(blockCheck){++stateVerified;if(differs)++stateMismatches;}
+            block->bufRgb=tevBufRgb_;block->bufAlpha=tevBufAlpha_;block->valid=true;
+        }
         last=o?nullptr:&s;lastRetail=retail;lastEnvironment=retailEnvironment;
+        if(setupStart)stats_.setupTicks+=svcGetSystemTick()-setupStart;
         } // !repeat
         C3D_BoolUnifSet(GPU_VERTEX_SHADER,projectedWaterLoc_,s.menuReflection==11||s.menuReflection==22);
         if(s.menuReflection==11||s.menuReflection==22){
@@ -2226,7 +2300,7 @@ void Renderer::drawNow(const Model& model,const Vertex* vertices,const C3D_Mtx& 
                     C3D_BoolUnifSet(GPU_VERTEX_SHADER,environmentMappedLoc_,true);
                     uvPlainNow(true);
                 }
-                C3D_DrawElements(GPU_TRIANGLES,part.count,C3D_UNSIGNED_SHORT,model.indices+part.first);
+                drawElements(part.count,model.indices+part.first);
                 stats_.triangles+=part.count/3;++stats_.drawCalls;
                 if(diag::modelPixels){C3D_Mtx partClip;Mtx_Multiply(&partClip,&projection_,&partView);stats_.pixels+=trianglePixels(partClip,vertices,model.indices+part.first,part.count,screenWidth_);}
             }
@@ -2246,7 +2320,7 @@ void Renderer::drawNow(const Model& model,const Vertex* vertices,const C3D_Mtx& 
             if(const uint16_t* list=facingIndicesNow(model,unsigned(i),clip,kept)){
                 ++facingDraws;facingKept+=kept/3;facingTotal+=s.count/3;
                 if(kept){
-                    C3D_DrawElements(GPU_TRIANGLES,kept,C3D_UNSIGNED_SHORT,list);
+                    drawElements(kept,list);
                     stats_.triangles+=kept/3;++stats_.drawCalls;
                     if(diag::modelPixels)stats_.pixels+=trianglePixels(clip,vertices,list,kept,screenWidth_);
                 }
@@ -2255,7 +2329,7 @@ void Renderer::drawNow(const Model& model,const Vertex* vertices,const C3D_Mtx& 
         }
         for(unsigned n=0;n<ranges.count;++n){
             const auto range=ranges.ranges[n];
-            C3D_DrawElements(GPU_TRIANGLES,range.count,C3D_UNSIGNED_SHORT,subIndices+range.first);
+            drawElements(range.count,subIndices+range.first);
             stats_.triangles+=range.count/3;++stats_.drawCalls;
             if(diag::modelPixels&&!skinPalette_){C3D_Mtx clip;Mtx_Multiply(&clip,&projection_,&mv);stats_.pixels+=trianglePixels(clip,vertices,subIndices+range.first,range.count,screenWidth_);}
         }
@@ -2263,6 +2337,7 @@ void Renderer::drawNow(const Model& model,const Vertex* vertices,const C3D_Mtx& 
         if(menuEnvironment||(s.lighting&retail::FixedEnvironment))clearEnvironmentUvNow();
         pendingEnd=retail;
     }
+    struct ResetTimer {uint64_t& sum;uint64_t start;~ResetTimer(){if(start)sum+=svcGetSystemTick()-start;}} resetTimer{stats_.resetTicks,drawTiming?svcGetSystemTick():0};
     if(pendingEnd)retailEndSubmesh();
     uvPlainNow(false);
     sceneDepthMap(projection_);
@@ -2424,7 +2499,27 @@ void Renderer::shadowVolumesNow(const ShadowVolume* volumes,unsigned count,float
     if(!bounded)++diag::shadowRectStats.full;
     else if(rect[2]>rect[0]&&rect[3]>rect[1]){++diag::shadowRectStats.bounded;diag::shadowRectStats.area+=uint64_t((rect[2]-rect[0])*(rect[3]-rect[1]));}
     else ++diag::shadowRectStats.empty;
-    if(!bounded||(rect[2]>rect[0]&&rect[3]>rect[1]))
+    // volumeRects: each volume's own rectangle (the same bound, per volume),
+    // when they cover clearly less than the union's. Every marked pixel lies
+    // in some volume's rectangle, 2 pixels inside its edge, and the first
+    // rectangle to reach it shades it and clears its count: the same pixels.
+    constexpr unsigned MaxVolumeRects=32;
+    float rects[MaxVolumeRects][4];unsigned rectCount=0;bool perVolume=false;
+    if(bounded&&volumeRects&&count>1&&count<=MaxVolumeRects&&rect[2]>rect[0]&&rect[3]>rect[1]){
+        float sum=0;bool each=true;
+        for(unsigned i=0;i<count;++i){
+            const auto& v=volumes[i];if(!v.model||!v.model->indexCount)continue;
+            float r[4];
+            if(!shadowVolumeRect(&v,1,view_,projection_,screenWidth_,r)){each=false;break;}
+            if(r[2]>r[0]&&r[3]>r[1]){std::copy(r,r+4,rects[rectCount++]);sum+=(r[2]-r[0])*(r[3]-r[1]);}
+        }
+        const float area=(rect[2]-rect[0])*(rect[3]-rect[1]);
+        perVolume=each&&sum<area*.8f;
+        if(perVolume){++volumeRectFrames;volumeRectsDrawn+=rectCount;volumeRectSaved+=uint64_t(area-sum);}
+    }
+    // No volume's own rectangle on screen: no pixel holds a count.
+    if(perVolume){if(rectCount)shadeRectsNow(1.f-float(shade)/255.f,shadowUnion_?4:0,rects,rectCount);}
+    else if(!bounded||(rect[2]>rect[0]&&rect[3]>rect[1]))
         screenFadeNow(1.f-float(shade)/255.f,false,false,shadowUnion_?4:0,bounded?rect:nullptr);
     // The fullscreen shade temporarily binds an orthographic projection.
     // Consecutive volume groups must return to this eye's perspective.
@@ -2912,6 +3007,41 @@ void Renderer::screenFadeNow(float opacity,bool white,bool depthOnly,int shadowM
     auto* buf=C3D_GetBufInfo();BufInfo_Init(buf);BufInfo_Add(buf,fade,sizeof(Vertex),4,0x3210);
     C3D_DrawArrays(GPU_TRIANGLES,0,6);stats_.triangles+=2;++stats_.drawCalls;
 }
+void Renderer::shadeRectsNow(float opacity,int shadowMode,const float (*rects)[4],unsigned count){
+    flushSprites();
+    // screenFadeNow's shade (black, this opacity, shadowMode 0 or 4) over each
+    // rectangle: one unit square of the overlay, placed by the model view.
+    const auto alpha=static_cast<uint8_t>(std::round(std::clamp(opacity,0.f,1.f)*255.f));
+    const Vec3 positions[6]={{0,0,0},{1,0,0},{1,1,0},{0,0,0},{1,1,0},{0,1,0}};
+    Vertex* quad=reserveOverlay(6);
+    if(writesVertices()){
+        for(int i=0;i<6;++i)quad[i]={positions[i],{0,0,1},{0,0},{0,0},{0,0,0,alpha}};
+        flushGpuData(quad,6*sizeof(Vertex));
+    }
+    C3D_Mtx projection,place;Mtx_OrthoTilt(&projection,0,screenWidth_,240,0,-1,1,false);
+    C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER,projectionLoc_,&projection);
+    C3D_FVUnifSet(GPU_VERTEX_SHADER,lightLoc_,1,1,1,1);
+    C3D_FVUnifSet(GPU_VERTEX_SHADER,uvScrollLoc_,0,0,0,0);
+    for(int i=0;i<6;++i)C3D_TexEnvInit(C3D_GetTexEnv(i));
+    auto* env=C3D_GetTexEnv(0);C3D_TexEnvSrc(env,C3D_Both,GPU_PRIMARY_COLOR);C3D_TexEnvFunc(env,C3D_Both,GPU_REPLACE);
+    C3D_CullFace(GPU_CULL_NONE);C3D_AlphaTest(false,GPU_ALWAYS,0);
+    C3D_DepthTest(false,GPU_ALWAYS,GPU_WRITE_COLOR);
+    C3D_AlphaBlend(GPU_BLEND_ADD,GPU_BLEND_ADD,GPU_SRC_ALPHA,GPU_ONE_MINUS_SRC_ALPHA,GPU_ONE,GPU_ONE_MINUS_SRC_ALPHA);
+    if(shadowMode){
+        C3D_DepthTest(false,GPU_ALWAYS,GPU_WRITE_ALPHA);
+        C3D_AlphaBlend(GPU_BLEND_ADD,shadowMode==4?GPU_BLEND_MAX:GPU_BLEND_ADD,GPU_ONE,GPU_ZERO,GPU_ONE,GPU_ZERO);
+    }
+    auto* buf=C3D_GetBufInfo();BufInfo_Init(buf);BufInfo_Add(buf,quad,sizeof(Vertex),4,0x3210);
+    for(unsigned r=0;r<count;++r){
+        const float x0=rects[r][0],y0=rects[r][1],x1=rects[r][2],y1=rects[r][3];
+        countPixels(x0,y0,x1,y1);
+        Mtx_Identity(&place);place.r[0].x=x1-x0;place.r[0].w=x0;place.r[1].y=y1-y0;place.r[1].w=y0;
+        C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER,modelViewLoc_,&place);
+        C3D_DrawArrays(GPU_TRIANGLES,0,6);stats_.triangles+=2;++stats_.drawCalls;
+    }
+    // As screenFadeNow leaves it.
+    Mtx_Identity(&place);C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER,modelViewLoc_,&place);
+}
 void Renderer::spriteState(){
     if(spriteStateReady_)return;
     C3D_Mtx projection=screenProjection(screenParallax_),identity;Mtx_Identity(&identity);
@@ -2969,18 +3099,27 @@ void Renderer::spriteNow(const Texture& texture,float x,float y,float width,floa
     }
 }
 void Renderer::fontSpriteNow(const Texture& texture,float x,float y,float width,float height,float u1,float v1,float alpha,uint32_t gradientTop,uint32_t gradientBottom,uint32_t color0,uint32_t color1){
+    const FontQuad quad{x,y,width,height,u1,v1,alpha,gradientTop,gradientBottom};
+    fontSpritesNow(texture,&quad,1,color0,color1);
+}
+void Renderer::fontSpritesNow(const Texture& texture,const FontQuad* quads,unsigned count,uint32_t color0,uint32_t color1){
     if(spriteCount_>=spriteCapacity_)return;
     flushSprites();
-    Vertex* vertices=spriteBase_+6*spriteCount_++;spriteRunFirst_=spriteCount_;
-    const uint64_t usePixels=stats_.pixels;
-    countPixels(x,y,x+width,y+height);
-    if(diag::textureUse){const void* d=texture.gpu.data;diag::textureDrawn(&d,1,1,stats_.pixels-usePixels);}
-    const Vec3 p[6]={{x,y,0},{x+width,y,0},{x+width,y+height,0},{x,y,0},{x+width,y+height,0},{x,y+height,0}};
-    const float uv[6][2]={{0,1},{u1,1},{u1,1-v1},{0,1},{u1,1-v1},{0,1-v1}};
-    if(writesVertices())for(unsigned i=0;i<6;++i){
-        const uint32_t rgba=(i==2||i>=4)?gradientBottom:gradientTop;
-        const auto a=uint8_t(std::round(std::clamp(alpha,0.f,1.f)*float(rgba&0xff)));
-        vertices[i]={p[i],{0,0,1},{uv[i][0],uv[i][1]},{0,0},{uint8_t(rgba>>24),uint8_t(rgba>>16),uint8_t(rgba>>8),a}};
+    // One draw for every quad (consecutive font sprites with this texture and these constants: quadMerge).
+    Vertex* vertices=spriteBase_+6*spriteCount_;unsigned drawn=0;
+    for(unsigned q=0;q<count&&spriteCount_<spriteCapacity_;++q,++drawn){
+        const auto& c=quads[q];const float x=c.x,y=c.y,width=c.width,height=c.height,u1=c.u1,v1=c.v1;
+        Vertex* quad=spriteBase_+6*spriteCount_++;spriteRunFirst_=spriteCount_;
+        const uint64_t usePixels=stats_.pixels;
+        countPixels(x,y,x+width,y+height);
+        if(diag::textureUse){const void* d=texture.gpu.data;diag::textureDrawn(&d,1,1,stats_.pixels-usePixels);}
+        const Vec3 p[6]={{x,y,0},{x+width,y,0},{x+width,y+height,0},{x,y,0},{x+width,y+height,0},{x,y+height,0}};
+        const float uv[6][2]={{0,1},{u1,1},{u1,1-v1},{0,1},{u1,1-v1},{0,1-v1}};
+        if(writesVertices())for(unsigned i=0;i<6;++i){
+            const uint32_t rgba=(i==2||i>=4)?c.gradientBottom:c.gradientTop;
+            const auto a=uint8_t(std::round(std::clamp(c.alpha,0.f,1.f)*float(rgba&0xff)));
+            quad[i]={p[i],{0,0,1},{uv[i][0],uv[i][1]},{0,0},{uint8_t(rgba>>24),uint8_t(rgba>>16),uint8_t(rgba>>8),a}};
+        }
     }
     // Sprite-buffer quads flush with the rest of it in end() (or beginBottom);
     // a mid-frame command-list split flushes all of LINEAR first.
@@ -3001,27 +3140,36 @@ void Renderer::fontSpriteNow(const Texture& texture,float x,float y,float width,
     C3D_DepthTest(false,GPU_ALWAYS,GPU_WRITE_COLOR);
     C3D_AlphaBlend(GPU_BLEND_ADD,GPU_BLEND_ADD,GPU_SRC_ALPHA,GPU_ONE_MINUS_SRC_ALPHA,GPU_ONE,GPU_ONE_MINUS_SRC_ALPHA);
     auto* buf=C3D_GetBufInfo();BufInfo_Init(buf);BufInfo_Add(buf,vertices,sizeof(Vertex),4,0x3210);
-    C3D_DrawArrays(GPU_TRIANGLES,0,6);stats_.triangles+=2;++stats_.drawCalls;
+    C3D_DrawArrays(GPU_TRIANGLES,0,6*int(drawn));stats_.triangles+=2*drawn;++stats_.drawCalls;
 }
 void Renderer::materialQuadsNow(const Texture* texture,const MaterialQuad* quads,unsigned count,uint32_t color0,uint32_t color1,int wrapS,int wrapT,bool additive,bool opaque){
-    if(!count||spriteCount_>=spriteCapacity_)return;
-    count=std::min(count,unsigned(spriteCapacity_-spriteCount_));
+    materialQuadsNow(texture,&quads,&count,1,color0,color1,wrapS,wrapT,additive,opaque);
+}
+void Renderer::materialQuadsNow(const Texture* texture,const MaterialQuad* const* lists,const unsigned* counts,unsigned listCount,uint32_t color0,uint32_t color1,int wrapS,int wrapT,bool additive,bool opaque){
+    if(!listCount||!counts[0]||spriteCount_>=spriteCapacity_)return;
     flushSprites();
-    Vertex* vertices=spriteBase_+6*spriteCount_;const int first=spriteCount_;
-    spriteCount_+=int(count);spriteRunFirst_=spriteCount_;
-    const uint64_t usePixels=stats_.pixels;
-    for(unsigned q=0;q<count;++q){const auto& c=quads[q];
-        countPixels(std::min({c.x[0],c.x[1],c.x[2],c.x[3]}),std::min({c.y[0],c.y[1],c.y[2],c.y[3]}),std::max({c.x[0],c.x[1],c.x[2],c.x[3]}),std::max({c.y[0],c.y[1],c.y[2],c.y[3]}));}
-    if(diag::textureUse&&texture){const void* d=texture->gpu.data;diag::textureDrawn(&d,1,1,stats_.pixels-usePixels);}
+    // Every list's quads in one draw (consecutive commands with this texture and these constants: quadMerge).
+    Vertex* vertices=spriteBase_+6*spriteCount_;const int first=spriteCount_;unsigned total=0;
     constexpr unsigned order[6]={0,1,3,0,3,2};
-    if(writesVertices())for(unsigned q=0;q<count;++q){
-        const auto& quad=quads[q];
-        for(unsigned i=0;i<6;++i){
-            const unsigned k=order[i];const uint32_t rgba=quad.color[k];
-            // tex3ds images are stored bottom-up.
-            vertices[q*6+i]={{quad.x[k],quad.y[k],0},{0,0,1},{quad.u[k],1-quad.v[k]},{0,0},{uint8_t(rgba>>24),uint8_t(rgba>>16),uint8_t(rgba>>8),uint8_t(rgba)}};
+    for(unsigned l=0;l<listCount&&spriteCount_<spriteCapacity_;++l){
+        const MaterialQuad* quads=lists[l];
+        const unsigned count=std::min(counts[l],unsigned(spriteCapacity_-spriteCount_));
+        spriteCount_+=int(count);spriteRunFirst_=spriteCount_;
+        const uint64_t usePixels=stats_.pixels;
+        for(unsigned q=0;q<count;++q){const auto& c=quads[q];
+            countPixels(std::min({c.x[0],c.x[1],c.x[2],c.x[3]}),std::min({c.y[0],c.y[1],c.y[2],c.y[3]}),std::max({c.x[0],c.x[1],c.x[2],c.x[3]}),std::max({c.y[0],c.y[1],c.y[2],c.y[3]}));}
+        if(diag::textureUse&&texture){const void* d=texture->gpu.data;diag::textureDrawn(&d,1,1,stats_.pixels-usePixels);}
+        if(writesVertices())for(unsigned q=0;q<count;++q){
+            const auto& quad=quads[q];
+            for(unsigned i=0;i<6;++i){
+                const unsigned k=order[i];const uint32_t rgba=quad.color[k];
+                // tex3ds images are stored bottom-up.
+                vertices[(total+q)*6+i]={{quad.x[k],quad.y[k],0},{0,0,1},{quad.u[k],1-quad.v[k]},{0,0},{uint8_t(rgba>>24),uint8_t(rgba>>16),uint8_t(rgba>>8),uint8_t(rgba)}};
+            }
         }
+        total+=count;
     }
+    const unsigned count=total;
     // Flushed with the sprite buffer in end() (see drawScreenFontSprite).
     C3D_Mtx projection=screenProjection(screenParallax_),identity;Mtx_Identity(&identity);
     C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER,projectionLoc_,&projection);

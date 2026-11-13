@@ -67,7 +67,8 @@ public:
   if(rendered){r.gpu=renderer.previousGpuMs;r.draws=renderer.drawCalls;r.triangles=renderer.triangles;
    r.culledTriangles=renderer.culledTriangles;r.culledSubmeshes=renderer.culledSubmeshes;r.metrics=renderMetrics;
    r.command=renderer.commandUsage;r.renderThread=renderer.renderThreadMs;r.renderWait=renderer.beginWaitMs;r.recordWait=renderer.recordWaitMs;
-   r.hook=renderer.hookMs;r.gpuGap=renderer.gpuGapMs;}
+   r.hook=renderer.hookMs;r.gpuGap=renderer.gpuGapMs;
+   r.drawSetup=renderer.drawSetupMs;r.drawCall=renderer.drawCallMs;r.drawReset=renderer.drawResetMs;r.drawNow=renderer.drawNowMs;r.drawSetups=renderer.drawSetups;r.stateHits=renderer.stateHits;}
   accumulate(r);
  }
  // Pause: save what exists so far; the race continues in the same files.
@@ -76,9 +77,10 @@ public:
  // after resuming (which measures the pause) is skipped.
  void hold(){skip_=true;}
 private:
- struct Row {float time=0;unsigned course=0,frame=0,ticks=0,rendered=0;float interval=0;std::array<float,StageCount> ms{};float gpu=0;unsigned draws=0,triangles=0,culledTriangles=0,culledSubmeshes=0;RenderMetrics metrics{};float command=0,renderThread=0,renderWait=0,recordWait=0,hook=0,gpuGap=0;unsigned passSkip=0,opens=0;float openMs=0;};
+ struct Row {float time=0;unsigned course=0,frame=0,ticks=0,rendered=0;float interval=0;std::array<float,StageCount> ms{};float gpu=0;unsigned draws=0,triangles=0,culledTriangles=0,culledSubmeshes=0;RenderMetrics metrics{};float command=0,renderThread=0,renderWait=0,recordWait=0,hook=0,gpuGap=0;unsigned passSkip=0,opens=0;float openMs=0;float drawSetup=0,drawCall=0,drawReset=0,drawNow=0;unsigned drawSetups=0,stateHits=0;};
  struct Second {unsigned loops=0,rendered=0,late1=0,late2=0,ticks=0,draws=0,triangles=0,culledTriangles=0,flushBytes=0,skinned=0,linearFree=0,opens=0,leaveOuts=0;
   float duration=0,intervalMax=0,gpu=0,gpuMax=0,command=0,renderThread=0,renderWait=0,recordWait=0,worker=0,contact=0,shadowSupport=0,openMs=0,hook=0,hookMax=0,gpuGap=0,gpuGapMax=0,gpuGapMin=0;
+  float drawSetup=0,drawCall=0,drawReset=0,drawNow=0,drawSetups=0,stateHits=0;
   std::array<float,StageCount> ms{},msMax{};};
  static constexpr unsigned MaxSeconds=480,SpikeCount=32,Buckets=200; // 0.5 ms histogram buckets to 100 ms
  static constexpr float Refresh=1000.f/59.83f;
@@ -96,6 +98,7 @@ private:
    s.flushBytes+=r.metrics.flushBytes;s.skinned+=r.metrics.skinnedVertices;s.command=std::max(s.command,r.command);
    s.renderThread+=r.renderThread;s.renderWait+=r.renderWait;s.recordWait+=r.recordWait;s.worker+=r.metrics.workerMs;s.contact+=r.metrics.contactMs;s.shadowSupport+=r.metrics.shadowSupportMs;
    s.hook+=r.hook;s.hookMax=std::max(s.hookMax,r.hook);s.gpuGap+=r.gpuGap;s.gpuGapMax=std::max(s.gpuGapMax,r.gpuGap);
+   s.drawSetup+=r.drawSetup;s.drawCall+=r.drawCall;s.drawReset+=r.drawReset;s.drawNow+=r.drawNow;s.drawSetups+=float(r.drawSetups);s.stateHits+=float(r.stateHits);
    // Least gap of the second (0 = unmeasured, e.g. unpipelined frames): what a frame ready in time still pays.
    if(r.gpuGap>0)s.gpuGapMin=s.gpuGapMin>0?std::min(s.gpuGapMin,r.gpuGap):r.gpuGap;}
   // Keep the slowest frames; replace the fastest kept one.
@@ -130,13 +133,14 @@ private:
    std::fputs("second,loops,rendered,late_frames,very_late_frames,max_interval_ms,physics_ticks",f);
    for(auto* n:StageNames)std::fprintf(f,",%s_ms",n);
    for(auto* n:StageNames)std::fprintf(f,",%s_max_ms",n);
-   std::fputs(",gpu_ms,gpu_max_ms,draws,triangles,culled_triangles,flush_kb,skinned_vertices,command_usage_max,render_thread_ms,render_begin_wait_ms,record_wait_ms,worker_ms,contact_ms,shadow_support_ms,linear_free_kb,file_opens,file_open_ms,leave_out_frames,hook_ms,hook_max_ms,gpu_gap_ms,gpu_gap_max_ms,gpu_gap_min_ms\n",f);
+   std::fputs(",gpu_ms,gpu_max_ms,draws,triangles,culled_triangles,flush_kb,skinned_vertices,command_usage_max,render_thread_ms,render_begin_wait_ms,record_wait_ms,worker_ms,contact_ms,shadow_support_ms,linear_free_kb,file_opens,file_open_ms,leave_out_frames,hook_ms,hook_max_ms,gpu_gap_ms,gpu_gap_max_ms,gpu_gap_min_ms,draw_setup_ms,draw_call_ms,draw_reset_ms,draw_now_ms,draw_setups,state_hits\n",f);
    for(unsigned i=0;i<seconds_;++i){const auto& s=second_[i];const float n=float(std::max(1u,s.rendered));
     std::fprintf(f,"%u,%u,%u,%u,%u,%.3f,%u",i,s.loops,s.rendered,s.late1,s.late2,s.intervalMax,s.ticks);
     for(float v:s.ms)std::fprintf(f,",%.3f",v/n);
     for(float v:s.msMax)std::fprintf(f,",%.3f",v);
-    std::fprintf(f,",%.3f,%.3f,%.1f,%.0f,%.0f,%.1f,%.0f,%.4f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%u,%u,%.3f,%u,%.3f,%.3f,%.3f,%.3f,%.3f\n",s.gpu/n,s.gpuMax,s.draws/n,s.triangles/n,s.culledTriangles/n,s.flushBytes/n/1024.f,s.skinned/n,
-     s.command,s.renderThread/n,s.renderWait/n,s.recordWait/n,s.worker/n,s.contact/n,s.shadowSupport/n,s.linearFree/1024,s.opens,s.openMs,s.leaveOuts,s.hook/n,s.hookMax,s.gpuGap/n,s.gpuGapMax,s.gpuGapMin);
+    std::fprintf(f,",%.3f,%.3f,%.1f,%.0f,%.0f,%.1f,%.0f,%.4f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%u,%u,%.3f,%u,%.3f,%.3f,%.3f,%.3f,%.3f,%.4f,%.4f,%.4f,%.4f,%.1f,%.1f\n",s.gpu/n,s.gpuMax,s.draws/n,s.triangles/n,s.culledTriangles/n,s.flushBytes/n/1024.f,s.skinned/n,
+     s.command,s.renderThread/n,s.renderWait/n,s.recordWait/n,s.worker/n,s.contact/n,s.shadowSupport/n,s.linearFree/1024,s.opens,s.openMs,s.leaveOuts,s.hook/n,s.hookMax,s.gpuGap/n,s.gpuGapMax,s.gpuGapMin,
+     s.drawSetup/n,s.drawCall/n,s.drawReset/n,s.drawNow/n,s.drawSetups/n,s.stateHits/n);
    }
    std::fclose(f);
   }

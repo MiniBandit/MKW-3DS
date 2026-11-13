@@ -5,6 +5,7 @@
 #include <atomic>
 #include <cstdint>
 #include <cstddef>
+#include <cstdio>
 #include <cstring>
 #include <functional>
 #include <string>
@@ -140,6 +141,16 @@ struct SubmeshOverride {
     enum : uint32_t { Constant=1, Tint=2, Alpha=4, Add=8, Uv=16, Texture=32 };
     float uv[12]; float tint[4]; int32_t texture[2]; uint32_t constant,add,flags;
 };
+// Renderer::stateCache: one submesh's six combiners and combiner-buffer
+// masks as its material setup left them, with every input that setup read
+// besides the material (the Star colour, fog, lighting mode).
+struct SubmeshState {
+    Submesh material{};
+    C3D_TexEnv env[6]{};
+    uint32_t additive=0,fog=0;
+    uint8_t bufRgb=0,bufAlpha=0,mode=0;
+    bool valid=false;
+};
 class Model {
 public:
     bool roadSamplerPolicy=false; // executable-only static-road sampler ranges
@@ -223,6 +234,10 @@ public:
     struct FacingPlanes {uint32_t submesh;float radius;std::vector<std::array<float,4>> planes;};
     std::vector<FacingPlanes> facing;
     void buildFacingCull(unsigned submesh);
+    // Renderer::stateCache: each submesh's combiners after its first setup
+    // (render thread only; allocated at its first cacheable draw, never copied).
+    mutable std::unique_ptr<SubmeshState[]> stateBlocks;
+    mutable uint32_t stateBlockCount=0;
     ~Model();
     bool load(const char* path,bool dynamicLighting=false,bool liveDiffuse=false);
 };
@@ -692,6 +707,34 @@ public:
     // DIAG (render thread): ticks spent in the course pass's model draws
     // (first eye of frames with pass markers) and the frames that drew any.
     uint64_t courseDrawTicks=0;unsigned long courseDrawFrames=0;
+    // drawNow applies a submesh's combiners as its last setup left them
+    // (Model::stateBlocks) while every input of that setup is unchanged,
+    // instead of building them again: the same GPU commands. A/B: no-state-cache.txt.
+    // DIAG state-cache-verify.txt builds them anyway and compares (stateMismatches).
+    bool stateCache=false,stateCacheVerify=false;
+    // Consecutive font sprites, or material quads, with the same texture and
+    // constants draw as one draw (the same pixels). A/B: no-quad-merge.txt.
+    bool quadMerge=false;
+    // Shadow volumes shade one rectangle per volume when those rectangles
+    // cover less than their union's (each marked pixel still shaded once).
+    // A/B: no-volume-rects.txt.
+    bool volumeRects=false;
+    // DIAG draw-timing.txt: drawNow's time split into material setup,
+    // C3D_DrawElements and end-of-draw resets (the last drawn frame, ms).
+    bool drawTiming=false;
+    float drawSetupMs=0,drawCallMs=0,drawResetMs=0,drawNowMs=0;
+    unsigned drawSetups=0,stateHits=0;
+    // DIAG (render thread, totals): state cache verifications and their
+    // mismatches; draws saved by quad merging; shade rectangles drawn
+    // per volume and the pixels they skipped against the union rectangle.
+    unsigned long stateVerified=0,stateMismatches=0,quadMerges=0,volumeRectFrames=0,volumeRectsDrawn=0;
+    uint64_t volumeRectSaved=0;
+    // DIAG cmd-hash.txt: each frame's GPU command words hashed (FNV-1a) into
+    // cmd-hash.csv; cmd-dump.txt lists animation ticks whose words are saved
+    // as cmd-dump-<tick>-<frame>.bin.
+    bool cmdHash=false;
+    // Reads this file's switches from the SD card (init()).
+    void readSwitches();
     // moveToVram widens texture-unit-1 ETC1 textures to ETC1A4 (opaque
     // alpha) instead of leaving them in LINEAR. A/B: no-unit1-vram.txt.
     bool unitOneEtc1a4=false;
@@ -717,7 +760,8 @@ private:
     // Recording (src/render_thread.cpp).
     struct FrameList;
     // pixels (DIAG): screen area of 2D quads (sprites, text, fades), clipped to the screen.
-    struct Stats {uint32_t triangles=0,drawCalls=0,culledTriangles=0,culledSubmeshes=0;uint64_t pixels=0;float previousGpuMs=0,beginWaitMs=0,commandUsage=0,renderMs=0,hookMs=0,gpuGapMs=0;RenderMetrics metrics{};};
+    struct Stats {uint32_t triangles=0,drawCalls=0,culledTriangles=0,culledSubmeshes=0;uint64_t pixels=0;float previousGpuMs=0,beginWaitMs=0,commandUsage=0,renderMs=0,hookMs=0,gpuGapMs=0;RenderMetrics metrics{};
+        uint64_t setupTicks=0,callTicks=0,resetTicks=0,drawNowTicks=0;uint32_t setups=0,stateHits=0;};
     bool recording() const;
     // The 3D slider's position (0..1), or its QA override.
     float slider() const;
@@ -888,10 +932,16 @@ private:
     void shadowUnionNow(bool active);
     // rect: x0,y0,x1,y1 in screen pixels (the whole screen when null).
     void screenFadeNow(float opacity,bool white,bool depthOnly=false,int shadowMode=0,const float* rect=nullptr);
+    // shadowVolumesNow's shade over several rectangles (volumeRects).
+    void shadeRectsNow(float opacity,int shadowMode,const float (*rects)[4],unsigned count);
     void drawPausedTopNow();
     void spriteNow(const Texture& texture,float x,float y,float width,float height,float u0,float v0,float u1,float v1,float alpha,uint32_t rgba,const uint32_t* corners,bool additive,float angle);
     void fontSpriteNow(const Texture& texture,float x,float y,float width,float height,float u1,float v1,float alpha,uint32_t gradientTop,uint32_t gradientBottom,uint32_t color0,uint32_t color1);
     void materialQuadsNow(const Texture* texture,const MaterialQuad* quads,unsigned count,uint32_t color0,uint32_t color1,int wrapS,int wrapT,bool additive=false,bool opaque=false);
+    // quadMerge: several lists (consecutive commands) in one draw.
+    void materialQuadsNow(const Texture* texture,const MaterialQuad* const* lists,const unsigned* counts,unsigned listCount,uint32_t color0,uint32_t color1,int wrapS,int wrapT,bool additive,bool opaque);
+    struct FontQuad {float x,y,width,height,u1,v1,alpha;uint32_t gradientTop,gradientBottom;};
+    void fontSpritesNow(const Texture& texture,const FontQuad* quads,unsigned count,uint32_t color0,uint32_t color1);
     void textNow(const char* text,float x,float y,float size,uint32_t rgba);
     Vertex* reserveOverlay(int count);
     unsigned recordSceneRegion_=3,execSceneRegion_=3;
@@ -962,6 +1012,33 @@ private:
     // Combiners/textures of a retail submesh after the generic setup; returns
     // true when it owns the environment rows (light textures).
     bool retailCombiners(const Submesh& s,const C3D_Mtx& modelView,bool backdrop,bool additive,uint32_t additiveRgb,uint32_t constant);
+    // Combiner stage `id` for a material setup: citro3d's, or a scratch
+    // stage while tevDry_ (a state block already holds the combiners; the
+    // setup only binds textures and sets uniforms).
+    C3D_TexEnv* tev(int id){return tevDry_?&tevScratch_:C3D_GetTexEnv(id);}
+    bool tevDry_=false;C3D_TexEnv tevScratch_{};
+    // C3D_TexEnvBufUpdate for a material setup, keeping the masks it set.
+    void tevBuf(int mode,int mask){C3D_TexEnvBufUpdate(mode,mask);if(mode&C3D_RGB)tevBufRgb_=uint8_t(mask);if(mode&C3D_Alpha)tevBufAlpha_=uint8_t(mask);}
+    uint8_t tevBufRgb_=0,tevBufAlpha_=0;
+    // The fog inputs of retailCombiners (0: no fog shows).
+    uint32_t retailFogKey() const;
+    // drawSetupMs..stateHits from a drawn frame's stats.
+    void takeDrawTimes(const Stats& s){
+        const double ms=1000.0/SYSCLOCK_ARM11;
+        drawSetupMs=float(double(s.setupTicks)*ms);drawCallMs=float(double(s.callTicks)*ms);drawResetMs=float(double(s.resetTicks)*ms);
+        drawNowMs=float(double(s.drawNowTicks)*ms);drawSetups=s.setups;stateHits=s.stateHits;
+    }
+#ifndef MKW_RELEASE
+    // DIAG cmd-hash.txt (render_thread.cpp).
+    void cmdHashBegin();
+    void cmdHashUpdate();
+    static void cmdHashFrameEnd(void* self);
+    bool cmdHashActive_=false,cmdHashValid_=false,cmdHashDumping_=false;
+    uint32_t cmdHashValue_=0,cmdHashWords_=0,cmdHashFrame_=0,cmdHashTick_=0;
+    const uint32_t* cmdHashAt_=nullptr;
+    std::vector<uint32_t> cmdDumpTicks_,cmdDumpWords_;
+    FILE* cmdHashFile_=nullptr;
+#endif
     void retailEnvironment(const C3D_Mtx& modelView);
     void retailEndSubmesh();
     const RigidPose* rigid_=nullptr;
