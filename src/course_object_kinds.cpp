@@ -551,8 +551,7 @@ void stepEscalatorPianta(Visual& v,int time){
         }
     }
     if(next!=current){v.moverState=next;v.frames=0;return;}
-    const char* names[]={"wait","turn","point_to"};
-    const unsigned length=v.main.model&&v.main.model->bank?v.main.model->bank->clipFrames(clip(v.main,names[next])):0;
+    const unsigned length=v.main.model&&v.main.model->bank&&v.clips[next]>=0?v.main.model->bank->clipFrames(v.clips[next]):0;
     v.frames=length&&next!=1?(v.frames+1)%length:std::min(v.frames+1,length?length-1:0u);
 }
 void drawEscalatorPianta(ObjectDraw& d,Visual& v){
@@ -1275,8 +1274,13 @@ bool classifyObject(Visual& v,const ObjectAssets& assets,int course){
     }else if(id==ObjectId::BeltCrossing){
         v.rate=1.25f;
     }else if(named(v,"escalator_group")&&live){
-        v.present=drawEscalatorPianta;v.low={};
+        // ObjFlow lists "escalator;monte_a" and link() keeps the first archive,
+        // but the group's model is the Pianta (Kinoko getResources: monte_a).
+        const auto* pianta=assets.main("monte_a");
+        v.main=assets.tracks(pianta);v.low={};v.shadow=assets.tracks(assets.shadow(pianta));
+        v.present=drawEscalatorPianta;
         v.clips[0]=clip(v.main,"wait");v.clips[1]=clip(v.main,"turn");v.clips[2]=clip(v.main,"point_to");
+        if(!v.main.model)return false;
     }else if(named(v,"monte_a")||named(v,"mare_a")||named(v,"mare_b")){
         // These archives name their idle CHR0 "wait", not the model name.
         // Leaving clip=-1 displayed the bind pose even though the bank loaded.
