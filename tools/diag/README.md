@@ -90,7 +90,8 @@ before, instead of at frame start into a copy no unfinished frame draws; the esc
 then also skip treads out of view or at the phase their copy already holds),
 `no-stadium-clear-skip.txt` (DK Summit, Waluigi Stadium and Funky Stadium capture frames
 without bloom clear the left LCD's colour again, although the capture then covers it),
-`no-clip-reuse.txt` (the clip fuse
+`no-shade-batch.txt` (shadow volumes' per-volume shade rectangles drawn one draw each again
+instead of as one batch of pixel-space quads), `no-clip-reuse.txt` (the clip fuse
 multiplies projection x modelView on every upload again instead of reusing an unchanged
 product or drawNow's culling product; exact: `cmd-hash.txt` equal either way),
 `no-box-precull.txt` (Item Box / Fake Item Box shells are drawn whole

@@ -2533,8 +2533,11 @@ bool shadowVolumeRect(const Renderer::ShadowVolume* volumes,unsigned count,const
     for(unsigned d=0;d<2;++d){lo[d]=std::max(lo[d],-1.f);hi[d]=std::min(hi[d],1.f);}
     if(hi[0]<lo[0]||hi[1]<lo[1]){rect[0]=rect[1]=rect[2]=rect[3]=0;return true;} // nothing on screen
     // Back to fade pixels through the fade's own (tilted) projection.
-    C3D_Mtx toPixels;Mtx_OrthoTilt(&toPixels,0,width,240,0,-1,1,false);
-    if(Mtx_Inverse(&toPixels)==0)return false;
+    // The fade projection's inverse for this width (render thread only; 400 or 320).
+    static float invertedWidth=-1;static C3D_Mtx inverse;static bool invertible=false;
+    if(width!=invertedWidth){Mtx_OrthoTilt(&inverse,0,width,240,0,-1,1,false);invertible=Mtx_Inverse(&inverse)!=0;invertedWidth=width;}
+    if(!invertible)return false;
+    const C3D_Mtx& toPixels=inverse;
     float px[2]={width,240},qx[2]={0,0};
     for(unsigned k=0;k<4;++k){
         const C3D_FVec p=Mtx_MultiplyFVec4(&toPixels,FVec4_New(k&1?hi[0]:lo[0],k&2?hi[1]:lo[1],0,1));
@@ -3124,6 +3127,33 @@ void Renderer::shadeRectsNow(float opacity,int shadowMode,const float (*rects)[4
     if(shadowMode){
         C3D_DepthTest(false,GPU_ALWAYS,GPU_WRITE_ALPHA);
         C3D_AlphaBlend(GPU_BLEND_ADD,shadowMode==4?GPU_BLEND_MAX:GPU_BLEND_ADD,GPU_ONE,GPU_ZERO,GPU_ONE,GPU_ZERO);
+    }
+    // Batched: every rectangle as a pixel-space quad under an identity model
+    // view, one draw per chunk of free overlay space. The stencil test still
+    // shades each marked pixel once, whichever rectangle reaches it.
+    if(shadeBatch){
+        Mtx_Identity(&place);C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER,modelViewLoc_,&place);
+        unsigned r=0;
+        while(r<count){
+            const unsigned n=std::min(count-r,unsigned(kOverlayCapacity-overlayCount_)/6);
+            if(!n)break;
+            Vertex* quads=reserveOverlay(int(n*6));
+            if(writesVertices()){
+                for(unsigned k=0;k<n;++k){
+                    const float x0=rects[r+k][0],y0=rects[r+k][1],x1=rects[r+k][2],y1=rects[r+k][3];
+                    const Vec3 corners[6]={{x0,y0,0},{x1,y0,0},{x1,y1,0},{x0,y0,0},{x1,y1,0},{x0,y1,0}};
+                    for(int i=0;i<6;++i)quads[k*6+i]={corners[i],{0,0,1},{0,0},{0,0},{0,0,0,alpha}};
+                }
+                flushGpuData(quads,n*6*sizeof(Vertex));
+            }
+            for(unsigned k=0;k<n;++k)countPixels(rects[r+k][0],rects[r+k][1],rects[r+k][2],rects[r+k][3]);
+            auto* batch=C3D_GetBufInfo();BufInfo_Init(batch);BufInfo_Add(batch,quads,sizeof(Vertex),4,0x3210);
+            C3D_DrawArrays(GPU_TRIANGLES,0,int(n*6));stats_.triangles+=2*n;++stats_.drawCalls;
+            r+=n;
+        }
+        if(r>=count)return;
+        // Out of overlay space: the rest one at a time below.
+        rects+=r;count-=r;
     }
     auto* buf=C3D_GetBufInfo();BufInfo_Init(buf);BufInfo_Add(buf,quad,sizeof(Vertex),4,0x3210);
     for(unsigned r=0;r<count;++r){

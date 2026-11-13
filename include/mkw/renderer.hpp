@@ -741,6 +741,8 @@ public:
     // cover less than their union's (each marked pixel still shaded once).
     // A/B: no-volume-rects.txt.
     bool volumeRects=false;
+    // Shade rectangles as pixel-space quads in one draw (A/B: no-shade-batch.txt).
+    bool shadeBatch=true;
     // DIAG draw-timing.txt: drawNow's time split into material setup,
     // C3D_DrawElements and end-of-draw resets (the last drawn frame, ms).
     bool drawTiming=false;
@@ -1124,7 +1126,8 @@ private:
     const CourseBloom* bloomSettings_=nullptr;
     C3D_Tex white_{};
     // Existing screen quads plus up to four textured wheel-contact quads.
-    static constexpr int kOverlayCapacity=48+4*6;
+    // + shadowVolumesNow's batched shade rectangles (32 quads).
+    static constexpr int kOverlayCapacity=48+4*6+32*6;
     // Both eyes share one submission. Reserve disjoint quad slots, including
     // the left-only stadium capture/composite (no extra render targets).
     static constexpr unsigned kBloomVertices=6*52;
