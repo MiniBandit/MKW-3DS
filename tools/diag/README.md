@@ -60,6 +60,13 @@ to the HOME Menu (about 100 minutes).
   saved to your license. Delete both files afterwards, or the DIAG title
   autoplays every launch.
 
+`perf-race-NNN-passes.csv` leaves one pass out of one frame in eight, in
+turn, and compares that frame's GPU time with its neighbours. Its `bottom`
+row leaves out the whole lower screen (no target bind, no draws, no display
+transfer); `bottom_quads` keeps the lower target and its display transfer
+(nothing is drawn on it, so its picture stays) and drops only its draws, so `bottom` minus `bottom_quads` is the lower
+screen's fixed cost and `bottom_quads` its draws and fill.
+
 ## A/B switches
 
 Create an empty file in `sd:/3ds/mkw-3ds/` to turn one change off:

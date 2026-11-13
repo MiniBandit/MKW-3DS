@@ -114,9 +114,11 @@ unsigned deferredLogBytes();
 extern std::atomic<unsigned> deferredOpens;
 
 enum Pass : uint8_t {PassNone,PassSky,PassCourse,PassScenery,PassOpponents,PassItems,PassPlayer,PassTranslucent,
-                     PassPlayerShadow,PassShadowVolumes,PassEffects,PassBloom,PassHud,PassBottom,PassCount};
+                     PassPlayerShadow,PassShadowVolumes,PassEffects,PassBloom,PassHud,PassBottom,PassBottomQuads,PassCount};
+// bottom_quads is a leave-out only: the lower screen's target bind and
+// display transfer stay, its draws go (fixed cost = bottom - bottom_quads).
 inline constexpr const char* PassNames[PassCount]={"none","sky","course","scenery","opponents","items","player","translucent",
-                                                   "player_shadow","shadow_volumes","effects","bloom","hud","bottom"};
+                                                   "player_shadow","shadow_volumes","effects","bloom","hud","bottom","bottom_quads"};
 inline constexpr unsigned PassPeriod=8;
 // Passes the vertex probe rotates through (those drawn as models).
 inline constexpr uint8_t ProbePasses[]={PassSky,PassCourse,PassScenery,PassOpponents,PassItems,PassPlayer,PassTranslucent};

@@ -394,6 +394,8 @@ void Renderer::publish(){
 static uint8_t diagPreviousSkip=diag::PassNone;static bool diagPreviousActive=false;
 static bool diagLeaveOut(uint8_t skip,uint8_t region,uint16_t type,bool& bottom){
     if(skip==diag::PassBottom){if(type==CmdBottom)bottom=true;return bottom&&type!=CmdEnd;}
+    // The lower target is still bound and transferred, with nothing drawn on it.
+    if(skip==diag::PassBottomQuads){if(type==CmdBottom){bottom=true;return false;}return bottom&&type!=CmdEnd;}
     if(skip==diag::PassBloom)return type==CmdRequestBloom;
     if(skip==diag::PassShadowVolumes)return type==CmdShadows;
     if(skip==diag::PassPlayerShadow&&type==CmdPlayerShadow)return true;
