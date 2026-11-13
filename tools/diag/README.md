@@ -246,6 +246,11 @@ The race's lower screen (each file read at the race load):
 standings column; by default it starts at the column's edge and markers wholly
 under the column are not drawn (the column itself slides in with the countdown
 either way).
+`no-race-bottom-keep.txt` redraws the lower screen on every race frame; by
+default a frame whose quads, textures and draws equal those of the previous
+frame, which was shown, leaves the lower LCD's picture as it is (no draw, no
+clear, no transfer), mostly through the countdown. `runtime.log` has `bottom
+keep: course=… kept=… drawn=…` for each race.
 The Settings page's options are in `settings.dat`, not in the license:
 Dynamic Shadows for benchmarks is set there (or on the Settings page).
 

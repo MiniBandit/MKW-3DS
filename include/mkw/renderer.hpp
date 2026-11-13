@@ -562,9 +562,12 @@ public:
     // recordingFrame()'s parity). Keeps per-frame storage fixed and preallocated.
     // opaque: the quads replace every pixel they cover (blending off).
     void drawScreenMaterialQuadsInPlace(const Texture* texture,const MaterialQuad* quads,unsigned count,uint32_t color0,uint32_t color1,bool opaque=false);
-    // This frame's bottom screen is covered opaquely (the race map): its
-    // per-frame clear is skipped. Recorded frames only.
-    void bottomCovered();
+    // This frame's bottom screen is covered opaquely (the race map), or keeps
+    // its last picture: its per-frame clear is skipped. Recorded frames only
+    // (false for an immediate frame, whose clear has already run).
+    bool bottomCovered();
+    // Counts begin() and beginSourceCamera() calls: frames, immediate or recorded.
+    uint32_t frameSerial() const {return frameSerial_;}
     // Small native HUD font; geometry is batched and remains alive for the frame.
     void drawScreenText(const char* text,float x,float y,float scale,uint32_t rgba=0xffffffff);
     // Call after end(). Waits for the finished frame and copies the top-screen
@@ -790,6 +793,7 @@ private:
     bool execDualScreenIntro_=false,bottomWorldPass_=false,execBottomCovered_=false;
     // setFrameCover: the next begin()'s request, and the frame being drawn.
     bool nextTopCovered_=false,nextBottomKept_=false,execTopCovered_=false,execBottomKept_=false;
+    uint32_t frameSerial_=0;
     // An immediate frame is open on this thread (between begin() and end()).
     bool immediateOpen_=false;
     // Diagnostic vertex probe: drawNow uploads a projection that sends every vertex to one point.

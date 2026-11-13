@@ -757,6 +757,7 @@ void Renderer::begin(Vec3 eye,Vec3 target,Vec3 up,bool mirror){
     beginRecorded();
 }
 void Renderer::beginRecorded(){
+    ++frameSerial_;
     // setFrameCover applies to this frame only. A stereo frame's eyes are
     // shifted: their backdrop may not reach an edge, so it clears as before.
     const bool topCovered=nextTopCovered_&&!frameStereo_.active(),bottomKept=nextBottomKept_;
@@ -1085,7 +1086,7 @@ void Renderer::drawScreenMaterialQuadsInPlace(const Texture* texture,const Mater
     auto& c=command<MaterialQuadsCommand>();
     c.texture=texture;c.quads=quads;c.count=count;c.color0=color0;c.color1=color1;c.wrapS=-1;c.wrapT=-1;c.additive=false;c.opaque=opaque;
 }
-void Renderer::bottomCovered(){if(recording()&&recording_)recording_->bottomCovered=true;}
+bool Renderer::bottomCovered(){if(!recording()||!recording_)return false;recording_->bottomCovered=true;return true;}
 // Each copy adds a command-list split and a GX copy to citro3d's 32-entry GX
 // queue (overflowing it panics): callers keep to a few per frame.
 std::unique_ptr<Texture> Renderer::copyTextureInFrame(const Texture& source,bool toVram,std::size_t reserve){

@@ -91,10 +91,20 @@ public:
     void toggleView();
     // Records the frame's bottom screen (after Renderer::beginBottom()).
     void draw(Renderer& renderer,const BottomView& view);
+    // A race frame's bottom screen, with its own beginBottom(): when its
+    // quads equal those of the previous frame, which was shown, the lower
+    // LCD keeps that picture (no beginBottom, no clear, no draw, no transfer).
+    // A/B: no-race-bottom-keep.txt.
+    void drawRace(Renderer& renderer,const BottomView& view);
     // runtime.log line: what is resident.
     void describe(char* text,unsigned size) const;
 private:
     struct Impl;
     std::unique_ptr<Impl> impl_;
+    bool compose(Renderer&,const BottomView&);
+    void submit(Renderer&);
+    uint64_t frameHash() const;
+    // DIAG: runtime.log "bottom keep:" with the race's kept and drawn frames.
+    void endRace();
 };
 }

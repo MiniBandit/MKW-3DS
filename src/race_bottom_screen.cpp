@@ -24,6 +24,10 @@
 #include <cmath>
 #include <cstdio>
 #include <mkw/hud_feedback.hpp>
+#include <mkw/diag.hpp>
+#include <mkw/loading_screen.hpp>
+#include <atomic>
+#include <cstring>
 #include <game/kart/KartAction.hh>
 #include <new>
 namespace mkw {
@@ -78,6 +82,13 @@ struct RaceBottomScreen::Impl {
     // The map stops at the standings column's edge; markers wholly under it
     // are not drawn (A/B: no-map-clip.txt).
     bool mapClip=true;
+    // Race frames whose quads equal the last shown frame's keep the lower
+    // LCD's picture: no draw, no clear, no transfer (A/B: no-race-bottom-keep.txt).
+    bool keep=true,shownValid=false;uint64_t shownHash=0;uint32_t shownSerial=0;unsigned shownApt=0,shownScopes=0;
+    unsigned keptFrames=0,drawnFrames=0;uint32_t miiGeneration=0;
+    // The composed frame's draws (compose -> submit).
+    struct Batches {unsigned fills=0,mapFirst=0,mapCount=0,objectFirst=0,objectCount=0,overlayFirst=0,overlayCount=0,
+                    topFirst=0,topCount=0,scoreFirst=0,scoreCount=0,fadeFirst=0,mii=0;const Texture* mapTexture=nullptr;bool covered=false,atlas=false;} b;
     // One frame's quads, in three in-place batches.
     Renderer::MaterialQuad* base=nullptr;unsigned count=0;
     bool add(const RaceMapRect& r,float x0,float y0,float x1,float y1,uint32_t color=0xffffffffu,bool mirrorU=false,bool mirrorV=false,bool score=false){
@@ -109,6 +120,7 @@ const Texture* RaceBottomScreen::miiPortrait() const{return impl_->mii.ready?&im
 bool RaceBottomScreen::setMiiPortrait(Renderer& renderer,const NativeMii& identity){
  if(impl_->mii.ready&&impl_->miiIdentity==identity)return true;
  renderer.waitForGpu();impl_->mii=Texture{};std::vector<uint8_t> rgba;
+ ++impl_->miiGeneration;
  if(!composeNativeMiiPortrait(identity,64,rgba)||!impl_->mii.initRgba8(64,64,rgba.data(),rgba.size()))return false;
  impl_->miiIdentity=identity;return true;
 }
@@ -232,8 +244,15 @@ void fillBottomView(BottomView& v,const RaceGrid& grid,const RaceItems& items,bo
     v.fade=std::clamp(leaveFade,0.f,1.f);
 }
 
-RaceBottomScreen::RaceBottomScreen():impl_(std::make_unique<Impl>()){}
-RaceBottomScreen::~RaceBottomScreen()=default;
+namespace {
+// The HOME Menu, sleep and the like may change what the lower LCD shows.
+std::atomic<unsigned> aptEvents{0};
+void countAptEvent(APT_HookType,void*){aptEvents.fetch_add(1,std::memory_order_relaxed);}
+aptHookCookie aptCookie;
+}
+
+RaceBottomScreen::RaceBottomScreen():impl_(std::make_unique<Impl>()){aptHook(&aptCookie,countAptEvent,nullptr);}
+RaceBottomScreen::~RaceBottomScreen(){aptUnhook(&aptCookie);}
 bool RaceBottomScreen::active() const {return impl_->target;}
 
 static bool sdFile(const char* name){
@@ -244,6 +263,7 @@ static bool sdFile(const char* name){
 bool RaceBottomScreen::load(Renderer& renderer,unsigned course){
     auto& m=*impl_;
     m.mapClip=!sdFile("no-map-clip.txt");
+    endRace();m.keep=!sdFile("no-race-bottom-keep.txt");
     const auto* art=raceMapCourse(course);
     if(!art){unload(renderer);return false;}
     if(m.target&&m.course==course){
@@ -271,6 +291,7 @@ bool RaceBottomScreen::load(Renderer& renderer,unsigned course){
 
 void RaceBottomScreen::unload(Renderer& renderer){
     auto& m=*impl_;
+    endRace();
     if(!m.target&&!m.map.ready&&!m.overview.ready&&!m.atlas.ready&&!m.objects.ready&&!m.scores.ready&&!m.quads)return;
     // Nothing recorded may still sample these textures or read the quads.
     renderer.waitForGpu();
@@ -292,9 +313,9 @@ void RaceBottomScreen::describe(char* text,unsigned size) const {
                   (unsigned long)m.atlas.bytes(),(unsigned long)m.objects.bytes(),(unsigned long)vramSpaceFree());
 }
 
-void RaceBottomScreen::draw(Renderer& renderer,const BottomView& view){
+bool RaceBottomScreen::compose(Renderer& renderer,const BottomView& view){
     auto& m=*impl_;m.miiMap=m.miiRow=false;
-    if(!m.target||!m.quads)return;
+    if(!m.target||!m.quads)return false;
     const auto& course=*raceMapCourse(m.course);
     // Animations advance by simulation ticks (presentation runs at 30 or 60 Hz).
     const unsigned elapsed=m.started?std::min<unsigned>(view.tick-m.lastTick,30u):0u;
@@ -567,19 +588,77 @@ void RaceBottomScreen::draw(Renderer& renderer,const BottomView& view){
     // race maps and overviews are ETC1 (no alpha), drawn in white. Battle
     // maps are RGBA4 and keep all three.
     const bool covered=skipCoveredFill&&mapCount&&m.course<32;
-    if(atlas&&fills&&!covered)renderer.drawScreenMaterialQuadsInPlace(&m.atlas,m.base,fills,0x00000000u,0xffffffffu);
-    if(!atlas&&!covered)renderer.drawScreenMaterialQuadsInPlace(nullptr,m.base,fills,0,0xffffffffu);
-    if(mapCount)renderer.drawScreenMaterialQuadsInPlace(mapTexture,m.base+mapFirst,mapCount,0x00000000u,0xffffffffu,covered);
-    if(covered)renderer.bottomCovered();
-    if(objectCount)renderer.drawScreenMaterialQuadsInPlace(&m.objects,m.base+objectFirst,objectCount,0x00000000u,0xffffffffu);
-    if(overlayCount)renderer.drawScreenMaterialQuadsInPlace(&m.atlas,m.base+overlayFirst,overlayCount,0x00000000u,0xffffffffu);
-    if(m.miiMap)renderer.drawScreenMaterialQuadsInPlace(&m.mii,&m.miiQuads[view.tick&1][0],1,0,0xffffffffu);
-    if(topCount){
-        if(atlas)renderer.drawScreenMaterialQuadsInPlace(&m.atlas,m.base+topFirst,topCount,0x00000000u,0xffffffffu);
-        else renderer.drawScreenMaterialQuadsInPlace(nullptr,m.base+topFirst,topCount,0,0xffffffffu);
+    m.b={fills,mapFirst,mapCount,objectFirst,objectCount,overlayFirst,overlayCount,topFirst,topCount,scoreFirst,scoreCount,fadeFirst,view.tick&1,mapTexture,covered,atlas};
+    return true;
+}
+
+void RaceBottomScreen::submit(Renderer& renderer){
+    auto& m=*impl_;const auto& b=m.b;
+    if(b.atlas&&b.fills&&!b.covered)renderer.drawScreenMaterialQuadsInPlace(&m.atlas,m.base,b.fills,0x00000000u,0xffffffffu);
+    if(!b.atlas&&!b.covered)renderer.drawScreenMaterialQuadsInPlace(nullptr,m.base,b.fills,0,0xffffffffu);
+    if(b.mapCount)renderer.drawScreenMaterialQuadsInPlace(b.mapTexture,m.base+b.mapFirst,b.mapCount,0x00000000u,0xffffffffu,b.covered);
+    if(b.covered)renderer.bottomCovered();
+    if(b.objectCount)renderer.drawScreenMaterialQuadsInPlace(&m.objects,m.base+b.objectFirst,b.objectCount,0x00000000u,0xffffffffu);
+    if(b.overlayCount)renderer.drawScreenMaterialQuadsInPlace(&m.atlas,m.base+b.overlayFirst,b.overlayCount,0x00000000u,0xffffffffu);
+    if(m.miiMap)renderer.drawScreenMaterialQuadsInPlace(&m.mii,&m.miiQuads[b.mii][0],1,0,0xffffffffu);
+    if(b.topCount){
+        if(b.atlas)renderer.drawScreenMaterialQuadsInPlace(&m.atlas,m.base+b.topFirst,b.topCount,0x00000000u,0xffffffffu);
+        else renderer.drawScreenMaterialQuadsInPlace(nullptr,m.base+b.topFirst,b.topCount,0,0xffffffffu);
     }
-    if(m.miiRow)renderer.drawScreenMaterialQuadsInPlace(&m.mii,&m.miiQuads[view.tick&1][1],1,0,0xffffffffu);
-    if(scoreCount)renderer.drawScreenMaterialQuadsInPlace(&m.scores,m.base+scoreFirst,scoreCount,0x00000000u,0xffffffffu);
-    if(m.count>fadeFirst)renderer.drawScreenMaterialQuadsInPlace(atlas?&m.atlas:nullptr,m.base+fadeFirst,m.count-fadeFirst,0x00000000u,0xffffffffu);
+    if(m.miiRow)renderer.drawScreenMaterialQuadsInPlace(&m.mii,&m.miiQuads[b.mii][1],1,0,0xffffffffu);
+    if(b.scoreCount)renderer.drawScreenMaterialQuadsInPlace(&m.scores,m.base+b.scoreFirst,b.scoreCount,0x00000000u,0xffffffffu);
+    if(m.count>b.fadeFirst)renderer.drawScreenMaterialQuadsInPlace(b.atlas?&m.atlas:nullptr,m.base+b.fadeFirst,m.count-b.fadeFirst,0x00000000u,0xffffffffu);
+}
+
+void RaceBottomScreen::draw(Renderer& renderer,const BottomView& view){
+    // Pause pages and the like: what follows on the lower LCD is not ours.
+    impl_->shownValid=false;
+    if(compose(renderer,view))submit(renderer);
+}
+
+// Everything the composed frame draws: its quads, batches and textures.
+uint64_t RaceBottomScreen::frameHash() const{
+    const auto& m=*impl_;const auto& b=m.b;
+    uint32_t a=2166136261u,c=0x9e3779b9u;
+    auto word=[&](uint32_t w){a=(a^w)*16777619u;c=(c^w)*0x27d4eb2du;c^=c>>15;};
+    auto bytes=[&](const void* p,size_t n){const auto* q=static_cast<const uint8_t*>(p);
+        for(size_t i=0;i+4<=n;i+=4){uint32_t w;std::memcpy(&w,q+i,4);word(w);}};
+    for(uint32_t w:std::initializer_list<uint32_t>{b.fills,b.mapFirst,b.mapCount,b.objectFirst,b.objectCount,b.overlayFirst,b.overlayCount,b.topFirst,b.topCount,
+                    b.scoreFirst,b.scoreCount,b.fadeFirst,m.count,unsigned(b.covered),unsigned(b.atlas),unsigned(m.miiMap),unsigned(m.miiRow),m.miiGeneration})word(w);
+    word(uint32_t(reinterpret_cast<uintptr_t>(b.mapTexture)));
+    static_assert(sizeof(Renderer::MaterialQuad)%4==0);
+    bytes(m.base,m.count*sizeof(Renderer::MaterialQuad));
+    if(m.miiMap)bytes(&m.miiQuads[b.mii][0],sizeof(Renderer::MaterialQuad));
+    if(m.miiRow)bytes(&m.miiQuads[b.mii][1],sizeof(Renderer::MaterialQuad));
+    return uint64_t(a)<<32|c;
+}
+
+void RaceBottomScreen::drawRace(Renderer& renderer,const BottomView& view){
+    auto& m=*impl_;
+    if(!compose(renderer,view))return;
+    const uint64_t hash=frameHash();
+    const uint32_t serial=renderer.frameSerial();
+    const unsigned apt=aptEvents.load(std::memory_order_relaxed),scopes=loadingScopes();
+    // A DIAG leave-out frame draws less than it composed, and a loading frame
+    // ends black: neither leaves this picture on the lower LCD.
+    const bool leaveOut=diag::passState.skip==diag::PassBottom||diag::passState.skip==diag::PassBottomQuads;
+    const bool shown=!leaveOut&&!renderer.loadingFrame;
+    // The previous frame showed exactly this picture and nothing has touched
+    // the lower LCD or its target since: draw nothing, and skip the clear.
+    if(m.keep&&shown&&m.shownValid&&serial==m.shownSerial+1&&apt==m.shownApt&&scopes==m.shownScopes&&hash==m.shownHash&&renderer.bottomCovered()){
+        m.shownSerial=serial;++m.keptFrames;return;
+    }
+    renderer.beginBottom();
+    submit(renderer);
+    m.shownValid=shown;m.shownHash=hash;m.shownSerial=serial;m.shownApt=apt;m.shownScopes=scopes;++m.drawnFrames;
+}
+
+void RaceBottomScreen::endRace(){
+    auto& m=*impl_;
+#ifndef MKW_RELEASE
+    if(m.keptFrames+m.drawnFrames)if(FILE* f=std::fopen("sdmc:/3ds/mkw-3ds/runtime.log","a")){
+        std::fprintf(f,"bottom keep: course=%d kept=%u drawn=%u keep=%d\n",m.course==~0u?-1:int(m.course),m.keptFrames,m.drawnFrames,int(m.keep));std::fclose(f);}
+#endif
+    m.keptFrames=m.drawnFrames=0;m.shownValid=false;
 }
 }
