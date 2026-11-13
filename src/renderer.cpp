@@ -666,6 +666,7 @@ void Renderer::readSwitches(){
     auto exists=[](const char* path){FILE* f=std::fopen(path,"r");if(f)std::fclose(f);return f!=nullptr;};
     stateCache=!exists("sdmc:/3ds/mkw-3ds/no-state-cache.txt");
     quadMerge=!exists("sdmc:/3ds/mkw-3ds/no-quad-merge.txt");
+    volumeRects=!exists("sdmc:/3ds/mkw-3ds/no-volume-rects.txt");
 #ifndef MKW_RELEASE
     stateCacheVerify=exists("sdmc:/3ds/mkw-3ds/state-cache-verify.txt");
     drawTiming=exists("sdmc:/3ds/mkw-3ds/draw-timing.txt");
@@ -2430,7 +2431,27 @@ void Renderer::shadowVolumesNow(const ShadowVolume* volumes,unsigned count,float
     if(!bounded)++diag::shadowRectStats.full;
     else if(rect[2]>rect[0]&&rect[3]>rect[1]){++diag::shadowRectStats.bounded;diag::shadowRectStats.area+=uint64_t((rect[2]-rect[0])*(rect[3]-rect[1]));}
     else ++diag::shadowRectStats.empty;
-    if(!bounded||(rect[2]>rect[0]&&rect[3]>rect[1]))
+    // volumeRects: each volume's own rectangle (the same bound, per volume),
+    // when they cover clearly less than the union's. Every marked pixel lies
+    // in some volume's rectangle, 2 pixels inside its edge, and the first
+    // rectangle to reach it shades it and clears its count: the same pixels.
+    constexpr unsigned MaxVolumeRects=32;
+    float rects[MaxVolumeRects][4];unsigned rectCount=0;bool perVolume=false;
+    if(bounded&&volumeRects&&count>1&&count<=MaxVolumeRects&&rect[2]>rect[0]&&rect[3]>rect[1]){
+        float sum=0;bool each=true;
+        for(unsigned i=0;i<count;++i){
+            const auto& v=volumes[i];if(!v.model||!v.model->indexCount)continue;
+            float r[4];
+            if(!shadowVolumeRect(&v,1,view_,projection_,screenWidth_,r)){each=false;break;}
+            if(r[2]>r[0]&&r[3]>r[1]){std::copy(r,r+4,rects[rectCount++]);sum+=(r[2]-r[0])*(r[3]-r[1]);}
+        }
+        const float area=(rect[2]-rect[0])*(rect[3]-rect[1]);
+        perVolume=each&&sum<area*.8f;
+        if(perVolume){++volumeRectFrames;volumeRectsDrawn+=rectCount;volumeRectSaved+=uint64_t(area-sum);}
+    }
+    // No volume's own rectangle on screen: no pixel holds a count.
+    if(perVolume){if(rectCount)shadeRectsNow(1.f-float(shade)/255.f,shadowUnion_?4:0,rects,rectCount);}
+    else if(!bounded||(rect[2]>rect[0]&&rect[3]>rect[1]))
         screenFadeNow(1.f-float(shade)/255.f,false,false,shadowUnion_?4:0,bounded?rect:nullptr);
     // The fullscreen shade temporarily binds an orthographic projection.
     // Consecutive volume groups must return to this eye's perspective.
@@ -2916,6 +2937,41 @@ void Renderer::screenFadeNow(float opacity,bool white,bool depthOnly,int shadowM
     }
     auto* buf=C3D_GetBufInfo();BufInfo_Init(buf);BufInfo_Add(buf,fade,sizeof(Vertex),4,0x3210);
     C3D_DrawArrays(GPU_TRIANGLES,0,6);stats_.triangles+=2;++stats_.drawCalls;
+}
+void Renderer::shadeRectsNow(float opacity,int shadowMode,const float (*rects)[4],unsigned count){
+    flushSprites();
+    // screenFadeNow's shade (black, this opacity, shadowMode 0 or 4) over each
+    // rectangle: one unit square of the overlay, placed by the model view.
+    const auto alpha=static_cast<uint8_t>(std::round(std::clamp(opacity,0.f,1.f)*255.f));
+    const Vec3 positions[6]={{0,0,0},{1,0,0},{1,1,0},{0,0,0},{1,1,0},{0,1,0}};
+    Vertex* quad=reserveOverlay(6);
+    if(writesVertices()){
+        for(int i=0;i<6;++i)quad[i]={positions[i],{0,0,1},{0,0},{0,0},{0,0,0,alpha}};
+        flushGpuData(quad,6*sizeof(Vertex));
+    }
+    C3D_Mtx projection,place;Mtx_OrthoTilt(&projection,0,screenWidth_,240,0,-1,1,false);
+    C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER,projectionLoc_,&projection);
+    C3D_FVUnifSet(GPU_VERTEX_SHADER,lightLoc_,1,1,1,1);
+    C3D_FVUnifSet(GPU_VERTEX_SHADER,uvScrollLoc_,0,0,0,0);
+    for(int i=0;i<6;++i)C3D_TexEnvInit(C3D_GetTexEnv(i));
+    auto* env=C3D_GetTexEnv(0);C3D_TexEnvSrc(env,C3D_Both,GPU_PRIMARY_COLOR);C3D_TexEnvFunc(env,C3D_Both,GPU_REPLACE);
+    C3D_CullFace(GPU_CULL_NONE);C3D_AlphaTest(false,GPU_ALWAYS,0);
+    C3D_DepthTest(false,GPU_ALWAYS,GPU_WRITE_COLOR);
+    C3D_AlphaBlend(GPU_BLEND_ADD,GPU_BLEND_ADD,GPU_SRC_ALPHA,GPU_ONE_MINUS_SRC_ALPHA,GPU_ONE,GPU_ONE_MINUS_SRC_ALPHA);
+    if(shadowMode){
+        C3D_DepthTest(false,GPU_ALWAYS,GPU_WRITE_ALPHA);
+        C3D_AlphaBlend(GPU_BLEND_ADD,shadowMode==4?GPU_BLEND_MAX:GPU_BLEND_ADD,GPU_ONE,GPU_ZERO,GPU_ONE,GPU_ZERO);
+    }
+    auto* buf=C3D_GetBufInfo();BufInfo_Init(buf);BufInfo_Add(buf,quad,sizeof(Vertex),4,0x3210);
+    for(unsigned r=0;r<count;++r){
+        const float x0=rects[r][0],y0=rects[r][1],x1=rects[r][2],y1=rects[r][3];
+        countPixels(x0,y0,x1,y1);
+        Mtx_Identity(&place);place.r[0].x=x1-x0;place.r[0].w=x0;place.r[1].y=y1-y0;place.r[1].w=y0;
+        C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER,modelViewLoc_,&place);
+        C3D_DrawArrays(GPU_TRIANGLES,0,6);stats_.triangles+=2;++stats_.drawCalls;
+    }
+    // As screenFadeNow leaves it.
+    Mtx_Identity(&place);C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER,modelViewLoc_,&place);
 }
 void Renderer::spriteState(){
     if(spriteStateReady_)return;

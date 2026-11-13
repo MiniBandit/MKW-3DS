@@ -679,17 +679,23 @@ public:
     // instead of building them again: the same GPU commands. A/B: no-state-cache.txt.
     // DIAG state-cache-verify.txt builds them anyway and compares (stateMismatches).
     bool stateCache=false,stateCacheVerify=false;
+    // Consecutive font sprites, or material quads, with the same texture and
+    // constants draw as one draw (the same pixels). A/B: no-quad-merge.txt.
+    bool quadMerge=false;
+    // Shadow volumes shade one rectangle per volume when those rectangles
+    // cover less than their union's (each marked pixel still shaded once).
+    // A/B: no-volume-rects.txt.
+    bool volumeRects=false;
     // DIAG draw-timing.txt: drawNow's time split into material setup,
     // C3D_DrawElements and end-of-draw resets (the last drawn frame, ms).
     bool drawTiming=false;
     float drawSetupMs=0,drawCallMs=0,drawResetMs=0,drawNowMs=0;
     unsigned drawSetups=0,stateHits=0;
-    // Consecutive font sprites, or material quads, with the same texture and
-    // constants draw as one draw (the same pixels). A/B: no-quad-merge.txt.
-    bool quadMerge=false;
     // DIAG (render thread, totals): state cache verifications and their
-    // mismatches; draws saved by quad merging.
-    unsigned long stateVerified=0,stateMismatches=0,quadMerges=0;
+    // mismatches; draws saved by quad merging; shade rectangles drawn
+    // per volume and the pixels they skipped against the union rectangle.
+    unsigned long stateVerified=0,stateMismatches=0,quadMerges=0,volumeRectFrames=0,volumeRectsDrawn=0;
+    uint64_t volumeRectSaved=0;
     // DIAG cmd-hash.txt: each frame's GPU command words hashed (FNV-1a) into
     // cmd-hash.csv; cmd-dump.txt lists animation ticks whose words are saved
     // as cmd-dump-<tick>-<frame>.bin.
@@ -893,6 +899,8 @@ private:
     void shadowUnionNow(bool active);
     // rect: x0,y0,x1,y1 in screen pixels (the whole screen when null).
     void screenFadeNow(float opacity,bool white,bool depthOnly=false,int shadowMode=0,const float* rect=nullptr);
+    // shadowVolumesNow's shade over several rectangles (volumeRects).
+    void shadeRectsNow(float opacity,int shadowMode,const float (*rects)[4],unsigned count);
     void drawPausedTopNow();
     void spriteNow(const Texture& texture,float x,float y,float width,float height,float u0,float v0,float u1,float v1,float alpha,uint32_t rgba,const uint32_t* corners,bool additive,float angle);
     void fontSpriteNow(const Texture& texture,float x,float y,float width,float height,float u1,float v1,float alpha,uint32_t gradientTop,uint32_t gradientBottom,uint32_t color0,uint32_t color1);
