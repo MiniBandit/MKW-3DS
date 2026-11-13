@@ -664,8 +664,10 @@ bool Scene::load(const char* path){
 }
 void Renderer::readSwitches(){
     auto exists=[](const char* path){FILE* f=std::fopen(path,"r");if(f)std::fclose(f);return f!=nullptr;};
+    stateCache=!exists("sdmc:/3ds/mkw-3ds/no-state-cache.txt");
     quadMerge=!exists("sdmc:/3ds/mkw-3ds/no-quad-merge.txt");
 #ifndef MKW_RELEASE
+    stateCacheVerify=exists("sdmc:/3ds/mkw-3ds/state-cache-verify.txt");
     drawTiming=exists("sdmc:/3ds/mkw-3ds/draw-timing.txt");
     cmdHash=exists("sdmc:/3ds/mkw-3ds/cmd-hash.txt");
     if(cmdHash){
@@ -1472,6 +1474,8 @@ void Renderer::drawNow(const Model& model,const Vertex* vertices,const C3D_Mtx& 
     // The last drawn submesh whose material state is still bound, and its end
     // of submesh (retailEndSubmesh), deferred while the next one repeats it.
     const Submesh* last=nullptr;bool lastRetail=false,lastEnvironment=false,pendingEnd=false;
+    // The fog inputs of the state blocks' key.
+    const uint32_t fogKey=stateCache?retailFogKey():0;
     C3D_Tex projectedWaterTexture{};
     // DIAG texture-use.txt: the data of the textures bound to units 0-2 (diag::textureDrawn).
     const void* useData[3]{};
@@ -1555,8 +1559,36 @@ void Renderer::drawNow(const Model& model,const Vertex* vertices,const C3D_Mtx& 
         if(pendingEnd){retailEndSubmesh();pendingEnd=false;}
         const uint32_t constant=o&&(o->flags&SubmeshOverride::Constant)?o->constant:s.constant;
         const GPU_TEVSCALE scales[]={GPU_TEVSCALE_1,GPU_TEVSCALE_2,GPU_TEVSCALE_4,GPU_TEVSCALE_1};
+        // stateCache: the combiners this submesh's last setup built, when it
+        // read the same inputs: its material (no override or binder), the Star
+        // colour, the fog and the lighting mode. Menu icon layers, ink, ghost
+        // passes and native Mii heads add stages of their own; the fog stages
+        // of light-texture and statue materials depend on the eye depth.
+        SubmeshState* block=nullptr;bool blockHit=false,blockCheck=false;
+        if(stateCache&&!o&&!material&&!menuIconLayer_&&!inkBlack&&!execGhostPass_&&!model.nativeMiiLighting){
+            const unsigned channel=(s.lighting&retail::ChannelMask)>>retail::ChannelShift;
+            if(!(fogKey&&(s.lighting&retail::Fog)&&(channel==2||s.menuReflection==8||s.menuReflection==10))){
+                if(model.stateBlockCount!=model.submeshes.size()){
+                    model.stateBlocks.reset(new(std::nothrow) SubmeshState[model.submeshes.size()]);
+                    model.stateBlockCount=model.stateBlocks?uint32_t(model.submeshes.size()):0;
+                }
+                if(i<model.stateBlockCount){
+                    block=&model.stateBlocks[i];
+                    const uint8_t lighting=uint8_t(courseLighting_)|uint8_t(uint8_t(retail_!=nullptr)<<1);
+                    const bool same=block->valid&&block->additive==additiveColor&&block->fog==fogKey&&block->mode==lighting&&sameMaterial(block->material,s);
+                    blockHit=same&&!stateCacheVerify;blockCheck=same&&stateCacheVerify;
+                    if(!same){block->valid=false;block->material=s;block->additive=additiveColor;block->fog=fogKey;block->mode=lighting;}
+                }
+            }
+        }
+        if(blockHit){
+            // The same stages the setup marks for upload: citro3d sends what differs.
+            for(int stage=0;stage<6;++stage)C3D_SetTexEnv(stage,&block->env[stage]);
+            C3D_TexEnvBufUpdate(C3D_RGB,block->bufRgb);C3D_TexEnvBufUpdate(C3D_Alpha,block->bufAlpha);
+            ++stats_.stateHits;
+        }else{
         if(!material){
-            C3D_TexEnvBufUpdate(C3D_Both,0);
+            tevBuf(C3D_Both,0);
             for(int stage=0;stage<6;++stage)C3D_TexEnvInit(C3D_GetTexEnv(stage));
             auto* e0=C3D_GetTexEnv(0);auto* e1=C3D_GetTexEnv(1);
             C3D_TexEnvSrc(e0,C3D_Both,GPU_TEXTURE0,GPU_PRIMARY_COLOR);
@@ -1657,7 +1689,7 @@ void Renderer::drawNow(const Model& model,const Vertex* vertices,const C3D_Mtx& 
             if(s.menuReflection==28){
                 // Stopwatch: clamp(C2.a*raster + (metal or raster)), then
                 // add metal.rgb * metal.a * K2.a. Keep the first clamp.
-                C3D_TexEnvBufUpdate(C3D_RGB,1);
+                tevBuf(C3D_RGB,1);
                 C3D_TexEnvColor(e0,s.reflectionConstant);
                 C3D_TexEnvSrc(e0,C3D_RGB,GPU_PRIMARY_COLOR,GPU_CONSTANT,s.reflectionAdd&1?GPU_PRIMARY_COLOR:GPU_TEXTURE1);
                 C3D_TexEnvFunc(e0,C3D_RGB,GPU_MULTIPLY_ADD);
@@ -1679,7 +1711,7 @@ void Renderer::drawNow(const Model& model,const Vertex* vertices,const C3D_Mtx& 
             }else if(s.menuReflection==30){
                 // Balloon: clamp(base*K + metal*(1-K)), then
                 // clamp(2*(previous*raster + C2 - .5)).
-                C3D_TexEnvBufUpdate(C3D_RGB,1);
+                tevBuf(C3D_RGB,1);
                 C3D_TexEnvColor(e0,constant);C3D_TexEnvSrc(e0,C3D_RGB,GPU_TEXTURE0,GPU_CONSTANT);C3D_TexEnvFunc(e0,C3D_RGB,GPU_MODULATE);
                 C3D_TexEnvColor(e1,s.reflectionConstant);C3D_TexEnvSrc(e1,C3D_RGB,GPU_TEXTURE1,GPU_CONSTANT);C3D_TexEnvFunc(e1,C3D_RGB,GPU_MODULATE);
                 auto* sum=C3D_GetTexEnv(2);C3D_TexEnvSrc(sum,C3D_RGB,GPU_PREVIOUS_BUFFER,GPU_PREVIOUS);C3D_TexEnvFunc(sum,C3D_RGB,GPU_ADD);
@@ -1694,7 +1726,7 @@ void Renderer::drawNow(const Model& model,const Vertex* vertices,const C3D_Mtx& 
                 // Award Tico's original signed yellow/metal environment layer.
                 C3D_TexEnvSrc(e0,C3D_RGB,GPU_TEXTURE0,GPU_PRIMARY_COLOR);
                 C3D_TexEnvFunc(e0,C3D_RGB,GPU_MODULATE);C3D_TexEnvScale(e0,C3D_RGB,GPU_TEVSCALE_1);
-                C3D_TexEnvBufUpdate(C3D_RGB,1);
+                tevBuf(C3D_RGB,1);
                 C3D_TexEnvColor(e1,s.reflectionConstant);
                 C3D_TexEnvSrc(e1,C3D_RGB,GPU_CONSTANT,GPU_CONSTANT,GPU_TEXTURE1);
                 C3D_TexEnvOpRgb(e1,GPU_TEVOP_RGB_SRC_ALPHA,GPU_TEVOP_RGB_SRC_COLOR,GPU_TEVOP_RGB_SRC_COLOR);
@@ -1822,7 +1854,7 @@ void Renderer::drawNow(const Model& model,const Vertex* vertices,const C3D_Mtx& 
                 // Save P in the delayed buffer so the last addition does not
                 // replace it with the second stage's interpolation result.
                 const bool halfGlow=(s.reflectionAdd&2)!=0;
-                C3D_TexEnvBufUpdate(C3D_RGB,halfGlow?2:1);
+                tevBuf(C3D_RGB,halfGlow?2:1);
                 C3D_TexEnvColor(e0,constant);
                 C3D_TexEnvSrc(e0,C3D_RGB,GPU_CONSTANT,GPU_TEXTURE0,GPU_CONSTANT);
                 C3D_TexEnvOpRgb(e0,GPU_TEVOP_RGB_ONE_MINUS_SRC_COLOR,GPU_TEVOP_RGB_SRC_COLOR,GPU_TEVOP_RGB_SRC_COLOR);
@@ -1852,7 +1884,7 @@ void Renderer::drawNow(const Model& model,const Vertex* vertices,const C3D_Mtx& 
                 // Keep albedo in the delayed TEV buffer while weighting the
                 // environment. Adding before subtracting the bias must not
                 // clamp the unbiassed sum (which may be greater than one).
-                C3D_TexEnvBufUpdate(C3D_RGB,1);
+                tevBuf(C3D_RGB,1);
                 C3D_TexEnvColor(e0,constant);
                 C3D_TexEnvSrc(e0,C3D_RGB,GPU_TEXTURE0,GPU_CONSTANT);
                 C3D_TexEnvFunc(e0,C3D_RGB,GPU_MODULATE);
@@ -2026,6 +2058,7 @@ void Renderer::drawNow(const Model& model,const Vertex* vertices,const C3D_Mtx& 
             C3D_TexEnvSrc(remap,C3D_RGB,GPU_PREVIOUS,GPU_CONSTANT);C3D_TexEnvFunc(remap,C3D_RGB,GPU_ADD);
             C3D_TexEnvSrc(remap,C3D_Alpha,GPU_PREVIOUS,GPU_CONSTANT);C3D_TexEnvFunc(remap,C3D_Alpha,GPU_MODULATE);
         }
+        } // !blockHit
         retail=(courseLighting_||(s.lighting&mkw::retail::Menu))&&retailLight(s);
         if(!retail){
             // Legacy grade: vertex colour * max(ambient floor, 0.35) * grade.
@@ -2093,8 +2126,11 @@ void Renderer::drawNow(const Model& model,const Vertex* vertices,const C3D_Mtx& 
         }
         if(diag::textureUse){useData[0]=texture->data;useData[1]=secondary->data;useData[2]=s.menuReflection==8?model.textures[(s.reflectionConstant&0xffff)-1]->gpu.data:nullptr;}
         // Retail course lighting: fog stage, light textures (after the generic setup).
+        // With a state block applied it only binds and sets uniforms (tev()).
+        tevDry_=blockHit;
         retailEnvironment=retail&&retailCombiners(s,mv,backdrop,additiveColor||((s.menuReflection!=7&&s.menuReflection!=8&&s.menuReflection!=14)&&o&&(o->flags&SubmeshOverride::Add)),
             additiveColor?(additiveColor>>24)|((additiveColor>>8)&0xff00)|((additiveColor<<8)&0xff0000):o&&(o->flags&SubmeshOverride::Add)?o->add&0xffffff:0,constant);
+        tevDry_=false;
         // A material binder owns the combiners and may replace any state above.
         drawCullSet_=false;
         if(material)material(context,i);
@@ -2114,6 +2150,17 @@ void Renderer::drawNow(const Model& model,const Vertex* vertices,const C3D_Mtx& 
         else if(execGhostPass_==2){
             C3D_DepthTest(true,GPU_GEQUAL,GPU_WRITE_COLOR);C3D_BlendingColor(uint32_t(execGhostAlpha_)<<24);
             C3D_AlphaBlend(GPU_BLEND_ADD,GPU_BLEND_ADD,GPU_CONSTANT_ALPHA,GPU_ONE_MINUS_CONSTANT_ALPHA,GPU_ZERO,GPU_ONE);
+        }
+        if(block&&!blockHit){
+            // Every stage was marked for upload by the setup (TexEnvInit of all six).
+            bool differs=block->bufRgb!=tevBufRgb_||block->bufAlpha!=tevBufAlpha_;
+            for(int stage=0;stage<6;++stage){
+                const C3D_TexEnv& built=*C3D_GetTexEnv(stage);
+                if(blockCheck&&std::memcmp(&built,&block->env[stage],sizeof built))differs=true;
+                block->env[stage]=built;
+            }
+            if(blockCheck){++stateVerified;if(differs)++stateMismatches;}
+            block->bufRgb=tevBufRgb_;block->bufAlpha=tevBufAlpha_;block->valid=true;
         }
         last=o?nullptr:&s;lastRetail=retail;lastEnvironment=retailEnvironment;
         if(setupStart)stats_.setupTicks+=svcGetSystemTick()-setupStart;

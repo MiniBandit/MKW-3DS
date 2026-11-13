@@ -43,6 +43,12 @@ bool fogVisible(const float* fog){
 }
 }
 
+uint32_t Renderer::retailFogKey() const{
+    if(!fogVisible(retailFog_))return 0;
+    // retailCombiners' fog colour (alpha set, so never 0).
+    return uint32_t(std::lround(retailFog_[4]*255.f))|uint32_t(std::lround(retailFog_[5]*255.f))<<8|
+           uint32_t(std::lround(retailFog_[6]*255.f))<<16|0xff000000u;
+}
 bool Renderer::retailUniformLocations(){
     auto location=[&](const char* name){return int(shaderInstanceGetUniformLocation(program_.vertexShader,name));};
     lightDiffLoc_=location("lightDiff");lightDirLoc_=location("lightDir");lightFnLoc_=location("lightFn");
@@ -283,7 +289,7 @@ bool Renderer::retailCombiners(const Submesh& s,const C3D_Mtx& modelView,[[maybe
         if(fog){
             const float depth=-modelView.r[2].w;
             const float f=retailFogFactor(unsigned(retailFog_[0]),(depth-retailFog_[2])/std::max(retailFog_[3]-retailFog_[2],1e-3f));
-            auto* e=C3D_GetTexEnv(5);
+            auto* e=tev(5);
             C3D_TexEnvColor(e,(fogColor&0xffffffu)|uint32_t(std::lround((1.f-f)*255.f))<<24);
             C3D_TexEnvSrc(e,C3D_RGB,GPU_PREVIOUS,GPU_CONSTANT,GPU_CONSTANT);
             C3D_TexEnvOpRgb(e,GPU_TEVOP_RGB_SRC_COLOR,GPU_TEVOP_RGB_SRC_COLOR,GPU_TEVOP_RGB_SRC_ALPHA);
@@ -302,9 +308,9 @@ bool Renderer::retailCombiners(const Submesh& s,const C3D_Mtx& modelView,[[maybe
         const unsigned primaryScale=(s.lighting&retail::PrimaryScaleMask)>>retail::PrimaryScaleShift;
         const unsigned secondary=(s.lighting&retail::SecondaryMask)>>retail::SecondaryShift;
         const unsigned albedoScale=(s.lighting&retail::AlbedoScaleMask)>>retail::AlbedoScaleShift;
-        for(int i=0;i<6;++i)C3D_TexEnvInit(C3D_GetTexEnv(i));
+        for(int i=0;i<6;++i)C3D_TexEnvInit(tev(i));
         int n=0;
-        auto next=[&](){return C3D_GetTexEnv(n++);};
+        auto next=[&](){return tev(n++);};
         C3D_TexEnv* e=nullptr;
         if(primary&&primaryScale==3){
             // (rasC + lm_0*rasA) * 0.5 without saturating the sum first.
@@ -389,11 +395,11 @@ bool Renderer::retailCombiners(const Submesh& s,const C3D_Mtx& modelView,[[maybe
     if(!fog)return false;
     if(additive){
         // The additive (CLR0/Star) stage moves before fog: GX fog follows the TEV.
-        auto* add=C3D_GetTexEnv(4);C3D_TexEnvColor(add,additiveRgb);
+        auto* add=tev(4);C3D_TexEnvColor(add,additiveRgb);
         C3D_TexEnvSrc(add,C3D_RGB,GPU_PREVIOUS,GPU_CONSTANT);C3D_TexEnvOpRgb(add,GPU_TEVOP_RGB_SRC_COLOR,GPU_TEVOP_RGB_SRC_COLOR);
         C3D_TexEnvFunc(add,C3D_RGB,GPU_ADD);
     }
-    auto* e=C3D_GetTexEnv(5);C3D_TexEnvInit(e);C3D_TexEnvColor(e,fogColor);
+    auto* e=tev(5);C3D_TexEnvInit(e);C3D_TexEnvColor(e,fogColor);
     C3D_TexEnvSrc(e,C3D_RGB,GPU_CONSTANT,GPU_PREVIOUS,GPU_TEXTURE2);
     C3D_TexEnvOpRgb(e,GPU_TEVOP_RGB_SRC_COLOR,GPU_TEVOP_RGB_SRC_COLOR,GPU_TEVOP_RGB_SRC_ALPHA);C3D_TexEnvFunc(e,C3D_RGB,GPU_INTERPOLATE);
     C3D_TexBind(2,&retailFogRamp_);retailFogBound_=true;

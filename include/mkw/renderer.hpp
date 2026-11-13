@@ -123,6 +123,16 @@ struct SubmeshOverride {
     enum : uint32_t { Constant=1, Tint=2, Alpha=4, Add=8, Uv=16, Texture=32 };
     float uv[12]; float tint[4]; int32_t texture[2]; uint32_t constant,add,flags;
 };
+// Renderer::stateCache: one submesh's six combiners and combiner-buffer
+// masks as its material setup left them, with every input that setup read
+// besides the material (the Star colour, fog, lighting mode).
+struct SubmeshState {
+    Submesh material{};
+    C3D_TexEnv env[6]{};
+    uint32_t additive=0,fog=0;
+    uint8_t bufRgb=0,bufAlpha=0,mode=0;
+    bool valid=false;
+};
 class Model {
 public:
     bool roadSamplerPolicy=false; // executable-only static-road sampler ranges
@@ -194,6 +204,10 @@ public:
     struct FacingPlanes {uint32_t submesh;float radius;std::vector<std::array<float,4>> planes;};
     std::vector<FacingPlanes> facing;
     void buildFacingCull(unsigned submesh);
+    // Renderer::stateCache: each submesh's combiners after its first setup
+    // (render thread only; allocated at its first cacheable draw, never copied).
+    mutable std::unique_ptr<SubmeshState[]> stateBlocks;
+    mutable uint32_t stateBlockCount=0;
     ~Model();
     bool load(const char* path,bool dynamicLighting=false,bool liveDiffuse=false);
 };
@@ -660,6 +674,11 @@ public:
     // DIAG (render thread): ticks spent in the course pass's model draws
     // (first eye of frames with pass markers) and the frames that drew any.
     uint64_t courseDrawTicks=0;unsigned long courseDrawFrames=0;
+    // drawNow applies a submesh's combiners as its last setup left them
+    // (Model::stateBlocks) while every input of that setup is unchanged,
+    // instead of building them again: the same GPU commands. A/B: no-state-cache.txt.
+    // DIAG state-cache-verify.txt builds them anyway and compares (stateMismatches).
+    bool stateCache=false,stateCacheVerify=false;
     // DIAG draw-timing.txt: drawNow's time split into material setup,
     // C3D_DrawElements and end-of-draw resets (the last drawn frame, ms).
     bool drawTiming=false;
@@ -668,8 +687,9 @@ public:
     // Consecutive font sprites, or material quads, with the same texture and
     // constants draw as one draw (the same pixels). A/B: no-quad-merge.txt.
     bool quadMerge=false;
-    // DIAG (render thread, total): draws saved by quad merging.
-    unsigned long quadMerges=0;
+    // DIAG (render thread, totals): state cache verifications and their
+    // mismatches; draws saved by quad merging.
+    unsigned long stateVerified=0,stateMismatches=0,quadMerges=0;
     // DIAG cmd-hash.txt: each frame's GPU command words hashed (FNV-1a) into
     // cmd-hash.csv; cmd-dump.txt lists animation ticks whose words are saved
     // as cmd-dump-<tick>-<frame>.bin.
@@ -951,6 +971,16 @@ private:
     // Combiners/textures of a retail submesh after the generic setup; returns
     // true when it owns the environment rows (light textures).
     bool retailCombiners(const Submesh& s,const C3D_Mtx& modelView,bool backdrop,bool additive,uint32_t additiveRgb,uint32_t constant);
+    // Combiner stage `id` for a material setup: citro3d's, or a scratch
+    // stage while tevDry_ (a state block already holds the combiners; the
+    // setup only binds textures and sets uniforms).
+    C3D_TexEnv* tev(int id){return tevDry_?&tevScratch_:C3D_GetTexEnv(id);}
+    bool tevDry_=false;C3D_TexEnv tevScratch_{};
+    // C3D_TexEnvBufUpdate for a material setup, keeping the masks it set.
+    void tevBuf(int mode,int mask){C3D_TexEnvBufUpdate(mode,mask);if(mode&C3D_RGB)tevBufRgb_=uint8_t(mask);if(mode&C3D_Alpha)tevBufAlpha_=uint8_t(mask);}
+    uint8_t tevBufRgb_=0,tevBufAlpha_=0;
+    // The fog inputs of retailCombiners (0: no fog shows).
+    uint32_t retailFogKey() const;
     // drawSetupMs..stateHits from a drawn frame's stats.
     void takeDrawTimes(const Stats& s){
         const double ms=1000.0/SYSCLOCK_ARM11;
