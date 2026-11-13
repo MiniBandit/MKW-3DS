@@ -374,8 +374,11 @@ bool RaceBottomScreen::compose(Renderer& renderer,const BottomView& view){
     }
     if(view.timeTrial)m.standings=0.f; // Never retain a sliding column from another mode.
     const float columnSlide=view.timeTrial?0.f:smooth(m.standings);
-    const float mapWidth=view.timeTrial?ScreenW:MapW;
-    const float mapCenterX=ScreenW*.5f+(MapCX-ScreenW*.5f)*columnSlide;
+    // Floating rows hide no strip of the screen: every map stays centred on its
+    // full width (the column moved it right of its edge).
+    const bool centred=view.timeTrial||(m.floatingRows&&m.rows.ready);
+    const float mapWidth=centred?ScreenW:MapW;
+    const float mapCenterX=centred?ScreenW*.5f:ScreenW*.5f+(MapCX-ScreenW*.5f)*columnSlide;
     // The opaque standings column covers x < columnEdge (drawn after the map).
     const float columnEdge=m.standings>0?Column-(1-smooth(m.standings))*(Column+4):0.f;
     const float clip=m.mapClip&&!m.floatingRows&&columnEdge>0?columnEdge:0.f;
