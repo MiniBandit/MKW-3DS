@@ -24,6 +24,8 @@ public:
     static inline bool thinHidden=false;
     // Poses and culls every opponent for this frame, on the job worker where
     // possible. Call after Renderer::begin; race state must not change until draw.
+    // fullDetail: no LOD at all (intro, results, replays, after the finish);
+    // otherwise RenderQuality::racerLod picks our rule or the Wii's driver LOD.
     void prepare(const Renderer& renderer,const RaceItems& items,Vec3 viewer,unsigned tick,bool fullDetail=false);
     // Draws in racer order; prepares inline first when prepare() was not called.
     // Original vehicle shadow volumes resolve on the world before racers draw.
@@ -33,6 +35,8 @@ public:
     // after the opaque world, player and its shadow. Translucent, no shadow volume.
     void drawGhosts(Renderer& renderer);
     unsigned count() const;
+    // QA: opponents drawn with the Wii's low-detail driver in the last draw().
+    unsigned lowDriverCount() const;
 private:
     struct Impl;
     std::unique_ptr<Impl> impl_;

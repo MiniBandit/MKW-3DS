@@ -57,6 +57,7 @@ struct RacerVisuals::Impl {
     struct Prepared {
         bool draw=false,bodyVisible=false,driverVisible=false;
         unsigned lod=1;
+        bool lowDriver=false; // stage 1 with the Wii's driver LOD (wiiLowDriver)
         uint32_t additive=0;
         C3D_Mtx body{},seated{},lowHandle{};bool lowHandleVisible=false;
         unsigned wheels=0;std::array<bool,4> wheelVisible{};std::array<C3D_Mtx,4> wheel{};
@@ -64,6 +65,7 @@ struct RacerVisuals::Impl {
         unsigned extras=0;std::array<Extra,9*4> extra{};
     };
     std::array<Prepared,11> prepared;
+    unsigned lowDrivers=0; // QA: Wii LOD drivers drawn by the last draw()
     std::array<Job,11> jobs;
     std::array<bool,11> queued{};
     struct Frame {Impl* impl=nullptr;ViewFrustum view{};const RaceItems* items=nullptr;Vec3 viewer{};unsigned tick=0;bool open=false;Vec3 camera{};ClipFrustum world{};float fov=60;bool fullDetail=true;} frame;
@@ -79,6 +81,7 @@ RacerVisuals::RacerVisuals():impl_(std::make_unique<Impl>()){}
 RacerVisuals::~RacerVisuals()=default;
 void RacerVisuals::reset(){for(auto& r:impl_->racers)r.reset();impl_->count=0;}
 unsigned RacerVisuals::count() const{return impl_->count;}
+unsigned RacerVisuals::lowDriverCount() const{return impl_->lowDrivers;}
 bool RacerVisuals::load(){
     reset();const auto& config=K::System::RaceConfig::Instance()->raceScenario();
     // Banks kept from the last race (DriverAnimation::keepReleased) that this
@@ -210,7 +213,7 @@ void RacerVisuals::Impl::prepareRacer(unsigned i){
     // Flags and counts only (not out=Prepared{}, ~3 KB a racer a frame): every matrix a
     // reader uses is written before its flag or count says so.
     auto& out=prepared[i];out.draw=out.bodyVisible=out.driverVisible=out.lowHandleVisible=false;
-    out.lod=1;out.additive=0;out.wheels=0;out.wheelVisible={};out.extras=0;
+    out.lod=1;out.lowDriver=false;out.additive=0;out.wheels=0;out.wheelVisible={};out.extras=0;
     auto* r=racers[i].get();if(!r)return;
     r->headShown=false;
     if(!r->body||!r->driver||!r->animation)return;
@@ -226,7 +229,9 @@ void RacerVisuals::Impl::prepareRacer(unsigned i){
     if(dot(position-frame.viewer,position-frame.viewer)>25000.f*25000.f)return;
     const auto& quality=renderQuality();const Vec3 camera=frame.camera;
     const float lodScale=std::max(.01f,r->vehicle.maxScale());
-    out.lod=r->lod.update(dot(position-camera,position-camera)/(lodScale*lodScale),frame.fov,frame.fullDetail||!r->driverLod||!r->bodyLod||!r->bodyLodRear||(VehicleLodLayout[r->choice->vehicle].handle&&(!r->handleLod||!r->handleLodRear)));
+    out.lod=r->lod.update(dot(position-camera,position-camera)/(lodScale*lodScale),frame.fov,frame.fullDetail||!quality.racerLod||!r->driverLod||!r->bodyLod||!r->bodyLodRear||(VehicleLodLayout[r->choice->vehicle].handle&&(!r->handleLod||!r->handleLodRear)));
+    // Opponent Detail Full: the Wii's rule, the driver alone (wiiLowDriver).
+    out.lowDriver=!quality.racerLod&&!frame.fullDetail&&diag::wiiDriverLod&&r->driverLod&&wiiLowDriver(dot(position-camera,position-camera));
     // Reduced detail: parts too small to see are neither posed nor drawn.
     auto tiny=[&](const Model& model,const C3D_Mtx& matrix){return quality.tooSmall({model.minimum,model.maximum},matrix,camera);};
     auto animate=[&](DriverAnimation* bank,Model& model,Racer::Clock& clock,bool handle,const C3D_Mtx& matrix){
@@ -248,8 +253,8 @@ void RacerVisuals::Impl::prepareRacer(unsigned i){
     auto frustum=view.model(seated);
     out.draw=K::Kart::KartObjectManager::Instance()->object(i+1)->move()->battleVisible();out.body=transform;out.seated=seated;
     if(r->luma&&out.lod<4)r->luma->prepare(view,r->vehicle,tick);
-    r->headShown=out.lod==1;
-    if(out.lod==1){r->animation->setBraidWorld(seated);
+    r->headShown=out.lod==1&&!out.lowDriver;
+    if(out.lod==1&&!out.lowDriver){r->animation->setBraidWorld(seated);
     out.driverVisible=!tiny(*r->driver,seated)&&r->animation->apply(*r->driver,r->animation->find(name),frame,tick,expression,faceFrame,&frustum);
     }else if(out.lod<4)out.driverVisible=view.visible(*r->driverLod,seated);
     out.additive=starMaterialColor(items.hud(i+1).star)|
@@ -315,7 +320,11 @@ void RacerVisuals::draw(Renderer& renderer,const RaceItems& items,Vec3 viewer,un
     // Submit all racers in one stencil batch: overlaps darken once. Resolve
     // before the racer models, so their own volumes cannot shade the casters.
     renderer.drawShadowVolumes(shadows.data(),shadowCount,.5f);
-    for(unsigned i=0;i<11;++i)if(d.racers[i]&&!d.racers[i]->ghost)d.drawPrepared(renderer,i);
+    d.lowDrivers=0;
+    for(unsigned i=0;i<11;++i)if(d.racers[i]){
+        const auto& out=d.prepared[i];d.lowDrivers+=out.draw&&out.driverVisible&&out.lowDriver;
+        if(!d.racers[i]->ghost)d.drawPrepared(renderer,i);
+    }
     d.frame.open=false;
 }
 void RacerVisuals::drawGhosts(Renderer& renderer){
@@ -340,7 +349,7 @@ void RacerVisuals::Impl::drawPrepared(Renderer& renderer,unsigned i){
         if(zone&&zoneCourse){const auto light=zone->light(*zoneCourse);renderer.setRacerLight(&light,zone->ambientColor());}
         if(out.bodyVisible){if(out.lod==1)drawSkinned(r->bodyAnimation.get(),*r->body,out.body);else renderer.draw(*(out.lod>=3?r->bodyLodRear:r->bodyLod),out.body);}
         if(out.lowHandleVisible)renderer.draw(*(out.lod>=3?r->handleLodRear:r->handleLod),out.lowHandle);
-        if(out.driverVisible){if(out.lod==1)drawSkinned(r->animation.get(),*r->driver,out.seated);else renderer.draw(*r->driverLod,out.seated);}
+        if(out.driverVisible){if(out.lod==1&&!out.lowDriver)drawSkinned(r->animation.get(),*r->driver,out.seated);else renderer.draw(*r->driverLod,out.seated);}
         if(r->luma&&out.lod<4)r->luma->draw(renderer);
         for(unsigned w=0;w<out.wheels;++w)if(out.wheelVisible[w])renderer.draw(*r->wheels[r->vehicle.modelIndex(w)],out.wheel[w]);
         for(unsigned e=0;e<out.extras;++e){const auto& x=out.extra[e];if(x.visible)drawSkinned(r->extraAnimation[x.part].get(),*r->extras[x.part],x.matrix);}

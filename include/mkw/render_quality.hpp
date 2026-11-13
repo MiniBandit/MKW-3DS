@@ -39,8 +39,9 @@ struct RenderQuality {
     // within 2,000 (retail's two-player split screen).
     unsigned kartEffectScreens=1;
     // Opponents switch to the Wii's split-screen kart bodies, low-detail
-    // drivers and fewer wheels with camera distance (RacerLod). Off: every
-    // opponent keeps full detail, as in the Wii's single-player races.
+    // drivers and fewer wheels with camera distance (RacerLod). Off: the Wii's
+    // single-player rule, only drivers swap to model_lod beyond 4,000 units
+    // (wiiLowDriver); bodies, wheels and accessories keep full detail.
     bool racerLod=false;
     // CPU-skinned spectator crowds and animated item models (Bullet Bill,
     // Thundercloud, POW...) advance in steps of this many ticks (4: 15 Hz),

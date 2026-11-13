@@ -78,6 +78,9 @@ inline bool liveLight=true,rearBake=true;
 // Opponents lit in the vertex shader like the local racer (full banks, lit
 // GPU skinning; LOD models stay baked). Off by default. A/B: live-opponents.txt.
 inline bool liveOpponents=false;
+// Opponent Detail Full: opponents' drivers swap to model_lod beyond 4,000 units
+// of camera distance, as on the Wii (wiiLowDriver). A/B: no-wii-driver-lod.txt.
+inline bool wiiDriverLod=true;
 // Light zones: racers take BLIGHT light and ambient k from the floor's KCL
 // bits 8-10 (RacerLightZone). A/B: no-light-zones.txt.
 inline bool lightZones=true;

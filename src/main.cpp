@@ -791,6 +791,7 @@ int main() {
     mkw::diag::menuFast=!exists("sdmc:/3ds/mkw-3ds/no-menu-fast.txt");mkw::diag::menuCheck=exists("sdmc:/3ds/mkw-3ds/menu-check.txt");mkw::diag::unlitBanks=!exists("sdmc:/3ds/mkw-3ds/no-unlit-banks.txt");mkw::diag::pauseKeep=!exists("sdmc:/3ds/mkw-3ds/no-pause-keep.txt");
     mkw::diag::liveLight=!exists("sdmc:/3ds/mkw-3ds/no-live-light.txt");mkw::diag::rearBake=!exists("sdmc:/3ds/mkw-3ds/no-rear-bake.txt");mkw::diag::liveOpponents=exists("sdmc:/3ds/mkw-3ds/live-opponents.txt");
     mkw::diag::lightZones=!exists("sdmc:/3ds/mkw-3ds/no-light-zones.txt");report(mkw::diag::lightZones?"light zones on":"light zones off");
+    mkw::diag::wiiDriverLod=!exists("sdmc:/3ds/mkw-3ds/no-wii-driver-lod.txt");report(mkw::diag::wiiDriverLod?"wii driver lod on":"wii driver lod off");
     report(mkw::diag::liveLight?"live light on":"live light off");report(mkw::diag::rearBake?"rear bake on":"rear bake off");report(mkw::diag::liveOpponents?"live opponents on":"live opponents off");
 #ifndef MKW_RELEASE
     mkw::loadprof::data.on=kQa;
@@ -4265,7 +4266,7 @@ int main() {
             courseObjects.prepare(renderer,physicsSteps,renderer.cameraPosition());
             // DIAG: perf-race-NNN-grid-draws.csv tallies the countdown's draws.
             mkw::diag::drawGrid.store(fullRace&&K::System::RaceManager::Instance()->stage()==K::System::RaceManager::Stage::Countdown,std::memory_order_relaxed);
-            if(fullRace)opponents.prepare(renderer,*raceItems,vec(cameraKart->pos()),physicsSteps,!mkw::renderQuality().racerLod||intro.active()||results.active()||raceGrid.finished());
+            if(fullRace)opponents.prepare(renderer,*raceItems,vec(cameraKart->pos()),physicsSteps,intro.active()||results.active()||raceGrid.finished()||watchReplay);
             // Snapshot the original chassis transform before the player pose
             // worker reads VehicleAnimation's lazy matrices.
             const C3D_Mtx playerShadowTransform=vehicleAnimation.body();
@@ -4554,6 +4555,7 @@ int main() {
             std::vector<uint8_t> pixels(400*240*3);char path[64];snprintf(path,sizeof path,"sdmc:/3ds/mkw-3ds/race-r%02u-%05u.ppm",captureRace,physicsSteps-captureBase);
             if(renderer.captureTop(pixels.data()))if(FILE* f=fopen(path,"wb")){fprintf(f,"P6\n400 240\n255\n");fwrite(pixels.data(),1,pixels.size(),f);fclose(f);}
             saveRightEye(renderer,path);
+            LOGF("race capture r%02u-%05u low drivers=%u",captureRace,physicsSteps-captureBase,opponents.lowDriverCount());
             // The lower LCD's frame beside it (name-bottom.ppm, 320x240).
             if(bottomScreen.active()&&renderer.captureBottom(pixels.data())){snprintf(path,sizeof path,"sdmc:/3ds/mkw-3ds/race-r%02u-%05u-bottom.ppm",captureRace,physicsSteps-captureBase);
                 if(FILE* f=fopen(path,"wb")){fprintf(f,"P6\n320 240\n255\n");fwrite(pixels.data(),1,320*240*3,f);fclose(f);}}
