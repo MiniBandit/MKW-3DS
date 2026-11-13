@@ -43,12 +43,7 @@ bool fogVisible(const float* fog){
 }
 }
 
-uint32_t Renderer::retailFogKey() const{
-    if(!fogVisible(retailFog_))return 0;
-    // retailCombiners' fog colour (alpha set, so never 0).
-    return uint32_t(std::lround(retailFog_[4]*255.f))|uint32_t(std::lround(retailFog_[5]*255.f))<<8|
-           uint32_t(std::lround(retailFog_[6]*255.f))<<16|0xff000000u;
-}
+uint32_t Renderer::retailFogKey() const{return retailFogKey_;}
 bool Renderer::retailUniformLocations(){
     auto location=[&](const char* name){return int(shaderInstanceGetUniformLocation(program_.vertexShader,name));};
     lightDiffLoc_=location("lightDiff");lightDirLoc_=location("lightDir");lightFnLoc_=location("lightFn");
@@ -88,6 +83,11 @@ void Renderer::retailFogNow(const RetailFog& fog){
     retailFog_[0]=float(fog.type);retailFog_[1]=fog.enabled?1.f:0.f;retailFog_[2]=fog.start;retailFog_[3]=fog.end;
     for(unsigned i=0;i<3;++i)retailFog_[4+i]=unit(fog.color,i);
     retailFog_[7]=ramp;
+    // retailCombiners' fog colour (alpha set, so never 0) and the state blocks'
+    // fog key (0 while fog is off), once per fog change instead of per draw.
+    retailFogColor_=uint32_t(std::lround(retailFog_[4]*255.f))|uint32_t(std::lround(retailFog_[5]*255.f))<<8|
+                    uint32_t(std::lround(retailFog_[6]*255.f))<<16|0xff000000u;
+    retailFogKey_=fogVisible(retailFog_)?retailFogColor_:0;
 }
 
 void Renderer::retailShutdown(){
@@ -281,8 +281,7 @@ bool Renderer::retailCombiners(const Submesh& s,const C3D_Mtx& modelView,[[maybe
     // fog index is 0; the cook sets retail::Fog only there (MKW_SKY_FOG).
     const bool fog=(s.lighting&retail::Fog)&&fogVisible(retailFog_);
     const unsigned channel=(s.lighting&retail::ChannelMask)>>retail::ChannelShift;
-    const uint32_t fogColor=uint32_t(std::lround(retailFog_[4]*255.f))|uint32_t(std::lround(retailFog_[5]*255.f))<<8|
-                            uint32_t(std::lround(retailFog_[6]*255.f))<<16|0xff000000u;
+    const uint32_t fogColor=retailFogColor_;
     if(s.menuReflection==8||s.menuReflection==10){
         // All three texture units hold the source statue layers. As with
         // existing light-texture objects, apply fog at the object's eye depth.

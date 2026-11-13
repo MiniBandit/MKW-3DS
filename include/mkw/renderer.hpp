@@ -1009,6 +1009,7 @@ private:
     bool lightTextureTransition_[2]{};
     int retailTextureKeys_[2][12]{}; // last generated GX direction matrices
     bool retailTextureDynamic_[2]{};
+    uint32_t retailFogColor_=0xff000000u,retailFogKey_=0; // from retailFog_, set by retailFogNow
     float retailFog_[8]{};      // type, enabled, start, end, r, g, b, ramp type
     // Light textures generated; light uniforms, light-texture state or unit 2 to restore after a submesh.
     bool fixedLightTextures_=false;
