@@ -555,7 +555,12 @@ void stepEscalatorPianta(Visual& v,int time){
     v.frames=length&&next!=1?(v.frames+1)%length:std::min(v.frames+1,length?length-1:0u);
 }
 void drawEscalatorPianta(ObjectDraw& d,Visual& v){
-    if(!v.railStarted){v.railStarted=true;v.moverState=0;v.frames=0;v.lastState=0;v.speed=0;v.lastTick=d.tick;}
+    // Retail init (USA 0x807f3e6c): the heading starts a quarter turn toward the
+    // escalator going up first (rot.y + pi/2 * (setting 1 > 0 ? 1 : -1); +X is
+    // the right escalator, whose Kinoko speed has setting 1's sign), and calc
+    // leaves it there until 240 frames before the first reversal.
+    if(!v.railStarted){v.railStarted=true;v.moverState=0;v.frames=0;v.lastState=0;
+        v.speed=(int16_t(v.geo->setting(1))>0?1.f:-1.f)*1.5707963705062866f;v.lastTick=d.tick;}
     const int time=int(K::System::RaceManager::Instance()->timer());
     for(unsigned n=0;n<8&&v.lastTick!=d.tick;++n,++v.lastTick)stepEscalatorPianta(v,time);
     v.lastTick=d.tick;
@@ -1287,6 +1292,11 @@ bool classifyObject(Visual& v,const ObjectAssets& assets,int course){
         const auto* pianta=assets.main("monte_a");
         v.main=assets.tracks(pianta);v.low={};v.shadow=assets.tracks(assets.shadow(pianta));
         v.present=drawEscalatorPianta;
+        // The Pianta stands at the group (between its escalators, raised 510,
+        // 50 forward, x1.75). link() lists the group first (ObjectDirector),
+        // then its two escalators (drivable director); the default last part
+        // is the left escalator, which put the Pianta on its treads.
+        if(v.parts.size()==3)v.object=v.parts.front();
         v.clips[0]=clip(v.main,"wait");v.clips[1]=clip(v.main,"turn");v.clips[2]=clip(v.main,"point_to");
         if(!v.main.model)return false;
     }else if(named(v,"monte_a")||named(v,"mare_a")||named(v,"mare_b")){
