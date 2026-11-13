@@ -84,9 +84,13 @@ struct RaceBottomScreen::Impl {
     float standings=0;                           // slide-in 0..1
     std::array<float,12> row{};bool rowsSet=false;
     unsigned roulette=0;
+    unsigned skippedFrames=0; // DIAG: frames left alone at 30 Hz (skipRace)
     // The map stops at the standings column's edge; markers wholly under it
     // are not drawn (A/B: no-map-clip.txt).
     bool mapClip=true;
+    // The standings rows float over the full-width map: no column backdrop, no
+    // map clip (A/B: no-floating-rows.txt).
+    bool floatingRows=true;
     // Race frames whose quads equal the last shown frame's keep the lower
     // LCD's picture: no draw, no clear, no transfer (A/B: no-race-bottom-keep.txt).
     // The race's 2D lower screen binds no depth buffer (A/B: no-bottom-depth-off.txt).
@@ -272,7 +276,7 @@ static bool sdFile(const char* name){
 
 bool RaceBottomScreen::load(Renderer& renderer,unsigned course){
     auto& m=*impl_;
-    m.mapClip=!sdFile("no-map-clip.txt");
+    m.mapClip=!sdFile("no-map-clip.txt");m.floatingRows=!sdFile("no-floating-rows.txt");
     endRace();m.keep=!sdFile("no-race-bottom-keep.txt");m.depthOff=!sdFile("no-bottom-depth-off.txt");m.depthFree=!sdFile("no-bottom-depth-free.txt");
     const auto* art=raceMapCourse(course);
     if(!art){unload(renderer);return false;}
@@ -347,7 +351,7 @@ bool RaceBottomScreen::compose(Renderer& renderer,const BottomView& view){
     const float mapCenterX=ScreenW*.5f+(MapCX-ScreenW*.5f)*columnSlide;
     // The opaque standings column covers x < columnEdge (drawn after the map).
     const float columnEdge=m.standings>0?Column-(1-smooth(m.standings))*(Column+4):0.f;
-    const float clip=m.mapClip&&columnEdge>0?columnEdge:0.f;
+    const float clip=m.mapClip&&!m.floatingRows&&columnEdge>0?columnEdge:0.f;
     // CtrlRaceBase's authored 20-tick entrance: -1 -> 0 in .05 steps.
     m.timerSlide=view.timerVisible?std::min(0.f,m.timerSlide+float(elapsed)*.05f):-1.f;
     m.base=m.quads.get()+(renderer.recordingFrame()&1)*QuadCapacity;m.count=0;
@@ -538,7 +542,7 @@ bool RaceBottomScreen::compose(Renderer& renderer,const BottomView& view){
     const unsigned topFirst=m.count;
     if(m.standings>0){
         const float edge=columnEdge;
-        if(edge>0){m.add(m.ui->white,0,0,edge,ScreenH,0x101626ffu);
+        if(edge>0&&!m.floatingRows){m.add(m.ui->white,0,0,edge,ScreenH,0x101626ffu);
             m.add(m.ui->white,std::max(0.f,edge-1),0,edge,ScreenH,0x5a6a8aff);}
     }
     if(atlas&&m.standings>0){
@@ -684,12 +688,21 @@ void RaceBottomScreen::drawRace(Renderer& renderer,const BottomView& view){
     m.shownValid=shown;m.shownHash=hash;m.shownSerial=serial;m.shownApt=apt;m.shownScopes=scopes;++m.drawnFrames;
 }
 
+bool RaceBottomScreen::skipRace(Renderer& renderer){
+    auto& m=*impl_;
+    // A loading frame ends black; a gap or an APT event may have changed the LCD.
+    if(!m.shownValid||renderer.loadingFrame||renderer.frameSerial()!=m.shownSerial+1||
+       aptEvents.load(std::memory_order_relaxed)!=m.shownApt||loadingScopes()!=m.shownScopes)return false;
+    if(!renderer.bottomCovered())return false;
+    m.shownSerial=renderer.frameSerial();++m.skippedFrames;
+    return true;
+}
 void RaceBottomScreen::endRace(){
     auto& m=*impl_;
 #ifndef MKW_RELEASE
     if(m.keptFrames+m.drawnFrames)if(FILE* f=std::fopen("sdmc:/3ds/mkw-3ds/runtime.log","a")){
-        std::fprintf(f,"bottom keep: course=%d kept=%u drawn=%u keep=%d\n",m.course==~0u?-1:int(m.course),m.keptFrames,m.drawnFrames,int(m.keep));std::fclose(f);}
+        std::fprintf(f,"bottom keep: course=%d kept=%u drawn=%u skipped=%u keep=%d\n",m.course==~0u?-1:int(m.course),m.keptFrames,m.drawnFrames,m.skippedFrames,int(m.keep));std::fclose(f);}
 #endif
-    m.keptFrames=m.drawnFrames=0;m.shownValid=false;
+    m.keptFrames=m.drawnFrames=m.skippedFrames=0;m.shownValid=false;
 }
 }

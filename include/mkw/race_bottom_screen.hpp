@@ -96,6 +96,11 @@ public:
     // LCD keeps that picture (no beginBottom, no clear, no draw, no transfer).
     // A/B: no-race-bottom-keep.txt.
     void drawRace(Renderer& renderer,const BottomView& view);
+    // A race frame not due to redraw the lower LCD (RenderQuality::bottomInterval):
+    // when the LCD shows this race's last shown picture, marks the frame as
+    // covering it (no clear, no transfer) and returns true; the next drawRace may
+    // still keep that picture. Otherwise returns false: draw this frame.
+    bool skipRace(Renderer& renderer);
     // runtime.log line: what is resident.
     void describe(char* text,unsigned size) const;
 private:

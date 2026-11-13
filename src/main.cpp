@@ -2783,6 +2783,10 @@ int main() {
     mkw::RacerVisuals::setReuse=mkw::RaceHud::setReuse=new3ds&&!exists("sdmc:/3ds/mkw-3ds/no-set-reuse.txt");
     report(mkw::RacerVisuals::setReuse?"set reuse on":"set reuse off");
     mkw::renderQuality().setReduced(!new3ds&&!(kQa&&exists("sdmc:/3ds/mkw-3ds/full-quality.txt")));
+    // New 3DS: the race's lower screen redraws every other frame (30 Hz); Old 3DS
+    // races run at 30 fps and draw it every frame. A/B: no-bottom-30hz.txt.
+    // DIAG bottom-half-rate.txt sets 2 on Old 3DS too.
+    mkw::renderQuality().bottomInterval=new3ds&&!exists("sdmc:/3ds/mkw-3ds/no-bottom-30hz.txt")?2:1;
     if(kQa&&exists("sdmc:/3ds/mkw-3ds/bottom-half-rate.txt"))mkw::renderQuality().bottomInterval=2;
     mkw::DriverAnimation::verifyLook=kQa&&exists("sdmc:/3ds/mkw-3ds/look-verify.txt");
     // Old 3DS Kinoko speed-ups (exact physics). Batched prism tests for a kart's wheels
@@ -4599,7 +4603,8 @@ int main() {
             const float bottomFade=std::max(results.leaveFade(),introFade);
             const unsigned bottomInterval=mkw::renderQuality().bottomInterval;
             const bool bottomDue=bottomInterval<=1||bottomFade>0||frames%bottomInterval==0||raceCapture;
-            if(fullRace&&bottomScreen.active()&&!intro.active()&&bottomDue){
+            const bool bottomRace=fullRace&&bottomScreen.active()&&!intro.active();
+            if(bottomRace&&(bottomDue||!bottomScreen.skipRace(renderer))){
                 // The lower LCD: the race read, never written (src/race_bottom_screen.cpp).
                 mkw::fillBottomView(bottomView,raceGrid,*raceItems,intro.active(),physicsSteps,bottomFade);
                 if(battleMode){
