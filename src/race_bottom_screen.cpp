@@ -41,10 +41,14 @@ constexpr float Column=82.f,MapX=Column,MapW=ScreenW-Column,MapCX=MapX+MapW*.5f,
 // fill the screen's height (1 px apart); in each, the position, then the
 // face and the held item at 17 px.
 constexpr float RowTop=1.f,RowPitch=20.f,RowX=2.f,RowH=19.f;
-// Floating rows (RaceRowsUi): 3 px of map above the first and below the last,
-// the rest shared out as 1-2 px gaps; each row snaps to a whole pixel.
-constexpr float FloatTop=3.f,FloatPitch=(ScreenH-2*FloatTop-RaceRowsUi.rowH)/11.f;
-inline float floatRowY(float row){return FloatTop+std::floor(row*FloatPitch+.5f);}
+// Floating rows (RaceRowsUi, 19 px): 1 px of map above the first and below the
+// last, the rest shared out as 0-1 px gaps; each row snaps to a whole pixel.
+// DIAG rows-margin.txt overrides the margin (pixels, e.g. 0.5).
+static float floatTop=1.f;
+inline float floatRowY(float row){
+    const float pitch=(ScreenH-2*floatTop-RaceRowsUi.rowH)/11.f;
+    return std::floor(floatTop+row*pitch+.5f);
+}
 constexpr float OrdinalX=3.f,FaceX=32.f,ItemX=56.f,RowIcon=17.f;
 // Retail CtrlRace2DMapCharacter (USA 0x807E1620/0x807E1B20): the face pane is
 // 32 x 1.6 layout units, scaled 0.8 for the local racer and 0.6 for the
@@ -293,6 +297,10 @@ static bool sdFile(const char* name){
 bool RaceBottomScreen::load(Renderer& renderer,unsigned course){
     auto& m=*impl_;
     m.mapClip=!sdFile("no-map-clip.txt");m.floatingRows=!sdFile("no-floating-rows.txt");
+    floatTop=1.f;
+#ifndef MKW_RELEASE
+    if(FILE* f=std::fopen("sdmc:/3ds/mkw-3ds/rows-margin.txt","r")){float v;if(std::fscanf(f,"%f",&v)==1&&v>=0&&v<=8)floatTop=v;std::fclose(f);}
+#endif
     endRace();m.keep=!sdFile("no-race-bottom-keep.txt");m.depthOff=!sdFile("no-bottom-depth-off.txt");m.depthFree=!sdFile("no-bottom-depth-free.txt");
     const auto* art=raceMapCourse(course);
     if(!art){unload(renderer);return false;}
