@@ -133,6 +133,8 @@
 #include <malloc.h>
 #include <new>
 #include <sys/stat.h>
+#include <dirent.h>
+#include <cctype>
 #include <unistd.h>
 #include <algorithm>
 #include <cmath>
@@ -169,8 +171,25 @@ static constexpr std::size_t MenuVramReserve=2560*1024,MenuVramCopyBudget=1024*1
 static std::atomic<unsigned> aptEvents{0};
 static aptHookCookie aptEventsCookie;
 static void countAptEvent(APT_HookType,void*){aptEvents.fetch_add(1,std::memory_order_relaxed);}
+// Boot: the game folder's names from one directory listing instead of ~100
+// failed opens of off-files (each an SD request). Only until the main loop:
+// off-files are placed there before launch, and nothing checked with exists()
+// is written before then. Lower case: FAT finds names in any case, as fopen.
+static std::vector<std::string> bootNames;static bool bootListed=false;
+static std::string lowerName(const char* s){std::string r(s);for(auto& c:r)c=char(std::tolower(static_cast<unsigned char>(c)));return r;}
+static void listBootFolder(){
+    DIR* d=opendir("sdmc:/3ds/mkw-3ds");if(!d)return;
+    while(const dirent* e=readdir(d))bootNames.push_back(lowerName(e->d_name));
+    closedir(d);std::sort(bootNames.begin(),bootNames.end());bootListed=true;
+}
 // A packed file is found in the pack index without opening it.
-static bool exists(const char* p) { if(mkw::pack::contains(p))return true; FILE* f=fopen(p,"rb"); if(!f)return false; fclose(f);return true; }
+static bool exists(const char* p) {
+    if(mkw::pack::contains(p))return true;
+    static constexpr char Folder[]="sdmc:/3ds/mkw-3ds/";constexpr std::size_t n=sizeof Folder-1;
+    if(bootListed&&!std::strncmp(p,Folder,n)&&!std::strchr(p+n,'/'))
+        return std::binary_search(bootNames.begin(),bootNames.end(),lowerName(p+n));
+    FILE* f=fopen(p,"rb"); if(!f)return false; fclose(f);return true;
+}
 // Sky last saves its fill where the track hides most of the sky. Rainbow
 // Road's sky fills most of the screen, so there the depth test only adds
 // work (run 3, New 3DS: sky pass 1.52 -> 2.62 ms; other courses -0.14 to +0.03).
@@ -564,6 +583,7 @@ int main() {
     mkdir("sdmc:/3ds",0777);mkdir(LicenseDirectory,0777);
     if(kQa)mkdir(DATA,0777);
     if(kQa)if(FILE* f=fopen("sdmc:/3ds/mkw-3ds/runtime.log","w")){fputs("MKW ARM11 startup\n",f);fclose(f);}
+    listBootFolder();
     // Embedded assets are read in place; writable diagnostics stay on SD.
     struct AssetMount {
         bool mounted=R_SUCCEEDED(romfsInit());
@@ -757,7 +777,7 @@ int main() {
         fclose(f);LOGF("texture lod bias %.2f",double(mkw::renderQuality().lodBias));
     }
     renderer.plainUv=!exists("sdmc:/3ds/mkw-3ds/no-plain-uv.txt");
-    renderer.depthGrid=exists("sdmc:/3ds/mkw-3ds/lens-depth-grid.txt");
+    renderer.depthGrid=kQa&&exists("sdmc:/3ds/mkw-3ds/lens-depth-grid.txt");
 #ifndef MKW_RELEASE
     textureWatch=exists("sdmc:/3ds/mkw-3ds/texture-watch.txt");if(textureWatch)report("texture watch on");
     {char text[200];snprintf(text,sizeof text,"memory: app_memtype=%lu application region %lu KB (free %lu KB), heap %lu KB, linear %lu KB, new3ds=%d",(unsigned long)OS_KernelConfig->app_memtype,(unsigned long)osGetMemRegionSize(MEMREGION_APPLICATION)/1024,(unsigned long)osGetMemRegionFree(MEMREGION_APPLICATION)/1024,(unsigned long)envGetHeapSize()/1024,(unsigned long)envGetLinearHeapSize()/1024,int(mkw::isNew3ds()));report(text);}
@@ -796,7 +816,7 @@ int main() {
     renderer.releaseIdleBloom=!exists("sdmc:/3ds/mkw-3ds/no-bloom-release.txt");if(!renderer.releaseIdleBloom)report("bloom release off");
     mkw::shareObjectTextures=!exists("sdmc:/3ds/mkw-3ds/no-texture-share.txt");if(!mkw::shareObjectTextures)report("texture share off");
     mkw::diag::menuFast=!exists("sdmc:/3ds/mkw-3ds/no-menu-fast.txt");mkw::diag::menuCheck=exists("sdmc:/3ds/mkw-3ds/menu-check.txt");mkw::diag::unlitBanks=!exists("sdmc:/3ds/mkw-3ds/no-unlit-banks.txt");mkw::diag::pauseKeep=!exists("sdmc:/3ds/mkw-3ds/no-pause-keep.txt");
-    mkw::diag::liveLight=!exists("sdmc:/3ds/mkw-3ds/no-live-light.txt");mkw::diag::rearBake=!exists("sdmc:/3ds/mkw-3ds/no-rear-bake.txt");mkw::diag::liveOpponents=exists("sdmc:/3ds/mkw-3ds/live-opponents.txt");
+    mkw::diag::liveLight=!exists("sdmc:/3ds/mkw-3ds/no-live-light.txt");mkw::diag::rearBake=!exists("sdmc:/3ds/mkw-3ds/no-rear-bake.txt");mkw::diag::liveOpponents=kQa&&exists("sdmc:/3ds/mkw-3ds/live-opponents.txt");
     mkw::diag::lightZones=!exists("sdmc:/3ds/mkw-3ds/no-light-zones.txt");report(mkw::diag::lightZones?"light zones on":"light zones off");
     mkw::diag::wiiDriverLod=!exists("sdmc:/3ds/mkw-3ds/no-wii-driver-lod.txt");report(mkw::diag::wiiDriverLod?"wii driver lod on":"wii driver lod off");
     report(mkw::diag::liveLight?"live light on":"live light off");report(mkw::diag::rearBake?"rear bake on":"rear bake off");report(mkw::diag::liveOpponents?"live opponents on":"live opponents off");
@@ -2990,6 +3010,8 @@ int main() {
     // The animation fixtures read posed vertices back while racing: immediate.
     const bool deferredRace=!animationTest;
     renderer.setDeferred(deferredRace);
+    // From here the game writes into its folder: exists() opens files again.
+    bootListed=false;bootNames.clear();bootNames.shrink_to_fit();
     while(aptMainLoop()){
         // DIAG: report the iteration that ended the intro or reached GO, then three more.
         {const auto now=mkw::diag::iterationBegin();

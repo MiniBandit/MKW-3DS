@@ -282,7 +282,9 @@ bool RaceBottomScreen::load(Renderer& renderer,unsigned course){
     if(FILE* f=std::fopen("sdmc:/3ds/mkw-3ds/timer-scale.txt","r")){float v;if(std::fscanf(f,"%f",&v)==1&&v>=.3f&&v<=1.f)TimerScale=v;std::fclose(f);}
     if(FILE* f=std::fopen("sdmc:/3ds/mkw-3ds/rows-margin.txt","r")){float v;if(std::fscanf(f,"%f",&v)==1&&v>=0&&v<=8)rowMargin=v;std::fclose(f);}
 #endif
-    endRace();m.keep=!sdFile("no-race-bottom-keep.txt");m.depthOff=!sdFile("no-bottom-depth-off.txt");m.depthFree=!sdFile("no-bottom-depth-free.txt");
+    // A/B files are read once a session (three SD opens per race load otherwise).
+    static const bool noKeep=sdFile("no-race-bottom-keep.txt"),noDepthOff=sdFile("no-bottom-depth-off.txt"),noDepthFree=sdFile("no-bottom-depth-free.txt");
+    endRace();m.keep=!noKeep;m.depthOff=!noDepthOff;m.depthFree=!noDepthFree;
     const auto* art=raceMapCourse(course);
     if(!art){unload(renderer);return false;}
     if(m.target&&m.course==course){
