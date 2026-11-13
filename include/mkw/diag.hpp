@@ -241,6 +241,10 @@ inline void textureDrawn(const void* const* data,unsigned count,uint32_t draws,u
 inline void textureFrame(){auto& t=textureUseTally;LightLock_Lock(&t.lock);++t.frames;LightLock_Unlock(&t.lock);}
 inline void textureUseReset(){auto& t=textureUseTally;LightLock_Lock(&t.lock);for(auto& e:t.entries)e={};t.frames=0;LightLock_Unlock(&t.lock);}
 inline void textureRegister(std::vector<TextureInfo> info){auto& t=textureUseTally;LightLock_Lock(&t.lock);t.info=std::move(info);LightLock_Unlock(&t.lock);}
+// Adds the textures not registered yet (racers, items, HUD, effects, Lakitu...).
+inline void textureRegisterMore(std::vector<TextureInfo> more){auto& t=textureUseTally;LightLock_Lock(&t.lock);
+    for(auto& i:more){bool known=false;for(const auto& k:t.info)known|=k.data==i.data;if(!known)t.info.push_back(std::move(i));}
+    LightLock_Unlock(&t.lock);}
 inline void textureUseWrite(int race){
     if(!textureUse||race<0)return;
     auto& t=textureUseTally;std::vector<TextureInfo> info;std::vector<TextureUseEntry> used;unsigned frames;

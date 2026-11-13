@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <cstddef>
 #include <cstring>
+#include <functional>
 #include <string>
 #include <memory>
 #include <type_traits>
@@ -75,6 +76,16 @@ public:
     std::array<C3D_Tex,3> materialSamplers{}; // one view per texture unit
     C3D_Tex* sampledGpu();
     C3D_Tex* sampledGpu(const MaterialSampler* sampler,unsigned unit=0);
+    // The file a load()/loadVram() read (without "textures/" and ".t3x"). While
+    // loaded that way, the texture is listed for forEachLoaded (a copy is not).
+    char name[40]{};
+    uint32_t serial=0; // loadSerial() when it was loaded
+    // Every texture currently loaded from a file, under a lock: f must not load
+    // or reset textures. Race VRAM placement and DIAG texture-use.txt use it.
+    static void forEachLoaded(const std::function<void(Texture&)>& f);
+    // Counts loads from a file: a texture with a serial above a value taken
+    // earlier was loaded since.
+    static uint32_t loadSerial();
     ~Texture();
     void reset();
     // Reads the whole .t3x in one FS request. Safe on the asset loader

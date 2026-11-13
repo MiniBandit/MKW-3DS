@@ -162,6 +162,11 @@ the front, as before, instead of from behind (no cost either way).
 racer (full driver banks, lit GPU skinning; LOD models stay baked).
 `no-light-zones.txt` keeps every racer on BLIGHT light 0 and ambient 0 instead of
 the light zone under it (KCL bits 8-10; lit racers only).
+`no-wii-driver-lod.txt` keeps opponents' drivers at full detail at any
+distance with Opponent Detail Full; by default a driver beyond 4,000 units of
+camera distance draws its model_lod, as on the Wii (bodies, wheels and
+accessories stay full; `runtime.log`: `race capture rNN-NNNNN low drivers=N`
+beside each race-capture.txt frame).
 `no-opp-pres-thin.txt` presents opponents not drawn up close every tick
 instead of once per drawn frame; `no-kartfx-lod-thin.txt` steps LOD racers'
 kart effects every tick instead of every 4th.
@@ -208,9 +213,17 @@ loaded (size, format, sampler state, every byte) uses that copy (Daisy
 Circuit's MiiObjD signs, Coconut Mall's cara1-3; `runtime.log`: `course
 objects share textures copies=… bytes=…`).
 `texture-use.txt` writes `perf-race-NNN-textures.csv` after each race: every
-course, sky and object texture (each once, under its first model), whether it is in VRAM or LINEAR, its size, format and bytes, and the model draws per
-frame that bound it on any unit; with `model-pixels.txt` also the screen
-pixels those draws covered. Slow; for Azahar runs.
+course, sky and object texture (each once, under its first model), then every
+other texture the race loaded from a file (`file:<name>`: opponents, items,
+HUD, effects, Lakitu, transitions), whether it is in VRAM or LINEAR, its size,
+format and bytes, and the draws per frame that bound it on any unit (models,
+sprites, HUD quads, effect batches); with `model-pixels.txt` also the screen
+pixels those draws covered (sprites and quads always; GPU-skinned meshes and
+effects count 0). Slow; for Azahar runs.
+`no-racer-vram.txt` (New 3DS) leaves opponent, item, HUD, effect and Lakitu
+textures in LINEAR; by default they take the VRAM the course left after the
+opponents load, down to the race reserve (`runtime.log`: `race textures in
+VRAM moved=…`, and a `race texture` line for each).
 `stereo-slider.txt` (a number from 0 to 1) pins the 3D slider for comparable
 runs. As with the slider, the right eye turns on above 0.03 and off at or below 0.01.
 `lod-bias.txt` (a number from -2 to 0, default 0) is added to the LOD of every

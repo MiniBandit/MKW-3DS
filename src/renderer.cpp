@@ -34,6 +34,7 @@ extern "C" {
 #include <new>
 #include <sys/stat.h>
 #include <map>
+#include <unordered_set>
 #include <algorithm>
 #include <cstdlib>
 #include <cstddef>
@@ -131,8 +132,20 @@ bool stereoScreen(mkw::stereo::Display& display){
 }
 constexpr u32 TopTransfer=GX_TRANSFER_FLIP_VERT(0)|GX_TRANSFER_OUT_TILED(0)|GX_TRANSFER_RAW_COPY(0)|GX_TRANSFER_IN_FORMAT(GX_TRANSFER_FMT_RGBA8)|GX_TRANSFER_OUT_FORMAT(GX_TRANSFER_FMT_RGB8)|GX_TRANSFER_SCALING(GX_TRANSFER_SCALE_NO);
 }
+namespace {
+// Texture::forEachLoaded. Never destroyed: textures may outlive static objects.
+struct LoadedTextures {LightLock lock;std::unordered_set<Texture*> set;uint32_t serial=0;LoadedTextures(){LightLock_Init(&lock);}};
+LoadedTextures& loadedTextures(){static auto* value=new LoadedTextures;return *value;}
+}
+uint32_t Texture::loadSerial(){auto& l=loadedTextures();LightLock_Lock(&l.lock);const uint32_t s=l.serial;LightLock_Unlock(&l.lock);return s;}
+void Texture::forEachLoaded(const std::function<void(Texture&)>& f){
+    auto& l=loadedTextures();LightLock_Lock(&l.lock);
+    for(Texture* t:l.set)f(*t);
+    LightLock_Unlock(&l.lock);
+}
 Texture::~Texture() { reset(); }
 void Texture::reset() {
+    if(name[0]){auto& l=loadedTextures();LightLock_Lock(&l.lock);l.set.erase(this);LightLock_Unlock(&l.lock);name[0]=0;}
     if(ready) C3D_TexDelete(&gpu);
     gpu={};noMipSampler={};materialSamplers={};ready=false;
 }
@@ -189,11 +202,23 @@ bool rigidBones(const float* palette,unsigned bones,unsigned stride){
     return true;
 }
 }
+namespace {
+// After a load from a file: name it and list it for Texture::forEachLoaded.
+bool listLoaded(Texture& t,const char* path,bool loaded){
+    if(!loaded)return false;
+    const char* base=std::strrchr(path,'/');base=base?base+1:path;
+    std::snprintf(t.name,sizeof t.name,"%s",base);
+    if(char* dot=std::strrchr(t.name,'.'))*dot=0;
+    if(!t.name[0])t.name[0]='?';
+    auto& l=loadedTextures();LightLock_Lock(&l.lock);l.set.insert(&t);t.serial=++l.serial;LightLock_Unlock(&l.lock);
+    return true;
+}
+}
 bool Texture::load(const char* path,int halveLarge) {
-    return withTextureFile(path,[&](const uint8_t* data,size_t size){return loadMemory(data,size,false,halveLarge);});
+    return listLoaded(*this,path,withTextureFile(path,[&](const uint8_t* data,size_t size){return loadMemory(data,size,false,halveLarge);}));
 }
 bool Texture::loadVram(const char* path) {
-    return withTextureFile(path,[&](const uint8_t* data,size_t size){return loadMemory(data,size,true);});
+    return listLoaded(*this,path,withTextureFile(path,[&](const uint8_t* data,size_t size){return loadMemory(data,size,true);}));
 }
 bool Texture::loadMemory(const void* data,size_t size,bool vram,int halveLarge) {
     reset();
@@ -2675,6 +2700,7 @@ void Renderer::effectListNow(const RaceEffects& effects,const ef::DrawList& list
         if(b.first>=vertexCount)break;
         const uint32_t count=ef::drawBatchVertexCount(b,vertexCount);
         if(!count)continue;
+        if(diag::textureUse){const void* d[2]{};for(int u=0;u<2;++u)if(b.texture[u]<effects.textures.size())d[u]=textures[b.texture[u]].gpu.data;diag::textureDrawn(d,2,1,0);}
         const ef::Material& m=state.materials[b.res->index];
         const ef::DrawSetting& d=b.res->desc.draw;
         const bool sameRes=effectStateSkip&&last&&last->res->index==b.res->index;
@@ -2879,8 +2905,10 @@ void Renderer::spriteNow(const Texture& texture,float x,float y,float width,floa
         C3D_AlphaBlend(GPU_BLEND_ADD,GPU_BLEND_ADD,GPU_SRC_ALPHA,additive?GPU_ONE:GPU_ONE_MINUS_SRC_ALPHA,GPU_ONE,GPU_ONE_MINUS_SRC_ALPHA);
     }
     Vertex* v=spriteBase_+6*spriteCount_++;
+    const uint64_t usePixels=stats_.pixels;
     if(angle==0)countPixels(x,y,x+width,y+height);
     else{const float r=.5f*std::sqrt(width*width+height*height),cx=x+width*.5f,cy=y+height*.5f;countPixels(cx-r,cy-r,cx+r,cy+r);}
+    if(diag::textureUse){const void* d=texture.gpu.data;diag::textureDrawn(&d,1,1,stats_.pixels-usePixels);}
     if(!writesVertices())return; // the left eye wrote this quad
     // tex3ds images are stored bottom-up: v=1 is the top image row.
     Vec3 p[6]={{x,y,0},{x+width,y,0},{x+width,y+height,0},{x,y,0},{x+width,y+height,0},{x,y+height,0}};
@@ -2901,7 +2929,9 @@ void Renderer::fontSpriteNow(const Texture& texture,float x,float y,float width,
     if(spriteCount_>=spriteCapacity_)return;
     flushSprites();
     Vertex* vertices=spriteBase_+6*spriteCount_++;spriteRunFirst_=spriteCount_;
+    const uint64_t usePixels=stats_.pixels;
     countPixels(x,y,x+width,y+height);
+    if(diag::textureUse){const void* d=texture.gpu.data;diag::textureDrawn(&d,1,1,stats_.pixels-usePixels);}
     const Vec3 p[6]={{x,y,0},{x+width,y,0},{x+width,y+height,0},{x,y,0},{x+width,y+height,0},{x,y+height,0}};
     const float uv[6][2]={{0,1},{u1,1},{u1,1-v1},{0,1},{u1,1-v1},{0,1-v1}};
     if(writesVertices())for(unsigned i=0;i<6;++i){
@@ -2936,8 +2966,10 @@ void Renderer::materialQuadsNow(const Texture* texture,const MaterialQuad* quads
     flushSprites();
     Vertex* vertices=spriteBase_+6*spriteCount_;const int first=spriteCount_;
     spriteCount_+=int(count);spriteRunFirst_=spriteCount_;
+    const uint64_t usePixels=stats_.pixels;
     for(unsigned q=0;q<count;++q){const auto& c=quads[q];
         countPixels(std::min({c.x[0],c.x[1],c.x[2],c.x[3]}),std::min({c.y[0],c.y[1],c.y[2],c.y[3]}),std::max({c.x[0],c.x[1],c.x[2],c.x[3]}),std::max({c.y[0],c.y[1],c.y[2],c.y[3]}));}
+    if(diag::textureUse&&texture){const void* d=texture->gpu.data;diag::textureDrawn(&d,1,1,stats_.pixels-usePixels);}
     constexpr unsigned order[6]={0,1,3,0,3,2};
     if(writesVertices())for(unsigned q=0;q<count;++q){
         const auto& quad=quads[q];
