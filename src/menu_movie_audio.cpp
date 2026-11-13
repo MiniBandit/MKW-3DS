@@ -117,7 +117,7 @@ void MenuMovieAudio::update(){
   if(!job->ok){s.failed=true;s.stream.reset();return;}
   auto& stream=*s.stream;
   const int c=s.channel;
-  ndspChnReset(c);ndspSetOutputMode(NDSP_OUTPUT_STEREO);
+  ndspChnReset(c);ndspSetOutputMode(ndspOutputMode(systemSoundOutput()));
   ndspChnSetInterp(c,NDSP_INTERP_LINEAR);ndspChnSetRate(c,float(stream.rate));
   ndspChnSetFormat(c,stream.channels==1?NDSP_FORMAT_MONO_PCM16:NDSP_FORMAT_STEREO_PCM16);
   float mix[12]={};mix[0]=mix[1]=std::clamp(s.volume,0.f,1.f);ndspChnSetMix(c,mix);

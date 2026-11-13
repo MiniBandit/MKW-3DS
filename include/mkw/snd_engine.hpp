@@ -144,6 +144,9 @@ public:
  virtual void pause(int v, bool paused) = 0;
  // rate in Hz, gains linear (AX mix 0x8000 == 1.0), lpf 0 = bypass.
  virtual void set(int v, f32 rate, f32 left, f32 right, f32 lpfHz) = 0;
+ // As set(), with rear (0..1) of the gain sent to the rear outputs instead
+ // of the front (surround output only; hardware without rear outputs ignores it).
+ virtual void setSurround(int v, f32 rate, f32 left, f32 right, f32 rear, f32 lpfHz) { (void)rear; set(v, rate, left, right, lpfHz); }
  virtual bool finished(int v) = 0;
  // Called once at the end of every audio-thread pass, after all set() calls.
  virtual void commit() {}
@@ -181,6 +184,11 @@ public:
  virtual bool ready(u32 file, u32 wave) = 0;
  virtual void release(u32 file, u32 wave) = 0;
 };
+// The console's System Settings sound output is Surround: sounds use their
+// surround pan (0 front .. 2 rear) and 3D sounds behind the listener move to
+// the rear outputs, which the DSP's surround processing places behind.
+// Set once before the audio thread starts; Mono and Stereo leave it false.
+inline bool surroundOutput = false;
 inline constexpr int WaveWaitFrames = 60;       // game frames a sound may wait for its waves
 
 // ------------------------------------------------------------ public API

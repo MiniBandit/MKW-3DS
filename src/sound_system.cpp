@@ -10,6 +10,7 @@
 #include <mkw/snd_short_loop.hpp>
 #include <3ds.h>
 #include <algorithm>
+#include <cmath>
 #include <array>
 #include <cstdio>
 #include <cstring>
@@ -27,6 +28,15 @@
 #endif
 
 namespace mkw {
+int systemSoundOutput() {
+ static int mode = -1;
+ if (mode < 0) {
+  u8 value = 1;
+  if (R_SUCCEEDED(cfguInit())) { if (R_FAILED(CFGU_GetConfigInfoBlk2(1, 0x70001, &value))) value = 1; cfguExit(); }
+  mode = value == 0 ? NDSP_OUTPUT_MONO : value == 2 ? NDSP_OUTPUT_SURROUND : NDSP_OUTPUT_STEREO;
+ }
+ return mode;
+}
 using namespace snd;
 namespace {
 constexpr int QueueSize = 1024;           // commands (main -> audio)
@@ -335,7 +345,7 @@ public:
   const u8* bridge = nullptr; u32 bridgeSamples = 0; const u8* body = nullptr; u32 bodySamples = 0; ndspAdpcmData bodyCtx{}, bridgeCtx{};
   // stream
   StreamFeed* feed = nullptr; int feedChannel = 0; IoFeed* ownFeed = nullptr;
-  f32 rate = -1, left = -1, right = -1, lpf = -1;
+  f32 rate = -1, left = -1, right = -1, rear = -1, lpf = -1;
  };
  std::array<Chan, VoiceMax> ch{};
  u8* bridgePool = nullptr; u32 bridgeUsed = 0;
@@ -398,7 +408,7 @@ public:
   Chan& c = ch[v];
   if (c.ownFeed) { if (retireFeed) retireFeed(feedCtx, c.ownFeed); else delete c.ownFeed; c.ownFeed = nullptr; }
   c.mode = Chan::Idle; c.bufCount = 0; c.lastBuf = -1; c.feed = nullptr; c.manualLoop = false; c.pendingStart = false; c.paused = false;
-  c.rate = c.left = c.right = c.lpf = -1;
+  c.rate = c.left = c.right = c.rear = c.lpf = -1;
   for (auto& b : c.buf) b = ndspWaveBuf{};
  }
  void setupChannel(int v, u8 format, const s16* coef, u32 rate) {
@@ -516,10 +526,16 @@ public:
   for (int i = 0; i < c.bufCount; ++i) if (c.buf[i].data_vaddr && c.buf[i].status != NDSP_WBUF_FREE) { c.feed->consumed(c.feedChannel, static_cast<const u8*>(c.buf[i].data_vaddr)); c.buf[i].data_vaddr = nullptr; }
  }
  void pause(int v, bool p) override { if (!ch[v].reserved) { ch[v].paused = p; if (!ch[v].pendingStart) ndspChnSetPaused(v, p); } }
- void set(int v, f32 rate, f32 left, f32 right, f32 lpfHz) override {
+ void set(int v, f32 rate, f32 left, f32 right, f32 lpfHz) override { setSurround(v, rate, left, right, 0.0f, lpfHz); }
+ void setSurround(int v, f32 rate, f32 left, f32 right, f32 rear, f32 lpfHz) override {
   Chan& c = ch[v]; if (c.reserved || c.mode == Chan::Idle) return;
   if (rate != c.rate) { ndspChnSetRate(v, std::clamp(rate, 1.0f, 192000.0f)); c.rate = rate; }
-  if (left != c.left || right != c.right) { float mix[12] = {}; mix[0] = left; mix[1] = right; ndspChnSetMix(v, mix); c.left = left; c.right = right; }
+  if (left != c.left || right != c.right || rear != c.rear) {
+   // Main bus: 0/1 front left/right, 2/3 rear left/right (constant power).
+   const f32 back = std::sin(rear * 1.5707963f), front = std::cos(rear * 1.5707963f);
+   float mix[12] = {}; mix[0] = left * front; mix[1] = right * front; mix[2] = left * back; mix[3] = right * back;
+   ndspChnSetMix(v, mix); c.left = left; c.right = right; c.rear = rear;
+  }
   if (lpfHz != c.lpf) {
    if (lpfHz > 0) { ndspChnIirMonoSetParamsLowPassFilter(v, lpfHz); ndspChnIirMonoSetEnable(v, true); }
    else ndspChnIirMonoSetEnable(v, false);
@@ -1070,7 +1086,9 @@ bool SoundSystem::start() {
  s->engine.setup(&s->archive, s->hw.get());
  s->engine.setStreamOpener(&Impl::openStream, s);
  s->engine.setResidency(&s->cache);
- ndspSetOutputMode(NDSP_OUTPUT_STEREO);
+ // Mono, stereo or surround as System Settings choose (retail 3DS games do).
+ snd::surroundOutput = systemSoundOutput() == NDSP_OUTPUT_SURROUND;
+ ndspSetOutputMode(ndspOutputMode(systemSoundOutput()));
  ndspSetClippingMode(NDSP_CLIP_SOFT);
  // Threads: New 3DS core 2; Old 3DS core 1 with an explicit app time limit
  // (the system core is time sliced; docs/AUDIO_SOURCE.md); else core 0

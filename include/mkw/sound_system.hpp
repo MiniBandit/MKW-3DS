@@ -10,6 +10,10 @@
 
 namespace mkw {
 namespace snd { class Engine; }
+// The console's System Settings > Sound output (config block 0x70001):
+// NDSP_OUTPUT_MONO, _STEREO or _SURROUND; Stereo when it cannot be read.
+// The first call reads it; later calls return the same value.
+int systemSoundOutput();
 
 // Main thread -> audio thread command. Slots name sounds the game keeps
 // (NW4R SoundHandle equivalents); slot 0 means "fire and forget".

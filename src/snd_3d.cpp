@@ -108,7 +108,9 @@ Ambient Engine3D::update(const SoundEntry& s, u32 soundId, const Actor3D& actor,
   f32 pan = panStereo(angle, nrm);
   if (swapPan) pan = -pan;
   if (flags & 2) { if (primed) pan = limit(pan, h->pan); a.pan = pan; if (h) h->pan = pan; }
-  if (flags & 4) { f32 surround = 0.0f; if (primed) surround = limit(surround, h->surround); a.surroundPan = surround; if (h) h->surround = surround; }
+  // Stereo (retail Wii stereo): no surround pan. Surround output: 0 in
+  // front, 1 beside, 2 directly behind, scaled like the stereo pan by distance.
+  if (flags & 4) { f32 surround = surroundOutput ? (1.0f - std::cos(angle)) * nrm : 0.0f; if (primed) surround = limit(surround, h->surround); a.surroundPan = surround; if (h) h->surround = surround; }
  }
  if ((flags & 0x10) && !(actor.userParam & 0x100))
   a.pitch = doppler(f32(s.dopplerFactor) * 0.03125f, sub(actor.position, l.position), actor.velocity, l.velocity);

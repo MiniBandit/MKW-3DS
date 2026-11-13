@@ -554,7 +554,8 @@ struct Engine::Impl {
    auto mix = [](f32 x) { return std::min(x, 65535.0f / 32768.0f); };
    const f32 l = mix(main * left) * baseVolume, r = mix(main * right) * baseVolume;
    const f32 freq = lpfFrequency(v.lpf);
-   hw->set(v.hw[c], f32(v.stream ? v.rate : v.wave.rate) * v.pitch, l, r, freq >= 16000 ? 0.0f : freq);
+   const f32 rear = surroundOutput ? clamp(v.surroundPan * 0.5f, 0.0f, 1.0f) : 0.0f;
+   hw->setSurround(v.hw[c], f32(v.stream ? v.rate : v.wave.rate) * v.pitch, l, r, rear, freq >= 16000 ? 0.0f : freq);
   }
  }
  struct PanCurveInfo { int curve = 0; bool centerZero = false, zeroClamp = false; };
