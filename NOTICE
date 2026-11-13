@@ -12,13 +12,17 @@ The Redux author has chosen not to declare a separate license for the later
 Redux contributions at this time.
 Do not interpret the root MIT text as a blanket license for every file.
 
-Online code (0.8.0 and later)
------------------------------
-Files marked "SPDX-License-Identifier: LicenseRef-MKW3DS-Online" (the online,
-leaderboard and ghost sharing code) are under licenses/MKW3DS-ONLINE-LICENSE.txt,
-not MIT: you may read, build and contribute to them, but not publish changed
-versions or builds containing them. Official builds alone can race each other
-online and post to the official leaderboard.
+MiniBandit's work from 0.8.0 onward
+-----------------------------------
+Every change and addition MiniBandit makes after release 0.7.0, and every
+file marked "SPDX-License-Identifier: LicenseRef-MKW3DS", is under
+licenses/MKW3DS-LICENSE.txt, not MIT: you may read, build and contribute to
+it, but not publish it, changed versions of it, code taken from it, or
+builds containing it. Official builds alone can race each other online.
+MiniBandit's work in release 0.7.0 and earlier stays MIT. Other people's
+contributions keep their own terms: sgrontflix's Docker build (pull request
+#74) and ThePhilosophicalOne's retail-accuracy work ported from pull request
+#76 (commits co-authored by ThePhilosophicalOne) are MIT.
 
 Bundled and external components
 -------------------------------

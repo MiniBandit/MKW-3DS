@@ -1,0 +1,50 @@
+MKW 3DS Licence, version 2.0
+Copyright (c) 2026 MiniBandit
+
+What this licence covers
+------------------------
+This licence covers MiniBandit's work on this project from version 0.8.0
+onward ("the covered code"):
+
+  a. every change and addition MiniBandit makes to any file of the project
+     after release 0.7.0 (git tag v0.7.0), and
+  b. every file that says "SPDX-License-Identifier: LicenseRef-MKW3DS" (or
+     the earlier "LicenseRef-MKW3DS-Online") at the top, in full.
+
+It does not cover:
+  - MiniBandit's work as published in release 0.7.0 and earlier, which
+    stays available under the MIT licence from those releases;
+  - other people's contributions, which keep the terms they were made under
+    (see NOTICE), and third-party components (see NOTICE and licenses/).
+
+Version 1.0 of this licence ("MKW 3DS Online Licence") covered only the
+online code. Version 2.0 replaces it.
+
+1. You may read and study the covered code, and build it for your own
+   personal, non-commercial use.
+
+2. You may change the covered code in order to contribute the changes back
+   to the official project (github.com/MiniBandit/MKW-3DS), for example in a
+   pull request. By contributing, you allow MiniBandit to use, change and
+   publish your contribution under this licence or any other terms.
+
+3. You may not publish or share the covered code, changed versions of it,
+   code taken from it, or any build that contains any of these, except:
+   a. official builds published by MiniBandit, and
+   b. complete, unchanged copies of the official repository (including a
+      GitHub fork you use to prepare a contribution under section 2).
+   Code taken from the covered code includes code copied in part, code
+   rewritten from it line by line, and code translated from it into another
+   language or into another project, such as another port or fork.
+
+4. You may not use the covered code, or builds containing it, for any
+   commercial purpose.
+
+5. Anyone who breaks these terms loses the permissions above, and MiniBandit
+   may ask for copies published against these terms to be taken down.
+
+6. THE COVERED CODE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND. IN NO
+   EVENT SHALL THE AUTHORS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+   LIABILITY ARISING FROM IT OR ITS USE.
+
+For other permission, ask MiniBandit through the official repository.

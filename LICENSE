@@ -3,10 +3,12 @@ MIT License
 Copyright (c) 2026 MiniBandit
 
 This inherited license covers MiniBandit's changes and additions to the
-upstream project. It does not cover dudewhat's original port, third-party
-components, Nintendo artwork or automatically establish terms for later Redux
-changes. This publication snapshot does not include the upstream Git history;
-see NOTICE for scope and outstanding provenance questions.
+upstream project up to and including release 0.7.0. MiniBandit's work after
+0.7.0 is under the MKW 3DS Licence instead (licenses/MKW3DS-LICENSE.txt). It
+does not cover dudewhat's original port, third-party components, Nintendo
+artwork or automatically establish terms for later Redux changes. This
+publication snapshot does not include the upstream Git history; see NOTICE for
+scope and outstanding provenance questions.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

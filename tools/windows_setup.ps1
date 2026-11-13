@@ -1,5 +1,5 @@
-# SPDX-License-Identifier: LicenseRef-MKW3DS-Online
-# Copyright (c) 2026 MiniBandit. See licenses/MKW3DS-ONLINE-LICENSE.txt.
+# SPDX-License-Identifier: LicenseRef-MKW3DS
+# Copyright (c) 2026 MiniBandit. See licenses/MKW3DS-LICENSE.txt.
 #
 # Windows builder, step one ("Build MKW CIA.bat" runs this first): finds what the
 # build needs and, once the player agrees, installs whatever is missing:

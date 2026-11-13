@@ -1,5 +1,5 @@
-// SPDX-License-Identifier: LicenseRef-MKW3DS-Online
-// Copyright (c) 2026 MiniBandit. See licenses/MKW3DS-ONLINE-LICENSE.txt.
+// SPDX-License-Identifier: LicenseRef-MKW3DS
+// Copyright (c) 2026 MiniBandit. See licenses/MKW3DS-LICENSE.txt.
 #pragma once
 #include <array>
 #include <cstddef>
