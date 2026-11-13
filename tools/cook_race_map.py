@@ -6,11 +6,14 @@ cooked GMDL parts and textures (build/course-materials first), removing roofs
 over the road with the course KCL, then tex3ds encodes it as ETC1 (at most
 1024x1024, 512 KB). One map is resident at a time, in VRAM.
 
-UI atlas (RGBA8): retail Wii art for the map icons (st_*_32x32 faces, the
-local player's searchlight), the leaderboard (result-board rows, 1st..12th in
-the result font, faces, item icons) and the timer (CtrlRaceTime's digits,
+UI atlas (RGBA8, 256x256): retail Wii art for the map icons (st_*_32x32 faces,
+the local player's searchlight), the leaderboard (result-board rows, 1st..12th
+in the result font, faces, item icons) and the timer (CtrlRaceTime's digits,
 separators and TIME label), plus Mario Kart 7's bottom-screen map markers
 for items on the course, read from the user's own MK7 dump (tools/mk7_assets.py).
+The local player's outline is drawn from its face (white, the face's alpha).
+The earlier 256x512 atlas, which held a white silhouette of every face for
+that outline, is still cooked for the DIAG build's no-bottom-atlas256.txt.
 
 Outputs: build/race-map/textures/*.t3x (a packaging overlay), build/race-map/
 race-map.json (sources, hashes, per-course statistics) and the generated
@@ -247,11 +250,12 @@ def cook_atlas(out, cci, manifest):
         sources.append(path)
         return decode_tpl(path)
     images = {}
+    shadows = {}
     for i, name in enumerate(FACES):
         images[('face', i)] = resize(tpl(GAME / f'timg/st_{name}_32x32.tpl'), (28, 28))
         silhouette = Image.new('RGBA', (28,28), (255,255,255,255))
         silhouette.putalpha(images[('face', i)].getchannel('A'))
-        images[('face_shadow', i)] = silhouette
+        shadows[('face_shadow', i)] = silhouette
     # Item icons appear only in the standings rows (17 px).
     for kind, name in ICONS.items():
         images[('item', kind)] = resize(tpl(GAME / f'timg/{name}.tpl'), (20, 20))
@@ -278,19 +282,28 @@ def cook_atlas(out, cci, manifest):
         images[('ordinal', i)] = im
     sources += [UI / 'Race_U/message/Race.bmg', UI / 'Font/kart_kanji_font.brfnt']
     images[('white', 0)] = Image.new('RGBA', (4, 4), (255, 255, 255, 255))
-    for width in (256, 512):
-        packed = pack(images, width)
-        if packed:
-            break
-    atlas, rects = packed
-    png = out / 'textures/race_bottom_ui.png'
-    atlas.save(png)
-    subprocess.run([TEX3DS, '-f', 'rgba8', '-z', 'none', '-o', str(png.with_suffix('.t3x')), str(png)], check=True, stdout=subprocess.DEVNULL)
-    manifest['atlas'] = {'texture': 'textures/race_bottom_ui.t3x', 'size': list(atlas.size),
-                         't3xBytes': png.with_suffix('.t3x').stat().st_size, 'ordinals': texts,
+    layouts = {}
+    for name, keys, fits in (('race_bottom_ui_256', images, lambda w, h: w * h <= 256 * 256),
+                             ('race_bottom_ui', {**images, **shadows}, lambda w, h: True)):
+        for width in (256, 512):
+            packed = pack(keys, width)
+            if packed and fits(*packed[0].size):
+                break
+        else:
+            raise SystemExit(f'{name}: the UI art no longer fits its atlas')
+        atlas, rects = packed
+        png = out / f'textures/{name}.png'
+        atlas.save(png)
+        subprocess.run([TEX3DS, '-f', 'rgba8', '-z', 'none', '-o', str(png.with_suffix('.t3x')), str(png)], check=True, stdout=subprocess.DEVNULL)
+        layouts[name] = (f'textures/{name}.t3x', atlas.size, rects, png.with_suffix('.t3x').stat().st_size)
+    texture, size, rects, size_bytes = layouts['race_bottom_ui_256']
+    legacy = layouts['race_bottom_ui']
+    manifest['atlas'] = {'texture': texture, 'size': list(size),
+                         't3xBytes': size_bytes, 'ordinals': texts,
+                         'withFaceShadows': {'texture': legacy[0], 'size': list(legacy[1]), 't3xBytes': legacy[3]},
                          'mk7Source': {'cci' if cci and Path(cci).is_file() else 'shipped': str(cci) if cci and Path(cci).is_file() else str(MK7_SHIPPED), 'archive': '/UI/race.szs', 'markers': MK7_MARKERS},
                          'sources': {Path(p).relative_to(ROOT).as_posix(): digest(p) for p in sorted(set(sources))}}
-    return atlas.size, rects
+    return layouts
 
 
 def timer_layout():
@@ -308,10 +321,26 @@ def timer_layout():
     return out, path
 
 
-def write_header(manifest, atlas_size, rects, timer, timer_source):
+def atlas_layout(variable, texture, size, rects):
+    """One RaceMapAtlas initializer: every rectangle the bottom screen draws from it."""
     def rect(key):
+        if key not in rects:
+            return '{0,0,0,0}'
         x, y, w, h = rects[key]
         return f'{{{x},{y},{w},{h}}}'
+    def array(keys):
+        return '{{' + ','.join(rect(k) for k in keys) + '}}'
+    fields = [f'"{texture}"', f'{{{size[0]},{size[1]}}}',
+              array([('face', i) for i in range(24)]), array([('face_shadow', i) for i in range(24)]),
+              array([('item', k) for k in range(21)]), array([('digit', d) for d in range(10)]),
+              rect(('sep', 'colon')), rect(('sep', 'dot')), rect(('label', 'time')), rect(('light', 0)),
+              rect(('fake', 0)), rect(('white', 0)), rect(('row', 'player')), rect(('row', 'other')),
+              array([('ordinal', i) for i in range(12)]),
+              array([('mk7', n.split('.')[0].replace('_r90', '')) for n in MK7_MARKERS])]
+    return f'inline constexpr RaceMapAtlas {variable}{{' + ','.join(fields) + '};'
+
+
+def write_header(manifest, layouts, timer, timer_source):
     lines = ['// Generated by tools/cook_race_map.py; see docs/BOTTOM_SCREEN.md.', '#pragma once', '#include <array>',
              '#include <cstdint>', 'namespace mkw {',
              '// One course map: an ETC1 texture covering the world rectangle [x0,x1] x [z0,z1]',
@@ -326,29 +355,24 @@ def write_header(manifest, atlas_size, rects, timer, timer_source):
                      f'{c["unitsPerPixel"]:.4f}f,{{{c["startLeft"][0]:.3f}f,{c["startLeft"][1]:.3f}f}},'
                      f'{{{c["startRight"][0]:.3f}f,{c["startRight"][1]:.3f}f}}}}, // {c["name"]}')
     lines += ['}};',
-              '// The bottom-screen UI atlas (RGBA8, VRAM): pixel rectangles x,y,w,h.',
+              '// The bottom-screen UI atlases (RGBA8, VRAM): pixel rectangles x,y,w,h.',
               'struct RaceMapRect {uint16_t x,y,w,h;};',
-              f'inline constexpr const char* RaceMapAtlasTexture="{manifest["atlas"]["texture"]}";',
-              f'inline constexpr uint16_t RaceMapAtlasSize[2]={{{atlas_size[0]},{atlas_size[1]}}};',
-              '// st_*_32x32 by retail character id (Kinoko Character 0..23).',
-              'inline constexpr std::array<RaceMapRect,24> RaceMapFaces{{' + ','.join(rect(('face', i)) for i in range(24)) + '}};',
-              'inline constexpr std::array<RaceMapRect,24> RaceMapFaceShadows{{' + ','.join(rect(('face_shadow', i)) for i in range(24)) + '}};',
-              '// Item window icons (tools/cook_race_items.py ICONS) by ItemKind; 19 = two Triple Mushrooms left (kinoko_2).',
-              'inline constexpr std::array<RaceMapRect,21> RaceMapItems{{' +
-              ','.join(rect(('item', k)) if ('item', k) in rects else '{0,0,0,0}' for k in range(21)) + '}};',
-              'inline constexpr std::array<RaceMapRect,10> RaceMapDigits{{' + ','.join(rect(('digit', d)) for d in range(10)) + '}};',
-              f'inline constexpr RaceMapRect RaceMapColon{rect(("sep", "colon"))},RaceMapDot{rect(("sep", "dot"))};',
-              f'inline constexpr RaceMapRect RaceMapTimeLabel{rect(("label", "time"))};',
-              f'inline constexpr RaceMapRect RaceMapSearchlight{rect(("light", 0))};',
-              f'inline constexpr RaceMapRect RaceMapFakeBox{rect(("fake", 0))};',
-              f'inline constexpr RaceMapRect RaceMapWhite{rect(("white", 0))};',
-              f'inline constexpr RaceMapRect RaceMapRowPlayer{rect(("row", "player"))},RaceMapRowOther{rect(("row", "other"))};',
-              '// 1st..12th (Race.bmg 0x515..0x520), result board font.',
-              'inline constexpr std::array<RaceMapRect,12> RaceMapOrdinals{{' + ','.join(rect(('ordinal', i)) for i in range(12)) + '}};',
               '// Mario Kart 7 bottom-screen map markers (/UI/race.szs).',
               'enum class Mk7Marker : uint8_t {Banana,Bobomb,GreenShell,RedShell,SpinyShell,BlastRed,BlastBlue,StartLine,Count};',
-              'inline constexpr std::array<RaceMapRect,8> RaceMapMk7{{' +
-              ','.join(rect(('mk7', n.split('.')[0].replace('_r90', ''))) for n in MK7_MARKERS) + '}};',
+              'struct RaceMapAtlas {',
+              '    const char* texture;uint16_t size[2];',
+              '    std::array<RaceMapRect,24> faces;       // st_*_32x32 by retail character id (Kinoko Character 0..23)',
+              '    std::array<RaceMapRect,24> faceShadows; // white + each face\'s alpha (RaceMapUiWithShadows only)',
+              '    std::array<RaceMapRect,21> items;       // item window icons by ItemKind; 19 = two Triple Mushrooms left (kinoko_2)',
+              '    std::array<RaceMapRect,10> digits;',
+              '    RaceMapRect colon,dot,timeLabel,searchlight,fakeBox,white,rowPlayer,rowOther;',
+              '    std::array<RaceMapRect,12> ordinals;    // 1st..12th (Race.bmg 0x515..0x520), result board font',
+              '    std::array<RaceMapRect,8> mk7;          // by Mk7Marker',
+              '};',
+              '// 256x256: the local outline is drawn from the face itself.',
+              atlas_layout('RaceMapUi', *layouts['race_bottom_ui_256'][:3]),
+              '// The earlier 256x512 atlas with a silhouette per face (DIAG: no-bottom-atlas256.txt).',
+              atlas_layout('RaceMapUiWithShadows', *layouts['race_bottom_ui'][:3]),
               '// CtrlRaceTime (Race_U game_image_number.brlyt): pane centre (layout units,',
               '// y up) relative to race_null, and drawn size. Digits: race_null and time_01 the',
               '// minutes, time_02..03 the seconds, time_04..06 the milliseconds (CtrlRaceTime_refresh',
@@ -406,12 +430,12 @@ def main():
     if len(manifest['courses']) != len(catalog):
         raise SystemExit('Cook every course before writing the header (missing maps)')
     if a.metadata_only:return
-    atlas_size, rects = cook_atlas(a.output, a.mk7_cci, manifest)
+    layouts = cook_atlas(a.output, a.mk7_cci, manifest)
     timer, timer_source = timer_layout()
     manifest['timer'] = {'source': timer_source.relative_to(ROOT).as_posix(), 'sha256': digest(timer_source), 'panes': timer}
     manifest_path.write_text(json.dumps(manifest, indent=1) + '\n')
-    write_header(manifest, atlas_size, rects, timer, timer_source)
-    print(json.dumps({'maps': len(manifest['courses']), 'atlas': atlas_size,
+    write_header(manifest, layouts, timer, timer_source)
+    print(json.dumps({'maps': len(manifest['courses']), 'atlas': layouts['race_bottom_ui_256'][1], 'atlasWithShadows': layouts['race_bottom_ui'][1],
                       'mapBytes': sum(c['t3xBytes'] for c in manifest['courses'])}))
 
 

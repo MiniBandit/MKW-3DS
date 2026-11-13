@@ -445,9 +445,10 @@ for rel,info in intro_info['textures'].items():
  if Path(rel).parts[0]!='textures' or digest_file(intro/rel)!=info['sha256']:raise ValueError('Invalid intro texture: '+rel)
  overlay[rel]=intro/rel
 # Race bottom screen (tools/cook_race_map.py): 32 course maps, their overviews
-# and the UI atlas, cooked into this tree's own overlay directory.
+# and the UI atlas (with the earlier 256x512 one for DIAG A/B), cooked into this
+# tree's own overlay directory.
 race_map=ROOT/'build/race-map/textures'
-if not (race_map/'race_bottom_ui.t3x').is_file():raise ValueError('Run tools/cook_race_map.py before packaging')
+if not all((race_map/n).is_file() for n in ('race_bottom_ui_256.t3x','race_bottom_ui.t3x')):raise ValueError('Run tools/cook_race_map.py before packaging')
 for extra in sorted(race_map.glob('race_*.t3x')):
  if not extra.name.startswith('._'):overlay['textures/'+extra.name]=extra
 # Offline sprites for the live minimap object layer; only the active course is resident.
