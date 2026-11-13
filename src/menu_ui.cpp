@@ -983,13 +983,14 @@ static void composeMenuImpl(const MenuState& s,const UiRaceView& race,std::vecto
  }
  case UiPage::LicenseSettings:{
   // Reuse the original control and game-font text, including the port options.
-  const char* variants[]={"ChangeMii","Delete","ChangeMii","ChangeMii","ChangeMii"};
+  const char* variants[]={"ChangeMii","Delete","ChangeMii","ChangeMii","ChangeMii","ChangeMii"};
   const char* modes[]={"Off","Items","Items + Events","Items + Events + Drifts"};
   char ledLabel[64],brightnessLabel[48];
   std::snprintf(brightnessLabel,sizeof brightnessLabel,"LED Brightness: %u%%",s.selection.ledBrightness);
   std::snprintf(ledLabel,sizeof ledLabel,"LED: %s",modes[std::min(s.selection.ledMode,3u)]);
-  const char* labels[]={"Change Miis","Erase License",ledLabel,brightnessLabel,s.selection.speedometer?"Speedometer: On":"Speedometer: Off"};
-  for(unsigned i=0;i<5;++i){const auto row=control("LicenseManagementButton",variants[i],i);
+  const char* labels[]={"Change Miis","Erase License",ledLabel,brightnessLabel,s.selection.speedometer?"Speedometer: On":"Speedometer: Off",
+                        s.selection.raceTimer?"Race Timer: On":"Race Timer: Off"};
+  for(unsigned i=0;i<6;++i){const auto row=control("LicenseManagementButton",variants[i],i);
    c.group(UiMenuRole::Choice,i,row,"license_management_free");c.button("license_management",i,row,labels[i]);}
   // The card displays this license's saved cups; its identity stays separate
   // from whichever driver is currently selected for the next race.
@@ -1476,7 +1477,7 @@ MenuRect menuChoiceRect(const UiQuad& q,const MenuState& state){
  case UiPage::VSRules:return {0,32.f+27.f*i,304,25};
  case UiPage::BattleRules:return {0,42.f+29.f*i,304,27};
  case UiPage::Settings:return {12,34.f+45.f*i,296,38};
- case UiPage::LicenseSettings:return {12,34.f+34.f*i,296,30};
+ case UiPage::LicenseSettings:return {12,33.f+29.f*i,296,26}; // six rows above Back
  case UiPage::TeamConfirm:return {52,95,216,48};
  case UiPage::Confirm:return {72,83,176,80};
  case UiPage::EraseLicense:return {35,65.f+75.f*i,250,52};

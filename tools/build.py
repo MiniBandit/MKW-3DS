@@ -1091,13 +1091,14 @@ class Builder:
         tool('staff-camera', ['cook_staff_camera.py'], 'include/mkw/staff_camera_data.hpp')
         tool('staff-crowd', ['generate_staff_crowd.py'], 'include/mkw/staff_crowd_data.hpp')
         tool('staff-ui', ['cook_staff_ui.py', '--retail-rel', 'build/itembox-retail.rel', '--output', 'build/staff'], 'include/mkw/staff_ui_data.hpp')
-        tool('maps', ['cook_race_map.py', '--jobs', J], 'include/mkw/race_map_assets.hpp')
+        # Course maps now; their UI atlas and header after menu-ui (map-ui).
+        tool('maps', ['cook_race_map.py', '--jobs', J, '--metadata-only'], 'build/race-map/race-map.json')
         tool('map-objects', ['cook_map_objects.py'], 'include/mkw/map_object_assets.hpp')
         tool('menu-models', ['cook_menu_models.py', '--machines', '--jobs', J], 'include/mkw/menu_model_params.hpp')
         tool('runtime-audio', ['generate_runtime_tables.py', 'audio'], 'include/mkw/race_voice_tables.hpp')
         tool('menu-ui', ['cook_menu_ui.py'], 'include/mkw/menu_assets.hpp')
-        # The lower screen's standings rows take the menus' selected-button frame.
-        tool('map-rows', ['cook_race_rows.py'], 'include/mkw/race_bottom_rows.hpp', 'build/race-map/textures/race_bottom_rows.t3x')
+        # The lower screen's UI atlas: its standings rows take the menus' selected-button frame.
+        tool('map-ui', ['cook_race_map.py', '--atlas-only'], 'include/mkw/race_map_assets.hpp', 'build/race-map/textures/race_bottom_ui_256.t3x')
         tool('menu-footer', ['cook_menu_footer.py'], 'include/mkw/menu_footer_text.inc')
         tool('menu-styles', ['cook_menu_styles.py'], 'include/mkw/menu_text_styles.hpp')
         tool('menu-record-text', ['cook_menu_record_text.py'], 'include/mkw/menu_record_text.inc')

@@ -41,6 +41,8 @@ struct UiSelection {
  unsigned ledMode=0,ledBrightness=100;bool dynamicShadows=true;
  // Speedometer at the start of a race; SELECT still switches it during one.
  bool speedometer=false;
+ // The race timer on the lower screen (License Settings: Race Timer).
+ bool raceTimer=true;
  bool operator==(const UiSelection&)const=default;
 };
 struct UiCharacterInfo {const char* name;unsigned retailId,weight;};

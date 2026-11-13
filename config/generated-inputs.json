@@ -215,12 +215,8 @@
       "bytes": 6170
     },
     "mkw/race_map_assets.hpp": {
-      "sha256": "e8c5a99579835bd3ef08e902489d2f3d4c1dcc515168eb8ce4d81d6de0d0b898",
-      "bytes": 11081
-    },
-    "mkw/race_bottom_rows.hpp": {
-      "sha256": "fca667ddf023d44ecb506f22b5f3f25505a6bdce776bbf7fb57fd23231eecb74",
-      "bytes": 1851
+      "sha256": "a9cb4371af2700b76b10f0c990f66baf08fb98f79bf504c1488d3389b65e33e6",
+      "bytes": 11370
     },
     "mkw/race_voice_tables.hpp": {
       "sha256": "93c9b34b467e355c0fc64ebb8a97d3424d3d9093e68f3c04379a7d38e4933bda",
