@@ -1,3 +1,4 @@
+#include <mkw/drift_button.hpp>
 #include <mkw/mii_voice.hpp>
 #include <mkw/notification_led.hpp>
 #include <game/kart/KartAction.hh>
@@ -2312,6 +2313,7 @@ int main() {
     };
     mkw::Job playerJob;bool playerJobQueued=false;
     bool lowerDrewLast=false; // Performance graphics: the lower screen at 30 FPS
+    mkw::DriftButton driftButton; // A while holding R does not hop
     const bool smoke=(kQa&&exists("sdmc:/3ds/mkw-3ds/smoke-test.txt"));
     bool capturedBlue=false;
     bool replayPass=true;unsigned finishes=0;double stepTotal=0,stepMax=0;unsigned replayHeap[2]{};
@@ -2489,7 +2491,8 @@ int main() {
                 const unsigned f=physicsSteps;held=KEY_A|((f/120)%3==1?KEY_R:0)|((f%500)<20?KEY_L:0);
                 pad.dx=int16_t(((f/40)%5)*40-80);
             }
-            unsigned buttons=(held&KEY_A?1:0)|(held&KEY_B?2:0)|(held&KEY_L?4:0)|(held&KEY_R?(held&KEY_A?10:2):0);
+            // R drifts only when pressed with A held (include/mkw/drift_button.hpp).
+            unsigned buttons=driftButton.bits(held&KEY_A,held&KEY_B,held&KEY_L,held&KEY_R);
             if(fullRace)buttons&=~4u; // Inventory owns L in races; retain stock mushrooms in trace/QA.
             auto trick=K::System::Trick::None;
             if(held&(KEY_DUP|KEY_ZR))trick=K::System::Trick::Up;else if(held&KEY_DDOWN)trick=K::System::Trick::Down;
