@@ -121,8 +121,10 @@ Old 3DS only:
 recorded and drawn on core 0 and core 1 keeps only audio (`runtime.log`:
 `Old 3DS: race frames and presentation jobs on core 0`).
 `bottom-half-rate.txt` redraws the race's lower screen on every second frame
-(15 Hz on Old 3DS); by default it redraws every frame (30 Hz there, like the
-upper screen).
+on Old 3DS too (15 Hz there); by default Old 3DS redraws it every frame (30 Hz,
+like the upper screen). New 3DS redraws it every second frame (30 Hz);
+`no-bottom-30hz.txt` redraws it every frame there. A frame not due leaves the
+lower LCD's last race picture up (`bottom keep: … skipped=…`).
 `bottom-rgba8.txt` keeps the lower screen's UI atlas in RGBA8; by default Old 3DS
 stores it as RGBA4 (256 KB less VRAM, so more course textures leave LINEAR).
 `full-quality.txt` turns off every Old 3DS detail reduction.
@@ -294,10 +296,10 @@ With `menu-capture.txt`, each capture also writes `…-lcd.ppm`: the lower LCD's
 last presented picture.
 
 The race's lower screen (each file read at the race load):
-`no-map-clip.txt` draws the map over the whole screen again, under the
-standings column; by default it starts at the column's edge and markers wholly
-under the column are not drawn (the column itself slides in at GO either way;
-the map is full width until then).
+`rows-margin.txt` (pixels, e.g. 0.5) sets the map margin above the first
+standings row and below the last (default 1); `timer-scale.txt` (0.3-1) draws
+the timer at that scale instead of its cooked 21 px digits (21/32). For
+comparisons only.
 `no-race-bottom-keep.txt` redraws the lower screen on every race frame; by
 default a frame whose quads, textures and draws equal those of the previous
 frame, which was shown, leaves the lower LCD's picture as it is (no draw, no
@@ -310,10 +312,6 @@ on again for the race's 2D lower screen; by default it is bound without them
 again; by default it has none there (300 KB more VRAM for the course textures),
 and the intro's 3D lower view uses the top LCD's depth buffer once the upper
 screen is drawn, cleared first (`runtime.log`: `bottom screen … vram_free=…`).
-`no-bottom-atlas256.txt` loads the earlier 512 KB UI atlas
-(`textures/race_bottom_ui.t3x`, with a white silhouette of every face for the
-local player's outline) when the pack has it; by default the 256 KB atlas
-(`race_bottom_ui_256.t3x`) draws that outline from the face itself.
 The Settings page's options are in `settings.dat`, not in the license:
 Dynamic Shadows for benchmarks is set there (or on the Settings page).
 
