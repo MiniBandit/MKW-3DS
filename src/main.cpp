@@ -1062,6 +1062,9 @@ int main() {
     size_t raceLinearLow=~size_t(0);
     std::function<void()> drawPausedBottom;
     std::function<void()> releaseRace,suspendRaceGraphics;
+    // Set reuse: releaseRace parks the opponents and item/HUD assets for the
+    // next race of the set instead of releasing them (loadRequiredRace's cleanup).
+    bool parkSetAssets=false;
     std::function<bool()> restoreRaceGraphics;
     // Retail course fog object (StaticR 0x805A30C8..0x805A36CC): KMP AREA
     // type 2 selects the BFG state; DK Summit fades on the race timer.
@@ -1207,7 +1210,7 @@ int main() {
             // The logical page becomes Race while the pause exit still animates.
             // Keep the resident course for ResumeRace; only release when leaving
             // the race section for an unrelated menu or a different race.
-            if(raceResident&&!menu.retainsRaceAssets()&&!transition.visual(menu).retainsRaceAssets()){releaseRace();mkw::pack::dropCache();}
+            if(raceResident&&!menu.retainsRaceAssets()&&!transition.visual(menu).retainsRaceAssets()){releaseRace();mkw::pack::dropCache();mkw::SoundSystem::dropRamCache();}
             if(!renderer.bottomEnabled()&&!renderer.enableBottom()){report("FAIL lower menu target");return leave(mkw::UiAction::Exit);}
             if(benchmark){menu.selection.mode=mkw::UiMode::VS;menu.selection.teams=false;menu.selection.vsCourses=2;menu.selection.vsRaces=32;
                 // A resumed run starts the in-order deck at the saved course
@@ -2283,7 +2286,8 @@ int main() {
         if(timeTrial){raceItems->reset({},raceGrid.itemCount());if(!watchReplay)raceItems->give(0,mkw::ItemKind::TripleMushroom);}
         // DIAG: the grid, items and AI apart from the opponents' graphics (logged as "grid and opponents").
         if(reload)stage("grid, items and AI");
-        if(reload){if(!opponents.load()){trackLoadFailed=true;report("FAIL opponent graphics load");}}
+        if(reload){if(!opponents.load()){trackLoadFailed=true;report("FAIL opponent graphics load");}
+            else if(kQa&&mkw::RacerVisuals::setReuse)LOGF("set reuse opponents %u of %u",opponents.reused(),opponents.count());}
         else opponents.resetAnimation();
         LOGF("race_grid count=%u opponents=%u route=%d item_boxes=%u",raceGrid.count(),opponents.count(),raceGrid.routeReady(),unsigned(raceItems->boxes().size()));
     };
@@ -2549,7 +2553,8 @@ int main() {
         renderer.waitForGpu();balloonRuntime.clear();raceGrid.ai().clearBattleSearch();coinBattle.clear();
         renderer.configureStadiumScreen(false);renderer.configurePlayerShadow(false);
         raceGraphicsSuspended=false;
-        opponents.reset();raceHud.reset();lakitu.unload();flowUi.unload();
+        if(parkSetAssets){opponents.park();raceHud.park();}else{opponents.reset();raceHud.reset();}
+        lakitu.unload();flowUi.unload();
         driverAnimation.reset();bodyAnimation.reset();for(auto& a:accessoryAnimations)a.reset();
         for(auto& a:accessories)a.reset();for(auto& w:wheels)w.reset();vehicle.reset();driver.reset();playerMiiHead.reset();playerLuma.reset();vehicleShadow.reset();
         sky.clear();track.clear();courseObjects.reset();lensFlare.clear();trackCourse=-1;raceResident=false;intro.stop();
@@ -2617,9 +2622,9 @@ int main() {
         // race banks, but must not truncate the departing menu cue.
         bool finishingMenuCue=mkw::SoundSystem::instance().slotAttached(mkw::MenuSound::RaceConfirmSlot);
         resourceFailure[0]=0;
-        auto cleanup=[&](){
+        auto cleanup=[&](bool park=false){
             mkw::jobWorker().finishAll();renderer.waitForGpu();
-            mkw::DriverAnimation::keepReleased(bankKeep);releaseRace();mkw::DriverAnimation::keepReleased(false);
+            parkSetAssets=park;mkw::DriverAnimation::keepReleased(bankKeep);releaseRace();mkw::DriverAnimation::keepReleased(false);parkSetAssets=false;
             menuModels.reset(renderer);menuIcons.reset(renderer);menuRenderer.release(renderer);
             menuAudio.close();
             if(!finishingMenuCue){
@@ -2650,6 +2655,7 @@ int main() {
             if(!loadDriver()){report("FAIL required player graphics");return false;}
             stage("player graphics");
             if(fullRace&&!raceHud.load()){report("FAIL required item/HUD graphics or animation");return false;}
+            if(fullRace&&kQa&&mkw::RaceHud::setReuse)LOGF("set reuse items and HUD %d",int(raceHud.reused()));
             stage("items and HUD");
             if(fullRace&&!flowUi.load()){report("FAIL required race transitions");return false;}
             stage("race transitions");
@@ -2690,6 +2696,9 @@ int main() {
                     svcSleepThread(20*1000000LL);
                 }
                 stage("sound cache ready");
+                if(kQa){const auto c=mkw::SoundSystem::ramCacheStats();
+                    LOGF("sound ram cache KB=%u hits=%u (%u KB) misses=%u (%u KB) evicted=%u heap_low=%u",unsigned(c.bytes/1024),unsigned(c.hits),unsigned(c.hitBytes/1024),
+                         unsigned(c.misses),unsigned(c.missBytes/1024),unsigned(c.evicted),unsigned(c.heapLow));}
                 // Everything above left pauseTextureReserve free; the pause
                 // textures take it now. Course objects then keep only their own reserve.
                 // The RAM cache keeps them for the set's later loads.
@@ -2733,11 +2742,11 @@ int main() {
         };
         // Release the preceding race before the first attempt too. A second
         // race must not need room for both generations of graphics/audio.
-        cleanup();stage("race cleanup");
+        cleanup(true);stage("race cleanup");
         // Old 3DS core-1 jobs: the worker stopped for the last award ceremony.
         if(core1Jobs&&!mkw::jobWorker().running()&&!startCore1Jobs())report("job worker unavailable: presentation jobs run on core 0");
         // A failed attempt retries with the heap the cache held.
-        const bool ok=mkw::loadRequiredResources(attempt,[&](){mkw::pack::dropCache();cleanup();mkw::DriverAnimation::dropKept();});
+        const bool ok=mkw::loadRequiredResources(attempt,[&](){mkw::pack::dropCache();mkw::SoundSystem::dropRamCache();cleanup();mkw::DriverAnimation::dropKept();});
         if(bankKeep){char text[64];snprintf(text,sizeof text,"animation banks reused %u, unused %u",mkw::DriverAnimation::reusedCount(),mkw::DriverAnimation::keptCount());report(text);}
         mkw::DriverAnimation::dropKept();
         trackLoadFailed=!ok;
@@ -2750,6 +2759,15 @@ int main() {
     const size_t raceCacheLimit=new3ds&&!exists("sdmc:/3ds/mkw-3ds/no-race-cache.txt")?mkw::pack::cacheLimitFor(envGetHeapSize()):0;
     mkw::pack::enableCache(raceCacheLimit);
     {char text[80];snprintf(text,sizeof text,"heap %lu KB, race cache limit %lu KB",(unsigned long)envGetHeapSize()/1024,(unsigned long)raceCacheLimit/1024);report(text);}
+    // Race sound waves from a heap RAM cache across the set's races (New 3DS,
+    // a third of the race cache's room at most). A/B: no-sound-cache.txt.
+    const size_t soundCacheLimit=new3ds&&!exists("sdmc:/3ds/mkw-3ds/no-sound-cache.txt")?std::min<size_t>(8u<<20,mkw::pack::cacheLimitFor(envGetHeapSize())/3):0;
+    mkw::SoundSystem::setRamCache(soundCacheLimit);
+    {char text[64];snprintf(text,sizeof text,"sound ram cache limit %lu KB",(unsigned long)soundCacheLimit/1024);report(text);}
+    // The opponents and item/HUD assets stay loaded across a set's races when the
+    // lineup and settings allow (New 3DS; Old 3DS releases them as before). A/B: no-set-reuse.txt.
+    mkw::RacerVisuals::setReuse=mkw::RaceHud::setReuse=new3ds&&!exists("sdmc:/3ds/mkw-3ds/no-set-reuse.txt");
+    report(mkw::RacerVisuals::setReuse?"set reuse on":"set reuse off");
     mkw::renderQuality().setReduced(!new3ds&&!(kQa&&exists("sdmc:/3ds/mkw-3ds/full-quality.txt")));
     if(kQa&&exists("sdmc:/3ds/mkw-3ds/bottom-half-rate.txt"))mkw::renderQuality().bottomInterval=2;
     mkw::DriverAnimation::verifyLook=kQa&&exists("sdmc:/3ds/mkw-3ds/look-verify.txt");
@@ -2971,7 +2989,7 @@ int main() {
             // race before freeing its child heap; the root keeps configuration
             // and archive/input services alive for the next menu selection.
             mkw::AssetLoader::instance().stop();renderer.waitForGpu();
-            releaseRace();mkw::pack::dropCache();menuAudio.close();menuModels.reset(renderer);menuIcons.reset(renderer);menuRenderer.release(renderer);
+            releaseRace();mkw::pack::dropCache();mkw::SoundSystem::dropRamCache();menuAudio.close();menuModels.reset(renderer);menuIcons.reset(renderer);menuRenderer.release(renderer);
             if(!mkw::SoundSystem::instance().carryingMusic())mkw::SoundSystem::instance().stop();renderer.clearUnusedTextureCache();
             results.reset();resultsInput={};nextRaceQueued=false;
             if(scenes.currentSceneId()==2){
@@ -3064,7 +3082,7 @@ int main() {
                 auto action=nextRaceQueued?mkw::UiAction::StartRace:runMenu();nextRaceQueued=false;renderer.setDeferred(deferredRace);if(action==mkw::UiAction::Exit)break;
                 if(action==mkw::UiAction::ResumeRace){
                     if(restoreRaceGraphics&&restoreRaceGraphics())raceSound.pause(false);
-                    else {report("FAIL resume graphics load");releaseRace();mkw::pack::dropCache();menu.enter(mkw::UiPage::Error);}
+                    else {report("FAIL resume graphics load");releaseRace();mkw::pack::dropCache();mkw::SoundSystem::dropRamCache();menu.enter(mkw::UiPage::Error);}
                 }
                 if(action==mkw::UiAction::StartRace||action==mkw::UiAction::RestartRace){
                     mkw::LoadingScope loading;
@@ -3128,7 +3146,7 @@ int main() {
             if(trackLoadFailed){
                 accumulator=0;
                 // Unwind the partial race before the error page's menu runs.
-                if(fullRace){renderer.waitForGpu();releaseRace();mkw::pack::dropCache();menu.enter(mkw::UiPage::Error);}
+                if(fullRace){renderer.waitForGpu();releaseRace();mkw::pack::dropCache();mkw::SoundSystem::dropRamCache();menu.enter(mkw::UiPage::Error);}
                 else if(kQa)printf("\x1b[18;1HCourse load/route failed");
                 gspWaitForVBlank();continue;
             }

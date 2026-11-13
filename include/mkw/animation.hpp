@@ -32,6 +32,10 @@ public:
     static unsigned keptCount(),reusedCount();
     // Menu PlayAnmNoBlend replaces the active palette without a gameplay blend.
     void clearPoseTransition(){lastClip_=-1;hasPreviousPose_=false;cachedSettled_=false;}
+    // A bank kept for the next race of a set (set reuse, main.cpp no-set-reuse.txt):
+    // look, transition, braid and pose-cache state back to what load() and the
+    // skinning setup leave; the bank's data and its model stay.
+    void restartRace();
     void setLookAngles(float yaw,float pitch){
         if(lookYaw_!=yaw||lookPitch_!=pitch){lookYaw_=yaw;lookPitch_=pitch;cachedSettled_=false;}
     }

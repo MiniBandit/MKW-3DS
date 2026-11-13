@@ -50,9 +50,13 @@ struct RacerVisuals::Impl {
         unsigned presentedTick=0; // last tick step() presented it (thinHidden)
         // One-tick driver events seen on ticks it was not presented (thinHidden).
         int pendingThrow=0;bool pendingCelebrate=false;
+        // Set reuse: what load() loaded it for (team ~0u: no teams).
+        unsigned keyCharacter=~0u,keyVehicle=~0u,keyTeam=~0u;
     };
     std::array<std::unique_ptr<Racer>,11> racers;
     unsigned count=0;
+    // Set reuse (park()): the last race's racers and the settings they loaded with.
+    std::array<std::unique_ptr<Racer>,11> parked;unsigned loadedSettings=0,parkedSettings=0,reused=0;
     // One frame's pose and visibility per racer (prepareRacer), drawn in order.
     struct Prepared {
         bool draw=false,bodyVisible=false,driverVisible=false;
@@ -79,11 +83,48 @@ struct RacerVisuals::Impl {
 };
 RacerVisuals::RacerVisuals():impl_(std::make_unique<Impl>()){}
 RacerVisuals::~RacerVisuals()=default;
-void RacerVisuals::reset(){for(auto& r:impl_->racers)r.reset();impl_->count=0;}
+void RacerVisuals::reset(){for(auto& r:impl_->racers)r.reset();impl_->count=0;for(auto& r:impl_->parked)r.reset();}
 unsigned RacerVisuals::count() const{return impl_->count;}
 unsigned RacerVisuals::lowDriverCount() const{return impl_->lowDrivers;}
+unsigned RacerVisuals::reused() const{return impl_->reused;}
+namespace {
+// What a racer's load depends on besides its slot's character, vehicle and team.
+unsigned reuseSettings(){const auto& q=renderQuality();return unsigned(q.halfLargeTextures)|unsigned(q.racerLod)<<1|unsigned(q.reduced)<<2;}
+// Every model of a racer whose colours the load baked for its course.
+template<class Racer,class F> void forEachModel(Racer& r,F f){
+    for(Model* m:{r.body.get(),r.driver.get(),r.shadow.get(),r.driverLod.get(),r.bodyLod.get(),r.bodyLodRear.get(),r.handleLod.get(),r.handleLodRear.get()})if(m)f(*m);
+    for(auto& m:r.wheels)if(m)f(*m);
+    for(auto& m:r.extras)if(m)f(*m);
+}
+}
+void RacerVisuals::park(){
+    // The next race is configured by now: racers it can't take go at once.
+    if(!setReuse||impl_->loadedSettings!=reuseSettings()){reset();return;}
+    for(unsigned i=0;i<11;++i)if(impl_->racers[i])impl_->parked[i]=std::move(impl_->racers[i]);
+    impl_->count=0;impl_->parkedSettings=impl_->loadedSettings;
+    const auto& config=K::System::RaceConfig::Instance()->raceScenario();
+    for(auto& p:impl_->parked)if(p){bool wanted=false;
+        for(unsigned i=1;i<config.playerCount&&i<=11;++i){const auto& player=config.players[i];
+            wanted|=p->keyCharacter==unsigned(player.character)&&p->keyVehicle==unsigned(player.vehicle)&&p->keyTeam==(config.teams?unsigned(player.team):~0u);}
+        if(!wanted)p.reset();
+    }
+}
 bool RacerVisuals::load(){
-    reset();const auto& config=K::System::RaceConfig::Instance()->raceScenario();
+    auto parked=std::move(impl_->parked);const bool sameSettings=impl_->parkedSettings==reuseSettings();
+    reset();impl_->loadedSettings=reuseSettings();const auto& config=K::System::RaceConfig::Instance()->raceScenario();
+    // Set reuse: a parked racer of the same character, vehicle and team takes the
+    // slot once its models' colours are baked for this course; the rest go now,
+    // before this lineup's own loads.
+    std::array<std::unique_ptr<Impl::Racer>,11> kept;impl_->reused=0;
+    if(sameSettings)for(unsigned i=1;i<config.playerCount&&i<=11;++i){const auto& player=config.players[i];
+        const unsigned team=config.teams?unsigned(player.team):~0u;
+        for(auto& p:parked)if(p&&p->keyCharacter==unsigned(player.character)&&p->keyVehicle==unsigned(player.vehicle)&&p->keyTeam==team){
+            bool baked=true;forEachModel(*p,[&](Model& m){if(m.staticLightingBaked)baked&=m.rebakeStaticLighting(Model::lightingCourseNow());});
+            if(baked)kept[i-1]=std::move(p);else p.reset();
+            break;
+        }
+    }
+    for(auto& p:parked)p.reset();
     // Banks kept from the last race (DriverAnimation::keepReleased) that this
     // lineup doesn't use go now, before its own banks are allocated.
     {std::vector<std::string> banks;
@@ -96,7 +137,19 @@ bool RacerVisuals::load(){
     // instead of from the front.
     static const float RearView[3][3]={{-1,0,0},{0,.9781476f,.2079117f},{0,.2079117f,-.9781476f}};
     struct BakeView {BakeView(){Model::setBakeView(diag::rearBake?RearView:nullptr);}~BakeView(){Model::setBakeView(nullptr);}} bakeViewScope;
+    struct KeepSource {KeepSource(){Model::keepBakeSource(setReuse);}~KeepSource(){Model::keepBakeSource(false);}} keepSourceScope;
     for(unsigned i=1;i<config.playerCount&&i<=11;++i){
+        if(auto& r=kept[i-1]){const auto& player=config.players[i];
+            // As a fresh load leaves it: the banks' pose state, presentation flags,
+            // a new Luma (resetAnimation below resets clocks and controller).
+            if(r->animation)r->animation->restartRace();
+            if(r->bodyAnimation)r->bodyAnimation->restartRace();
+            for(auto& bank:r->extraAnimation)if(bank)bank->restartRace();
+            r->headShown=true;r->presentedTick=0;r->pendingThrow=0;r->pendingCelebrate=false;
+            if(r->luma){r->luma=std::make_unique<LumaVisual>();if(!r->luma->load()){reset();return false;}}
+            r->ghost=player.type==K::System::RaceConfig::Player::Type::Ghost;
+            impl_->racers[i-1]=std::move(r);++impl_->count;++impl_->reused;continue;
+        }
         auto r=std::make_unique<Impl::Racer>();const auto& player=config.players[i];
         std::string failure;
         if(!r->load(unsigned(player.character),unsigned(player.vehicle),config.teams?RaceTeam(player.team):RaceTeam::None,&failure,diag::unlitBanks&&!diag::liveOpponents,diag::liveOpponents)){
@@ -138,6 +191,7 @@ bool RacerVisuals::load(){
             if(c>=0)r->controller.setDuration(name,r->animation->duration(c));
         }
         r->ghost=player.type==K::System::RaceConfig::Player::Type::Ghost;
+        r->keyCharacter=unsigned(player.character);r->keyVehicle=unsigned(player.vehicle);r->keyTeam=config.teams?unsigned(player.team):~0u;
         impl_->racers[i-1]=std::move(r);++impl_->count;
     }
     resetAnimation();return true;
