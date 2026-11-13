@@ -64,6 +64,10 @@ public:
     struct ReviewTarget {char name[32];unsigned visual;Vec3 center;float radius;};
     std::vector<ReviewTarget> reviewTargets();
     bool reviewBounds(unsigned visual,Vec3& center,float& radius);
+    // DIAG static precull counts (totals; eligible: this course's visuals):
+    // tested, culled, and culled presenters that would have drawn (precull-check.txt).
+    struct PrecullStats {unsigned long eligible=0,tested=0,culled=0,violations=0;};
+    static PrecullStats precullTotals();
 private:
     struct Impl;
     std::unique_ptr<Impl> impl_;

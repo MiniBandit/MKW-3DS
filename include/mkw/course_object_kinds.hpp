@@ -187,6 +187,12 @@ bool classifyMover(Visual& visual,const ObjectAssets& assets);
 void drawObject(ObjectDraw& draw,Visual& visual);
 // The presenter clips each part itself (minecarts travel far from the manager's placement).
 bool partsClipped(const Visual& visual);
+// Static precull (CourseObjects): true when the presenter draws and shadows
+// at one matrix only and does nothing else while every model it may use is
+// outside the view there; out receives those models' bounds (model space).
+bool singleMatrixBounds(const Visual& visual,Bounds& out);
+// That matrix this frame; false when it may not hold (an Obake block falling).
+bool singleMatrix(const Visual& visual,C3D_Mtx& m);
 // Drawn in the sky pass rather than with the course objects.
 bool skyObject(const Visual& visual);
 bool waterObject(const Visual& visual);

@@ -1300,6 +1300,30 @@ bool classifyObject(Visual& v,const ObjectAssets& assets,int course){
 }
 void drawObject(ObjectDraw& d,Visual& v){if(v.present)v.present(d,v);}
 bool partsClipped(const Visual& v){return v.present==drawTruckWagon;}
+bool singleMatrixBounds(const Visual& v,Bounds& out){
+    // drawGeneric: submit (main, or low far away) and shadow at one matrix,
+    // each after its own frustum test (not DKRockGC: its shadow has its own
+    // transform). drawObakeBlock: main at one matrix. Neither changes any
+    // state before those tests.
+    bool any=false;
+    auto add=[&](const Tracks& t){
+        if(!t.model||!t.model->model)return;
+        if(!any){out=t.model->bounds;any=true;}
+        else{out.include(t.model->bounds.minimum);out.include(t.model->bounds.maximum);}
+    };
+    if(v.present==drawGeneric&&!(v.object&&v.object->id()==ObjectId::DKRockGC)){add(v.main);add(v.low);add(v.shadow);return any;}
+    if(v.present==drawObakeBlock&&v.object){add(v.main);return any;}
+    return false;
+}
+bool singleMatrix(const Visual& v,C3D_Mtx& m){
+    if(v.present==drawObakeBlock){
+        // A falling block moves every frame: no precull.
+        using State=K::Field::ObjectObakeBlock::FallState;
+        if(static_cast<const K::Field::ObjectObakeBlock*>(v.object)->fallState()==State::Falling)return false;
+        m=v.placement;return true;
+    }
+    m=v.kinetic&&v.object?liveMatrix(*v.object):v.placement;return true;
+}
 bool skyObject(const Visual& v){return v.present==drawSun;}
 bool waterObject(const Visual& v){return v.present==drawTide||v.present==drawVeniceWater;}
 const K::Field::ObjectBase* reviewFocus(const Visual& v){
