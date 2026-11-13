@@ -84,6 +84,9 @@ public:
     // Moved to VRAM by the race's spare-VRAM placement (main.cpp); a texture kept
     // past the race goes back to LINEAR (Renderer::moveToLinear) when it ends.
     bool raceVram=false;
+    // Loaded for a race and kept past it (set reuse): a later race's placement
+    // takes it as one of its own.
+    bool raceKept=false;
     // Every texture currently loaded from a file, under a lock: f must not load
     // or reset textures. Race VRAM placement and DIAG texture-use.txt use it.
     static void forEachLoaded(const std::function<void(Texture&)>& f);

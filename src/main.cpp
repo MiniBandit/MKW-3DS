@@ -2415,6 +2415,9 @@ int main() {
     // the VRAM the course placement left, down to the race reserve. Course, sky
     // and object textures had their turn above; 4-bit textures stay in LINEAR.
     // Then DIAG texture-use.txt registers them all by file name.
+    // Serials of the textures loaded for the current race (its load and any
+    // pause restore): releaseRace marks the ones still alive as kept.
+    uint32_t raceTexturesFrom=0,raceTexturesTo=0;
     auto moveRaceTexturesToVram=[&](uint32_t since){
         const bool move=racerTexturesVram&&mkw::isNew3ds()&&mkw::renderQuality().vramCourseTextures;
         if(!move&&!(kQa&&mkw::diag::textureUse))return;
@@ -2427,7 +2430,7 @@ int main() {
             // No 4-bit formats: item boxes, effects and other draws bind these to
             // units 1 and 2 without Texture::unitOne (gpu-guard caught ETC1 there).
             const bool fourBit=t.gpu.fmt==GPU_ETC1||t.gpu.fmt==GPU_L4||t.gpu.fmt==GPU_A4;
-            if(t.ready&&t.serial>since&&t.gpu.data&&!fourBit&&!(at>=0x1F000000u&&at<0x1F600000u)&&!course.count(&t))candidates.push_back(&t);});
+            if(t.ready&&(t.serial>since||t.raceKept)&&t.gpu.data&&!fourBit&&!(at>=0x1F000000u&&at<0x1F600000u)&&!course.count(&t))candidates.push_back(&t);});
         if(move){
             renderer.waitForGpu();
             // DIAG texture-use (Azahar, Mario and Daisy Circuit; captures/2026-11-13-texture-use):
@@ -2452,7 +2455,7 @@ int main() {
         }
         if(kQa&&mkw::diag::textureUse){
             std::vector<mkw::diag::TextureInfo> more;
-            mkw::Texture::forEachLoaded([&](mkw::Texture& t){if(!t.ready||t.serial<=since||course.count(&t))return;const auto& g=t.gpu;
+            mkw::Texture::forEachLoaded([&](mkw::Texture& t){if(!t.ready||(t.serial<=since&&!t.raceKept)||course.count(&t))return;const auto& g=t.gpu;
                 more.push_back({g.data,std::string("file:")+t.name,-1,unsigned(g.width),unsigned(g.height),unsigned(g.fmt),unsigned(g.maxLevel)+1,uint32_t(C3D_TexCalcTotalSize(g.size,g.maxLevel)),t.unitOne});});
             mkw::diag::textureRegisterMore(std::move(more));
         }
@@ -2567,7 +2570,7 @@ int main() {
         // Textures the race moved to VRAM (moveRaceTexturesToVram) and something kept
         // past it go back to LINEAR: the next course places its textures first.
         unsigned returned=0;std::vector<mkw::Texture*> kept;
-        mkw::Texture::forEachLoaded([&](mkw::Texture& t){if(t.raceVram)kept.push_back(&t);});
+        mkw::Texture::forEachLoaded([&](mkw::Texture& t){if(t.serial>raceTexturesFrom&&t.serial<=raceTexturesTo)t.raceKept=true;if(t.raceVram)kept.push_back(&t);});
         for(auto* t:kept)returned+=renderer.moveToLinear(*t);
         if(!kept.empty())LOGF("race textures back in LINEAR %u of %u, vram_free=%lu",returned,unsigned(kept.size()),(unsigned long)vramSpaceFree());
     };
@@ -2602,7 +2605,7 @@ int main() {
             if(!loadDriver()||!opponents.load()||!courseObjects.resumeGraphics())return false;
             driverController=pausedDriverController;driverPose=pausedDriverPose;
             bodyClock=pausedBodyClock;accessoryClocks=pausedAccessoryClocks;
-            moveCourseTexturesToVram();moveRaceTexturesToVram(since);
+            moveCourseTexturesToVram();moveRaceTexturesToVram(since);raceTexturesTo=mkw::Texture::loadSerial();
             raceGraphicsSuspended=false;trackCourse=int(courseChoice);return true;
         };
         if(attempt())return true;
@@ -2669,6 +2672,7 @@ int main() {
             mkw::pack::cacheReads(true);
             resetRaceSystems(true);mkw::pack::cacheReads(false);if(trackLoadFailed)return false;stage("grid and opponents");
             if(fullRace){moveRaceTexturesToVram(since);stage("race texture VRAM transfer");}
+            raceTexturesFrom=since;raceTexturesTo=mkw::Texture::loadSerial();
             if(!courseObjects.loadFirePhases()){report("FAIL fire phases");return false;}
             if(fullRace){
                 startIntro();
