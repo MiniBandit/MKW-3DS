@@ -340,6 +340,10 @@ def step_fingerprint(cmd,windows_npm=False):
     # so the menu code itself does not count: menu code changes stay quick updates.
     if any('tools/cook_menu_ui.py' in c for c in commands):
         queue += [ROOT/'tools/optimize_menu_textures.py', ROOT/'tools/menu_sprite_scales.json']
+    # The measurer decides which menu textures are packed at all (a new page's
+    # buttons are listed there), so it counts; the menu code it compiles does not.
+    if any('sprite-scales' in c for c in commands):
+        queue += [ROOT/'tools/menu_sprite_scales.cpp']
     exporters=any('build/export_' in a or 'bundle_cooker' in a for c in commands for a in c if isinstance(a,str))
     if any(a.startswith('npm') for c in commands for a in c if isinstance(a,str)):queue.append(ROOT/'package-lock.json')
     while queue:

@@ -400,11 +400,16 @@ def main():
   ('ghost_arrow_left','MenuSingle/button/blyt/common_w016_yajirushi_left.brlyt',('text',)),
   ('ghost_arrow_right','MenuSingle/button/blyt/common_w021_yajirushi_right.brlyt',('text',)),
   ('confirm','MenuSingle/button/blyt/common_w109_go_button.brlyt',('text',)),
+  # Online: the Wi-Fi menu button and the friend-code number pad key (runtime text).
+  ('wifi_button','Channel/button/blyt/common_w103_wifi_menu_normal.brlyt',('text',)),
+  ('id_key','Channel/button/blyt/common_w044_id_key.brlyt',('text',)),
  ]
  for name,resource,exclude in specs:bake_panel(name,resource,exclude=exclude)
  for team in ('red','blue'):
   for human in (False,True):
    bake_panel('team_'+team+('_human' if human else '_cpu'),'MenuSingle/control/blyt/common_w051_team_blue_red_chara_point.brlyt',states=('',),exclude=('mii_name','point','pts','chara_icon'),hidden=('blue_null' if team=='red' else 'red_null','point','pts'),group_states={'Select':'SelectOn' if human else 'SelectOff','Select2':'Select2On' if human else 'Select2Off'})
+ # The online lobby's member card (WifiMemberConfirm): name and icon at runtime.
+ bake_panel('wifi_member','MenuSingle/control/blyt/common_w100_earth_mii_point_wifi.brlyt',states=('',),exclude=('mii_name','point','pts','chara_icon'),hidden=('blue_null','red_null'))
  bake_panel('record_row','MenuOther/control/blyt/record_parts.brlyt',states=('',),exclude=('menu_text','score'),hidden=('grade',))
  bake_panel('rule_base','MenuSingle/control/blyt/common_w023_rule_menu.brlyt',exclude=('text',))
  bake_panel('rule_option','MenuSingle/control/blyt/common_w024_rule_icon.brlyt',exclude=('text',),group_states={'Choice':'ChoiceOff'})
@@ -563,7 +568,7 @@ def main():
  vehicle_labels=header_strings('UiVehicleNames[3][12]=','};')
  battle_labels=header_strings('UiBattleStageNames[]=',';')
  roles={
-  'header_text':['Main Menu','Select License','Characters','Vehicles','Engine Classes','Cups','Courses','Drift','Grand Prix','Time Trials','Single Player','VS','Battle','Stages','Ghosts','Wii Stages','Retro Stages','Select Stage','Start Race','Rules','Teams','Settings','License Settings','Erase License?','General','Favorites','Other Records'],
+  'header_text':['Main Menu','Select License','Characters','Vehicles','Engine Classes','Cups','Courses','Drift','Grand Prix','Time Trials','Single Player','VS','Battle','Stages','Ghosts','Wii Stages','Retro Stages','Select Stage','Start Race','Rules','Teams','Settings','License Settings','Erase License?','General','Favorites','Other Records','Online','Enter Code','Lobby'],
   'footer_help':[v for vv in help_text.values() for v in vv],
   'main':['Single Player','Multiplayer','Nintendo WFC','Online','Mario Kart Channel'],
   'main_button':['1','Player','1\nPlayer'],'main_multi':['2','3','4','Players','2\nPlayers','3\nPlayers','4\nPlayers'],'main_wifi':['1','2','Player','Players','1\nPlayer','2\nPlayers'],
@@ -715,6 +720,7 @@ def main():
  controller_paths=[p for archive in ['Title','MenuSingle'] for p in sorted((ROOT/'assets/menu-ui'/archive).rglob('*.brctr'))]
  controller_paths += [ROOT/'assets/menu-ui/MenuOther'/part/'ctrl'/(name+'.brctr') for part,name in [('button','LicenseManagementButton'),('control','LicenseManagement'),('control','Record'),('button','NextRecordButton')]]
  controller_paths += [ROOT/'assets/menu-ui/Channel/button/ctrl/OptionTopButton.brctr']
+ controller_paths += [ROOT/'assets/menu-ui/Globe/button/ctrl/WifiMenuSingleTop.brctr',ROOT/'assets/menu-ui/Channel/button/ctrl/RegisterFriendKeyboard.brctr']
  controller_paths += [ROOT/'assets/menu-ui/Present/common/ctrl/NextButton.brctr']
  controller_paths += list((ROOT/'assets/menu-ui/Present/control/ctrl').glob('*.brctr'))
  controller_paths += [ROOT/'assets/race-ui/Race/button/ctrl'/(name+'.brctr') for name in ['PauseMenuVS','PauseMenuGrandPrix','PauseMenuTimeAttack','PauseMenuBT']]

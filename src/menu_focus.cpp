@@ -78,6 +78,8 @@ const char* uiFocusControlName(const MenuState& state,unsigned slot){
  case UiPage::BattleCup:return "BattleCupSelectCup";
  case UiPage::BattleStage:return "BattleStageSelectStage";
  case UiPage::Ghost:return "TimeAttackGhostList";
+ case UiPage::OnlineMenu:case UiPage::OnlineLobby:return "WifiMenuSingleTop";
+ case UiPage::OnlineCode:return "RegisterFriendKeyboard";
  case UiPage::DriftHelp:return "OKKey";
  case UiPage::Confirm:return "MenuEndConfirm";
  case UiPage::Pause:return "OptionTopButton";

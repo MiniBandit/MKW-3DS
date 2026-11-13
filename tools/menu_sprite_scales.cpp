@@ -53,6 +53,25 @@ int main(int argc,char** argv){
    }
   }
  }
+ // Online pages: host and joiner, a full lobby, typed and mistyped codes.
+ for(UiPage page:{UiPage::OnlineMenu,UiPage::OnlineCode,UiPage::OnlineLobby})for(int host=0;host<2;++host)for(int wrong=0;wrong<2;++wrong){
+  MenuState s;s.selection.online=true;s.onlineHost=host;s.enter(page);
+  s.codeForPlayer=host;s.codeWrong=wrong;std::snprintf(s.codeEntry,sizeof s.codeEntry,"%s",wrong?"1234567890123456":"12345");
+  s.onlineCount=12;s.onlineFailed=wrong;
+  for(unsigned i=0;i<12;++i){auto& player=s.onlinePlayers[i];player.driver=i*2%24;const char* name="Player WWWW";for(unsigned c=0;c<10&&name[c];++c)player.name[c]=name[c];}
+  std::snprintf(s.onlineCode,sizeof s.onlineCode,"1234-5678-9012-3456");std::snprintf(s.onlineStatus,sizeof s.onlineStatus,"Player 2 joined");
+  for(unsigned cursor=0;cursor<s.count();++cursor){
+   MenuState t=s;t.cursor=cursor;
+   for(unsigned age:{0u,31u,61u,121u}){MenuState u=t;u.advance(age);composeMenu(u,race,q);record(q);u.unavailable=true;composeMenu(u,race,q);record(q);}
+   // Everything the page asks to have loaded before it shows (main's residentQuads).
+   {UiTransitionView view{};view.preload=true;view.selectedControl=uiSelectedMenuControl(t);composeMenu(t,race,q,view);record(q);}
+   for(int back=0;back<2;++back){
+    MenuState logical=t;logical.advance(30);MenuTransition tr;UiInput key;key.accept=!back;key.back=back;
+    tr.input(logical,key);
+    for(unsigned frame=0;frame<120&&tr.active();++frame){composeMenu(tr.visual(logical),race,q,tr.view());record(q);tr.advance(logical,1);}
+   }
+  }
+ }
  // Every notification carries different original text, including rewards
  // not reachable with the default fixture's progress.
  for(const auto& notice:UiUnlockTexts){

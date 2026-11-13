@@ -10,7 +10,7 @@
 #include <vector>
 #include <cstdint>
 namespace mkw {
-enum class UiPage {Title,MainMenu,Mode,Character,Vehicle,Drift,Cup,Course,Confirm,Race,Pause,QuitConfirm,Results,Error,Strap,License,EngineClass,VSMode,BattleMode,BattleCup,BattleStage,Ghost,Intro,DriftHelp,VSRules,TeamConfirm,Settings,LicenseSettings,EraseLicense,RecordsGeneral,RecordsFavorites,RecordsOther,Unlock,BattleRules};
+enum class UiPage {Title,MainMenu,Mode,Character,Vehicle,Drift,Cup,Course,Confirm,Race,Pause,QuitConfirm,Results,Error,Strap,License,EngineClass,VSMode,BattleMode,BattleCup,BattleStage,Ghost,Intro,DriftHelp,VSRules,TeamConfirm,Settings,LicenseSettings,EraseLicense,RecordsGeneral,RecordsFavorites,RecordsOther,Unlock,BattleRules,OnlineMenu,OnlineCode,OnlineLobby};
 enum class UiAction {None,StartRace,RestartRace,ResumeRace,Exit};
 enum class UiMode {GrandPrix,TimeTrials,VS,Battle};
 enum class UiEngineClass {CC50,CC100,CC150,Mirror};
@@ -35,7 +35,7 @@ struct UiSelection {
  // Time Trials ghost page: 0 Race This Ghost, 1 Watch the Replay, 2 Solo;
  // ghostIndex: which of the course's ghosts (MenuState::ghosts).
  unsigned ghostChoice=2,ghostIndex=0;
- // Main menu Online: a VS race against another console through the online server.
+ // Main menu Online: a VS race against other consoles (peer to peer).
  bool online=false;
  // The retail unlocked engine-class page switches both 50cc/100cc entries
  // together between their restricted type and the combined kart/bike list.
@@ -81,6 +81,20 @@ public:
  // (a friend's, a Wii's), 2 the staff ghost, 3 the expert staff ghost.
  struct Ghost {uint8_t kind=0;uint32_t ms=0;char name[24]{};};
  std::vector<Ghost> ghosts;unsigned ghostsCourse=~0u;
+ // Online (main menu): Host a Race or Join a Race, the host's code on the
+ // number pad, then the lobby. main fills in the lobby from the network each
+ // frame and acts on the requests.
+ struct OnlinePlayer {unsigned driver=~0u;std::array<std::uint16_t,10> name{};bool you=false;};
+ bool onlineHost=true; // the last choice on the Online page (Host first)
+ std::array<OnlinePlayer,12> onlinePlayers{};unsigned onlineCount=0;
+ char onlineCode[24]{};    // this console's code, empty until known
+ char onlineStatus[96]{};  // what the connection is doing
+ bool onlineCanStart=false,onlineFailed=false;
+ // The number pad: the digits so far; codeForPlayer: the host is typing a
+ // joining player's code (else a joiner types the host's).
+ char codeEntry[17]{};bool codeWrong=false,codeForPlayer=false;
+ bool onlineStartRequest=false,onlineCodeRequest=false,onlineLeaveRequest=false;
+ static constexpr const char* OnlineKeys[12]={"1","2","3","4","5","6","7","8","9","Delete","0","OK"};
  unsigned unlockCondition=~0u,unlockBit=~0u;
  bool unlockNextRequested=false;
  unsigned titleLicense=~0u; // transient card shown when returning from license browsing
@@ -161,7 +175,8 @@ public:
 // A control keeps its source animation and a stable layout rectangle. Layout
 // uses the latter, never the animated bounds, so slide/focus tracks cannot
 // move neighbouring controls. Modal underlays retain their own page tags.
-enum class UiMenuRole : uint8_t {Content,Background,Header,Footer,Title,Description,Back,Choice,Auxiliary,Name,Statistics,Preview,PreviewLabel,Information,Shade,Dialog,Notice,TitleCard,CupRecord,TimeTrialRecord};
+enum class UiMenuRole : uint8_t {Content,Background,Header,Footer,Title,Description,Back,Choice,Auxiliary,Name,Statistics,Preview,PreviewLabel,Information,Shade,Dialog,Notice,TitleCard,CupRecord,TimeTrialRecord,
+ LowerText}; // LowerText: runtime text placed directly on the lower screen (online pages)
 struct UiMenuLayout {
  UiPage page=UiPage::Race;UiMenuRole role=UiMenuRole::Content;
  unsigned group=0;float x=0,y=0,w=400,h=240;bool preserveAspect=false,selected=false;uint8_t columns=0;

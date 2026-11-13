@@ -230,8 +230,22 @@ static bool netRace=false,netWaiting=false;static uint32_t netRemoteMask=0,netLo
 static std::array<uint8_t,12> netLocal{},netItemSeen{};static std::array<uint32_t,12> netFinishKey{};static uint32_t netFirstFinish=0;
 static uint8_t netPlayerOf(unsigned slot){return slot<12?netLocal[slot]:uint8_t(255);}
 static std::array<unsigned,12> netRoster{};static std::array<uint8_t,12> netGlobal{};static std::array<uint32_t,12> netAppliedTick{};
-// Remote karts: the position error still to glide away (see the race loop).
-static std::array<K::EGG::Vector3f,12> netCorrection{};
+// Online: each remote kart's recent path, as its owner sent it (race loop, "Remote karts").
+struct NetKart {
+    struct Snap {uint32_t tick=0;K::EGG::Vector3f pos{},ext{},in{};K::EGG::Quatf full{1.f,0.f,0.f,0.f},main{1.f,0.f,0.f,0.f};float speed=0;};
+    static constexpr unsigned Capacity=64,Window=128;
+    std::array<Snap,Capacity> snaps{};unsigned count=0; // by sender tick, oldest first
+    // lead: for each of the last Window Frames, the local tick it was first shown at
+    // less its sender tick. wanted, delay: the replay's distance behind the local tick,
+    // as the link asks and as eased to. at: the sender tick shown last tick.
+    std::array<float,Window> lead{};unsigned leads=0,leadAt=0;
+    bool started=false,placed=false;float wanted=0,delay=0,at=0;
+    K::EGG::Vector3f shown{};K::EGG::Quatf shownFull{1.f,0.f,0.f,0.f},shownMain{1.f,0.f,0.f,0.f};
+    unsigned starved=0; // QA: ticks the replay ran past the newest Frame
+};
+static std::array<NetKart,12> netKart{};
+// Online: the tick the countdown was released at, and whether it still runs to the shared clock (race loop).
+static unsigned netStartTick=0;static bool netCountdown=false;
 // Time Trials ghost (Race/TimeAttack on the SD card): racer 1 replays it.
 static bool ghostRace=false,watchReplay=false;
 // Time Trials: the player's run as a ghost; the best per course and license is
@@ -684,11 +698,17 @@ int main() {
         mkw::UiPage page=mkw::UiPage::Strap;unsigned cursor=0;mkw::UiSelection selection{};bool unavailable=false;
         unsigned unlockCondition=~0u,unlockBit=~0u,titleArtwork=0;
         bool modal=false;mkw::UiPage underlayPage=mkw::UiPage::Strap;unsigned underlayCursor=0;
+        unsigned onlinePlayers=0; // the lobby's cards: count, drivers and names
         bool operator==(const ResidencyKey&)const=default;
     };
     auto residencyKey=[](const mkw::MenuState& state,const mkw::MenuState* underlay){
         ResidencyKey key;key.page=state.page;key.cursor=state.cursor;key.selection=state.selection;key.unavailable=state.unavailable;key.titleArtwork=state.titleArtwork;
         key.unlockCondition=state.unlockCondition;key.unlockBit=state.unlockBit;
+        if(state.page==mkw::UiPage::OnlineLobby){
+            unsigned hash=state.onlineCount;
+            for(unsigned i=0;i<state.onlineCount&&i<12;++i){hash=hash*31+state.onlinePlayers[i].driver;for(auto c:state.onlinePlayers[i].name)hash=hash*31+c;}
+            key.onlinePlayers=hash;
+        }
         if(underlay){key.modal=true;key.underlayPage=underlay->page;key.underlayCursor=underlay->cursor;}
         return key;
     };
@@ -753,6 +773,81 @@ int main() {
         menu.licenseUnlocks[slot]=save.unlockFlags;
         menu.enter(mkw::UiPage::Unlock);
         return true;
+    };
+    // Online (main menu): the network runs while the code pad and lobby pages
+    // show; the lobby starts the race. lan.txt keeps the connection terminal.
+    bool onlineOpenTried=false;unsigned qaOnlineHost=0;char qaOnlineCode[32]{};
+    auto onlineStep=[&](mkw::MenuTransition& transition)->bool{
+        auto& net=mkw::net::session();
+        if(net.fromFile())return false;
+        const bool flow=menu.selection.online&&(menu.page==mkw::UiPage::OnlineCode||menu.page==mkw::UiPage::OnlineLobby);
+        if(menu.onlineLeaveRequest||(!flow&&(menu.page==mkw::UiPage::MainMenu||menu.page==mkw::UiPage::OnlineMenu))){
+            menu.onlineLeaveRequest=false;
+            if(net.opened()){net.close();LOGF("online: left the lobby");}
+            onlineOpenTried=false;menu.onlineFailed=false;menu.onlineStatus[0]=menu.onlineCode[0]=0;menu.onlineCount=0;
+        }
+        if(!flow)return false;
+        const auto mode=menu.onlineHost?mkw::net::Mode::Host:mkw::net::Mode::Join;
+        if(net.opened()&&net.mode()!=mode)net.close();
+        if(!net.opened()&&!onlineOpenTried){
+            onlineOpenTried=true;menu.onlineFailed=false;menu.onlineStatus[0]=0;
+            if(kQa)if(FILE* f=std::fopen("sdmc:/3ds/mkw-3ds/qa-online.txt","r")){char what[8]{},arg[32]{};
+                if(std::fscanf(f,"%7s %31s",what,arg)==2){if(!std::strcmp(what,"host"))qaOnlineHost=std::max(2u,unsigned(std::strtoul(arg,nullptr,10)));else std::snprintf(qaOnlineCode,sizeof qaOnlineCode,"%s",arg);}std::fclose(f);}
+            net.configureOnline(mode);
+            if(net.open()){net.newRound();LOGF("online: %s",menu.onlineHost?"hosting":"joining");}
+            else{menu.onlineFailed=true;std::snprintf(menu.onlineStatus,sizeof menu.onlineStatus,"Can't go online: %s.",net.reason());}
+        }
+        if(!net.opened())return false;
+        // Test builds: qa-online.txt "join <code>" types the host's code.
+        if(kQa&&*qaOnlineCode&&menu.page==mkw::UiPage::OnlineCode&&!menu.codeEntry[0]&&!menu.codeForPlayer){
+            unsigned n=0;for(const char* c=qaOnlineCode;*c&&n<16;++c)if(*c>='0'&&*c<='9')menu.codeEntry[n++]=*c;menu.codeEntry[n]=0;
+            menu.onlineCodeRequest=true;const auto from=menu;menu.enter(mkw::UiPage::OnlineLobby);transition.reset();transition.begin(from,menu);
+        }
+        if(menu.onlineCodeRequest){
+            menu.onlineCodeRequest=false;
+            if(!net.addCode(menu.codeEntry))LOGF("online: bad code %s",menu.codeEntry);
+        }
+        // Back in the lobby after a race (or the host's course choice): a new round.
+        if(menu.page==mkw::UiPage::OnlineLobby&&net.started())net.newRound();
+        const unsigned slot=std::min(menu.selection.license,3u);
+        net.setName(licenseSaves[slot].name.data());
+        const unsigned driver=menu.selection.driver,vehicle=menu.selection.vehicle;
+        const unsigned garage=driver<24?driver*mkw::VehiclesPerDriver+vehicle:unsigned(mkw::GarageChoices.size())+mkw::miiGarageOffset(selectedMiiBody.retailCharacter)+vehicle;
+        const unsigned cc=menu.selection.vsClass;
+        net.lobbyStep(garage,menu.selection.automatic,menu.selection.course,std::min(cc,2u),cc==3);
+        // What the lobby page shows.
+        char step[64];
+        while(net.takeEvent(step,sizeof step)){
+            LOGF("online: %s",step);
+            const char* text=step;while(*text=='>'||*text==' ')++text;
+            // The lobby may be streamed or photographed: no addresses on screen.
+            char plain[64];
+            if(!std::strncmp(text,"Wi-Fi ready",11)||!std::strncmp(text,"Finding this console",20))text="Connecting...";
+            else if(!std::strncmp(text,"Internet address",16))text="Online. Your code is ready.";
+            else if(!std::strncmp(text,"Calling the host",16))text="Calling the host...";
+            else if(!std::strncmp(text,"Opening the way",15))text="Letting the player in...";
+            else if(const char* from=std::strstr(text," from ")){std::snprintf(plain,sizeof plain,"%.*s",int(from-text),text);text=plain;}
+            if(step[0]==' '&&menu.onlineStatus[0]){const auto n=std::strlen(menu.onlineStatus);std::snprintf(menu.onlineStatus+n,sizeof menu.onlineStatus-n," %s",text);}
+            else std::snprintf(menu.onlineStatus,sizeof menu.onlineStatus,"%s",text);
+        }
+        std::snprintf(menu.onlineCode,sizeof menu.onlineCode,"%s",net.code());
+        menu.onlineFailed=net.failed();menu.onlineCanStart=net.canStart();
+        // The host closed its lobby (Bye): nothing more will come from it.
+        if(!net.host()&&net.lobbyCount()&&net.left(0)&&!net.started()){menu.onlineFailed=true;std::snprintf(menu.onlineStatus,sizeof menu.onlineStatus,"The host left the lobby. Press B to go back.");}
+        const unsigned count=std::min(net.lobbyCount(),12u);
+        if(count){
+            menu.onlineCount=count;
+            for(unsigned s=0;s<count;++s){auto& player=menu.onlinePlayers[s];
+                const unsigned g=net.garage(s);player.driver=g<mkw::GarageChoices.size()?g/mkw::VehiclesPerDriver:~0u;
+                std::copy(net.name(s),net.name(s)+mkw::net::NameLength,player.name.begin());player.you=s==net.slot();}
+        }else{
+            // Not in the host's lobby yet: just this player.
+            menu.onlineCount=1;auto& player=menu.onlinePlayers[0];player.driver=driver<24?driver:~0u;player.name=licenseSaves[slot].name;player.you=true;
+        }
+        if(menu.onlineStartRequest){menu.onlineStartRequest=false;net.start();}
+        if(kQa&&qaOnlineHost&&net.canStart()&&net.lobbyCount()>=qaOnlineHost)net.start();
+        if(menu.page==mkw::UiPage::OnlineLobby&&net.started()){LOGF("online: race course=%u players=%u",net.course(),net.count());return true;}
+        return false;
     };
     auto runMenu=[&](){
         mkw::animationStride.store(1);
@@ -882,6 +977,7 @@ int main() {
                 if(menu.ghosts.empty())menu.cursor=2;else if(beforeInput.page!=mkw::UiPage::Ghost)menu.cursor=0;
                 menu.selection.ghostIndex%=std::max<unsigned>(1,unsigned(menu.ghosts.size()));
             }
+            if(onlineStep(transition)){menuSound.leave();return leave(mkw::UiAction::StartRace);}
             if(acceptedInput&&menu.selectRaceMiiRequest>=24){
                 mkw::LicenseIdentity identity;mkw::MiiAppearance appearance;mkw::MiiBodySpec body;
                 const unsigned outfit=unsigned(menu.selectRaceMiiRequest-24);
@@ -1291,68 +1387,34 @@ int main() {
                 LOGF("ghost: %s %s",entry.path,ghostRace?"racing":watchReplay?"watching":"unusable: racing solo");
             }
         }
-        // Online (main menu) or LAN (lan.txt): find the other consoles, agree on
-        // the race and swap drivers before loading. docs/ONLINE-TESTING.md.
+        // Online (main menu): the online pages have found the players and the
+        // lobby started the race. LAN (lan.txt): find the other consoles here,
+        // agree on the race and swap drivers before loading. docs/ONLINE-TESTING.md.
         netRace=false;
         auto& net=mkw::net::session();
-        const bool netWanted=vs&&!selectedTeams&&(net.fromFile()||(menu.selection.online&&vs));
-        if(netWanted){
+        const bool netWanted=vs&&!selectedTeams&&(net.fromFile()||menu.selection.online);
+        if(netWanted&&net.fromFile()){
             mkw::LanTerminal terminal(renderer);char step[64];
-            // Test builds: qa-online.txt "host <players>" starts once that many are in;
-            // "join <code>" joins without the keyboard.
-            unsigned qaHostPlayers=0;char qaCode[32]{};
+            // Test builds: qa-online.txt "host <players>" starts once that many are in.
+            unsigned qaHostPlayers=0;
             if(kQa)if(FILE* f=std::fopen("sdmc:/3ds/mkw-3ds/qa-online.txt","r")){char mode[8]{},arg[32]{};
-                if(std::fscanf(f,"%7s %31s",mode,arg)==2){if(!std::strcmp(mode,"host"))qaHostPlayers=std::max(2u,unsigned(std::strtoul(arg,nullptr,10)));else std::snprintf(qaCode,sizeof qaCode,"%s",arg);}std::fclose(f);}
-            auto typeCode=[&](const char* hint,char* out,size_t size){
-                SwkbdState keyboard;swkbdInit(&keyboard,SWKBD_TYPE_QWERTY,2,15);swkbdSetHintText(&keyboard,hint);
-                swkbdSetValidation(&keyboard,SWKBD_NOTEMPTY_NOTBLANK,0,0);
-                return swkbdInputText(&keyboard,out,size)==SWKBD_BUTTON_CONFIRM;
-            };
+                if(std::fscanf(f,"%7s %31s",mode,arg)==2&&!std::strcmp(mode,"host"))qaHostPlayers=std::max(2u,unsigned(std::strtoul(arg,nullptr,10)));std::fclose(f);}
             auto waitB=[&](){terminal.add("Press B to race offline.",true);while(aptMainLoop()){hidScanInput();if(hidKeysDown()&KEY_B)break;terminal.frame();}};
-            terminal.add(net.fromFile()?"MKW 3DS - LAN PLAY (lan.txt)":"MKW 3DS - ONLINE",true);terminal.add("");
+            terminal.add("MKW 3DS - LAN PLAY (lan.txt)",true);terminal.add("");
             bool go=true;
-            if(!net.fromFile()){
-                mkw::net::Mode mode=qaHostPlayers?mkw::net::Mode::Host:*qaCode?mkw::net::Mode::Join:mkw::net::Mode::None;
-                if(mode==mkw::net::Mode::None){
-                    terminal.add("A  Host a race (you choose the course)",true);
-                    terminal.add("Y  Join a race with the host's code",true);
-                    terminal.add("B  Race offline instead",true);terminal.add("");
-                    while(aptMainLoop()){hidScanInput();const u32 k=hidKeysDown();
-                        if(k&KEY_A){mode=mkw::net::Mode::Host;break;}if(k&KEY_Y){mode=mkw::net::Mode::Join;break;}if(k&KEY_B)break;terminal.frame();}
-                }
-                if(mode==mkw::net::Mode::None)go=false;
-                else{net.configureOnline(mode);terminal.add(mode==mkw::net::Mode::Host?"> Hosting a race.":"> Joining a race.");}
-            }
-            if(go&&!net.open()){char line[64];std::snprintf(line,sizeof line,"> %s",net.reason());terminal.add(line);waitB();go=false;}
+            if(!net.open()){char line[64];std::snprintf(line,sizeof line,"> %s",net.reason());terminal.add(line);waitB();go=false;}
             if(go){
                 net.newRound();
-                if(!net.host()&&!net.hostKnown()){
-                    if(*qaCode&&!net.addCode(qaCode))LOGF("online: bad qa code %s",qaCode);
-                    while(!net.hostKnown()&&aptMainLoop()){
-                        char text[32]{};
-                        if(!typeCode("The host's code, e.g. 7K2D-QX9M-4PA",text,sizeof text)){go=false;break;}
-                        if(!net.addCode(text)){terminal.add("> That code isn't right. Check it and try again.");terminal.frame();}
-                    }
-                }
-            }
-            if(go){
-                LOGF("online: %s, waiting in the lobby",net.host()?"hosting":"joining");
-                bool shownCode=false;unsigned shownCount=0;
-                if(net.host())terminal.add(net.fromFile()?"A start  B cancel":"A start  X add a player's code  B cancel",true);
-                else terminal.add("Waiting for the host to start. B cancel",true);
+                LOGF("lan: %s, waiting in the lobby",net.host()?"hosting":"joining");
+                unsigned shownCount=0;
+                terminal.add(net.host()?"A start  B cancel":"Waiting for the host to start. B cancel",true);
                 while(!net.started()&&!net.failed()&&aptMainLoop()){
                     hidScanInput();const u32 k=hidKeysDown();
                     if(k&KEY_B){go=false;break;}
                     net.lobbyStep(selectedGarageIndex(),automaticDrift,courseChoice,selectedEngineClass,selectedMirror);
                     while(net.takeEvent(step,sizeof step))terminal.add(step);
-                    if(!shownCode&&*net.code()){shownCode=true;char line[64];
-                        std::snprintf(line,sizeof line,"YOUR CODE: %s",net.code());terminal.add("");terminal.add(line,true);
-                        if(net.host()&&!net.fromFile())terminal.add("Send it to the other players.",true);
-                        terminal.add("");LOGF("online: code %s",net.code());}
                     if(net.host()&&net.lobbyCount()!=shownCount){shownCount=net.lobbyCount();char line[64];
                         std::snprintf(line,sizeof line,"> Players in the lobby: %u of 12%s",shownCount,shownCount>=2?" (A to start)":"");terminal.add(line);}
-                    if(net.host()&&!net.fromFile()&&(k&KEY_X)){char text[32]{};
-                        if(typeCode("A joining player's code",text,sizeof text)&&!net.addCode(text))terminal.add("> That code isn't right.");}
                     if(net.canStart()&&((k&KEY_A)||(qaHostPlayers&&net.lobbyCount()>=qaHostPlayers)))net.start();
                     terminal.frame();
                 }
@@ -1364,17 +1426,17 @@ int main() {
                     for(unsigned f=0;f<120&&aptMainLoop();++f){net.poll();terminal.frame(f/60.f);}
                 }
             }
-            if(go&&net.started()){
-                netRace=true;netCount=std::min(net.count(),12u);
-                courseChoice=net.course();selectedEngineClass=std::min(net.engineClass(),2u);selectedMirror=net.mirror();
-                // Local racer 0 is this console; the others follow in lobby order.
-                const unsigned me=net.slot();netRemoteMask=0;netRoster=selectedRoster.choices;
-                for(unsigned g=0,i=1;g<netCount;++g){
-                    const unsigned local=g==me?0:i++;netGlobal[local]=uint8_t(g);netLocal[g]=uint8_t(local);
-                    if(local){netRoster[local]=net.garage(g);netRemoteMask|=1u<<local;}
-                }
-                LOGF("online: race course=%u players=%u as player %u",courseChoice,netCount,me+1);
+        }
+        if(netWanted&&net.started()){
+            netRace=true;netCount=std::min(net.count(),12u);
+            courseChoice=net.course();selectedEngineClass=std::min(net.engineClass(),2u);selectedMirror=net.mirror();
+            // Local racer 0 is this console; the others follow in lobby order.
+            const unsigned me=net.slot();netRemoteMask=0;netRoster=selectedRoster.choices;
+            for(unsigned g=0,i=1;g<netCount;++g){
+                const unsigned local=g==me?0:i++;netGlobal[local]=uint8_t(g);netLocal[g]=uint8_t(local);
+                if(local){netRoster[local]=net.garage(g);netRemoteMask|=1u<<local;}
             }
+            LOGF("online: race course=%u players=%u as player %u",courseChoice,netCount,me+1);
         }
     };
     // Test builds (tools/release/TEST_BUILD): at start-up, "TEST" flashes red in the
@@ -2117,7 +2179,7 @@ int main() {
             // Execute and retire the first complete render, then its reuse
             // frame while still black. Resource allocation alone does not
             // prime pose uploads, shadow captures or their GPU dependencies.
-            raceWarmupFrames=fullRace?2u:0u;netWaiting=netRace;netLostMask=0;netAppliedTick={};netCorrection={};ghostRun.reset();recordGhost=timeTrial&&!replay&&!watchReplay;ghostFinishLogged=false;ghostTick=0;
+            raceWarmupFrames=fullRace?2u:0u;netWaiting=netRace;netCountdown=false;netLostMask=0;netAppliedTick={};netKart={};ghostRun.reset();recordGhost=timeTrial&&!replay&&!watchReplay;ghostFinishLogged=false;ghostTick=0;
             if(fullRace)K::System::RaceManager::Instance()->setIntroHeld(true);
             raceResident=fullRace;return true;
         };
@@ -2338,7 +2400,8 @@ int main() {
                 }
                 if(results.hudGone())down&=~u32(KEY_START);
             }
-            if(down&KEY_START)menu.input({false,false,false,false,false,false,true});
+            // Online races can't pause (as on the Wii): the other consoles race on.
+            if((down&KEY_START)&&!netRace)menu.input({false,false,false,false,false,false,true});
             // Mario Kart 7: a tap on the lower screen switches its map view.
             if((down&KEY_TOUCH)&&menu.page==mkw::UiPage::Race&&!intro.active())bottomScreen.toggleView();
             if(menu.page!=mkw::UiPage::Race&&menu.page!=mkw::UiPage::Results){
@@ -2382,6 +2445,13 @@ int main() {
         // Races: whole refreshes, at most six (the clock's 0.1 s cap). Elsewhere, or
         // should the refresh count ever stall, the clock.
         accumulator+=fullRace&&refreshes?double(std::min<u32>(refreshes,6)):std::min(delta,0.1)*60.0;
+        // Online, from the release of the countdown to GO!: the ticks owed are those the
+        // agreed start time asks for, so every console's countdown ends at the same moment,
+        // whenever its Go arrived and whatever frames it dropped on the way.
+        if(netRace&&netCountdown){
+            if(K::System::RaceManager::Instance()->isStageReached(K::System::RaceManager::Stage::Race))netCountdown=false;
+            else accumulator=std::clamp(double(mkw::net::session().sinceStart())*(59.8261/1000.0)-double(physicsSteps-netStartTick),0.0,6.0);
+        }
         if(raceWarmupFrames)accumulator=1; // settle initial support, never catch up loading wall time
         profiler->begin(unsigned(Courses[courseChoice].id),frames,physicsSteps,float(delta*1000));
         if(dataReady){
@@ -2599,7 +2669,8 @@ int main() {
                         info.vehicle=uint8_t(selectedVehicle().vehicle);info.automaticDrift=automaticDrift;info.finish={9,59,999};
                         LOGF("QA ghost kept: %d",int(mkw::TimeTrialGhost::save(ghostRun,info)));
                     }
-                    if(kQa&&((ghostTick%5==0||(ghostTick>=500&&ghostTick<1000))&&ghostTick<2400||ghostTick%300==0)){const unsigned k=ghostRace?1u:0u;auto* o=K::Kart::KartObjectManager::Instance()->object(k);const auto p=o->pos();
+                    // Not online: a log line a tick stalls the test console, and its clock falls behind the others'.
+                    if(kQa&&!netRace&&((ghostTick%5==0||(ghostTick>=500&&ghostTick<1000))&&ghostTick<2400||ghostTick%300==0)){const unsigned k=ghostRace?1u:0u;auto* o=K::Kart::KartObjectManager::Instance()->object(k);const auto p=o->pos();
                         const auto& in=K::System::KPadDirector::Instance()->playerInput(k).currentState();
                         LOGF("GTRACE gt=%u k=%u pos=%.3f,%.3f,%.3f v=%.3f b=%u s=%.3f",ghostTick,k,p.x,p.y,p.z,o->move()->speed(),unsigned(in.buttons),in.stick.x);}
                     ++ghostTick;
@@ -2628,7 +2699,7 @@ int main() {
                         }
                         const auto items=raceItems->netState();
                         if(items.item!=netItemSeen[0]){netItemSeen[0]=items.item;if(items.item<19)LOGF("online: player %u got %s",unsigned(netGlobal[0])+1,mkw::itemName(mkw::ItemKind(items.item)));}
-                        net.sendFrame(physicsSteps,lanButtons,lanStick,lanTrick,lanItemFlags,pos,full,main,ext,in,
+                        net.sendFrame(physicsSteps,lanButtons,lanStick,lanTrick,lanItemFlags,pos,full,main,ext,in,mine->move()->speed(),
                             {items.item,items.charges,items.heldKind,items.heldMask,items.flags,netFinishKey[0]});
                     }
                     bool waiting=false;
@@ -2645,40 +2716,118 @@ int main() {
                         netFinishKey[i]=mkw::net::FinishKey::gone(netGlobal[i]);LOGF("online: player %u did not report a finish",unsigned(netGlobal[i])+1);}
                     results.hold(waiting);
                     raceGrid.setNetFinish(true,netFinishKey,netGlobal);
-                    // Remote karts drive on their latest inputs. A Frame tells where the kart was
-                    // when it was sent, half a round trip ago: carry it forward by that delay along
-                    // its velocity, then glide the error away over a few ticks instead of snapping
-                    // back (the back-and-forth jitter). A big error (a respawn, a long gap) snaps.
+                    // Remote karts replay the path their owner sent, a little in the past. Each Frame
+                    // is kept by its sender's tick, and every tick the kart is placed where its owner
+                    // had it at (local tick - delay), on a smooth curve through the Frames either side.
+                    // Nothing is guessed ahead and then corrected, so nothing jumps or runs backwards.
+                    // The delay is measured, never assumed: for each Frame, how many local ticks
+                    // after its own tick it could first be shown; the delay is what 19 in 20 of the
+                    // last two seconds' Frames needed, plus a tick. So it covers this link's latency,
+                    // its bunching, either console dropping frames and the two clocks' different
+                    // starting points, follows them when they change (the replay runs at most 10%
+                    // slow or 5% fast), and is no longer than the link needs. The odd Frame later
+                    // than that is bridged along the kart's motion and the small error glided away.
+                    // Frames polled this tick are shown at the end of this frame's ticks.
+                    const float now=float(physicsSteps),shownTick=now+float(std::max(0,int(accumulator)-1));
                     for(unsigned i=1;i<raceGrid.count();++i){
-                        if(!(raceGrid.remoteMask>>i&1u)){netCorrection[i]={};continue;}
+                        auto& k=netKart[i];
+                        if(!(raceGrid.remoteMask>>i&1u)){k={};continue;} // a CPU now
                         auto* other=objects->object(i);if(!other)continue;auto* d=other->dynamics();
-                        mkw::net::Frame peer;
-                        // QA: qa-net-snap.txt restores the old snap, to compare the two.
-                        static const bool qaSnap=kQa&&exists("sdmc:/3ds/mkw-3ds/qa-net-snap.txt");
-                        if(qaSnap&&net.frame(netGlobal[i],peer)&&peer.tick!=netAppliedTick[i]){
-                            netAppliedTick[i]=peer.tick;d->setPos({peer.pos[0],peer.pos[1],peer.pos[2]});
-                            d->setFullRot(K::EGG::Quatf(peer.fullRot[3],peer.fullRot[0],peer.fullRot[1],peer.fullRot[2]));
-                            d->setMainRot(K::EGG::Quatf(peer.mainRot[3],peer.mainRot[0],peer.mainRot[1],peer.mainRot[2]));
-                            d->setExtVel({peer.extVel[0],peer.extVel[1],peer.extVel[2]});d->setIntVel({peer.intVel[0],peer.intVel[1],peer.intVel[2]});
-                        }else if(!qaSnap&&net.frame(netGlobal[i],peer)&&peer.tick!=netAppliedTick[i]){
-                            netAppliedTick[i]=peer.tick;
-                            const K::EGG::Vector3f ext{peer.extVel[0],peer.extVel[1],peer.extVel[2]},in{peer.intVel[0],peer.intVel[1],peer.intVel[2]};
-                            const float ahead=std::min(net.delayTicks(netGlobal[i]),20.f);
-                            const K::EGG::Vector3f target=K::EGG::Vector3f{peer.pos[0],peer.pos[1],peer.pos[2]}+(ext+in)*ahead;
-                            const K::EGG::Quatf full(peer.fullRot[3],peer.fullRot[0],peer.fullRot[1],peer.fullRot[2]),main(peer.mainRot[3],peer.mainRot[0],peer.mainRot[1],peer.mainRot[2]);
-                            const K::EGG::Vector3f error=target-d->pos();
-                            if(error.length()>800.f){d->setPos(target);netCorrection[i]={};d->setFullRot(full);d->setMainRot(main);}
-                            else{netCorrection[i]=error;d->setFullRot(d->fullRot().slerpTo(full,.5f));d->setMainRot(d->mainRot().slerpTo(main,.5f));}
-                            d->setExtVel(ext);d->setIntVel(in);
+                        const unsigned g=netGlobal[i];
+                        mkw::net::Frame peer;bool fresh=false;
+                        while(net.takeFrame(g,peer)){
+                            k.lead[k.leadAt]=shownTick-float(peer.tick);k.leadAt=(k.leadAt+1)%NetKart::Window;if(k.leads<NetKart::Window)++k.leads;fresh=true;
+                            NetKart::Snap snap;snap.tick=peer.tick;snap.pos={peer.pos[0],peer.pos[1],peer.pos[2]};
+                            snap.ext={peer.extVel[0],peer.extVel[1],peer.extVel[2]};snap.in={peer.intVel[0],peer.intVel[1],peer.intVel[2]};
+                            snap.full=K::EGG::Quatf(peer.fullRot[3],peer.fullRot[0],peer.fullRot[1],peer.fullRot[2]);
+                            snap.main=K::EGG::Quatf(peer.mainRot[3],peer.mainRot[0],peer.mainRot[1],peer.mainRot[2]);snap.speed=peer.speed;
+                            unsigned at=k.count;while(at&&k.snaps[at-1].tick>snap.tick)--at;
+                            if(at&&k.snaps[at-1].tick==snap.tick)continue;
+                            if(k.count==NetKart::Capacity){if(!at)continue;std::move(k.snaps.begin()+1,k.snaps.begin()+k.count,k.snaps.begin());--k.count;--at;}
+                            std::move_backward(k.snaps.begin()+at,k.snaps.begin()+k.count,k.snaps.begin()+k.count+1);k.snaps[at]=snap;++k.count;
                         }
-                        // Half the remaining error each tick: gone within about a tenth of a second.
-                        if(netCorrection[i].squaredLength()>.01f){const auto step=netCorrection[i]*.5f;d->setPos(d->pos()+step);netCorrection[i]-=step;}
-                        // QA: how often the shown kart jumps backwards along its own motion.
-                        if(kQa){static std::array<K::EGG::Vector3f,12> last{};static std::array<unsigned,12> back{},ticks{};static std::array<float,12> worst{};
+                        if(!k.count)continue;
+                        // (Every fourth tick is often enough, and a twelve-player race stays cheap.)
+                        if(fresh&&(!k.started||(physicsSteps+i)%4==0)){
+                            std::array<float,NetKart::Window> sorted;std::copy_n(k.lead.begin(),k.leads,sorted.begin());
+                            const unsigned nth=std::min(k.leads-1,k.leads*19/20);
+                            std::nth_element(sorted.begin(),sorted.begin()+nth,sorted.begin()+k.leads);
+                            k.wanted=sorted[nth]+1.f;
+                        }
+                        // A different clock altogether (the other console froze or lost ticks): start afresh.
+                        if(!k.started||std::fabs(k.wanted-k.delay)>45.f){k.started=true;k.delay=k.wanted;}
+                        else k.delay+=std::clamp(k.wanted-k.delay,-.05f,.1f);
+                        const float at=now-k.delay;
+                        // Motion per tick at Frame j, from its neighbours (Catmull-Rom).
+                        // A jump far beyond any kart's speed is a respawn: no curve across it.
+                        auto far=[&](unsigned a,unsigned b){return (k.snaps[b].pos-k.snaps[a].pos).length()>400.f*float(k.snaps[b].tick-k.snaps[a].tick);};
+                        auto slope=[&](unsigned j){
+                            const unsigned a=j&&!far(j-1,j)?j-1:j,b=j+1<k.count&&!far(j,j+1)?j+1:j;
+                            if(a==b)return k.snaps[j].ext+k.snaps[j].in;
+                            return (k.snaps[b].pos-k.snaps[a].pos)*(1.f/float(k.snaps[b].tick-k.snaps[a].tick));
+                        };
+                        // The kart at sender tick t, as the Frames held now tell it.
+                        auto path=[&](float t){
+                            const auto& newest=k.snaps[k.count-1];NetKart::Snap out;
+                            if(t>=float(newest.tick)){
+                                // Past the newest Frame: on along its motion for a fifth of a second, then wait.
+                                out=newest;out.pos=newest.pos+slope(k.count-1)*std::min(t-float(newest.tick),12.f);
+                            }else if(t<=float(k.snaps[0].tick))out=k.snaps[0];
+                            else{
+                                unsigned j=0;while(float(k.snaps[j+1].tick)<=t)++j;
+                                const auto& a=k.snaps[j];const auto& b=k.snaps[j+1];
+                                const float span=float(b.tick-a.tick),u=(t-float(a.tick))/span;
+                                out=u<.5f?a:b;
+                                if(!far(j,j+1)){
+                                    const float u2=u*u,u3=u2*u;
+                                    out.pos=a.pos*(2*u3-3*u2+1)+slope(j)*(span*(u3-2*u2+u))+b.pos*(3*u2-2*u3)+slope(j+1)*(span*(u3-u2));
+                                    out.full=a.full.slerpTo(b.full,u);out.full.normalise();out.main=a.main.slerpTo(b.main,u);out.main.normalise();
+                                    out.ext=a.ext+(b.ext-a.ext)*u;out.in=a.in+(b.in-a.in)*u;out.speed=a.speed+(b.speed-a.speed)*u;
+                                }
+                            }
+                            return out;
+                        };
+                        NetKart::Snap shown=path(at);
+                        if(at>float(k.snaps[k.count-1].tick))++k.starved;
+                        if(k.placed){
+                            // Where the kart was drawn last tick against where the Frames now say it
+                            // was then: they differ after a bridged gap. A quarter of that goes each
+                            // tick; a respawn or a long silence is not glided across.
+                            const auto error=k.shown-path(k.at).pos;
+                            if(error.squaredLength()<1500.f*1500.f)shown.pos=shown.pos+error*.75f;
+                            shown.full=k.shownFull.slerpTo(shown.full,.6f);shown.full.normalise();shown.main=k.shownMain.slerpTo(shown.main,.6f);shown.main.normalise();
+                        }
+                        k.placed=true;k.at=at;k.shown=shown.pos;k.shownFull=shown.full;k.shownMain=shown.main;
+                        d->setPos(shown.pos);d->setFullRot(shown.full);d->setMainRot(shown.main);d->setExtVel(shown.ext);d->setIntVel(shown.in);other->move()->setSpeed(shown.speed);
+                        // Keep three Frames before the replay point (for the curve and last tick's place), drop older ones.
+                        unsigned drop=0;while(k.count-drop>4&&float(k.snaps[drop+3].tick)<=at)++drop;
+                        if(drop){std::move(k.snaps.begin()+drop,k.snaps.begin()+k.count,k.snaps.begin());k.count-=drop;}
+                        // QA: how the shown kart moves: steps backwards along its motion, and jerks
+                        // (a tick's step differing from the last by over a quarter of the speed),
+                        // beside the same count for this console's own kart.
+                        if(kQa){static std::array<K::EGG::Vector3f,12> last{},lastStep{};static std::array<unsigned,12> back{},jerk{},ticks{};static std::array<float,12> worst{};
+                            static K::EGG::Vector3f ownLast{},ownStep{};static unsigned ownJerk=0;
                             const auto p=d->pos(),v=d->extVel()+d->intVel();const auto delta=p-last[i];last[i]=p;
-                            if(v.squaredLength()>100.f){const float along=delta.dot(v)/v.length();if(along<-5.f){++back[i];worst[i]=std::min(worst[i],along);}}
-                            if(++ticks[i]%600==0){LOGF("online jitter racer %u: %u backward jumps in 600 ticks, worst %.0f, delay %.1f ticks",i,back[i],-worst[i],net.delayTicks(netGlobal[i]));back[i]=0;worst[i]=0;}}
+                            if(v.squaredLength()>100.f){const float along=delta.dot(v)/v.length();if(along<-5.f){++back[i];worst[i]=std::min(worst[i],along);}
+                                if((delta-lastStep[i]).length()>std::max(15.f,.25f*v.length()))++jerk[i];}
+                            lastStep[i]=delta;
+                            if(i==1)if(auto* mine=objects->object(0)){const auto op=mine->dynamics()->pos(),ov=mine->dynamics()->extVel()+mine->dynamics()->intVel();const auto od=op-ownLast;ownLast=op;
+                                if(ov.squaredLength()>100.f&&(od-ownStep).length()>std::max(15.f,.25f*ov.length()))++ownJerk;ownStep=od;}
+                            if(++ticks[i]%600==0){LOGF("online jitter racer %u: %u backward steps (worst %.0f), %u jerks (own kart %u), %u ticks past the newest Frame in 600 ticks; replay %.1f ticks behind, round trip %.1f ticks",
+                                i,back[i],-worst[i],jerk[i],ownJerk,k.starved,k.delay,2.f*net.delayTicks(g));back[i]=jerk[i]=0;worst[i]=0;k.starved=0;if(i==1)ownJerk=0;}
+                        }
                     }
+                    // QA: qa-net-stall.txt "ticks milliseconds" freezes this console for that long every
+                    // so many ticks, as a console that drops frames or stalls on its SD card does.
+                    if(kQa){static unsigned every=0,ms=0;static bool read=false;
+                        if(!read){read=true;if(FILE* f=std::fopen("sdmc:/3ds/mkw-3ds/qa-net-stall.txt","r")){if(std::fscanf(f,"%u %u",&every,&ms)!=2)every=0;std::fclose(f);}}
+                        if(every&&physicsSteps%every==0)svcSleepThread(s64(ms)*1000000);}
+                    // QA: this tick's own kart and shown racer 1, to the test computer's clock (qaBeacon).
+                    if(kQa)if(auto* mine=objects->object(0)){char line[200];const auto op=mine->dynamics()->pos();K::EGG::Vector3f sp{};
+                        if(auto* other=objects->object(1))sp=other->dynamics()->pos();
+                        std::snprintf(line,sizeof line,"T %u %u %u %u %u %.1f %.1f %.1f %.1f %.1f %.1f %lu",unsigned(net.slot()),physicsSteps,frames,
+                            unsigned(K::System::RaceManager::Instance()->stage()),unsigned(netWaiting),op.x,op.y,op.z,sp.x,sp.y,sp.z,(unsigned long)uint32_t(osGetTime()));
+                        net.qaBeacon(line);}
                 }
                 {
                     // The player's driver model after the kart step: its trick animation,
@@ -3682,7 +3831,11 @@ int main() {
         }else renderer.begin({0,100,500},{0,0,0},{0,1,0});
         if(frames==0)report("graphics first frame submitting");
         renderer.end();profiler->mark(Profile::Submit);profiler->end(physicsSteps,renderer);frames++;
-        if(netWaiting&&!raceWarmupFrames&&mkw::net::session().readyStep()){netWaiting=false;K::System::RaceManager::Instance()->setIntroHeld(intro.active());LOGF("online: go");}
+        // Online: once every console has loaded the host names a moment half a second
+        // off, and each releases its countdown at that moment by its own clock.
+        if(netWaiting&&!raceWarmupFrames){auto& net=mkw::net::session();
+            if(net.readyStep()&&net.sinceStart()>=0){netWaiting=false;netCountdown=true;netStartTick=physicsSteps;K::System::RaceManager::Instance()->setIntroHeld(intro.active());LOGF("online: go, %d ms after the agreed start",int(net.sinceStart()));}
+        }else if(netRace&&netCountdown)mkw::net::session().startStep();
         if(raceWarmupFrames){
             renderer.waitForGpu();
             if(!--raceWarmupFrames)K::System::RaceManager::Instance()->setIntroHeld(intro.active()||netWaiting);

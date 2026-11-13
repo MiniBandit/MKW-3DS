@@ -1,5 +1,7 @@
 #include <mkw/menu_ui.hpp>
 #include <mkw/roster.hpp>
+#include <mkw/net_code.hpp>
+#include <cstring>
 #include <algorithm>
 #include <cmath>
 
@@ -107,6 +109,9 @@ unsigned MenuState::count()const{
  case UiPage::Course:return 4;
  case UiPage::BattleStage:return 5;
  case UiPage::Ghost:return 3;
+ case UiPage::OnlineMenu:return 2;
+ case UiPage::OnlineCode:return 12;
+ case UiPage::OnlineLobby:return onlineHost?2:1;
  case UiPage::Pause:return pauseCount();
  default:return 1;
  }
@@ -135,6 +140,7 @@ unsigned MenuState::columns()const{
  case UiPage::Character:case UiPage::Cup:return 4;
  case UiPage::Vehicle:return kartsOnly(*this)||bikesOnly(*this)?1:2;
  case UiPage::BattleCup:return 2;
+ case UiPage::OnlineCode:return 3;
  default:return 1;
  }
 }
@@ -231,6 +237,8 @@ void MenuState::enter(UiPage next){
  case UiPage::BattleCup:cursor=selection.battleStage/5;break;
  case UiPage::BattleStage:cursor=selection.battleStage%5;break;
  case UiPage::Ghost:selection.ghostIndex=0;cursor=ghosts.empty()?2:std::min(selection.ghostChoice,2u);break;
+ case UiPage::OnlineMenu:cursor=onlineHost?0:1;break;
+ case UiPage::OnlineCode:codeEntry[0]=0;codeWrong=false;break;
  case UiPage::EraseLicense:case UiPage::QuitConfirm:cursor=1;break;
  default:break;
  }
@@ -256,7 +264,7 @@ UiAction MenuState::input(UiInput key){
   case UiPage::Mode:enter(UiPage::MainMenu);break;
   case UiPage::EngineClass:case UiPage::VSMode:case UiPage::BattleMode:enter(UiPage::Mode);break;
   case UiPage::Character:
-   if(selection.online){enter(UiPage::MainMenu);cursor=4;uiFocusReset(*this);break;}
+   if(selection.online){enter(UiPage::OnlineMenu);break;}
    enter(selection.mode==UiMode::GrandPrix?UiPage::EngineClass:selection.mode==UiMode::VS?UiPage::VSMode:selection.mode==UiMode::Battle?UiPage::BattleMode:UiPage::Mode);break;
   case UiPage::TeamConfirm:enter(UiPage::Character);break;
   case UiPage::Vehicle:enter(selection.teams?UiPage::TeamConfirm:UiPage::Character);break;
@@ -267,6 +275,14 @@ UiAction MenuState::input(UiInput key){
   case UiPage::Course:enter(UiPage::Cup);break;
   case UiPage::BattleStage:enter(UiPage::BattleCup);break;
   case UiPage::Ghost:enter(UiPage::Course);break;
+  case UiPage::OnlineMenu:selection.online=false;enter(UiPage::MainMenu);cursor=4;uiFocusReset(*this);break;
+  // B deletes the last digit first, like the Wii's friend code pad.
+  case UiPage::OnlineCode:
+   if(const auto n=std::strlen(codeEntry)){codeEntry[n-1]=0;codeWrong=false;focusAge=0;break;}
+   if(codeForPlayer){codeForPlayer=false;enter(UiPage::OnlineLobby);cursor=1;uiFocusReset(*this);}
+   else enter(UiPage::Drift);
+   break;
+  case UiPage::OnlineLobby:onlineLeaveRequest=true;enter(UiPage::OnlineMenu);break;
   case UiPage::Confirm:case UiPage::Error:
    if((selection.mode==UiMode::VS&&selection.vsCourses)||(selection.mode==UiMode::Battle&&selection.battleCourses)){enter(UiPage::Drift);break;}
    enter(selection.mode==UiMode::GrandPrix?UiPage::Cup:selection.mode==UiMode::Battle?UiPage::BattleStage:selection.mode==UiMode::TimeTrials?UiPage::Ghost:UiPage::Course);break;
@@ -376,8 +392,8 @@ UiAction MenuState::input(UiInput key){
  case UiPage::MainMenu:
   selection.online=cursor==4;
   if(cursor==0)enter(UiPage::Mode);
-  // Online: VS solo on a chosen course; the room code is asked for at the start.
-  else if(cursor==4){selection.mode=UiMode::VS;selection.teams=false;selection.vsCourses=0;enter(UiPage::Character);}
+  // Online: VS solo. Host a Race or Join a Race comes next.
+  else if(cursor==4){selection.mode=UiMode::VS;selection.teams=false;selection.vsCourses=0;enter(UiPage::OnlineMenu);}
   else unavailable=true;break;
  case UiPage::Mode:
   if(!raceMode(UiMode(cursor))){unavailable=true;break;}
@@ -408,6 +424,8 @@ UiAction MenuState::input(UiInput key){
  case UiPage::DriftHelp:enter(UiPage::Drift);cursor=2;uiFocusReset(*this);break;
  case UiPage::Drift:selection.automatic=cursor==0;
   if(selection.mode==UiMode::Battle&&selection.battleCourses){prepareBattleStages();enter(UiPage::Confirm);break;}
+  // Joining online: the host chooses the course; type the host's code.
+  if(selection.online&&!onlineHost){codeForPlayer=false;enter(UiPage::OnlineCode);break;}
   if(selection.mode==UiMode::VS&&selection.vsCourses){prepareVsCourses();enter(UiPage::Confirm);}
   else enter(selection.mode==UiMode::Battle?UiPage::BattleCup:UiPage::Cup);break;
  case UiPage::Cup:
@@ -415,7 +433,27 @@ UiAction MenuState::input(UiInput key){
   // A Grand Prix selects the whole cup. VS and Time Trials select a course.
   if(selection.course/4!=cursor||selection.mode==UiMode::GrandPrix)selection.course=cursor*4;
   enter(selection.mode==UiMode::GrandPrix?UiPage::Confirm:UiPage::Course);break;
- case UiPage::Course:selection.course=selection.course/4*4+cursor;enter(selection.mode==UiMode::TimeTrials?UiPage::Ghost:UiPage::Confirm);break;
+ case UiPage::Course:selection.course=selection.course/4*4+cursor;enter(selection.mode==UiMode::TimeTrials?UiPage::Ghost:selection.online?UiPage::OnlineLobby:UiPage::Confirm);break;
+ case UiPage::OnlineMenu:onlineHost=cursor==0;enter(UiPage::Character);break;
+ case UiPage::OnlineCode:{
+  const auto n=std::strlen(codeEntry);
+  if(cursor==9){if(n){codeEntry[n-1]=0;codeWrong=false;}break;}
+  if(cursor==11){
+   uint32_t address=0;uint16_t port=0;
+   if(n<net::CodeDigits||!net::decodeCode(codeEntry,address,port)){codeWrong=true;unavailable=true;break;}
+   onlineCodeRequest=true;const bool player=codeForPlayer;codeForPlayer=false;
+   enter(UiPage::OnlineLobby);if(player){cursor=1;uiFocusReset(*this);}
+   break;
+  }
+  if(n<net::CodeDigits){codeEntry[n]=OnlineKeys[cursor][0];codeEntry[n+1]=0;codeWrong=false;}
+  // The whole code typed: go to OK, as the Wii's pad does.
+  if(n+1>=net::CodeDigits){const unsigned before=cursor;cursor=11;uiFocusSelect(*this,before);}
+  break;
+ }
+ case UiPage::OnlineLobby:
+  if(!onlineHost)break;
+  if(cursor==0){if(onlineCanStart)onlineStartRequest=true;else unavailable=true;break;}
+  enter(UiPage::OnlineCode);codeForPlayer=true;break;
  // Racing or watching a ghost needs one for the course.
  case UiPage::Ghost:
   if(cursor<2&&ghosts.empty()){unavailable=true;break;}
@@ -427,7 +465,8 @@ UiAction MenuState::input(UiInput key){
  case UiPage::Confirm:if(supportsRace())return UiAction::StartRace;unavailable=true;break;
  case UiPage::Pause:
   if(cursor==0){enter(UiPage::Race);return UiAction::ResumeRace;}
-  if(cursor==1)return UiAction::RestartRace;
+  // Online, a restart would restart this console's race alone.
+  if(cursor==1){if(selection.online){unavailable=true;break;}return UiAction::RestartRace;}
   if(selection.mode==UiMode::TimeTrials){
    if(cursor==2){enter(UiPage::Cup);break;}
    if(cursor==3){enter(UiPage::Character);break;}
@@ -440,6 +479,9 @@ UiAction MenuState::input(UiInput key){
   // choice (section 0x4B); Quit (and, without the award scene, the final
   // race's Next) returns to the menus (section 0x41).
   // A Grand Prix goes straight on to the cup's next course.
+  // Online: the host picks the next course and the others wait in the lobby,
+  // also after the last race of a set (the next set starts there).
+  if(cursor==0&&selection.online){enter(onlineHost?UiPage::Cup:UiPage::OnlineLobby);break;}
   if(cursor==0&&!finalRace&&selection.mode==UiMode::GrandPrix){selection.course=selection.course/4*4+std::min(selection.course%4+1,3u);enter(UiPage::Confirm);return UiAction::StartRace;}
   if(cursor==0&&!finalRace&&selection.mode==UiMode::Battle&&selection.battleCourses){nextBattleStage();enter(UiPage::Confirm);return UiAction::StartRace;}
   if(cursor==0&&!finalRace&&selection.mode==UiMode::VS&&selection.vsCourses){nextVsCourse();enter(UiPage::Confirm);return UiAction::StartRace;}

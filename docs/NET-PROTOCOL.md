@@ -1,4 +1,4 @@
-# MKW 3DS network protocol (version 3)
+# MKW 3DS network protocol (version 4)
 
 How consoles race each other, peer to peer. Any port (3DS, PS Vita) that speaks
 this can join the same races. The source of truth is
@@ -13,7 +13,7 @@ Addresses inside packets are IPv4 in network byte order (as `sin_addr`).
 | Offset | Size | Field | |
 |---|---|---|---|
 | 0 | 4 | magic | `0x314E4B4D` ("MKN1") |
-| 4 | 2 | version | 3 |
+| 4 | 2 | version | 4 |
 | 6 | 1 | type | see below |
 | 7 | 1 | sender | the sender's lobby slot (0 = host), 255 before it has one |
 | 8 | 4 | session | chosen by the host; 0 until known |
@@ -26,43 +26,45 @@ Refuse and Ping) packets whose session doesn't match.
 
 Each console asks two public STUN servers (RFC 5389 Binding request from the
 game's own socket) for the address the internet sees. That address and port are
-its **connection code**: 48 bits (address << 16 | port) followed by a 7-bit
-check `((v + 1) * 0x9E3779B97F4A7C15) >> 57` (64-bit), 55 bits written as 11
-Crockford base-32 characters, grouped 4-4-3. See `net_code.hpp`.
+its **connection code**, typed on a number pad like a Wii friend code: the 48
+bits (address << 16 | port) as 15 decimal digits, then a Luhn check digit (so
+any single mistyped digit or swapped neighbours are caught), grouped 4-4-4-4.
+See `net_code.hpp`.
 
 The host prefers port 41750. A joiner sends Hello to the host's code; the host
 answers with Lobby. If the host's router drops the Hello, the host types the
-joiner's code and sends Ping to it every half second, which opens its router.
+joiner's code (Add a Player) and sends Ping to it every half second, which opens its router.
 
 ## Packets
 
 | Type | Name | Direction | Body after the header |
 |---|---|---|---|
-| 1 | Hello | joiner → host, every 20 frames while in the lobby | `u32 id, u16 garage, u8 autoDrift, u8 0, u16 reach, u16 lastRound, char version[12], char build[16]` |
+| 1 | Hello | joiner → host, every 20 frames while in the lobby | `u32 id, u16 garage, u8 autoDrift, u8 0, u16 reach, u16 lastRound, char version[12], char build[16], u16 name[10]` |
 | 2 | Lobby | host → lobby, every 30 frames | `u16 round, u8 course, u8 engineClass, u8 mirror, u8 count, u8 started, u8 0, char build[16], LobbyPlayer[12]` |
-| 3 | Ready | joiner → host, every 10 frames after loading | `u16 round` |
-| 4 | Go | host → all, 6 times, and again for a late Ready | `u16 round` |
+| 3 | Ready | joiner → host, every 6 frames from the end of loading to the end of the countdown | `u16 round, u16 0, u32 time` |
+| 4 | Go | host → a joiner, answering each Ready; host → all, 12 times over the half second before the start | `u16 round, u8 set, u8 0, u32 echo, u32 hostTime, i32 startIn` |
 | 5 | Frame | all → all, each tick (60 a second) | see below |
 | 6 | Bye | all → all, when leaving | none |
 | 7 | Refuse | host → a joiner it can't take | `u32 id, char message[44]` |
 | 8 | Ping | all → all in the lobby, every 30 frames | `u32 id` |
 | 9 | Events | all → all, while the sender has race events not everyone has acknowledged | `u8 count, u8 0, u16 round, u16 oldest, RaceEvent[count]` (count ≤ 8) |
 
-**LobbyPlayer** (14 bytes): `u32 id, u32 address, u16 port, u16 garage, u8 autoDrift, u8 0`.
+**LobbyPlayer** (34 bytes): `u32 id, u32 address, u16 port, u16 garage, u8 autoDrift, u8 0, u16 name[10]`.
 Slot = position in the list; the host is slot 0 with address 0.
 
 **id** is random per console. **build** is the 16-character build fingerprint
 (`tools/build_id.py`): consoles only race the same build. **garage** is
 `driver * 12 + vehicle choice` in the order of `GarageChoices`
 (`include/mkw/garage.hpp`). **course** is the menu course index;
-**engineClass** 0 50cc, 1 100cc, 2 150cc. **reach** has a bit for each slot this
+**engineClass** 0 50cc, 1 100cc, 2 150cc. **name** is the player's license
+name, UTF-16, up to 10 characters (0 after the end), shown in every lobby. **reach** has a bit for each slot this
 console heard directly in the last 3 seconds.
 
-### Frame (120 bytes in total)
+### Frame (124 bytes in total)
 
 | Field | Type | |
 |---|---|---|
-| tick | u32 | the sender's simulation tick |
+| tick | u32 | the sender's simulation tick: one more each tick, from any starting point (receivers only use differences) |
 | buttons | u16 | 1 accelerate, 2 brake, 4 item, 8 drift |
 | stickX, stickY | s8, s8 | steering −7..7 (stickY unused) |
 | trick | u8 | 0 none, 1 up, 2 down, 3 left, 4 right |
@@ -71,6 +73,7 @@ console heard directly in the last 3 seconds.
 | pos | float[3] | kart position |
 | fullRot, mainRot | float[4] each | quaternions x, y, z, w |
 | extVel, intVel | float[3] each | velocities |
+| speed | float | the kart's engine speed (KartMove), which drives it between placements |
 | item, charges | u8, u8 | the sender's item window: item number (below; 20 none) and how many uses are left |
 | heldKind, heldMask | u8, u8 | the items tethered to the sender's kart: item number (20 none) and a bit for each of the up to 3 places that still holds one |
 | itemFlags | u8 | 1 roulette running, 2 Thunder Cloud overhead, 4 riding a Bullet Bill |
@@ -171,18 +174,48 @@ from where a console saw another kart cross the line.
 2. **Start.** The host sends Lobby with `started = 1`. Everyone builds the same
    grid: slot *n* starts in position *n + 1*. On its own screen each console is
    racer 0 and the others follow in slot order.
-3. **Ready/Go.** After loading, joiners send Ready; the host sends Go once all
-   are ready (or after 30 seconds). Everyone releases the countdown on Go.
-4. **Race.** Send a Frame every tick to every other player. Every half second, send each player a Probe (type 10: `u32 time, u8 echo, u8[3] 0`); the receiver returns it at once with echo 1, and half the round trip is how old that player's Frames are when they arrive. Carry each received state forward by that delay along its velocity and correct the shown kart towards it gradually; snap only a large error. Drive each remote
-   kart from its newest inputs and snap it to the newest state. Never wait for
-   the network. If the host sees that a player can't hear another (its reach
-   bit is clear), it passes that sender's Frames, Events and Bye on to it.
-   A console that says Bye or is silent for 5 seconds is gone: its kart
-   carries on as a CPU (it takes its kart back if it speaks again).
+3. **Ready/Go.** After loading, a joiner sends Ready with `time` = its own
+   clock in milliseconds (never 0). The host answers each Ready at once with a
+   Go: `echo` = that Ready's `time`, `hostTime` = the host's clock in
+   milliseconds as it sends. Once every joiner has sent a Ready (or after 30
+   seconds) the host fixes the start half a second ahead and from then on
+   every Go has `set = 1` and `startIn` = milliseconds from `hostTime` to the
+   start (negative once it has passed); it also sends that Go to everyone
+   (`echo = 0`) 12 times, every 3 frames.
+   A joiner works out how far the host's clock is ahead of its own from the
+   answer with the shortest round trip: `ahead = hostTime - echo - rtt / 2`,
+   `rtt = now - echo`. The start on its own clock is
+   `hostTime + startIn - ahead`. Every console releases the countdown at that
+   moment, not when the Go happens to arrive, and until GO! runs as many ticks
+   as the time since the start asks for (59.8261 a second, at most 6 a frame):
+   a console whose Go came late, or that dropped frames, catches up during the
+   countdown, so the race begins at the same moment on all of them.
+4. **Race.** Send a Frame every tick to every other player. Every half second,
+   send each player a Probe (type 10: `u32 time, u8 echo, u8[3] 0`); the
+   receiver returns it at once with echo 1 (the round trip is only reported, in
+   test logs).
+   **Showing the other karts.** Keep each player's Frames in order of their
+   `tick` and replay them a little in the past: each tick, place the kart
+   where its owner had it at `local tick - delay`, on a curve through the
+   Frames either side (Frames can arrive late, bunched, out of order or not at
+   all). For each Frame note `lead` = the local tick it could first be shown
+   at minus its `tick`; `delay` is the value 95% of the last 128 leads are
+   under, plus 1, and the delay in use moves towards it by at most 0.1 a tick
+   up or 0.05 down. Ticks are never compared between consoles, only their
+   differences: consoles count ticks from different starting points. When the
+   replay point passes the newest Frame, carry on along the kart's motion (up
+   to 12 ticks) and afterwards remove the difference a quarter a tick. Never
+   move a kart to a newly received position directly: Frames arrive unevenly,
+   and the kart would lurch. Drive each remote kart from its newest inputs
+   between placements. Never wait for the network. If the host sees that a
+   player can't hear another (its reach bit is clear), it passes that sender's
+   Frames, Events and Bye on to it. A console that says Bye or is silent for 5
+   seconds is gone: its kart carries on as a CPU (it takes its kart back if it
+   speaks again).
 5. **Next race.** The host starts a new round (round + 1); joiners Hello again
    with `lastRound` set and ignore started Lobbies for rounds they've raced.
 
-## Not in version 3 yet
+## Not in version 4 yet
 
 - Objects are created alike everywhere but then simulated by each console:
   a shell can break on a wall or against another object on one console and
@@ -191,6 +224,9 @@ from where a console saw another kart cross the line.
 - Item boxes: each console breaks and regrows them from the karts it sees.
 - Hits from the course itself (Thwomps, cars, Goombas) are reported by the
   victim like any Hit, but the other consoles may also play their own copy.
-- Each console uses its own race clock for its finishing time; clocks start
-  on Go, so they differ by the delivery time of that packet.
+- Each console uses its own race clock for its finishing time. The clocks
+  start together (Ready/Go above), but a console that freezes for more than a
+  tenth of a second during the race loses that time and is not brought back.
+- The other karts are shown where they were a moment ago (the replay delay:
+  about 0.05 s on a good link, more on a poor one), not where they are now.
 - Battle mode.

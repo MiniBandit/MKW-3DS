@@ -19,8 +19,9 @@ physics, and rendering, audio and menus are written for the 3DS hardware.
 - **Two-screen menus**, race results and maps, with the Wii's materials, animations, particles and audio restored
 - **Dynamic shadows** and **notification LED** effects, set per license
 - Distance-based opponent detail, for demanding courses
+- **Online VS races** for up to 12 players, console to console with a code, no server ([how to play online](docs/ONLINE-TESTING.md))
 
-See [CHANGELOG.md](CHANGELOG.md) for the full list. Online play is not included yet.
+See [CHANGELOG.md](CHANGELOG.md) for the full list.
 
 ## What you need
 

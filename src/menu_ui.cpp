@@ -18,6 +18,11 @@
 namespace mkw {
 namespace {
 constexpr float XScale=display::MenuScaleX,YScale=display::MenuScaleY;
+// The online pages write their captions, codes and names at runtime in the
+// game's own font glyphs (name_glyph_*). Lower-screen cell sizes match menuChoiceRect.
+bool onlinePage(UiPage page){return page==UiPage::OnlineMenu||page==UiPage::OnlineCode||page==UiPage::OnlineLobby;}
+std::array<float,2> onlineCell(UiPage page){return page==UiPage::OnlineMenu?std::array<float,2>{288,58}:page==UiPage::OnlineCode?std::array<float,2>{78,36}:std::array<float,2>{280,36};}
+constexpr const char* OnlineAlphabet=" !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[]_abcdefghijklmnopqrstuvwxyz";
 constexpr const char* CupNames[]={"Mushroom Cup","Flower Cup","Star Cup","Special Cup","Shell Cup","Banana Cup","Leaf Cup","Lightning Cup"};
 constexpr const char* CourseNames[]={"Luigi Circuit","Moo Moo Meadows","Mushroom Gorge","Toad's Factory","Mario Circuit","Coconut Mall","DK Summit","Wario's Gold Mine","Daisy Circuit","Koopa Cape","Maple Treeway","Grumble Volcano","Dry Dry Ruins","Moonview Highway","Bowser's Castle","Rainbow Road","GCN Peach Beach","DS Yoshi Falls","SNES Ghost Valley 2","N64 Mario Raceway","N64 Sherbet Land","GBA Shy Guy Beach","DS Delfino Square","GCN Waluigi Stadium","DS Desert Hills","GBA Bowser Castle 3","N64 DK's Jungle Parkway","GCN Mario Circuit","SNES Mario Circuit 3","DS Peach Gardens","GCN DK Mountain","N64 Bowser's Castle"};
 struct Pose {
@@ -439,8 +444,8 @@ public:
  }
  // Existing native-font name glyphs allow runtime option values without
  // adding texture assets or using a platform/system font.
- void optionText(const char* value,const UiPaneInfo& original,Pose p){
-  if(transition&&transition->preload)value="0123456789% Change Miis Erase License LED: Off Items + Events Drifts Dynamic Shadows On Brightness Graphics: Auto Quality Performance";
+ void optionText(const char* value,const UiPaneInfo& original,Pose p,float cellW=296,float cellH=31){
+  if(transition&&transition->preload)value=onlinePage(layout.page)?OnlineAlphabet:"0123456789% Change Miis Erase License LED: Off Items + Events Drifts Dynamic Shadows On Brightness Graphics: Auto Quality Performance";
   unsigned indices[128]{},count=0;float widths[128]{},total=0;
   for(const unsigned char* ch=reinterpret_cast<const unsigned char*>(value);*ch&&count<128;++ch){
    char key[32];std::snprintf(key,sizeof key,"name_glyph_%04x",unsigned(*ch));
@@ -451,8 +456,8 @@ public:
   if(total<=0)return;
   // Fit the complete run to the LCD button, not the much narrower Wii
   // source pane. Its characters and their advances use the SAME scale.
-  const float groupScale=std::min(296.f/layout.w,31.f/layout.h);
-  const float fit=std::min(1.f,264.f/(total*p.sx*XScale*groupScale));
+  const float groupScale=std::min(cellW/layout.w,cellH/layout.h);
+  const float fit=std::min(1.f,(cellW-32.f)/(total*p.sx*XScale*groupScale));
   float x=original.x+(original.w-total*fit)*.5f;
   for(unsigned i=0;i<count;++i){auto cell=original;cell.x=x;cell.w=widths[i]*fit;cell.fontW*=fit;cell.fontH*=fit;cell.textAlign=0;
    textSprite(indices[i],cell,p);x+=cell.w;}
@@ -460,6 +465,7 @@ public:
  void text(const char* text,const char* base,Pose p={},uint32_t tint=0xffffffff,const char* name="text"){
   const auto* r=pane(base,name);if(!r)return;
   if(layout.page==UiPage::LicenseSettings&&layout.role==UiMenuRole::Choice){optionText(text,*r,p);return;}
+  if(onlinePage(layout.page)&&layout.role==UiMenuRole::Choice){const auto cell=onlineCell(layout.page);optionText(text,*r,p,cell[0],cell[1]);return;}
   const auto* shadow=pane(base,"text_shadow");
   if(!shadow&&!std::strcmp(name,"text"))shadow=pane(base,"TextBox_sha");
   if(shadow)textSprite(lookup().find(text,true,shadow->font,shadow->textStyle),*shadow,p);
@@ -725,6 +731,64 @@ public:
    x+=advance;
   }
   if(list.size()>1){char page[24];std::snprintf(page,sizeof page,"< %u/%u >",at+1,unsigned(list.size()));words(page,156,16,0xc0c0c0ffu);}
+ }
+ // Runtime text in the game font, centred on cx (0 left-aligns at x=-cx), on the
+ // upper screen (400 wide) or straight onto the lower one (320 wide).
+ void screenWords(const char* value,float cx,float y,float h,uint32_t tint,bool lower,float maxWidth=360.f){
+  group(lower?UiMenuRole::LowerText:UiMenuRole::TimeTrialRecord);
+  if(transition&&transition->preload)value=OnlineAlphabet;
+  unsigned indices[96]{},count=0;float widths[96]{},total=0;
+  for(const unsigned char* ch=reinterpret_cast<const unsigned char*>(value);*ch&&count<96;++ch){
+   char key[32];std::snprintf(key,sizeof key,"name_glyph_%04x",unsigned(*ch));
+   const auto index=lookup().find(key);if(index>=std::size(UiSprites))continue;
+   indices[count]=index;const auto& g=UiSprites[index];widths[count]=h*g.w/g.h;total+=widths[count++];
+  }
+  const float fit=std::min(1.f,maxWidth/std::max(total,1.f));float x=cx<0?-cx:cx-total*fit*.5f;
+  for(unsigned i=0;i<count;++i){
+   const auto first=out.size();quad(indices[i],(x-200.f)/XScale,(y+(h-h*fit)*.5f-120.f)/YScale,widths[i]*fit/XScale,h*fit/YScale,1,tint,{},true);
+   if(out.size()>first)out.back().menu.preserveAspect=true;
+   x+=widths[i]*fit;
+  }
+ }
+ // A connection code in the large record digits: "1234-5678-...". Digits not
+ // typed yet (typed < 16) show as dim dashes; groups of four are spaced apart.
+ void screenCode(const char* digits,float cx,float y,float h,bool lower,unsigned typed=16,bool blink=false){
+  group(lower?UiMenuRole::LowerText:UiMenuRole::TimeTrialRecord);
+  const float advance=h*.74f,gap=h*.4f,width=advance*16.f+gap*3.f;
+  float x=cx-width*.5f;
+  for(unsigned i=0;i<16;++i){
+   if(i&&i%4==0)x+=gap;
+   const char c=i<typed?digits[i]:'-';
+   const unsigned n=c>='0'&&c<='9'?unsigned(c-'0'):12u;
+   char key[40];std::snprintf(key,sizeof key,"menu_record_digit_%u",n);
+   const bool cursor=i==typed&&blink;
+   const uint32_t tint=i<typed?0xffe040ffu:cursor?((state.age/15)%2?0xffffffffu:0x808080ffu):0x707070ffu;
+   const auto first=out.size();quad(lookup().find(key),(x-(h-advance)*.5f-200.f)/XScale,(y-120.f)/YScale,h/XScale,h/YScale,1,tint,{},true);
+   if(out.size()>first){auto& q=out.back();q.u0=float(n%8*26+1)/256.f;q.v0=float(n/8*26+1)/64.f;q.u1=q.u0+24.f/256.f;q.v1=q.v0+24.f/64.f;q.menu.preserveAspect=true;}
+   x+=advance;
+  }
+ }
+ // A UTF-16 name (license or Mii) in a text pane, in the game font.
+ void paneName(const std::uint16_t* name,unsigned length,const char* base,const char* paneName,Pose p){
+  const auto* original=pane(base,paneName);if(!original)return;
+  unsigned indices[16]{},count=0;float widths[16]{},total=0;
+  for(unsigned i=0;i<length&&i<16;++i){
+   const auto code=name[i];if(!code)break;
+   char key[32];std::snprintf(key,sizeof key,"name_glyph_%04x",unsigned(code));
+   auto index=lookup().find(key);
+   if(index>=std::size(UiSprites))index=lookup().find("name_glyph_003f");
+   if(index>=std::size(UiSprites))continue;
+   const auto& glyph=UiSprites[index];indices[count]=index;
+   widths[count]=glyph.w*original->fontH/UiFontCells[0][1]*YScale/XScale;
+   total+=widths[count++];
+  }
+  if(total<=0)return;
+  const float fit=std::min(1.f,original->w/total);
+  float x=original->x+(original->w-total*fit)*(original->textAlign==0?0:original->textAlign==2?1:.5f);
+  for(unsigned i=0;i<count;++i){
+   auto cell=*original;cell.x=x;cell.w=widths[i]*fit;cell.fontW*=fit;cell.fontH*=fit;cell.textAlign=0;
+   textSprite(indices[i],cell,p);x+=cell.w;
+  }
  }
  void cupRecord(unsigned cup){
   if(state.selection.mode!=UiMode::GrandPrix||cup>=8)return;
@@ -1203,6 +1267,58 @@ static void composeMenuImpl(const MenuState& s,const UiRaceView& race,std::vecto
   }
   c.chrome("Time Trials");break;
  }
+ // Online: retail Wi-Fi menu buttons, the friend-code number pad and the
+ // room's member cards, with the words written in the game font at runtime.
+ case UiPage::OnlineMenu:{
+  const char* variants[]={"ButtonWorld","ButtonRegion"};const char* names[]={"Host a Race","Join a Race"};
+  for(unsigned i=0;i<2;++i){auto p=control("WifiMenuSingleTop",variants[i],i);c.group(UiMenuRole::Choice,i,p,"wifi_button_free");c.button("wifi_button",i,p,names[i]);}
+  if(s.cursor==0){
+   c.screenWords("Choose the course, then send your code",200,84,18,0xffffffffu,false);
+   c.screenWords("to the other players. Up to 12 can race.",200,108,18,0xffffffffu,false);
+  }else{
+   c.screenWords("Type the code the host sends you",200,84,18,0xffffffffu,false);
+   c.screenWords("and race on the host's course.",200,108,18,0xffffffffu,false);
+  }
+  c.screenWords("Everyone needs the same version of the game.",200,150,14,0xc0c0c0ffu,false);
+  c.chrome("Online");break;
+ }
+ case UiPage::OnlineCode:{
+  const char* variants[]={"Key1","Key2","Key3","Key4","Key5","Key6","Key7","Key8","Key9","KeyBackSpace","Key0","OK"};
+  for(unsigned i=0;i<12;++i){auto p=control("RegisterFriendKeyboard",variants[i],i);c.group(UiMenuRole::Choice,i,p,"id_key_free");c.button("id_key",i,p,MenuState::OnlineKeys[i]);}
+  const unsigned typed=unsigned(std::strlen(s.codeEntry));
+  c.screenWords(s.codeForPlayer?"Type the joining player's code.":"Type the host's code.",200,64,20,0xffffffffu,false);
+  c.screenCode(s.codeEntry,200,98,28,false,typed,true);
+  if(s.codeWrong)c.screenWords("That code isn't right. Check it and try again.",200,148,16,0xff6060ffu,false);
+  else c.screenWords(s.codeForPlayer?"Only needed when a player can't get in.":"The host's code is shown in their lobby.",200,148,16,0xc0c0c0ffu,false);
+  c.chrome("Enter Code");break;
+ }
+ case UiPage::OnlineLobby:{
+  // Retail WifiMemberConfirm: two columns of six member cards (upper screen).
+  const bool preload=transition&&transition->preload;
+  const unsigned shown=preload?std::max(s.onlineCount,1u):std::min(s.onlineCount,12u);
+  for(unsigned i=0;i<shown;++i){
+   const auto& player=s.onlinePlayers[i];
+   char variant[16];std::snprintf(variant,sizeof variant,"Member%02u",i);
+   const auto p=control("WifiMemberConfirm",variant);c.group(UiMenuRole::Information,i,p,"wifi_member");
+   c.panel("wifi_member",p);
+   if(player.driver<24){c.icon("driver_",player.driver,"wifi_member","chara_icon_sha",p,1,0x000000ff);c.icon("driver_",player.driver,"wifi_member","chara_icon",p);}
+   c.paneName(player.name.data(),10,"wifi_member","mii_name",p);
+  }
+  // Lower screen: this console's code, the head count and the host's buttons.
+  c.screenWords(s.onlineHost?"Your code: send it to the other players":"Your code",160,38,14,0xc0c0c0ffu,true,296);
+  if(s.onlineCode[0]){char digits[17]{};unsigned n=0;for(const char* ch=s.onlineCode;*ch&&n<16;++ch)if(*ch>='0'&&*ch<='9')digits[n++]=*ch;c.screenCode(digits,160,56,22,true);}
+  else c.screenWords("Connecting...",160,58,20,0xffffffffu,true,296);
+  char count[40];std::snprintf(count,sizeof count,"Players: %u of 12",s.onlineCount);
+  c.screenWords(count,160,90,16,0xffffffffu,true,296);
+  if(s.onlineHost){
+   const char* variants[]={"ButtonWorld","ButtonRegion"};const char* names[]={"Start Race","Add a Player"};
+   for(unsigned i=0;i<2;++i){auto p=control("WifiMenuSingleTop",variants[i],i);c.group(UiMenuRole::Choice,i,p,"wifi_button_free");c.button("wifi_button",i,p,names[i]);}
+  }else if(!s.onlineFailed)c.screenWords("Waiting for the host to start the race.",160,140,16,0xffffffffu,true,296);
+  c.chrome("Lobby");
+  // The newest step, in dark ink on the instruction bar (after the bar is drawn).
+  if(s.onlineStatus[0]||preload)c.screenWords(s.onlineStatus,200,222,14,s.onlineFailed?0xb00000ffu:0x202020ffu,false,384);
+  break;
+ }
  case UiPage::DriftHelp:{
   c.group(UiMenuRole::Shade);c.panel("confirm_back",control("RaceConfirmBack","BlackBack"));
   auto window=control("MessageWindow","MessageWindow");c.group(UiMenuRole::Dialog,0,window,"drift_message");
@@ -1316,7 +1432,7 @@ void placeMenuQuad(const UiQuad& source,MenuRect target,bool lower,std::vector<U
  // Individually cooked native glyphs still form one string. Stretching
  // their centres with the button while preserving each glyph's aspect
  // produces tracking gaps; map the entire run about the button centre.
- if(g.page==UiPage::LicenseSettings&&g.role==UiMenuRole::Choice&&
+ if((g.page==UiPage::LicenseSettings||onlinePage(g.page))&&g.role==UiMenuRole::Choice&&
     q.sprite<std::size(UiSprites)&&!std::strncmp(UiSprites[q.sprite].key,"name_glyph_",11))
   center[0]=target.x+target.w*.5f+(source.x+source.w*.5f-(g.x+g.w*.5f))*std::min(sx,sy);
  if(q.affine){for(auto& p:q.positions)p=point(p[0],p[1]);}
@@ -1390,6 +1506,10 @@ MenuRect menuChoiceRect(const UiQuad& q,const MenuState& state){
  case UiPage::Confirm:return {72,83,176,80};
  case UiPage::EraseLicense:return {35,65.f+75.f*i,250,52};
  case UiPage::Ghost:return {12,51.f+44.f*i,296,36};
+ // Sizes as onlineCell.
+ case UiPage::OnlineMenu:return {16,52.f+80.f*i,288,58};
+ case UiPage::OnlineCode:return {38.f+82.f*(i%3),34.f+44.f*(i/3),78,36};
+ case UiPage::OnlineLobby:return {20,116.f+44.f*i,280,36};
  case UiPage::Unlock:return {96,190,128,30};
  case UiPage::Error:return {15,93,290,48};
  default:return {10,35.f+39.f*i,300,34};
@@ -1486,8 +1606,10 @@ void layoutMenuScreens(const MenuState& state,const std::vector<UiQuad>& source,
    placeMenuQuad(q,{221,56.f+(g.page==UiPage::BattleCup?25.f:31.f)*i,169,27},false,top);break;
   case UiMenuRole::TimeTrialRecord:
   case UiMenuRole::CupRecord:{auto record=q;record.bottom=false;top.push_back(record);break;}
+  case UiMenuRole::LowerText:{auto text=q;text.bottom=true;bottom.push_back(text);break;}
   case UiMenuRole::Information:
    if(g.page==UiPage::TeamConfirm)placeMenuQuad(q,{14.f+194.f*(i/6),37.f+28.f*(i%6),178,25},false,top);
+   else if(g.page==UiPage::OnlineLobby)placeMenuQuad(q,{14.f+194.f*(i%2),37.f+28.f*(i/2),178,25},false,top);
    else placeMenuQuad(q,{14,38.f+27.f*i,372,24},false,top);
    break;
   case UiMenuRole::Shade:

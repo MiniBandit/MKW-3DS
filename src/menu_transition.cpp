@@ -60,6 +60,8 @@ const char* uiSelectedMenuControl(const MenuState& state,bool back){
  case UiPage::BattleCup:return "BattleCupSelectCup";
  case UiPage::BattleStage:return "BattleStageSelectStage";
  case UiPage::Ghost:return "TimeAttackGhostList";
+ case UiPage::OnlineMenu:case UiPage::OnlineLobby:return "WifiMenuSingleTop";
+ case UiPage::OnlineCode:return "RegisterFriendKeyboard";
  case UiPage::DriftHelp:return "OKKey";
  case UiPage::Confirm:return "MenuEndConfirm";
  case UiPage::Pause:return "OptionTopButton";
@@ -93,6 +95,8 @@ float uiMenuMaxDelay(const MenuState& state){
  case UiPage::BattleCup:return std::max(maximum("BattleCupSelectCup"),delay("BattleCupSelectNULL","CupSelectCourseNULL")+maximum("BattleCupSelectStage"));
  case UiPage::BattleStage:return maximum("BattleStageSelectStage");
  case UiPage::Ghost:return maximum("TimeAttackGhostList");
+ case UiPage::OnlineMenu:case UiPage::OnlineLobby:return std::max(maximum("WifiMenuSingleTop"),maximum("WifiMemberConfirm"));
+ case UiPage::OnlineCode:return maximum("RegisterFriendKeyboard");
  case UiPage::Confirm:return maximum("MenuEndConfirm");
  case UiPage::Pause:return maximum(uiPauseMenuControl(state));
  case UiPage::QuitConfirm:return maximum("OptionTopButton");

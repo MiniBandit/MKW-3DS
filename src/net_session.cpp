@@ -22,7 +22,10 @@ namespace mkw::net {
 namespace {
 constexpr size_t SocBufferSize=0x20000; // libctru's minimum page-aligned pool; small for Old 3DS
 // Polls are frames (60 a second).
-constexpr unsigned HelloEvery=20,LobbyEvery=30,PingEvery=30,ReadyEvery=10,GoRepeats=6,StunEvery=30,StunTries=8;
+constexpr unsigned HelloEvery=20,LobbyEvery=30,PingEvery=30,ReadyEvery=6,GoEvery=3,GoRepeats=12,StunEvery=30,StunTries=8;
+// The countdown is released this long after the last console reports Ready, so the
+// news reaches everyone first (milliseconds).
+constexpr int32_t StartLead=500;
 constexpr unsigned HeardWithin=180,LobbyTimeout=300,ReadyTimeout=30*60,AskHostAfter=600;
 constexpr unsigned LostAfter=300,EventsEvery=4;
 constexpr uint32_t StunCookie=0x2112A442;
@@ -42,6 +45,31 @@ bool sameBuild(const char build[16]){
     return !std::memcmp(mine,build,sizeof mine);
 }
 void copyBuild(char build[16]){std::memset(build,0,16);std::memcpy(build,MKW_BUILD_ID,std::min<size_t>(16,std::strlen(MKW_BUILD_ID)));}
+#ifndef MKW_RELEASE
+// Test builds: qa-net-lag.txt "latency jitter burst loss" (milliseconds,
+// milliseconds, milliseconds, percent) holds received packets back like a
+// poor Wi-Fi link: each is delayed by latency plus up to jitter, delivered
+// only on burst boundaries (a radio waking up), and some are dropped. Late
+// packets overtake each other, as on a real network.
+struct Lag {
+    bool on=false;unsigned latency=0,jitter=0,burst=0,loss=0;uint32_t random=0x9e3779b9u;
+    struct Held {uint64_t due;uint32_t address;uint16_t port,size;uint8_t data[512];};
+    static constexpr unsigned Capacity=384;Held held[Capacity];unsigned count=0;
+    unsigned next(unsigned n){random=random*1664525u+1013904223u;return n?(random>>8)%n:0;}
+};
+Lag* lag(){
+    static Lag* value=[]{
+        Lag* l=nullptr;
+        if(FILE* f=std::fopen("sdmc:/3ds/mkw-3ds/qa-net-lag.txt","r")){
+            unsigned a=0,b=0,c=0,d=0;
+            if(std::fscanf(f,"%u %u %u %u",&a,&b,&c,&d)>=1){l=new Lag;l->on=true;l->latency=a;l->jitter=b;l->burst=c;l->loss=d;l->random^=uint32_t(svcGetSystemTick());}
+            std::fclose(f);
+        }
+        return l;
+    }();
+    return value;
+}
+#endif
 }
 
 Session& session(){static Session value;return value;}
@@ -77,6 +105,8 @@ void Session::configureOnline(Mode mode){
     if(fromFile_)return;
     if(mode_!=mode&&socket_>=0)close();
     mode_=mode;lanOnly_=false;
+    // A new lobby: forget the last host's code and the players invited before.
+    hostKnown_=false;invitedCount_=0;
     // The host keeps the usual port when it can: home routers often keep it too.
     localPort_=mode==Mode::Host?DefaultPort:0;
 }
@@ -84,6 +114,9 @@ void Session::configureOnline(Mode mode){
 bool Session::open(){
     if(socket_>=0)return true;
     failed_=false;
+    // Round numbers belong to one host's lobby; a joiner that left and joins
+    // again must not skip the new host's first races as already raced.
+    round_=lastRound_=0;
     socBuffer_=static_cast<uint32_t*>(memalign(0x1000,SocBufferSize));
     if(!socBuffer_){reason_="no memory for the network";return false;}
     if(R_FAILED(socInit(socBuffer_,SocBufferSize))){std::free(socBuffer_);socBuffer_=nullptr;reason_="Wi-Fi is not available";return false;}
@@ -214,7 +247,7 @@ void Session::receiveStun(const uint8_t* data,size_t size){
 void Session::sendLobby(){
     Lobby lobby{};lobby.h=header(Type::Lobby);lobby.round=round_;lobby.course=uint8_t(course_);lobby.engineClass=uint8_t(engineClass_);
     lobby.mirror=mirror_;lobby.count=uint8_t(count_);lobby.started=started_;copyBuild(lobby.build);
-    for(unsigned s=0;s<count_;++s){const auto& p=players_[s];lobby.players[s]={p.id,p.address,p.port,p.garage,uint8_t(p.autoDrift),0};}
+    for(unsigned s=0;s<count_;++s){const auto& p=players_[s];auto& out=lobby.players[s];out={p.id,p.address,p.port,p.garage,uint8_t(p.autoDrift),0,{}};std::memcpy(out.name,p.name,sizeof out.name);}
     sendAll(&lobby,sizeof lobby);
 }
 
@@ -222,7 +255,7 @@ void Session::lobbyStep(unsigned garage,bool autoDrift,unsigned course,unsigned 
     poll();stunStep();
     if(mode_==Mode::Host){
         if(!count_){count_=1;slot_=0;}
-        players_[0]={id_,0,0,uint16_t(garage),autoDrift};course_=course;engineClass_=engineClass;mirror_=mirror;
+        players_[0]={id_,0,0,uint16_t(garage),autoDrift,{}};std::memcpy(players_[0].name,name_,sizeof name_);course_=course;engineClass_=engineClass;mirror_=mirror;
         // A player who stopped calling has gone back to the menu.
         for(unsigned s=1;s<count_;)if(!started_&&direct_[s]>LobbyTimeout){
             note("> Player %u left the lobby",s+1);
@@ -238,10 +271,11 @@ void Session::lobbyStep(unsigned garage,bool autoDrift,unsigned course,unsigned 
         if(polls_%HelloEvery==0){
             Hello hello{};hello.h=header(Type::Hello);hello.id=id_;hello.garage=uint16_t(garage);hello.autoDrift=autoDrift;
             hello.reach=reachMask();hello.lastRound=lastRound_;std::snprintf(hello.version,sizeof hello.version,"%s",MKW_VERSION);copyBuild(hello.build);
+            std::memcpy(hello.name,name_,sizeof hello.name);
             sendTo(hostAddress_,hostPort_,&hello,sizeof hello);
         }
         if(slot_==255&&!announcedWait_&&polls_>=AskHostAfter&&*code_){
-            announcedWait_=true;note("> No answer yet. Ask the host to press X");note("  and type your code: %s",code_);
+            announcedWait_=true;note("> No answer yet. Ask the host to choose Add a Player");note("  and type your code.");
         }
     }
     if(slot_!=255&&polls_%PingEvery==0){Ping ping{header(Type::Ping),id_};sendAll(&ping,sizeof ping);}
@@ -252,8 +286,8 @@ void Session::lobbyStep(unsigned garage,bool autoDrift,unsigned course,unsigned 
 bool Session::canStart() const{return mode_==Mode::Host&&count_>=2&&!started_;}
 void Session::start(){
     if(!canStart())return;
-    started_=true;lastRound_=round_;ready_={};ready_[0]=true;goRepeats_=0;readyPolls_=0;resetEvents();
-    for(unsigned s=0;s<MaxPlayers;++s){hasFrame_[s]=false;left_[s]=false;silent_[s]=0;}
+    started_=true;lastRound_=round_;ready_={};ready_[0]=true;goSeen_=false;goRepeats_=0;readyPolls_=0;resetEvents();
+    for(unsigned s=0;s<MaxPlayers;++s){hasFrame_[s]=false;left_[s]=false;silent_[s]=0;queueCount_[s]=0;}
     for(unsigned n=0;n<4;++n)sendLobby();
     note("> Starting with %u players",count_);
 }
@@ -262,28 +296,51 @@ bool Session::readyStep(){
     poll();++readyPolls_;
     if(mode_==Mode::Host){
         if(polls_%LobbyEvery==0)sendLobby();
-        bool all=true;for(unsigned s=1;s<count_;++s)if(!ready_[s]&&!left_[s])all=false;
-        if(!all&&readyPolls_<ReadyTimeout)return false;
-        if(goRepeats_<GoRepeats){Go go{header(Type::Go),round_};sendAll(&go,sizeof go);++goRepeats_;}
-        goSeen_=true;return true;
+        if(!goSeen_){
+            bool all=true;for(unsigned s=1;s<count_;++s)if(!ready_[s]&&!left_[s])all=false;
+            if(!all&&readyPolls_<ReadyTimeout)return false;
+            startAt_=uint32_t(osGetTime())+uint32_t(StartLead);goSeen_=true;
+        }
     }
-    if(!goSeen_&&polls_%ReadyEvery==0){Ready ready{header(Type::Ready),round_};sendTo(hostAddress_,hostPort_,&ready,sizeof ready);}
-    if(polls_%PingEvery==0){Ping ping{header(Type::Ping),id_};sendAll(&ping,sizeof ping);}
+    startStep();
     return goSeen_;
+}
+void Session::startStep(){
+    ++syncCalls_;
+    if(mode_==Mode::Host){
+        // The start, to everyone, through the lead time; each Ready is also answered.
+        if(goSeen_&&goRepeats_<GoRepeats&&syncCalls_%GoEvery==0){
+            const uint32_t now=uint32_t(osGetTime());
+            Go go{header(Type::Go),round_,1,0,0,now,int32_t(startAt_-now)};sendAll(&go,sizeof go);++goRepeats_;
+        }
+        return;
+    }
+    if(syncCalls_%ReadyEvery==0){Ready ready{header(Type::Ready),round_,0,uint32_t(osGetTime())|1u};sendTo(hostAddress_,hostPort_,&ready,sizeof ready);}
+    if(syncCalls_%PingEvery==0){Ping ping{header(Type::Ping),id_};sendAll(&ping,sizeof ping);}
+}
+int32_t Session::sinceStart() const{
+    const uint32_t now=uint32_t(osGetTime());
+    return mode_==Mode::Host?int32_t(now-startAt_):int32_t(now+uint32_t(clockAhead_)-startAt_);
 }
 
 void Session::sendFrame(uint32_t tick,uint16_t buttons,int8_t stickX,uint8_t trick,uint8_t flags,const float pos[3],const float fullRot[4],
-                        const float mainRot[4],const float extVel[3],const float intVel[3],const FrameState& state){
+                        const float mainRot[4],const float extVel[3],const float intVel[3],float speed,const FrameState& state){
     // Every half second, time the round trip to each player (Probe).
     if(++probeTick_>=30){probeTick_=0;Probe p{};p.h=header(Type::Probe);p.time=uint32_t(osGetTime());sendAll(&p,sizeof p);}
     // Every tick, whatever the player count: the other consoles see this kart move at
     // the full 60 positions a second.
     Frame f{};f.h=header(Type::Frame);f.tick=tick;f.buttons=buttons;f.stickX=stickX;f.trick=trick;f.flags=flags;f.reach=reachMask();
     std::memcpy(f.pos,pos,sizeof f.pos);std::memcpy(f.fullRot,fullRot,sizeof f.fullRot);std::memcpy(f.mainRot,mainRot,sizeof f.mainRot);
-    std::memcpy(f.extVel,extVel,sizeof f.extVel);std::memcpy(f.intVel,intVel,sizeof f.intVel);
+    std::memcpy(f.extVel,extVel,sizeof f.extVel);std::memcpy(f.intVel,intVel,sizeof f.intVel);f.speed=speed;
     f.item=state.item;f.charges=state.charges;f.heldKind=state.heldKind;f.heldMask=state.heldMask;f.itemFlags=state.itemFlags;f.round=round_;f.finish=state.finish;
     for(unsigned s=0;s<MaxPlayers;++s)f.ack[s]=uint8_t(expected_[s]);
     sendAll(&f,sizeof f);
+}
+
+bool Session::takeFrame(unsigned slot,Frame& out){
+    if(slot>=MaxPlayers||!queueCount_[slot])return false;
+    out=queue_[slot][queueHead_[slot]];queueHead_[slot]=uint8_t((queueHead_[slot]+1)%FrameQueue);--queueCount_[slot];
+    return true;
 }
 
 void Session::resetEvents(){
@@ -327,8 +384,30 @@ void Session::poll(){
         sockaddr_in from{};socklen_t length=sizeof from;
         const ssize_t got=recvfrom(socket_,buffer,sizeof buffer,0,reinterpret_cast<sockaddr*>(&from),&length);
         if(got<=0)break;
+#ifndef MKW_RELEASE
+        if(Lag* l=lag()){
+            const bool stun=got>=8&&buffer[4]==0x21&&buffer[5]==0x12;
+            if(!stun){
+                if(l->next(100)<l->loss||l->count==Lag::Capacity)continue;
+                uint64_t due=osGetTime()+l->latency+l->next(l->jitter+1);
+                if(l->burst)due=(due+l->burst-1)/l->burst*l->burst;
+                auto& h=l->held[l->count++];h.due=due;h.address=from.sin_addr.s_addr;h.port=ntohs(from.sin_port);h.size=uint16_t(got);std::memcpy(h.data,buffer,size_t(got));
+                continue;
+            }
+        }
+#endif
         receive(buffer,size_t(got),from.sin_addr.s_addr,ntohs(from.sin_port));
     }
+#ifndef MKW_RELEASE
+    if(Lag* l=lag()){
+        const uint64_t now=osGetTime();
+        for(unsigned i=0;i<l->count;){
+            if(l->held[i].due>now){++i;continue;}
+            const auto h=l->held[i];l->held[i]=l->held[--l->count];
+            alignas(4) uint8_t copy[512];std::memcpy(copy,h.data,h.size);receive(copy,h.size,h.address,h.port);
+        }
+    }
+#endif
 }
 
 void Session::receive(const uint8_t* data,size_t size,uint32_t address,uint16_t port){
@@ -349,7 +428,7 @@ void Session::receive(const uint8_t* data,size_t size,uint32_t address,uint16_t 
             if(count_==MaxPlayers){refuse("The race is full (12 players).");return;}
             ++count_;note("> Player %u joined from %s",s+1,dotted(address,ip));
         }
-        players_[s]={hello.id,address,port,hello.garage,hello.autoDrift!=0};reach_[s]=hello.reach;direct_[s]=0;silent_[s]=0;
+        players_[s]={hello.id,address,port,hello.garage,hello.autoDrift!=0,{}};std::memcpy(players_[s].name,hello.name,sizeof hello.name);reach_[s]=hello.reach;direct_[s]=0;silent_[s]=0;
         sendLobby();return;
     }
     if(h.type==Type::Lobby||h.type==Type::Refuse){
@@ -369,7 +448,7 @@ void Session::receive(const uint8_t* data,size_t size,uint32_t address,uint16_t 
         if(started_)return;
         const unsigned count=std::min<unsigned>(lobby.count,MaxPlayers);
         unsigned mine=255;
-        for(unsigned s=0;s<count;++s){const auto& p=lobby.players[s];players_[s]={p.id,p.address,p.port,p.garage,p.autoDrift!=0};if(p.id==id_)mine=s;}
+        for(unsigned s=0;s<count;++s){const auto& p=lobby.players[s];players_[s]={p.id,p.address,p.port,p.garage,p.autoDrift!=0,{}};std::memcpy(players_[s].name,p.name,sizeof p.name);if(p.id==id_)mine=s;}
         players_[0].address=hostAddress_;players_[0].port=hostPort_;
         if(mine==255){if(lobby.started&&!announcedWait_){announcedWait_=true;note("> A race started without you. Wait for the next.");}return;}
         const bool first=slot_==255;
@@ -377,8 +456,8 @@ void Session::receive(const uint8_t* data,size_t size,uint32_t address,uint16_t 
         direct_[0]=0;silent_[0]=0;
         if(first)note("> In the lobby as player %u",slot_+1);
         if(lobby.started){
-            started_=true;lastRound_=round_;goSeen_=false;resetEvents();
-            for(unsigned s=0;s<MaxPlayers;++s){hasFrame_[s]=false;left_[s]=false;silent_[s]=0;}
+            started_=true;lastRound_=round_;goSeen_=false;bestRtt_=0x7fffffff;clockAhead_=0;resetEvents();
+            for(unsigned s=0;s<MaxPlayers;++s){hasFrame_[s]=false;left_[s]=false;silent_[s]=0;queueCount_[s]=0;}
             note("> The host started the race: %u players",count_);
         }
         return;
@@ -395,15 +474,38 @@ void Session::receive(const uint8_t* data,size_t size,uint32_t address,uint16_t 
     // The host passes packets on to players who can't hear the sender themselves.
     auto relay=[&](){if(mode_!=Mode::Host||!direct)return;for(unsigned k=1;k<count_;++k)if(k!=s&&!(reach_[k]>>s&1u))sendTo(players_[k].address,players_[k].port,data,size);};
     switch(h.type){
-    case Type::Ready:if(mode_==Mode::Host){ready_[s]=true;if(goRepeats_>=GoRepeats){Go go{header(Type::Go),round_};sendTo(address,port,&go,sizeof go);}}break;
-    case Type::Go:{if(size<sizeof(Go))return;Go go;std::memcpy(&go,data,sizeof go);if(mode_==Mode::Join&&go.round==round_)goSeen_=true;break;}
+    case Type::Ready:{
+        if(size<sizeof(Ready)||mode_!=Mode::Host)return;
+        Ready ready;std::memcpy(&ready,data,sizeof ready);if(ready.round!=round_||!started_)return;
+        ready_[s]=true;
+        // Answered at once, with this console's clock: the joiner times the round trip.
+        const uint32_t now=uint32_t(osGetTime());
+        Go go{header(Type::Go),round_,uint8_t(goSeen_),0,ready.time,now,goSeen_?int32_t(startAt_-now):0};sendTo(address,port,&go,sizeof go);
+        break;
+    }
+    case Type::Go:{
+        if(size<sizeof(Go)||mode_!=Mode::Join||s!=0)return;
+        Go go;std::memcpy(&go,data,sizeof go);if(go.round!=round_)return;
+        const uint32_t now=uint32_t(osGetTime());
+        // The host's clock against this one's. An answer to a Ready of mine left the host
+        // halfway through the round trip; the quickest trip waited least on the way, so it
+        // is the one believed. Before any answer: as if the Go took no time to arrive.
+        if(go.echo){
+            const int32_t rtt=int32_t(now-go.echo);
+            if(rtt>=0&&rtt<2000&&rtt<=bestRtt_){bestRtt_=rtt;clockAhead_=int32_t(go.hostTime-go.echo)-rtt/2;}
+        }else if(bestRtt_==0x7fffffff)clockAhead_=int32_t(go.hostTime-now);
+        if(go.set){startAt_=go.hostTime+uint32_t(go.startIn);goSeen_=true;}
+        break;
+    }
     case Type::Probe:{
         if(size<sizeof(Probe))return;
         Probe p;std::memcpy(&p,data,sizeof p);
         if(!p.echo){Probe back=p;back.h=header(Type::Probe);back.echo=1;sendTo(address,port,&back,sizeof back);break;}
         // A round trip a few times longer than a race's patience is a stale echo.
         const float rtt=float(uint32_t(osGetTime())-p.time);
-        if(rtt>=0&&rtt<2000)rttMs_[s]=rttMs_[s]>0?rttMs_[s]*.8f+rtt*.2f:rtt;
+        if(rtt>=0&&rtt<2000){rttMs_[s]=rttMs_[s]>0?rttMs_[s]*.8f+rtt*.2f:rtt;
+            // The quickest recent trip: takes a quicker one at once, creeps up 2 ms a probe.
+            minRttMs_[s]=minRttMs_[s]>0?std::min(rtt,minRttMs_[s]+2.f):rtt;}
         break;
     }
     case Type::Frame:{
@@ -411,6 +513,9 @@ void Session::receive(const uint8_t* data,size_t size,uint32_t address,uint16_t 
         Frame frame;std::memcpy(&frame,data,sizeof frame);if(frame.round!=round_)return;reach_[s]=frame.reach;
         // UDP can reorder: keep only the newest tick.
         if(!hasFrame_[s]||frame.tick>=latest_[s].tick){latest_[s]=frame;hasFrame_[s]=true;}
+        // All of them, for the race to replay the kart's path (bunched packets included).
+        if(queueCount_[s]==FrameQueue){queueHead_[s]=uint8_t((queueHead_[s]+1)%FrameQueue);--queueCount_[s];}
+        queue_[s][(queueHead_[s]+queueCount_[s])%FrameQueue]=frame;++queueCount_[s];
         // Which of this console's events the sender has: the newest number at
         // or below the next one with that low byte.
         if(slot_<MaxPlayers){const uint16_t has=uint16_t(nextSeq_-((nextSeq_-frame.ack[slot_])&0xffu));if(has>acked_[s])acked_[s]=has;}
@@ -435,9 +540,23 @@ void Session::receive(const uint8_t* data,size_t size,uint32_t address,uint16_t 
     }
 }
 
+void Session::qaBeacon(const char* text){
+#ifndef MKW_RELEASE
+    static uint32_t address=0;static uint16_t port=0;static bool read=false;
+    if(!read){read=true;
+        if(FILE* f=std::fopen("sdmc:/3ds/mkw-3ds/qa-net-beacon.txt","r")){char ip[64]{};unsigned p=0;
+            if(std::fscanf(f,"%63s %u",ip,&p)==2){in_addr a{};if(inet_aton(ip,&a)){address=a.s_addr;port=uint16_t(p);}}
+            std::fclose(f);}
+    }
+    if(port)sendTo(address,port,text,std::strlen(text));
+#else
+    (void)text;
+#endif
+}
+
 void Session::newRound(){
-    goSeen_=false;goRepeats_=0;readyPolls_=0;ready_={};announcedWait_=false;failed_=false;resetEvents();
-    for(unsigned s=0;s<MaxPlayers;++s){hasFrame_[s]=false;left_[s]=false;silent_[s]=0;}
+    goSeen_=false;goRepeats_=0;readyPolls_=0;ready_={};bestRtt_=0x7fffffff;clockAhead_=0;announcedWait_=false;failed_=false;resetEvents();
+    for(unsigned s=0;s<MaxPlayers;++s){hasFrame_[s]=false;left_[s]=false;silent_[s]=0;queueCount_[s]=0;}
     if(mode_==Mode::Host){
         // Joiners call again from their own menus; the lobby fills up anew.
         if(started_){++round_;started_=false;}
