@@ -23,9 +23,9 @@ from PIL import Image
 TOOLS = Path(__file__).resolve().parent
 sys.path.insert(0, str(TOOLS))
 
-# Row geometry (lower-screen pixels). Twelve rows on a 20 px pitch fill the 240 px
-# screen with 1 px between them.
-ROW_H = 19
+# Row geometry (lower-screen pixels). Twelve 18 px rows, 1 px apart, centred on the
+# 240 px screen (src/race_bottom_screen.cpp FloatTop) with a few pixels above and below.
+ROW_H = 18
 ORDINAL_H = 12
 ICON = 13
 ORDINAL_X = 5

@@ -41,6 +41,8 @@ constexpr float Column=82.f,MapX=Column,MapW=ScreenW-Column,MapCX=MapX+MapW*.5f,
 // fill the screen's height (1 px apart); in each, the position, then the
 // face and the held item at 17 px.
 constexpr float RowTop=1.f,RowPitch=20.f,RowX=2.f,RowH=19.f;
+// Floating rows (RaceRowsUi): 1 px apart, the stack centred on the screen's height.
+constexpr float FloatPitch=RaceRowsUi.rowH+1.f,FloatTop=float(int(ScreenH-(11*FloatPitch+RaceRowsUi.rowH))/2);
 constexpr float OrdinalX=3.f,FaceX=32.f,ItemX=56.f,RowIcon=17.f;
 // Retail CtrlRace2DMapCharacter (USA 0x807E1620/0x807E1B20): the face pane is
 // 32 x 1.6 layout units, scaled 0.8 for the local racer and 0.6 for the
@@ -567,7 +569,7 @@ bool RaceBottomScreen::compose(Renderer& renderer,const BottomView& view){
         }
         auto drawRow=[&](unsigned i){
             const auto& r=view.racer[i];
-            const float x=RowX+slide,y=RowTop+m.row[i]*RowPitch,icon=R.icon,iy=y+std::floor((R.rowH-icon)*.5f);
+            const float x=RowX+slide,y=FloatTop+m.row[i]*FloatPitch,icon=R.icon,iy=y+std::floor((R.rowH-icon)*.5f);
             m.addRow(r.local?R.player:R.other,x,y,x+R.rowW,y+R.rowH);
             if(!view.battle){
                 const auto& ord=R.ordinals[std::clamp<unsigned>(r.rank,1,12)-1];
@@ -650,7 +652,7 @@ bool RaceBottomScreen::compose(Renderer& renderer,const BottomView& view){
         for(unsigned i=0;i<std::min(view.racers,12u);++i){
             const auto& r=view.racer[i];char text[4];
             const unsigned n=unsigned(std::snprintf(text,sizeof text,"%u",std::min(unsigned(r.score),999u)));
-            const float left=RowX+slide+(floatRows?RaceRowsUi.ordinalX:OrdinalX),y=RowTop+m.row[i]*RowPitch+2.f;
+            const float left=RowX+slide+(floatRows?RaceRowsUi.ordinalX:OrdinalX),y=(floatRows?FloatTop+m.row[i]*FloatPitch+1.5f:RowTop+m.row[i]*RowPitch+2.f);
             for(unsigned j=0;j<n;++j)m.add(BattleBottomScoreDigits[text[j]-'0'],left+j*9.f,y,left+(j+1)*9.f,y+15.f,r.team==RaceTeam::Red?0xff3030ffu:r.team==RaceTeam::Blue?0x4080ffffu:0xffffffffu,false,false,true);
         }
     }
