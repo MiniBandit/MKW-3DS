@@ -75,6 +75,9 @@ struct RaceBottomScreen::Impl {
     float standings=0;                           // slide-in 0..1
     std::array<float,12> row{};bool rowsSet=false;
     unsigned roulette=0;
+    // The map stops at the standings column's edge; markers wholly under it
+    // are not drawn (A/B: no-map-clip.txt).
+    bool mapClip=true;
     // One frame's quads, in three in-place batches.
     Renderer::MaterialQuad* base=nullptr;unsigned count=0;
     bool add(const RaceMapRect& r,float x0,float y0,float x1,float y1,uint32_t color=0xffffffffu,bool mirrorU=false,bool mirrorV=false,bool score=false){
@@ -222,9 +225,9 @@ void fillBottomView(BottomView& v,const RaceGrid& grid,const RaceItems& items,bo
     const auto& me=race->player(0);
     const auto& timer=me.finished()?me.raceTimer():race->timerManager().currentTimer();
     v.milliseconds=uint32_t(timer.min)*60000u+uint32_t(timer.sec)*1000u+uint32_t(timer.mil);
-    // CtrlRaceTime shows with the HUD from the countdown; Mario Kart 7 shows
-    // its standings once the race has started.
-    v.timerVisible=!introActive&&stage>=1;v.standingsVisible=!v.timeTrial&&!introActive&&stage>=2;v.tick=tick;
+    // CtrlRaceTime shows with the HUD from the countdown; the standings slide
+    // in with it (the grid order until the race starts).
+    v.timerVisible=!introActive&&stage>=1;v.standingsVisible=!v.timeTrial&&!introActive&&stage>=1;v.tick=tick;
     // Both screens go black together when leaving after the race (Mario Kart 7).
     v.fade=std::clamp(leaveFade,0.f,1.f);
 }
@@ -233,8 +236,14 @@ RaceBottomScreen::RaceBottomScreen():impl_(std::make_unique<Impl>()){}
 RaceBottomScreen::~RaceBottomScreen()=default;
 bool RaceBottomScreen::active() const {return impl_->target;}
 
+static bool sdFile(const char* name){
+    char path[96];std::snprintf(path,sizeof path,"sdmc:/3ds/mkw-3ds/%s",name);
+    FILE* f=std::fopen(path,"rb");if(f)std::fclose(f);return f!=nullptr;
+}
+
 bool RaceBottomScreen::load(Renderer& renderer,unsigned course){
     auto& m=*impl_;
+    m.mapClip=!sdFile("no-map-clip.txt");
     const auto* art=raceMapCourse(course);
     if(!art){unload(renderer);return false;}
     if(m.target&&m.course==course){
@@ -299,6 +308,9 @@ void RaceBottomScreen::draw(Renderer& renderer,const BottomView& view){
     const float columnSlide=view.timeTrial?0.f:smooth(m.standings);
     const float mapWidth=view.timeTrial?ScreenW:MapW;
     const float mapCenterX=ScreenW*.5f+(MapCX-ScreenW*.5f)*columnSlide;
+    // The opaque standings column covers x < columnEdge (drawn after the map).
+    const float columnEdge=m.standings>0?Column-(1-smooth(m.standings))*(Column+4):0.f;
+    const float clip=m.mapClip&&columnEdge>0?columnEdge:0.f;
     // CtrlRaceBase's authored 20-tick entrance: -1 -> 0 in .05 steps.
     m.timerSlide=view.timerVisible?std::min(0.f,m.timerSlide+float(elapsed)*.05f):-1.f;
     m.base=m.quads.get()+(renderer.recordingFrame()&1)*QuadCapacity;m.count=0;
@@ -348,9 +360,10 @@ void RaceBottomScreen::draw(Renderer& renderer,const BottomView& view){
         auto& q=m.base[m.count++];
         // The screen's corners mapped back to the world (the inverse of
         // screenAt), so in Mirror the map flips about mapCenterX like the
-        // markers do, and turns with them about the player.
+        // markers do, and turns with them about the player. It starts at
+        // the column's edge: the column hides everything left of it.
         for(unsigned k=0;k<4;++k){
-            q.x[k]=(k&1)?ScreenW:0;q.y[k]=(k&2)?ScreenH:0;
+            q.x[k]=(k&1)?ScreenW:clip;q.y[k]=(k&2)?ScreenH:0;
             const float ox=(q.x[k]-mapCenterX)*upp,oy=(q.y[k]-MapCY)*upp;
             const float wx=cx+s*(rc*ox+rs*oy),wz=cz+(-rs*ox+rc*oy);
             q.u[k]=(wx-course.x0)/frameW;q.v[k]=(wz-course.z0)/frameH;
@@ -377,10 +390,10 @@ void RaceBottomScreen::draw(Renderer& renderer,const BottomView& view){
             q.v[k]=float(art.y+((k&2)?art.h:0))/objectArt.height;
         }
     }
-    const unsigned objectCount=m.count-objectFirst;
+    unsigned objectCount=m.count-objectFirst;
 
     // 3. Everything else from the atlas, in drawing order.
-    const unsigned overlayFirst=m.count;
+    unsigned overlayFirst=m.count;
     auto onMap=[&](float x,float y,float margin){return x>-margin&&x<ScreenW+margin&&y>-margin&&y<ScreenH+margin;};
     if(atlas){
         // Start line (KMP checkpoint 0): Mario Kart 7's checker marker across the road.
@@ -462,12 +475,24 @@ void RaceBottomScreen::draw(Renderer& renderer,const BottomView& view){
             if(native){auto& q=m.miiQuads[view.tick&1][0];q=m.base[--m.count];for(unsigned k=0;k<4;++k){q.u[k]=(k&1)?1.f:0.f;q.v[k]=(k&2)?1.f:0.f;}m.miiMap=true;}
         }
     }
-    const unsigned overlayCount=m.count-overlayFirst;
+    unsigned overlayCount=m.count-overlayFirst;
+    if(clip>0){
+        // Map objects and markers wholly left of the column's edge are hidden
+        // by the opaque column: not drawn.
+        auto under=[&](const Renderer::MaterialQuad& q){return std::max({q.x[0],q.x[1],q.x[2],q.x[3]})<=clip;};
+        auto keep=[&](unsigned first,unsigned count,unsigned to){
+            unsigned w=to;for(unsigned i=first;i<first+count;++i)if(!under(m.base[i]))m.base[w++]=m.base[i];return w-to;};
+        objectCount=keep(objectFirst,objectCount,objectFirst);
+        const unsigned first=objectFirst+objectCount;
+        overlayCount=keep(overlayFirst,overlayCount,first);
+        overlayFirst=first;m.count=first+overlayCount;
+        if(m.miiMap&&under(m.miiQuads[view.tick&1][0]))m.miiMap=false;
+    }
 
     // 4. The standings column and its rows over the map's left edge, then the time.
     const unsigned topFirst=m.count;
     if(m.standings>0){
-        const float edge=Column-(1-smooth(m.standings))*(Column+4);
+        const float edge=columnEdge;
         if(edge>0){m.add(RaceMapWhite,0,0,edge,ScreenH,0x101626ffu);
             m.add(RaceMapWhite,std::max(0.f,edge-1),0,edge,ScreenH,0x5a6a8aff);}
     }

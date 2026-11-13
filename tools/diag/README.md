@@ -240,6 +240,12 @@ backdrop again; by default an opaque backdrop drawn at full alpha over the whole
 screen only clears depth (2D frames).
 With `menu-capture.txt`, each capture also writes `…-lcd.ppm`: the lower LCD's
 last presented picture.
+
+The race's lower screen (each file read at the race load):
+`no-map-clip.txt` draws the map over the whole screen again, under the
+standings column; by default it starts at the column's edge and markers wholly
+under the column are not drawn (the column itself slides in with the countdown
+either way).
 The Settings page's options are in `settings.dat`, not in the license:
 Dynamic Shadows for benchmarks is set there (or on the Settings page).
 
