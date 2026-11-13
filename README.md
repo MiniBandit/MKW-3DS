@@ -27,6 +27,8 @@ See [CHANGELOG.md](CHANGELOG.md) for the full list. Online play is not included 
 - **Mario Kart Wii (USA)**, game ID `RMCE01`, dumped as `.iso` or `.wbfs`.
   Convert RVZ or NKit dumps to ISO in Dolphin first.
 - About **30 GB** of free space and an internet connection
+
+The following dependencies are only needed if you **DON'T** want to use Docker to build:
 - [devkitPro](https://devkitpro.org/wiki/Getting_Started) with the 3DS tools (`3ds-dev`)
 - [Python 3.11–3.14](https://www.python.org/downloads/) and [Node.js LTS](https://nodejs.org) (Python 3.15 is not supported yet)
 - [Git](https://git-scm.com)
@@ -70,6 +72,28 @@ share `build-cia-log.txt` when asking for help.
 **Mii faces:** license portraits and Mii drivers use the 3DS's Mii resource. The
 game asks your console for its own copy. If yours doesn't show them, put your
 console's `CFL_Res.dat` beside the builder before building.
+
+### Docker (suitable for any OS)
+
+You can also generate your `.cia` file using [Docker Engine](https://docs.docker.com/engine/install/) (Linux only) or [Docker Desktop](https://docs.docker.com/desktop/) (Windows, macOS, Linux):
+- Put your `.iso` or `.wbfs` file inside the `mkw-rom` folder
+- Open a terminal window inside the project's root and run the following command:
+  ```
+  docker compose run --build --rm builder bash /workspace/build-mkw-cia-docker.sh
+  ```
+- Every dependency will be downloaded and installed and the build script will start automatically
+- If the build stops partway, run the above command again
+- After the script is done running and you have copied over important files (i.e. the `build/release/sd-card/3ds` folder and the `.cia` file), you can:
+  - Remove containers/images/networks/volumes associated with this project:
+    ```
+    docker compose down --rmi all -v
+    ```
+  - Delete the whole project folder
+- If you want to reclaim a little more space, you can also erase your Docker build cache:
+  ```
+  docker builder prune
+  ```
+- If you no longer need Docker, you can uninstall it as well
 
 ## Installing
 
