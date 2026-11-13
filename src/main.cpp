@@ -3108,6 +3108,9 @@ int main() {
                     else {report("FAIL resume graphics load");releaseRace();mkw::pack::dropCache();mkw::SoundSystem::dropRamCache();menu.enter(mkw::UiPage::Error);}
                 }
                 if(action==mkw::UiAction::StartRace||action==mkw::UiAction::RestartRace){
+                    // A set's next race skips the menus; its results fade must not
+                    // reach this race's first pause.
+                    sectionFadeIn=false;
                     mkw::LoadingScope loading;
                     raceGraphicsSuspended=false;
                     raceLoadStart=svcGetSystemTick();
