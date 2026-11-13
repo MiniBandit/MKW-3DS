@@ -75,9 +75,7 @@ outer passes one per sparkle group again instead of the shell with group 0, then
 1 and 2 together), `no-rigid-skin.txt` (lit skinned draws whose bones are all rotations
 times a uniform scale take the cofactor normal path again; runtime.log `lit skin draws`
 counts both), `no-bloom-triple.txt` (bloom blur rings back to two taps a quad instead of
-three), `no-shared-normal.txt` (lit EnvCamera draws transform and
-normalize the light's normal again instead of reusing the EnvCamera branch's),
-`no-hook-prep.txt` (CPU driver poses, object CPU skinning and fire
+three), `no-hook-prep.txt` (CPU driver poses, object CPU skinning and fire
 phase copies run on the frame hook again instead of at frame start; runtime.log
 "hook prepare off"), `no-box-precull.txt` (Item Box / Fake Item Box shells are drawn whole
 again instead of without the triangles their cull mode removes; runtime.log

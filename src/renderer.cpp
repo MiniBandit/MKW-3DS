@@ -705,10 +705,9 @@ bool Renderer::init(){
     if(!retailUniformLocations())return fail();
     bonesLoc_=shaderInstanceGetUniformLocation(program_.vertexShader,"bones");
     skinnedLoc_=shaderInstanceGetUniformLocation(program_.vertexShader,"skinned");
-    sharedNormalLoc_=shaderInstanceGetUniformLocation(program_.vertexShader,"sharedNormal");
     uvPlainLoc_=shaderInstanceGetUniformLocation(program_.vertexShader,"uvPlain");
     fastPathLoc_=shaderInstanceGetUniformLocation(program_.vertexShader,"fastPath");
-    if(bonesLoc_<0||skinnedLoc_<0||sharedNormalLoc_<0||uvPlainLoc_<0||fastPathLoc_<0)return fail();
+    if(bonesLoc_<0||skinnedLoc_<0||uvPlainLoc_<0||fastPathLoc_<0)return fail();
     cofactorNormalsLoc_=shaderInstanceGetUniformLocation(program_.vertexShader,"cofactorNormals");
     rigidNormalsLoc_=shaderInstanceGetUniformLocation(program_.vertexShader,"rigidNormals");
     environmentPairLoc_=shaderInstanceGetUniformLocation(program_.vertexShader,"environmentPair");
@@ -1310,12 +1309,6 @@ void Renderer::uvPlainNow(bool allowed){
     const bool fast=plain&&fastVertex&&!on(playerShadowProjectLoc_)&&!on(environmentMappedLoc_)&&!on(environmentTexture2Loc_)&&
         !on(environmentPrimaryLoc_)&&!on(projectedWaterLoc_)&&!on(retailBoolLoc_)&&!on(shadowCaptureLoc_);
     C3D_BoolUnifSet(GPU_VERTEX_SHADER,fastPathLoc_,fast);
-    // The EnvCamera branch's normalized normal is the light's when both use
-    // the same rows (normalMatrixNow(..., true)); bitwise, so the same result.
-    auto same=[](int a,int b){return !std::memcmp(&C3D_FVUnif[GPU_VERTEX_SHADER][a],&C3D_FVUnif[GPU_VERTEX_SHADER][b],3*sizeof(float));};
-    const bool shared=allowed&&sharedNormals&&!fast&&on(environmentMappedLoc_)&&on(diffuseLightingLoc_)&&!on(playerShadowProjectLoc_)&&
-        same(envRowLoc_[0],normalRowLoc_[0])&&same(envRowLoc_[1],normalRowLoc_[1])&&same(envRowLoc_[2],normalRowLoc_[2]);
-    C3D_BoolUnifSet(GPU_VERTEX_SHADER,sharedNormalLoc_,shared);
 }
 // Model::materialTracks at animation frame `frame` into materialOverrides,
 // once per frame: each track loops or holds its last frame by its own flag.

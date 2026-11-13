@@ -30,6 +30,10 @@ def check(source):
             if start is not None:raise ValueError('Only one entry procedure is supported')
             start=i
     if start is None or not outputs:raise ValueError('Missing shader entry/outputs')
+    # b15 is the geometry shader's flag: the hardware sets it after
+    # invocations, and a vertex shader branch on it failed on the console
+    # (Nov 12; Azahar keeps the uploaded value).
+    if len(uniforms)>15:raise ValueError(f'{len(uniforms)} bool uniforms: keep b15 free (at most 15)')
     body=[(i,s,t) for i,s,t in lines if i>start and s]
     if [i for i,(_,s,_) in enumerate(body) if s=='end']!=[len(body)-2]:
         raise ValueError('Exactly one terminal end instruction is required')

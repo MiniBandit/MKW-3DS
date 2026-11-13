@@ -659,9 +659,6 @@ public:
     // DIAG (render thread): ticks spent in the course pass's model draws
     // (first eye of frames with pass markers) and the frames that drew any.
     uint64_t courseDrawTicks=0;unsigned long courseDrawFrames=0;
-    // Lit EnvCamera draws whose light uses the same normal rows reuse that
-    // branch's normalized normal in the vertex shader. A/B: no-shared-normal.txt.
-    bool sharedNormals=false;
     // moveToVram widens texture-unit-1 ETC1 textures to ETC1A4 (opaque
     // alpha) instead of leaving them in LINEAR. A/B: no-unit1-vram.txt.
     bool unitOneEtc1a4=false;
@@ -937,7 +934,7 @@ private:
     const RigidPose* rigid_=nullptr;
     const float* skinPalette_=nullptr;
     unsigned skinBones_=0,skinStride_=12;
-    int bonesLoc_=-1,skinnedLoc_=-1,sharedNormalLoc_=-1,uvPlainLoc_=-1,fastPathLoc_=-1;
+    int bonesLoc_=-1,skinnedLoc_=-1,uvPlainLoc_=-1,fastPathLoc_=-1;
     int cofactorNormalsLoc_=-1,rigidNormalsLoc_=-1,environmentPairLoc_=-1,uv2RowLoc_[2]={-1,-1};
     // Sets uvPlain for the next draws from the bound UV uniforms (drawNow only).
     void uvPlainNow(bool allowed);

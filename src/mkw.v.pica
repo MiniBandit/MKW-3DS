@@ -30,6 +30,10 @@
 ; Light-texture materials: texcoord2 repeats the EnvCamera UV1 (lm_1).
 .bool retailLightTexture
 ; Uniform branches skip work whose result cannot contribute to the draw.
+; At most 15 bools (b0-b14): b15 is the geometry shader's flag, which the
+; hardware sets after invocations; a vertex shader branch on it went wrong on
+; the console (Nov 12: fastPath at b15 left boost panels and item box
+; patterns half static, Azahar fine). tools/shader_outputs.py checks it.
 .bool environmentMapped, environmentTexture2, environmentPrimary, diffuseLighting
 .bool projectedWater, playerShadowProject, shadowCapture
 ; The palette index arrives in inbone: lit racers' own attribute, or (unlit
@@ -39,9 +43,6 @@
 .bool skinned, staticLighting
 .bool cofactorNormals, rigidNormals
 .bool environmentPair
-; Lighting's normal rows equal the EnvCamera rows (bitwise; Renderer::uvPlainNow):
-; the general path's light reuses the EnvCamera branch's normalized normal.
-.bool sharedNormal
 ; The draw's UV rows and uv1Row are identity and uvScroll is zero (set per
 ; draw from the uniform values): the UVs pass through without the transforms.
 .bool uvPlain
@@ -233,7 +234,6 @@
     ifu environmentMapped
         ; Same equation as the CPU path: m=normalize(R*n),
         ; uv1=(0.5+0.5*(cos*m.x+sin*m.z), 0.5+0.5*m.y).
-        ; r7 (the normalized normal) stays for sharedNormal's lighting.
         dp3 r7.x, envRow0, r15
         dp3 r7.y, envRow1, r15
         dp3 r7.z, envRow2, r15
@@ -307,17 +307,13 @@
     mul r13.x, fogParam.z, r12.z
     add r13.x, fogParam.w, r13.x
     ifu diffuseLighting
-        ifu sharedNormal
-            mov r1.xyz, r7
-        .else
-            dp3 r1.x, normalRow0, r15
-            dp3 r1.y, normalRow1, r15
-            dp3 r1.z, normalRow2, r15
-            dp3 r2.x, r1, r1
-            max r2.x, normalEpsilon.x, r2.x
-            rsq r2.x, r2.x
-            mul r1.xyz, r1, r2.x
-        .end
+        dp3 r1.x, normalRow0, r15
+        dp3 r1.y, normalRow1, r15
+        dp3 r1.z, normalRow2, r15
+        dp3 r2.x, r1, r1
+        max r2.x, normalEpsilon.x, r2.x
+        rsq r2.x, r2.x
+        mul r1.xyz, r1, r2.x
         ; GX colour channel: light + lightDiff * df(n.L), saturated at lightDir.w.
         dp3 r2.x, lightDir, r1
         mul r2.x, lightFn.x, r2.x

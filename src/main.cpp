@@ -759,8 +759,7 @@ int main() {
     mkw::materialSwapOff=exists("sdmc:/3ds/mkw-3ds/no-material-swap.txt");if(mkw::materialSwapOff)report("material swap off");
     renderer.fastVertex=!exists("sdmc:/3ds/mkw-3ds/no-fast-vertex.txt");
     renderer.rigidSkin=!exists("sdmc:/3ds/mkw-3ds/no-rigid-skin.txt");
-    renderer.sharedNormals=!exists("sdmc:/3ds/mkw-3ds/no-shared-normal.txt");
-    renderer.bloomTriple=!exists("sdmc:/3ds/mkw-3ds/no-bloom-triple.txt");if(!renderer.bloomTriple)report("bloom triple off");if(!renderer.sharedNormals)report("shared normal off");if(!renderer.rigidSkin)report("rigid skin off");
+    renderer.bloomTriple=!exists("sdmc:/3ds/mkw-3ds/no-bloom-triple.txt");if(!renderer.bloomTriple)report("bloom triple off");if(!renderer.rigidSkin)report("rigid skin off");
     mkw::boxSparklePair=!exists("sdmc:/3ds/mkw-3ds/no-sparkle-pair.txt");if(!mkw::boxSparklePair)report("sparkle pair off");
     // Item box shells drop the triangles their cull mode removes before the draw.
     renderer.facingCull=!exists("sdmc:/3ds/mkw-3ds/no-box-precull.txt");if(!renderer.facingCull)report("box precull off");
