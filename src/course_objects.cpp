@@ -49,6 +49,16 @@ C3D_Mtx basisMatrix(Vec3 x,Vec3 y,Vec3 z,Vec3 position,Vec3 scale){
 }
 namespace {
 constexpr size_t SkinReserve=2u*1024*1024;
+// DIAG no-reset-skip.txt: every object record resets overrides, rigid pose and
+// skin palette again (for comparing command-word hashes).
+bool resetSkip=true,switchesRead=false;
+void readSwitches(){
+    if(switchesRead)return;switchesRead=true;
+#ifndef MKW_RELEASE
+    auto exists=[](const char* path){FILE* f=std::fopen(path,"r");if(f)std::fclose(f);return f!=nullptr;};
+    resetSkip=!exists("sdmc:/3ds/mkw-3ds/no-reset-skip.txt");
+#endif
+}
 std::unique_ptr<Model> cloneModel(const Model& source){
     auto copy=std::make_unique<Model>();
     copy->vertices=static_cast<Vertex*>(linearAlloc(source.vertexCount*sizeof(Vertex)));
@@ -469,6 +479,7 @@ bool CourseObjects::loadCourse(int courseId){
     return d.assets.load(courseId);
 }
 void CourseObjects::Impl::link(){
+    readSwitches();
     stadiumBoundsReady=false;stadiumScreens.clear();
     visuals.clear();drawDistances.clear();linked=true;
     palmDistance=drawDistance2(K::Field::ObjectId::PalmTree);
@@ -577,6 +588,9 @@ void CourseObjects::Impl::recordObjects(){
     }
 }
 void CourseObjects::Impl::replay(Renderer& renderer,const ObjectDrawList& list,unsigned phase){
+    // Bindings a later draw could still see (overrides 1, rigid pose 2, skin palette 4):
+    // all of them until the first record resets them, then only what a record set.
+    unsigned bound=7;
     for(const auto& r:list.records){
         if(r.kind==ObjectDrawRecord::Explosion){
             if(phase!=1)blast::drawBlast(renderer,*r.target,r.transform,unsigned(std::max(0.f,r.frame)),false);
@@ -602,9 +616,12 @@ void CourseObjects::Impl::replay(Renderer& renderer,const ObjectDrawList& list,u
         else if(r.pose==2)renderer.setSkinPalette(list.palettes.data()+r.palette,r.bones,12);
         if(r.overrideCount)renderer.setOverrides(list.overrides.data()+r.overrides,r.overrideCount);
         renderer.draw(*r.target,r.transform,r.backdrop,nullptr,context,visible);
-        renderer.setOverrides(nullptr,0);
-        renderer.setRigidPose(nullptr);
-        renderer.setSkinPalette(nullptr,0,12);
+        // Reset only what may still be bound: an empty reset is a recorded command too.
+        bound|=(r.overrideCount?1u:0u)|(r.pose==1?2u:0u)|(r.pose==2?4u:0u);
+        if(bound&1)renderer.setOverrides(nullptr,0);
+        if(bound&2)renderer.setRigidPose(nullptr);
+        if(bound&4)renderer.setSkinPalette(nullptr,0,12);
+        bound=resetSkip?0:7;
     }
 }
 void CourseObjects::prepare(const Renderer& renderer,unsigned tick,Vec3 camera){
