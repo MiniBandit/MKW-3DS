@@ -226,7 +226,7 @@ $env:DEVKITPRO = $Dkp
 $env:DEVKITPRO_WIN = $Dkp
 if ($env:MKW_BOOTSTRAP_ONLY) { Say "Tools ready. Python: $PythonExe"; exit 0 }
 
-Say 'Building. The first build takes about an hour and needs nothing from you.'
+Say 'Building. The first build takes between 20 minutes and an hour and needs nothing from you.'
 Set-Location -LiteralPath $Repo
 Invoke-Native { & $PythonExe tools/build.py --disc $Disc --delete-converted }
 if ($LASTEXITCODE) { Fail "The build stopped. Run this again to continue where it left off.`nLogs are in $Repo\build\standard\logs" }

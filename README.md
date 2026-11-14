@@ -100,8 +100,8 @@ Node.js, an ffmpeg with soxr, and [devkitPro](https://devkitpro.org/wiki/Getting
 Only Windows has been tested so far. Add `--delete-converted` to the build
 script to delete the converted data afterwards.
 
-The first build takes about an hour. If it stops, run it again and it picks up
-where it left off. The results are in `build/standard/output`.
+The first build takes between 20 minutes and an hour, depending on the PC. If it
+stops, run it again and it picks up where it left off. The results are in `build/standard/output`.
 
 ## Installing
 
@@ -130,7 +130,7 @@ keep your licenses, records, ghosts and settings from an earlier version, copy
 `sd:/3ds/MKWiiDS/`. Delete `sd:/3ds/mkw-3ds/` and the old title in FBI if you no
 longer want them.
 
-See [CHANGELOG.md](CHANGELOG.md) for what's new.
+See the [releases](https://github.com/ethanseagull/MarioKartWiiDS/releases) for what's new.
 
 ## Controls
 
