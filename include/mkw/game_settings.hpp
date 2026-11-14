@@ -4,7 +4,7 @@
 // the six values, two spare bytes, then a CRC-32 of the first 16 bytes (files
 // from before the Minimap option have 0 in byte 13: 30fps).
 // Version 1 (16 bytes: "MKWS0001", four values, a CRC-32 of the first 12) is
-// still read, with 800px Mode off.
+// still read, with 800px Mode at its default.
 #include <array>
 #include <cstdint>
 #include <cstdio>
@@ -19,8 +19,8 @@ struct UiSettings {
  // the Wii's split-screen bodies with camera distance (RenderQuality::racerLod).
  unsigned opponentDetail=0;
  // 800px Mode (New 3DS family): the top screen shows 800 columns while the
- // 3D slider is down, and 3D's two 400-column eyes while it is up.
- bool wide800=false;
+ // 3D slider is down, and 3D's two 400-column eyes while it is up. On by default; Old 3DS locks it off.
+ bool wide800=true;
  // Minimap: the race's lower screen redraws at 60fps (every frame) instead of
  // 30fps (every other frame, RenderQuality::bottomInterval). New 3DS only.
  bool minimap60=false;
@@ -44,7 +44,7 @@ inline bool read(const char* path,UiSettings& out){
  const unsigned at=v2?16:12;
  const std::uint32_t stored=std::uint32_t(b[at])|std::uint32_t(b[at+1])<<8|std::uint32_t(b[at+2])<<16|std::uint32_t(b[at+3])<<24;
  if(!end||!(v1||v2)||b[8]>1||b[9]>1||b[10]>1||b[11]>1||(v2&&(b[12]>1||b[13]>1))||stored!=crc(b.data(),at))return false;
- out.textureQuality=b[8];out.dynamicShadows=b[9];out.bloom=b[10];out.opponentDetail=b[11];out.wide800=v2&&b[12];out.minimap60=v2&&b[13];
+ out.textureQuality=b[8];out.dynamicShadows=b[9];out.bloom=b[10];out.opponentDetail=b[11];out.wide800=v2?b[12]!=0:UiSettings{}.wide800;out.minimap60=v2&&b[13];
  return true;
 }
 }
