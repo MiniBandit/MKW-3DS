@@ -84,10 +84,9 @@ times a uniform scale take the cofactor normal path again; runtime.log `lit skin
 counts both), `no-bloom-triple.txt` (bloom blur rings back to two taps a quad instead of
 three), `no-hook-prep.txt` (CPU driver poses, object CPU skinning and fire
 phase copies run on the frame hook again instead of at frame start; runtime.log
-"hook prepare off"), `no-skin-direct.txt` (course objects' CPU skins and Coconut Mall's
-escalator treads are written on the frame hook into the copy the last frame drew, as
-before, instead of at frame start into a copy no unfinished frame draws; the escalators
-then also skip treads out of view or at the phase their copy already holds),
+"hook prepare off"), `no-skin-direct.txt` (course objects' CPU skins are written on the
+frame hook into the copy the last frame drew, as before, instead of at frame start into a
+copy no unfinished frame draws),
 `no-stadium-clear-skip.txt` (DK Summit, Waluigi Stadium and Funky Stadium capture frames
 without bloom clear the left LCD's colour again, although the capture then covers it),
 `no-shade-batch.txt` (shadow volumes' per-volume shade rectangles drawn one draw each again

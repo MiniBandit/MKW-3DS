@@ -9,7 +9,7 @@
 #include <mkw/animation_budget.hpp>
 #include "mkw/course_object_kinds.hpp"
 #include "mkw/render_quality.hpp"
-#include "mkw/escalator_landing.hpp"
+#include "mkw/escalator_pieces.hpp"
 #include "mkw/retail_lighting.hpp"
 #include <mkw/render_metrics.hpp>
 #include <mkw/job_worker.hpp>
@@ -88,16 +88,74 @@ std::unique_ptr<Model> cloneModel(const Model& source){
     return copy;
 }
 bool endsWith(const std::string& s,const char* suffix){const size_t n=std::strlen(suffix);return s.size()>=n&&!s.compare(s.size()-n,n,suffix);}
-// Coconut Mall escalator treads at their Kinoko step phase.
-struct EscalatorWrite {Model* mesh;const Vertex* base;float phase;};
-void writeEscalator(void* payload){
-    const auto& w=*static_cast<const EscalatorWrite*>(payload);auto& mesh=*w.mesh;
-    // Only Y and Z ever change: every other field keeps its loaded (base) value.
-    for(unsigned i=0;i<mesh.vertexCount;++i){
-        const auto p=escalatorLanding(w.base[i].position.y,w.base[i].position.z,w.phase);
-        mesh.vertices[i].position.y=p.y;mesh.vertices[i].position.z=p.z;
+// A Coconut Mall escalator as retail draws it (escalator_pieces.hpp), in one
+// GPU-skinned draw (unlit skin: the bone in the normal's x, as
+// ObjectBank::gpuSkin; the strip's lighting is baked at load). Bone 0 is the
+// strip, bones 1-4 the escalator_pieces.hpp slots. escalatorA/B come from
+// the generic object cook (race.pak obj05_escalator__*): the retail piece
+// geometry and UVs, under another cook's material and texture. They take the
+// strip's (the same retail material, escalator_m). Every strip vertex faces
+// up with a white source colour, so the load-time bake gives them one colour;
+// the pieces take it. Without both pieces the model is the strip alone.
+struct EscalatorBuild {std::unique_ptr<Model> model;unsigned bones=0,dropped=0;bool uniform=true;};
+EscalatorBuild buildEscalator(const Model& strip,const Model* a,const Model* b){
+    EscalatorBuild out;
+    if(strip.submeshes.size()!=1||!strip.vertexCount||strip.staticEnvironment2||strip.skinBoneIndices||!strip.staticLightingBaked||strip.liveDiffuse)return out;
+    const auto& s=strip.submeshes[0];
+    // The cook appends copies of the end treads past the retail strip (Y
+    // -200..1500, Z -4500..600) for the old bent-strip draw: 24 triangles, 8 at
+    // the bottom and 16 at the top, whose first riser stands on the strip's last edge.
+    auto extension=[&](uint32_t i){
+        for(unsigned k=0;k<3;++k){const Vec3 p=strip.vertices[strip.indices[i+k]].position;if(p.z< -4500.5f||p.z>600.5f||p.y< -200.5f||p.y>1500.5f)return true;}
+        return false;
+    };
+    const Model* pieces[4]={a,b,a,b};
+    const bool withPieces=a&&b&&a->submeshes.size()==1&&b->submeshes.size()==1;
+    uint32_t vertexCount=strip.vertexCount,indexCount=0;
+    for(uint32_t i=s.first;i+2<s.first+s.count;i+=3)if(extension(i))++out.dropped;else indexCount+=3;
+    if(withPieces)for(const Model* p:pieces){vertexCount+=p->vertexCount;indexCount+=p->submeshes[0].count;}
+    if(vertexCount>65535)return out;
+    auto m=std::make_unique<Model>();
+    m->vertices=static_cast<Vertex*>(linearAlloc(vertexCount*sizeof(Vertex)));
+    m->indices=static_cast<uint16_t*>(linearAlloc(indexCount*sizeof(uint16_t)));
+    if(!m->vertices||!m->indices)return out;
+    m->vertexCount=vertexCount;m->indexCount=indexCount;
+    const uint8_t* color=strip.vertices[0].color;
+    for(uint32_t i=1;i<strip.vertexCount;++i)out.uniform&=!std::memcmp(strip.vertices[i].color,color,4);
+    std::memcpy(m->vertices,strip.vertices,strip.vertexCount*sizeof(Vertex));
+    for(uint32_t i=0;i<strip.vertexCount;++i)m->vertices[i].normal={0,0,0};
+    uint32_t at=0;bool any=false;Vec3 low{},high{};
+    auto include=[&](Vec3 p){if(!any){low=high=p;any=true;}
+        low={std::min(low.x,p.x),std::min(low.y,p.y),std::min(low.z,p.z)};high={std::max(high.x,p.x),std::max(high.y,p.y),std::max(high.z,p.z)};};
+    for(uint32_t i=s.first;i+2<s.first+s.count;i+=3)if(!extension(i))
+        for(unsigned k=0;k<3;++k){m->indices[at++]=strip.indices[i+k];include(strip.vertices[strip.indices[i+k]].position);}
+    uint32_t base=strip.vertexCount;
+    if(withPieces)for(unsigned slot=0;slot<4;++slot){
+        const Model& p=*pieces[slot];const auto& ps=p.submeshes[0];
+        for(uint32_t i=0;i<p.vertexCount;++i){
+            Vertex v=p.vertices[i];std::memcpy(v.color,color,4);v.normal={float((slot+1)*3),0,0};m->vertices[base+i]=v;
+        }
+        for(uint32_t k=0;k<ps.count;++k)m->indices[at++]=uint16_t(base+p.indices[ps.first+k]);
+        base+=p.vertexCount;
+        // Bounds: the piece wherever its slot puts it over a step period.
+        for(unsigned step=0;step<=80;++step){
+            EscalatorPiece place[4];escalatorPieces(std::min(step*.25f,19.999f),place);const auto& q=place[slot];
+            if(q.shown)for(const Vec3 c:{p.minimum,p.maximum})include({c.x,q.y+q.scaleY*c.y,q.z+c.z});
+        }
     }
-    flushGpuData(mesh.vertices,mesh.vertexCount*sizeof(Vertex));
+    Submesh material=s;material.first=0;material.count=indexCount;
+    m->submeshes={material};
+    m->textures=strip.textures;m->samplers=strip.samplers;
+    m->uvTracks=strip.uvTracks;m->materialTracks=strip.materialTracks;m->materialData=strip.materialData;
+    m->staticLightingBaked=true;m->fixedLighting=strip.fixedLighting;m->bakedCourse=strip.bakedCourse;
+    m->dynamicLightTextures=strip.dynamicLightTextures;
+    m->minimum=low;m->maximum=high;
+    flushGpuData(m->vertices,vertexCount*sizeof(Vertex));flushGpuData(m->indices,indexCount*sizeof(uint16_t));
+    out.bones=withPieces?5:1;
+    // Per-bone culling blocks; the player-shadow receiver pass needs them too.
+    m->enableSkinCulling(out.bones);
+    out.model=std::move(m);
+    return out;
 }
 // One CPU-skinned instance copy (its palette follows the record).
 // skinned: the prepare()d results (after the palette), or null.
@@ -344,17 +402,10 @@ float drawDistance2(K::Field::ObjectId id){
 struct CourseObjects::Impl {
     size_t allocationReserve=SkinReserve;
     std::unique_ptr<Model> palm;
-    std::array<std::unique_ptr<Model>,6> escalators;
-    std::vector<Vertex> escalatorBase;
-    std::array<bool,6> escalatorWritten{};
-    // directWrites: a second vertex copy per escalator. Each copy keeps the
-    // phase last written to it and the frame serial that last drew it; a
-    // tread mesh is written only when its phase changed and it is in view.
-    std::array<std::unique_ptr<Model>,6> escalatorsAlt;
-    struct EscalatorCopy {float phase=0;bool written=false;unsigned drawn=0;};
-    std::array<std::array<EscalatorCopy,2>,6> escalatorCopies{};
-    // Every phase's treads (escalatorLanding) lie inside these bounds.
-    Bounds escalatorBounds{};
+    // Coconut Mall escalators (buildEscalator): one model shared by all six,
+    // each drawn once with its own palette of escalatorBones matrices.
+    std::unique_ptr<Model> escalator;
+    unsigned escalatorBones=0;
     std::vector<C3D_Mtx> palms;
     struct LavaSplash { bool active=false;unsigned start=0;Vec3 position{};float scale=1; };
     std::array<LavaSplash,12> lavaSplashes{};
@@ -446,12 +497,12 @@ void CourseObjects::suspendGraphics(){
     d.suspendedVisuals=std::move(d.visuals);
     d.sky.clear();d.objects.clear();d.water.clear();d.shadows.clear();d.skyShadows.clear();
     d.assets.explosionPoses.clear();d.assets.explosionUsed=0;d.assets.explosion.reset();d.assets.explosionBank.reset();d.assets.models.clear();
-    d.palm.reset();for(auto& mesh:d.escalators)mesh.reset();for(auto& mesh:d.escalatorsAlt)mesh.reset();d.escalatorBase.clear();
+    d.palm.reset();d.escalator.reset();d.escalatorBones=0;
     d.linked=false;d.linkedReady=false;d.recorded=false;d.queued=false;d.graphicsSuspended=true;
 }
 bool CourseObjects::resumeGraphics(){
     auto& d=*impl_;if(!d.graphicsSuspended)return true;
-    d.assets.models.clear();d.palm.reset();for(auto& mesh:d.escalators)mesh.reset();for(auto& mesh:d.escalatorsAlt)mesh.reset();
+    d.assets.models.clear();d.palm.reset();d.escalator.reset();d.escalatorBones=0;
     if(d.course==5&&!loadCoconut())return false;
     if(!d.assets.load(d.course))return false;
     d.link();
@@ -479,29 +530,23 @@ bool CourseObjects::loadCoconut(){
     d.palm=std::make_unique<Model>();
     if(!d.palm->load("models/coconut_palm_000.gmdl")){d.palm.reset();return false;}
     d.palm->enableStaticCulling();
-    // Each escalator has independent GPU vertices until the frame completes.
-    // Model's weak texture cache shares the original texture across all six.
-    for(auto& mesh:d.escalators){
-        mesh=std::make_unique<Model>();
-        if(!mesh->load("models/coconut_escalator_000.gmdl")){for(auto& m:d.escalators)m.reset();d.palm.reset();return false;}
-    }
-    d.escalatorBase.assign(d.escalators[0]->vertices,d.escalators[0]->vertices+d.escalators[0]->vertexCount);
-    d.escalatorWritten={};
-    d.escalatorCopies={};
-    if(DeferredWrites::directWrites&&!renderQuality().reduced){
-        for(auto& mesh:d.escalatorsAlt){
-            mesh=std::make_unique<Model>();
-            if(!mesh->load("models/coconut_escalator_000.gmdl")){for(auto& m:d.escalatorsAlt)m.reset();break;}
+    // Never written after load: all six escalators draw this one model. The
+    // source models go once it is built (the textures stay shared with it).
+    {
+        Model strip,pieceA,pieceB;
+        if(!strip.load("models/coconut_escalator_000.gmdl")){d.palm.reset();return false;}
+        // Without its pieces the strip still draws (its landing steps just pop).
+        const bool a=pieceA.load("models/obj05_escalator__escalatora_000.gmdl"),b=pieceB.load("models/obj05_escalator__escalatorb_000.gmdl");
+        auto built=buildEscalator(strip,a?&pieceA:nullptr,b?&pieceB:nullptr);
+        if(!built.model){d.palm.reset();return false;}
+        d.escalator=std::move(built.model);d.escalatorBones=built.bones;
+#ifndef MKW_RELEASE
+        if(FILE* f=std::fopen("sdmc:/3ds/MKWiiDS/runtime.log","a")){
+            std::fprintf(f,"escalators: one skinned draw each, %u bones, %lu vertices, %lu indices; %u cooked extension triangles dropped; strip colour %s\n",
+                built.bones,(unsigned long)d.escalator->vertexCount,(unsigned long)d.escalator->indexCount,built.dropped,built.uniform?"uniform":"varies");
+            std::fclose(f);
         }
-        // escalatorLanding at phase 0..20 (Kinoko's step factor): a tread's
-        // Y goes down by at most 200 (lower landing, upper landing) and its
-        // Z by at most 3 x its source depth below the lower landing.
-        auto& b=d.escalatorBounds;b={d.escalatorBase[0].position,d.escalatorBase[0].position};
-        for(const auto& v:d.escalatorBase)b.include(v.position);
-        const float low=std::min(b.minimum.y,0.f);
-        b.minimum.y=std::min(b.minimum.y,-200.f);b.minimum.z+=3.f*low;
-        // Padded for rounding in escalatorLanding.
-        b.minimum=b.minimum-Vec3{1,1,1};b.maximum=b.maximum+Vec3{1,1,1};
+#endif
     }
     const auto* map=K::System::CourseMap::Instance();
     d.palms.clear();
@@ -589,46 +634,28 @@ void CourseObjects::Impl::recordObjects(){
     // Includes the children of paired escalators. Kinoko updates these transforms
     // after its 60 Hz step, including stops/reversals and the looping tread offset.
     // Query each frame so restart/map changes cannot leave stale scene pointers.
-    if(escalators[0]){
-        unsigned index=0;
+    // Each is one skinned draw at the object's transform: bone 0 the rigid
+    // strip, bones 1-4 its landing pieces at the step phase (escalator_pieces.hpp,
+    // a hidden piece collapsed by a zero matrix). Nothing is written to the model.
+    if(escalator){
         for(const auto* obj:K::Field::ObjectDrivableDirector::Instance()->objects()){
             if(obj->id()!=K::Field::ObjectId::Escalator)continue;
-            if(index>=escalators.size())break;
-            const unsigned slot=index;auto& mesh=*escalators[index++];
             if(beyond({obj->pos().x,obj->pos().y,obj->pos().z},escalatorDistance)){diag::tallyHidden("escalator");continue;}
-            const EscalatorWrite write{&mesh,escalatorBase.data(),static_cast<const K::Field::ObjectEscalator*>(obj)->stepFactor()};
-            // Reduced quality: each tread mesh re-poses on alternate frames
-            // (half of them each frame); its transform still moves every frame.
-            const bool skip=renderQuality().animationStep&&escalatorWritten[slot]&&((tick/2+slot)&1);
-            escalatorWritten[slot]=true;
-            auto* deferred=deferredWrites();
-            if(escalatorsAlt[slot]&&!renderQuality().animationStep&&deferred&&deferred->preparing()&&DeferredWrites::directWrites){
-                // directWrites: nothing to draw or write out of view. Else the
-                // copy that holds this phase, or one no unfinished frame draws,
-                // written when the render thread starts the frame.
-                const C3D_Mtx matrix=objectMatrix(obj->transform(),obj->scale());
-                if(!view.model(matrix).intersects(escalatorBounds))continue;
-                auto& copies=escalatorCopies[slot];
-                Model* meshes[2]={&mesh,escalatorsAlt[slot].get()};
-                int use=-1;
-                for(int c=0;c<2&&use<0;++c)if(copies[c].written&&copies[c].phase==write.phase)use=c;
-                if(use<0){
-                    for(int c=0;c<2&&use<0;++c){const unsigned d=copies[c].drawn;if(!d||d+2<=assets.serial)use=c;}
-                    // Never expected (one draw per escalator a frame): the hook writes it, as before.
-                    const bool hook=use<0;if(hook)use=0;
-                    auto* w=static_cast<EscalatorWrite*>(deferred->allocate(sizeof write));*w=write;w->mesh=meshes[use];
-                    if(hook)deferred->queue(writeEscalator,w,"escalator");else deferred->prepare(writeEscalator,w,"escalator");
-                    copies[use].phase=write.phase;copies[use].written=true;
+            const C3D_Mtx matrix=objectMatrix(obj->transform(),obj->scale());
+            if(!view.visible(*escalator,matrix))continue;
+            const unsigned palette=unsigned(objects.palettes.size());
+            objects.palettes.resize(palette+escalatorBones*12,0.f);
+            float* bones=objects.palettes.data()+palette;
+            bones[0]=bones[5]=bones[10]=1.f;
+            if(escalatorBones>1){
+                EscalatorPiece pieces[4];
+                escalatorPieces(static_cast<const K::Field::ObjectEscalator*>(obj)->stepFactor(),pieces);
+                for(unsigned slot=0;slot<4;++slot)if(const auto& p=pieces[slot];p.shown){
+                    float* b=bones+(slot+1)*12;
+                    b[0]=1.f;b[5]=p.scaleY;b[7]=p.y;b[10]=1.f;b[11]=p.z;
                 }
-                copies[use].drawn=assets.serial;
-                objects.records.push_back({ObjectDrawRecord::Plain,false,0,meshes[use],nullptr,0,0,0,0,0,matrix});
-                continue;
             }
-            if(skip){}
-            else if(deferred){
-                auto* w=static_cast<EscalatorWrite*>(deferred->allocate(sizeof write));*w=write;deferred->queue(writeEscalator,w,"escalator");
-            }else writeEscalator(const_cast<EscalatorWrite*>(&write));
-            objects.records.push_back({ObjectDrawRecord::Plain,false,0,&mesh,nullptr,0,0,0,0,0,objectMatrix(obj->transform(),obj->scale())});
+            objects.records.push_back({ObjectDrawRecord::Submit,false,2,escalator.get(),nullptr,escalatorBones,palette,0,0,0,matrix});
         }
     }
     shadows.clear();
