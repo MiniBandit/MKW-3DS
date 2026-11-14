@@ -56,7 +56,7 @@ def main():
         tools = json.loads((WORK / 'tools.json').read_text()) if (WORK / 'tools.json').is_file() else {}
         icon = OUT / 'icon-old3ds.icn'
         subprocess.run([os.environ.get('BANNERTOOL') or tools.get('bannertool') or 'bannertool', 'makesmdh',
-                        '-s', 'Mario Kart WiiDS Old 3DS', '-l', 'Mario Kart WiiDS Old 3DS', '-p', 'Redux',
+                        '-s', 'Mario Kart WiiDS Old 3DS', '-l', 'Mario Kart WiiDS Old 3DS', '-p', 'ethanseagull',
                         '-i', str(art / 'icon48.png'), '-si', str(art / 'icon24.png'), '-o', str(icon)], check=True)
     subprocess.run([MAKEROM, '-f', 'cia', '-target', 't', '-exefslogo', '-elf', str(ELF),
                     '-rsf', str(HERE / 'package' / RSF), '-icon', str(icon),

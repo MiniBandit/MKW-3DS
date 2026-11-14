@@ -780,7 +780,7 @@ class Builder:
         for n in (48, 24):
             icon.resize((n, n), Image.Resampling.LANCZOS).save(art / f'icon{n}.png')
         self.run('banner-icon', [self.tools['bannertool'], 'makesmdh', '-s', 'Mario Kart WiiDS', '-l', 'Mario Kart WiiDS',
-                                 '-p', 'Epic0522/ethanseagull', '-i', art / 'icon48.png', '-si', art / 'icon24.png', '-o', art / 'icon.icn'])
+                                 '-p', 'ethanseagull', '-i', art / 'icon48.png', '-si', art / 'icon24.png', '-o', art / 'icon.icn'])
         self.banner_sound(art)
 
     def banner_sound(self, art):
