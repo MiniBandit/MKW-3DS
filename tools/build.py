@@ -743,10 +743,23 @@ class Builder:
         exe = host / ('menu_sprite_scales' + ('.exe' if os.name == 'nt' else ''))
         objects = host / 'menu-scales-objects'
         objects.mkdir(exist_ok=True)
+        # The measurement reads menu-ui's menu_assets.hpp. The last step below
+        # rewrites that header in place, so a second run must not measure its
+        # own output: keep menu-ui's copy and compile against it. The fit
+        # receipt's hash says whether the header is already fitted.
+        header, original = self.root / 'include/mkw/menu_assets.hpp', host / 'menu-scales-include/mkw/menu_assets.hpp'
+        fitted = read_json(self.root / 'sd-card/3ds/mkw-3ds/models/menu-texture-fit.json', {}).get('header_sha256')
+        if hashlib.sha256(header.read_bytes()).hexdigest() == fitted and not original.is_file():
+            # Fitted by an older build that kept no copy: menu-ui writes it again.
+            self.py('menu-ui-again', 'cook_menu_ui.py', '--jobs', str(self.jobs))
+        if hashlib.sha256(header.read_bytes()).hexdigest() != fitted:
+            original.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(header, original)
 
         def compiled(source):
             obj = objects / (Path(source).stem + '.o')
-            self.run('menu-scales-host-' + Path(source).stem, [self.cxx, '-std=' + CXX_STD, '-O2', '-Iinclude', '-c', source, '-o', obj])
+            self.run('menu-scales-host-' + Path(source).stem, [self.cxx, '-std=' + CXX_STD, '-O2', '-I' + str(original.parent.parent), '-Iinclude',
+                                                               '-c', source, '-o', obj])
             return obj
         with ThreadPoolExecutor(max_workers=self.jobs) as pool:
             objs = list(pool.map(compiled, self.MENU_SCALE_SOURCES))
