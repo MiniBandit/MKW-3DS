@@ -374,6 +374,8 @@ if (water_mipmaps/'receipt.json').is_file():
   if digest_file((assets/rel).with_suffix('.png'))!=info['pngSha256']:
    raise ValueError('Water mipmap pixels changed: '+rel)
   overlay[rel]=src
+ water_textures=set(water['textures'])
+else:water_textures=set()
 # Static world minification levels, retaining maximum-resolution pixels.
 world_mipmaps=ROOT/'build/world-mipmaps'
 if (world_mipmaps/'receipt.json').is_file():
@@ -381,6 +383,8 @@ if (world_mipmaps/'receipt.json').is_file():
  for rel,info in world['models'].items():
   if digest_file(ROOT/info['source'])!=info['sha256']:raise ValueError('World mipmap model changed: '+rel)
  for rel,info in world['textures'].items():
+  # Psea's original mip levels replace box-filtered ones (yo_wave_soko).
+  if rel in water_textures:continue
   src=world_mipmaps/rel
   if rel not in packaged or Path(rel).parent!=Path('textures') or Path(rel).suffix!='.t3x':
    raise ValueError('Invalid world mipmap override: '+rel)
