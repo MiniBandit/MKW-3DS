@@ -3446,7 +3446,9 @@ void Renderer::materialQuadsNow(const Texture* texture,const MaterialQuad* const
     if(texture){
         // NW4R default material: lerp(C0, C1, texture) x vertex colour.
         if(wrapS>=0)C3D_TexSetWrap(const_cast<C3D_Tex*>(&texture->gpu),GPU_TEXTURE_WRAP_PARAM(wrapS),GPU_TEXTURE_WRAP_PARAM(wrapT));
-        C3D_TexBind(0,const_cast<C3D_Tex*>(&texture->gpu));
+        // A course texture keeps its mip cap here too (the Settings page's road
+        // sample): uncapped, the console samples blurrier levels in patches.
+        C3D_TexBind(0,Texture::mipCapOn&&texture->mipCap<texture->gpu.maxLevel?const_cast<Texture*>(texture)->sampledGpu():const_cast<C3D_Tex*>(&texture->gpu));
         C3D_TexEnvColor(e0,gpuColor(color0));C3D_TexEnvSrc(e0,C3D_Both,GPU_CONSTANT);C3D_TexEnvFunc(e0,C3D_Both,GPU_REPLACE);
         auto* e1=C3D_GetTexEnv(1);C3D_TexEnvColor(e1,gpuColor(color1));
         C3D_TexEnvSrc(e1,C3D_Both,GPU_CONSTANT,GPU_PREVIOUS,GPU_TEXTURE0);C3D_TexEnvFunc(e1,C3D_Both,GPU_INTERPOLATE);
