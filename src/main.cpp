@@ -1657,7 +1657,10 @@ int main() {
     unsigned raceWarmupFrames=0;
     auto startIntro=[&](){
         intro.stop();introClearance.clear();
+        // Time Trials start as on the Wii: no course preview, straight to the
+        // start camera swinging round the kart, then the countdown.
         if(!fullRace)return;
+        if(timeTrial){if(auto* race=K::System::RaceManager::Instance())race->setIntroHeld(false);return;}
         size_t size=0;const void* kmp=K::System::ResourceManager::Instance()->getFile("course.kmp",&size,K::System::ArchiveId::Course);
         if(intro.load(kmp,size)){
             mkw::IntroMeshClearance visibleScenery;

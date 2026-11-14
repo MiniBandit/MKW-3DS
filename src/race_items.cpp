@@ -674,7 +674,10 @@ void RaceItems::updateHolder(unsigned i){
     if(canPress){
         const auto kind=h.deployed?h.heldKind:h.item;
         // Neutral drops traps; stick-up explicitly throws them forward.
-        const bool backwards=kind==ItemKind::Banana||kind==ItemKind::TripleBanana||kind==ItemKind::FakeBox?!input.forwards:input.backwards;
+        // A Blue Shell always launches forward, whatever the stick or a CPU's throw
+        // direction says (ItemObjKouraAo takes no throw direction).
+        const bool backwards=kind==ItemKind::BlueShell?false:
+            kind==ItemKind::Banana||kind==ItemKind::TripleBanana||kind==ItemKind::FakeBox?!input.forwards:input.backwards;
         // A dragged single item is thrown on the first such frame the button is up (flag 0x100
         // re-armed by the trail update each frame), so a release during a spin or the start
         // burnout throws once it ends. Inventory use needs the press edge (0x2000).
