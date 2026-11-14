@@ -1160,10 +1160,12 @@ bool SoundSystem::start() {
  s->engine.setup(&s->archive, s->hw.get());
  s->engine.setStreamOpener(&Impl::openStream, s);
  s->engine.setResidency(&s->cache);
- // System Settings sound: retail NW4R mixes for mono, stereo or DPL2; the
- // 3DS surround mode takes the four DPL2 channels (front and rear pairs).
+ // System Settings sound: retail NW4R mixes for mono, stereo or surround. The
+ // 3DS surround mode has four discrete channels (front and rear pairs), so it
+ // takes NW4R's plain surround mix, not DPL2's pan correction for a Pro Logic
+ // II encoder and receiver (that leaks side sounds into the opposite rear).
  {const int mode=MenuMovieAudio::outputMode();ndspSetOutputMode(ndspOutputMode(mode));
-  s->engine.setOutputMode(mode==NDSP_OUTPUT_MONO?OutputMono:mode==NDSP_OUTPUT_SURROUND?OutputDpl2:OutputStereo);}
+  s->engine.setOutputMode(mode==NDSP_OUTPUT_MONO?OutputMono:mode==NDSP_OUTPUT_SURROUND?OutputSurround:OutputStereo);}
  ndspSetClippingMode(NDSP_CLIP_SOFT);
  // Threads: New 3DS core 2; Old 3DS core 1 with an explicit app time limit
  // (the system core is time sliced; docs/AUDIO_SOURCE.md); else core 0

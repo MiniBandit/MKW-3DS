@@ -28,6 +28,10 @@ enum PanMode : u8 { PanDual = 0, PanBalance = 1 };
 enum OutputMode : u8 { OutputStereo = 0, OutputSurround = 1, OutputDpl2 = 2, OutputMono = 3 };
 // Main-bus gains for one hardware channel (AX mix 0x8000 == 1.0).
 struct Gains { f32 left = 0, right = 0, rearLeft = 0, rearRight = 0; };
+// 3DS Surround only (not retail): share of the front pair also sent to the
+// rear pair, at equal power (front x 1/sqrt(1+k^2), rear x k/sqrt(1+k^2)).
+// Music (streams, menu movies) more than effects; sounds behind keep their mix.
+inline constexpr f32 SurroundSpreadMusic = 0.75f, SurroundSpreadEffects = 0.6f;
 enum PanCurve : u8 { CurveSqrt, CurveSqrt0Db, CurveSqrt0DbClamp, CurveSinCos, CurveSinCos0Db, CurveSinCos0DbClamp,
                      CurveLinear, CurveLinear0Db, CurveLinear0DbClamp };
 

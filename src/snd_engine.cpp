@@ -460,8 +460,6 @@ struct Engine::Impl {
  EngineStats stats;
  u32 warningNotes = 0, ledCues = 0;
  f32 masterVolume = 1;
- // Surround (DPL2) only: share of the front pair also sent to the rear pair.
- static constexpr f32 SurroundSpreadMusic = 0.75f, SurroundSpreadEffects = 0.4f;
  OutputMode outputMode = OutputStereo;
  std::vector<LoadedFile*> files; // indexed by file id
  std::unique_ptr<StreamFeed> (*openStream)(void*, const char*, u32) = nullptr;
@@ -584,11 +582,14 @@ struct Engine::Impl {
    Gains g;
    switch (outputMode) {
    case OutputMono: g.left = g.right = mix(0.5f * (left + right)); break;
+   case OutputSurround:
    case OutputDpl2: {
     // Not retail: a Pro Logic II receiver filled the Wii's rear speakers with
     // the music's ambience; 3DS surround has only this mix. Spread the front
-    // pair into the rear (music more than effects) at equal power, so music
-    // and front sounds fill the field; sounds behind keep their rear-only mix.
+    // pair into the rear (music more than effects), so music and front sounds
+    // fill the field; sounds behind keep their rear-only mix. The rear adds its
+    // own share and the spread by power, so every direction keeps the stereo
+    // loudness (front^2 + rear^2 per side is unchanged).
     // The surround ratios only here; the spread's equal-power factors once.
     const f32 front = surroundRatio(span, info.curve), rear = surroundRatio(2.0f - span, info.curve);
     static const f32 nMusic = 1.0f / std::sqrt(1.0f + SurroundSpreadMusic * SurroundSpreadMusic),
@@ -596,7 +597,8 @@ struct Engine::Impl {
     const f32 k = v.stream ? SurroundSpreadMusic : SurroundSpreadEffects, n = v.stream ? nMusic : nEffects;
     const f32 fl = left * front, fr = right * front;
     g.left = mix(fl * n); g.right = mix(fr * n);
-    g.rearLeft = mix(left * rear + fl * (n * k)); g.rearRight = mix(right * rear + fr * (n * k));
+    const f32 spread = n * k * front, back = std::sqrt(rear * rear + spread * spread);
+    g.rearLeft = mix(left * back); g.rearRight = mix(right * back);
     break;
    }
    default: g.left = mix(left); g.right = mix(right); break;

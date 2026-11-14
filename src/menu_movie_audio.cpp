@@ -2,9 +2,11 @@
 #include <mkw/asset_loader.hpp>
 #include <mkw/dsp_adpcm.hpp>
 #include <mkw/sound_system.hpp>
+#include <mkw/snd_engine.hpp>
 #include <3ds.h>
 #include <array>
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -18,6 +20,16 @@ std::uint32_t u32(const unsigned char* p){return std::uint32_t(p[0])|(std::uint3
 constexpr unsigned SamplesPerBuffer=4096;
 int dspState=0; // 0 untried, 1 ready, -1 unavailable
 int systemOutput=NDSP_OUTPUT_STEREO;
+// Front pair at the movie's gain; in Surround also the rear pair, spread as the
+// engine spreads music (snd::SurroundSpreadMusic, equal power).
+void movieMix(int channel,float gain){
+ gain=std::clamp(gain,0.f,1.f);float mix[12]={};
+ if(systemOutput==NDSP_OUTPUT_SURROUND){
+  static const float k=snd::SurroundSpreadMusic,n=1.f/std::sqrt(1.f+k*k);
+  mix[0]=mix[1]=gain*n;mix[2]=mix[3]=gain*n*k;
+ }else mix[0]=mix[1]=gain;
+ ndspChnSetMix(channel,mix);
+}
 // MADP files are read in whole chunks from chunk-aligned offsets, so each
 // read is one SD request of whole sectors.
 constexpr unsigned AdpcmChunk=32u<<10;
@@ -188,7 +200,7 @@ void MenuMovieAudio::update(){
   ndspChnReset(c);ndspSetOutputMode(ndspOutputMode(systemOutput));
   ndspChnSetInterp(c,NDSP_INTERP_LINEAR);ndspChnSetRate(c,float(stream.rate));
   ndspChnSetFormat(c,stream.channels==1?NDSP_FORMAT_MONO_PCM16:NDSP_FORMAT_STEREO_PCM16);
-  float mix[12]={};mix[0]=mix[1]=std::clamp(s.volume,0.f,1.f);ndspChnSetMix(c,mix);
+  movieMix(c,s.volume);
   s.dsp=true;
   for(unsigned i=0;i<s.waves.size();++i){
    auto& wave=s.waves[i];wave={};wave.data_vaddr=stream.buffers[i];wave.status=NDSP_WBUF_FREE;
@@ -219,7 +231,7 @@ void MenuMovieAudio::update(){
 }
 void MenuMovieAudio::setVolume(float gain){
  impl_->volume=gain;if(!impl_->dsp)return;
- float mix[12]={};mix[0]=mix[1]=std::clamp(gain,0.f,1.f);ndspChnSetMix(impl_->channel,mix);
+ movieMix(impl_->channel,gain);
 }
 bool MenuMovieAudio::ready()const{return impl_->dsp&&!impl_->failed;}
 bool MenuMovieAudio::finished()const{
