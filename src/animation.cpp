@@ -536,7 +536,7 @@ bool DriverAnimation::apply(Model& model,int clip,float frame,unsigned tick,int 
         static std::vector<std::string> seen;
         if(std::find(seen.begin(),seen.end(),path_)==seen.end()){
             seen.push_back(path_);
-            if(FILE* f=std::fopen("sdmc:/3ds/mkw-3ds/cpu-pose-banks.txt","a")){
+            if(FILE* f=std::fopen("sdmc:/3ds/MKWiiDS/cpu-pose-banks.txt","a")){
                 std::fprintf(f,"%s matrices=%u vertices=%u model_vertices=%u skin_normals=%d baked=%d bone_indices=%d\n",path_.c_str(),matrices_,vertices_,
                              unsigned(model.vertexCount),int(skinNormals_),int(model.staticLightingBaked),int(model.skinBoneIndices!=nullptr));
                 std::fclose(f);

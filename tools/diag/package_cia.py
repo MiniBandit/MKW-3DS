@@ -2,7 +2,7 @@
 
     python tools/diag/package_cia.py
 
-build/diag/mkw-3ds-diag.elf -> build/diag/MKW-3DS-v<VERSION>-DIAG.cia,
+build/diag/mkw-3ds-diag.elf -> build/diag/MarioKartWiiDS-v<VERSION>-DIAG.cia,
 title 000400000F4B5D00 "MKW3DSDIAG". It installs beside the release title and
 shares its SD data.
 
@@ -18,7 +18,7 @@ import hashlib, json, os, shutil, struct, subprocess, sys
 ROOT = Path(__file__).resolve().parents[2]
 HERE = Path(__file__).resolve().parent
 # MKW_DIAG_VARIANT=o3dstest (compile.py): the Old 3DS test build for a New 3DS,
-# title 000400000F4B5E00 "Mario Kart Wii 3DS Old 3DS" (HOME Menu) from package/diag-o3ds-test.rsf, CIA ...-Old3DS.cia.
+# title 000400000F4B5E00 "Mario Kart WiiDS Old 3DS" (HOME Menu) from package/diag-o3ds-test.rsf, CIA ...-Old3DS.cia.
 VARIANT = os.environ.get('MKW_DIAG_VARIANT', '')
 OUT = ROOT / ('build/diag-' + VARIANT if VARIANT else 'build/diag')
 ELF = OUT / 'mkw-3ds-diag.elf'
@@ -47,16 +47,16 @@ def main():
         raise SystemExit(f'{ELF} missing: run tools/diag/compile.py first.')
     if not BANNER.is_file():
         raise SystemExit(f'{BANNER} missing: run tools/build.py first or set MKW_BANNER.')
-    cia = OUT / f'MKW-3DS-v{VERSION}-{SUFFIX}.cia'
+    cia = OUT / f'MarioKartWiiDS-v{VERSION}-{SUFFIX}.cia'
     icon = HERE / 'package/icon-diag.icn'
     if VARIANT in ('o3dstest', 'o3dsrelease'):
-        # The Old 3DS build shows on the HOME Menu as "Mario Kart Wii 3DS Old 3DS" with
+        # The Old 3DS build shows on the HOME Menu as "Mario Kart WiiDS Old 3DS" with
         # the game's own icon (the standard build's icon48/24), beside the game.
         art = WORK / 'home-banner/production'
         tools = json.loads((WORK / 'tools.json').read_text()) if (WORK / 'tools.json').is_file() else {}
         icon = OUT / 'icon-old3ds.icn'
         subprocess.run([os.environ.get('BANNERTOOL') or tools.get('bannertool') or 'bannertool', 'makesmdh',
-                        '-s', 'Mario Kart Wii 3DS Old 3DS', '-l', 'Mario Kart Wii 3DS Old 3DS', '-p', 'Redux',
+                        '-s', 'Mario Kart WiiDS Old 3DS', '-l', 'Mario Kart WiiDS Old 3DS', '-p', 'Redux',
                         '-i', str(art / 'icon48.png'), '-si', str(art / 'icon24.png'), '-o', str(icon)], check=True)
     subprocess.run([MAKEROM, '-f', 'cia', '-target', 't', '-exefslogo', '-elf', str(ELF),
                     '-rsf', str(HERE / 'package' / RSF), '-icon', str(icon),

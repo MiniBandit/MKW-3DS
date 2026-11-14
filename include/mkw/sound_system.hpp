@@ -35,7 +35,7 @@ class SoundSystem {
 public:
  static SoundSystem& instance();
  // Loads audio/sound.arc and opens audio/revo_kart.brsar under the asset
- // root (romfs:/ or sdmc:/3ds/mkw-3ds). Requires MenuMovieAudio::initialize.
+ // root (romfs:/ or sdmc:/3ds/MKWiiDS). Requires MenuMovieAudio::initialize.
  bool start();
  void stop();
  // Preserve only the already-playing results music across a loading handoff.

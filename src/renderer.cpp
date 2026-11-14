@@ -756,16 +756,16 @@ bool Scene::load(const char* path){
 }
 void Renderer::readSwitches(){
     auto exists=[](const char* path){FILE* f=std::fopen(path,"r");if(f)std::fclose(f);return f!=nullptr;};
-    stateCache=!exists("sdmc:/3ds/mkw-3ds/no-state-cache.txt");
-    quadMerge=!exists("sdmc:/3ds/mkw-3ds/no-quad-merge.txt");
-    volumeRects=!exists("sdmc:/3ds/mkw-3ds/no-volume-rects.txt");
-    DeferredWrites::directWrites=!exists("sdmc:/3ds/mkw-3ds/no-skin-direct.txt");
+    stateCache=!exists("sdmc:/3ds/MKWiiDS/no-state-cache.txt");
+    quadMerge=!exists("sdmc:/3ds/MKWiiDS/no-quad-merge.txt");
+    volumeRects=!exists("sdmc:/3ds/MKWiiDS/no-volume-rects.txt");
+    DeferredWrites::directWrites=!exists("sdmc:/3ds/MKWiiDS/no-skin-direct.txt");
 #ifndef MKW_RELEASE
-    stateCacheVerify=exists("sdmc:/3ds/mkw-3ds/state-cache-verify.txt");
-    drawTiming=exists("sdmc:/3ds/mkw-3ds/draw-timing.txt");
-    cmdHash=exists("sdmc:/3ds/mkw-3ds/cmd-hash.txt");
+    stateCacheVerify=exists("sdmc:/3ds/MKWiiDS/state-cache-verify.txt");
+    drawTiming=exists("sdmc:/3ds/MKWiiDS/draw-timing.txt");
+    cmdHash=exists("sdmc:/3ds/MKWiiDS/cmd-hash.txt");
     if(cmdHash){
-        if(FILE* f=std::fopen("sdmc:/3ds/mkw-3ds/cmd-dump.txt","r")){unsigned tick;while(std::fscanf(f,"%u",&tick)==1)cmdDumpTicks_.push_back(tick);std::fclose(f);}
+        if(FILE* f=std::fopen("sdmc:/3ds/MKWiiDS/cmd-dump.txt","r")){unsigned tick;while(std::fscanf(f,"%u",&tick)==1)cmdDumpTicks_.push_back(tick);std::fclose(f);}
         C3D_FrameEndHook(cmdHashFrameEnd,this);
     }
 #endif
@@ -2969,7 +2969,7 @@ void Renderer::effectListNow(const RaceEffects& effects,const ef::DrawList& list
         constexpr const char* diagnosed[]={"rk_itemBox","rk_bananaSmk","rk_miniTurbo","rk_spinHalfL","rk_spinHalfR","rk_spinL","rk_spinR","rk_driftSpark1LB_Spark00","rk_driftSpark1LB_Spark01","rk_driftSpark1RB_Spark00","rk_driftSpark1RB_Spark01","rk_driftSpark1CB_Spark00","rk_driftSpark1CB_Spark01"};
         for(unsigned i=0;i<std::size(diagnosed);++i)if(!std::strcmp(b.res->name,diagnosed[i])&&!(state.diagnosticMask&(1u<<i))){
             state.diagnosticMask|=1u<<i;
-            if(FILE* log=std::fopen("sdmc:/3ds/mkw-3ds/effects-state.txt","a")){
+            if(FILE* log=std::fopen("sdmc:/3ds/MKWiiDS/effects-state.txt","a")){
                 std::fprintf(log,"draw generation=%u root=%s vertices=%lu missingTexture=%u linear=%lu\n",effects.generation(),b.res->name,(unsigned long)count,missing,(unsigned long)linearSpaceFree());
                 std::fclose(log);
             }

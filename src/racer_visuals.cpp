@@ -153,7 +153,7 @@ bool RacerVisuals::load(){
         auto r=std::make_unique<Impl::Racer>();const auto& player=config.players[i];
         std::string failure;
         if(!r->load(unsigned(player.character),unsigned(player.vehicle),config.teams?RaceTeam(player.team):RaceTeam::None,&failure,diag::unlitBanks&&!diag::liveOpponents,diag::liveOpponents)){
-            if(auto* log=std::fopen("sdmc:/3ds/mkw-3ds/opponent-load-error.txt","w")){
+            if(auto* log=std::fopen("sdmc:/3ds/MKWiiDS/opponent-load-error.txt","w")){
                 // Free heap and the largest LINEAR block (a free total says nothing about fragmentation).
                 const struct mallinfo m=mallinfo();const size_t heapTotal=envGetHeapSize();
                 const size_t heapFree=(heapTotal>size_t(m.arena)?heapTotal-size_t(m.arena):0)+size_t(m.fordblks);

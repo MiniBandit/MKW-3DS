@@ -1,6 +1,6 @@
 #pragma once
 // Whole-game options from the Settings page (the license screen's corner
-// button): sd:/3ds/mkw-3ds/settings.dat, 16 bytes: "MKWS0001", the four
+// button): sd:/3ds/MKWiiDS/settings.dat, 16 bytes: "MKWS0001", the four
 // values, two spare bytes, then a CRC-32 of the first 12 bytes.
 #include <array>
 #include <cstdint>

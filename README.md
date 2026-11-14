@@ -1,4 +1,4 @@
-# Mario Kart Wii 3DS Redux
+# Mario Kart WiiDS
 
 A native Nintendo 3DS port of Mario Kart Wii. This fork builds on
 [Epic0522's Redux](https://github.com/Epic0522/MarioKartWii-3DS-Redux) and adds
@@ -101,7 +101,7 @@ where it left off. The results are in `build/standard/output`.
 ## Installing
 
 1. Copy the `sd/3ds` folder to the root of your SD card.
-2. Install the `.cia` file with FBI, or run `mkw-3ds.3dsx` from the Homebrew Launcher.
+2. Install the `.cia` file with FBI, or run `MarioKartWiiDS.3dsx` from the Homebrew Launcher.
 
 ## Updating
 
@@ -117,9 +117,13 @@ the same `export` lines on macOS. Only what changed is rebuilt, which usually ta
 changes game data does a full build. Then repeat the install steps. Your saves
 are kept.
 
-If you're coming from a version before 1.0.0, first delete everything in
-`sd:/3ds/mkw-3ds/` except `rksys.dat`, `settings.dat`, `last-license.txt`, the
-`license-options-*.dat` and `mii-*.3dsmii` files, and the `ghosts` folder.
+Since 1.1.0 the game is its own title, "Mario Kart WiiDS", with its own folder,
+`sd:/3ds/MKWiiDS/`, so it installs beside other versions instead of over them. To
+keep your licenses, records, ghosts and settings from an earlier version, copy
+`rksys.dat`, `settings.dat`, `last-license.txt`, the `license-options-*.dat` and
+`mii-*.3dsmii` files, and the `ghosts` folder from `sd:/3ds/mkw-3ds/` into
+`sd:/3ds/MKWiiDS/`. Delete `sd:/3ds/mkw-3ds/` and the old title in FBI if you no
+longer want them.
 
 See [CHANGELOG.md](CHANGELOG.md) for what's new.
 

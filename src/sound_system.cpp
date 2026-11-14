@@ -942,7 +942,7 @@ struct SoundSystem::Impl {
      const unsigned failures = ++files[next].loadFailures;
      files[next].retryAfter = nowMs() + (failures == 1 ? 250.f : failures == 2 ? 1000.f : 5000.f);
      LightLock_Unlock(&fileLock);
-     if (failures <= 3) if (FILE* log = std::fopen("sdmc:/3ds/mkw-3ds/audio-load-errors.txt", "a")) {
+     if (failures <= 3) if (FILE* log = std::fopen("sdmc:/3ds/MKWiiDS/audio-load-errors.txt", "a")) {
       std::fprintf(log, "bank=%lu attempt=%u linear_free=%lu resident=%lu\n", (unsigned long)next,
                    failures, (unsigned long)linearSpaceFree(), (unsigned long)waveBytes.load());
       std::fclose(log);

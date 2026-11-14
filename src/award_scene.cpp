@@ -135,7 +135,7 @@ AwardSceneResult runAwardPodium(Renderer& renderer,const AwardResults& results,v
 #ifndef MKW_RELEASE
   renderer.waitForGpu();
   const double ms=double(svcGetSystemTick()-started)*1000.0/SYSCLOCK_ARM11;
-  if(FILE* file=std::fopen("sdmc:/3ds/mkw-3ds/award-load-times.jsonl","a")){
+  if(FILE* file=std::fopen("sdmc:/3ds/MKWiiDS/award-load-times.jsonl","a")){
    std::fprintf(file,"{\"stage\":\"%s\",\"milliseconds\":%.3f,\"within2000ms\":%s}\n",stage,ms,ms<=2000?"true":"false");std::fclose(file);
   }
 #endif

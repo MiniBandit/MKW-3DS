@@ -16,7 +16,7 @@ Kinoko changes:
    for Old 3DS paths) builds an instrumented ELF in `build/diag-o3dstest-pgogen/`.
 2. Run races with it (Azahar in Old 3DS mode is fine: the counts are the same as on
    the console). At each race end the instrumented code writes its counters to
-   `sdmc:/3ds/mkw-3ds/pgo/<path below objects/>`, merged over the races.
+   `sdmc:/3ds/MKWiiDS/pgo/<path below objects/>`, merged over the races.
 3. Replace this folder's `.gcda` files with the contents of `pgo/vendor/kinoko/source/`
    (and `tools/pgo/port/`'s with `pgo/src/`: the same training run profiles both).
 

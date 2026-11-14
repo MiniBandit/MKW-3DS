@@ -172,7 +172,7 @@ finds them there. The cook receipts (`.json`) aren't shipped: the game reads
 none of them.
 
 The SD folder is `menu.pak`, `race.pak`, `stream.pak` and
-`mkw-3ds.3dsx` (`build/mkw-3ds.3dsx` under its shipped name).
+`MarioKartWiiDS.3dsx` (`build/mkw-3ds.3dsx` under its shipped name).
 The game still opens loose files that no pack holds, so an older SD folder
 keeps working. A folder copied over an older one keeps the older loose files,
 which slow every file lookup on the console: `slim_sd_models.py <sd folder>`
@@ -187,7 +187,7 @@ For the CIA, remove the `RomFs` block from a copy of
 then:
 
 ```sh
-makerom -f cia -target t -exefslogo -elf mkw-3ds.elf -rsf external-sd.rsf -icon icon.icn -banner banner-startgrid.bnr -ver 1040 -DAPP_REMASTER=0 -o MKW-3DS-REDUX-v1.1.0.cia
+makerom -f cia -target t -exefslogo -elf mkw-3ds.elf -rsf external-sd.rsf -icon icon.icn -banner banner-startgrid.bnr -ver 1040 -DAPP_REMASTER=0 -o MarioKartWiiDS-v1.1.0.cia
 ```
 
 The title version is `major << 10 | minor << 4 | micro`, so 1.1.0 is 1040.

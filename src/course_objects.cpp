@@ -58,11 +58,11 @@ bool staticPrecull=true,precullCheck=false,objectSetLog=false,resetSkip=true,swi
 void readSwitches(){
     if(switchesRead)return;switchesRead=true;
     auto exists=[](const char* path){FILE* f=std::fopen(path,"r");if(f)std::fclose(f);return f!=nullptr;};
-    staticPrecull=!exists("sdmc:/3ds/mkw-3ds/no-static-precull.txt");
+    staticPrecull=!exists("sdmc:/3ds/MKWiiDS/no-static-precull.txt");
 #ifndef MKW_RELEASE
-    precullCheck=exists("sdmc:/3ds/mkw-3ds/precull-check.txt");
-    objectSetLog=exists("sdmc:/3ds/mkw-3ds/object-set.txt");
-    resetSkip=!exists("sdmc:/3ds/mkw-3ds/no-reset-skip.txt");
+    precullCheck=exists("sdmc:/3ds/MKWiiDS/precull-check.txt");
+    objectSetLog=exists("sdmc:/3ds/MKWiiDS/object-set.txt");
+    resetSkip=!exists("sdmc:/3ds/MKWiiDS/no-reset-skip.txt");
 #endif
 }
 CourseObjects::PrecullStats precullStats;
@@ -703,7 +703,7 @@ void CourseObjects::Impl::logObjectSet(){
     char line[96];std::snprintf(line,sizeof line,"%u,%u,%u,%u,%08lx\n",tick,unsigned(objects.records.size()),unsigned(water.records.size()),unsigned(shadows.size()),(unsigned long)h);
     objectSetLines+=line;
     if(objectSetLines.size()>8192){
-        if(FILE* f=std::fopen("sdmc:/3ds/mkw-3ds/object-set.csv","a")){std::fputs(objectSetLines.c_str(),f);std::fclose(f);}
+        if(FILE* f=std::fopen("sdmc:/3ds/MKWiiDS/object-set.csv","a")){std::fputs(objectSetLines.c_str(),f);std::fclose(f);}
         objectSetLines.clear();
     }
 }

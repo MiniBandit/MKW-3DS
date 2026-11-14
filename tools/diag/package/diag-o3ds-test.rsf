@@ -1,7 +1,7 @@
 # Old 3DS test build for a New 3DS (DIAG variant o3dstest, MKW_OLD3DS_TEST;
 # include/mkw/console_model.hpp). SystemModeExt Legacy: a New 3DS launches it
 # in the Old 3DS 80 MB mode (heap ~43 MB). 268 MHz, no L2 cache, no core 2.
-# Its own title (000400000F4B5E00, HOME Menu "Mario Kart Wii 3DS Old 3DS") beside the
+# Its own title (000400000F4B5E00, HOME Menu "Mario Kart WiiDS Old 3DS") beside the
 # game and the DIAG; same SD folder.
 # Otherwise as diag-external-sd.rsf.
 BasicInfo:

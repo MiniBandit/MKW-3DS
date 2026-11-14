@@ -40,7 +40,7 @@ void traceLanding(const ItemActor& a,const ItemSurface& surface){
     static unsigned count=0;
     if(a.owner!=0||(!(a.kind==ItemKind::Banana)&&!a.scattered)||a.age%32||count>=16)return;
     ++count;
-    if(FILE* log=std::fopen("sdmc:/3ds/mkw-3ds/item-ground-state.txt","a")){
+    if(FILE* log=std::fopen("sdmc:/3ds/MKWiiDS/item-ground-state.txt","a")){
         std::fprintf(log,"kind=%u age=%u scattered=%u settled=%u pos=%.2f,%.2f,%.2f velocity=%.2f,%.2f,%.2f floor=%.3f,%.3f,%.3f correction=%.2f,%.2f,%.2f\n",unsigned(a.kind),a.age,a.scattered,a.settled,a.position.x,a.position.y,a.position.z,a.velocity.x,a.velocity.y,a.velocity.z,surface.floorNormal.x,surface.floorNormal.y,surface.floorNormal.z,surface.correction.x,surface.correction.y,surface.correction.z);
         std::fclose(log);
     }

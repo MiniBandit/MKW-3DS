@@ -1,8 +1,8 @@
 @echo off
 setlocal
-rem Builds Mario Kart Wii 3DS Redux on Windows: double-click it and pick your disc
+rem Builds Mario Kart WiiDS on Windows: double-click it and pick your disc
 rem image, or drop the image on this file. Anything missing is downloaded.
-title Mario Kart Wii 3DS Redux builder
+title Mario Kart WiiDS builder
 set "MKW_BAT=%~f0"
 set "MKW_DISC=%~1"
 powershell -NoProfile -ExecutionPolicy Bypass -Command "$s=[IO.File]::ReadAllText($env:MKW_BAT);Invoke-Expression $s.Substring($s.IndexOf('#'+'POWERSHELL'))"

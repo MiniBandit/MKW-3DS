@@ -79,7 +79,7 @@ Resize the supplied 64-pixel source into the two SMDH sizes:
 
 ```sh
 python3 -c "from PIL import Image; from pathlib import Path; p=Path('/external/home-banner/production'); im=Image.open('tools/release/artwork/icon.png').convert('RGBA'); [(im.resize((n,n),Image.Resampling.LANCZOS).save(p/f'icon{n}.png')) for n in (48,24)]"
-bannertool makesmdh -s "Mario Kart Wii 3DS" -l "Mario Kart Wii 3DS Redux" -p "Redux" -i /external/home-banner/production/icon48.png -si /external/home-banner/production/icon24.png -o /external/home-banner/production/icon.icn
+bannertool makesmdh -s "Mario Kart WiiDS" -l "Mario Kart WiiDS" -p "Epic0522/ethanseagull" -i /external/home-banner/production/icon48.png -si /external/home-banner/production/icon24.png -o /external/home-banner/production/icon.icn
 ```
 
 ## 7. Package the banner with its sound

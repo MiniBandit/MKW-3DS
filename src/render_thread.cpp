@@ -437,7 +437,7 @@ void Renderer::cmdHashFrameEnd(void* self){
     if(!r.cmdHashActive_)return;
     r.cmdHashUpdate();r.cmdHashActive_=false;
     if(!r.cmdHashFile_){
-        r.cmdHashFile_=std::fopen("sdmc:/3ds/mkw-3ds/cmd-hash.csv","w");
+        r.cmdHashFile_=std::fopen("sdmc:/3ds/MKWiiDS/cmd-hash.csv","w");
         if(r.cmdHashFile_)std::fputs("frame,tick,words,hash,valid,buffers\n",r.cmdHashFile_);
     }
     if(r.cmdHashFile_){
@@ -448,7 +448,7 @@ void Renderer::cmdHashFrameEnd(void* self){
         if(r.cmdHashFrame_%120==0)std::fflush(r.cmdHashFile_);
     }
     if(r.cmdHashDumping_){
-        char path[96];std::snprintf(path,sizeof path,"sdmc:/3ds/mkw-3ds/cmd-dump-%05lu-%06lu.bin",(unsigned long)r.cmdHashTick_,(unsigned long)r.cmdHashFrame_);
+        char path[96];std::snprintf(path,sizeof path,"sdmc:/3ds/MKWiiDS/cmd-dump-%05lu-%06lu.bin",(unsigned long)r.cmdHashTick_,(unsigned long)r.cmdHashFrame_);
         if(FILE* f=std::fopen(path,"wb")){std::fwrite(r.cmdDumpWords_.data(),4,r.cmdDumpWords_.size(),f);std::fclose(f);}
         // One dump per listed tick.
         r.cmdDumpTicks_.erase(std::remove(r.cmdDumpTicks_.begin(),r.cmdDumpTicks_.end(),r.cmdHashTick_),r.cmdDumpTicks_.end());

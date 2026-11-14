@@ -271,7 +271,7 @@ RaceBottomScreen::~RaceBottomScreen(){aptUnhook(&aptCookie);}
 bool RaceBottomScreen::active() const {return impl_->target;}
 
 static bool sdFile(const char* name){
-    char path[96];std::snprintf(path,sizeof path,"sdmc:/3ds/mkw-3ds/%s",name);
+    char path[96];std::snprintf(path,sizeof path,"sdmc:/3ds/MKWiiDS/%s",name);
     FILE* f=std::fopen(path,"rb");if(f)std::fclose(f);return f!=nullptr;
 }
 
@@ -279,8 +279,8 @@ bool RaceBottomScreen::load(Renderer& renderer,unsigned course){
     auto& m=*impl_;
     rowMargin=1.f;TimerScale=21.f/32.f;
 #ifndef MKW_RELEASE
-    if(FILE* f=std::fopen("sdmc:/3ds/mkw-3ds/timer-scale.txt","r")){float v;if(std::fscanf(f,"%f",&v)==1&&v>=.3f&&v<=1.f)TimerScale=v;std::fclose(f);}
-    if(FILE* f=std::fopen("sdmc:/3ds/mkw-3ds/rows-margin.txt","r")){float v;if(std::fscanf(f,"%f",&v)==1&&v>=0&&v<=8)rowMargin=v;std::fclose(f);}
+    if(FILE* f=std::fopen("sdmc:/3ds/MKWiiDS/timer-scale.txt","r")){float v;if(std::fscanf(f,"%f",&v)==1&&v>=.3f&&v<=1.f)TimerScale=v;std::fclose(f);}
+    if(FILE* f=std::fopen("sdmc:/3ds/MKWiiDS/rows-margin.txt","r")){float v;if(std::fscanf(f,"%f",&v)==1&&v>=0&&v<=8)rowMargin=v;std::fclose(f);}
 #endif
     // A/B files are read once a session (three SD opens per race load otherwise).
     static const bool noKeep=sdFile("no-race-bottom-keep.txt"),noDepthOff=sdFile("no-bottom-depth-off.txt"),noDepthFree=sdFile("no-bottom-depth-free.txt");
@@ -680,7 +680,7 @@ bool RaceBottomScreen::skipRace(Renderer& renderer){
 void RaceBottomScreen::endRace(){
     auto& m=*impl_;
 #ifndef MKW_RELEASE
-    if(m.keptFrames+m.drawnFrames)if(FILE* f=std::fopen("sdmc:/3ds/mkw-3ds/runtime.log","a")){
+    if(m.keptFrames+m.drawnFrames)if(FILE* f=std::fopen("sdmc:/3ds/MKWiiDS/runtime.log","a")){
         std::fprintf(f,"bottom keep: course=%d kept=%u drawn=%u skipped=%u keep=%d\n",m.course==~0u?-1:int(m.course),m.keptFrames,m.drawnFrames,m.skippedFrames,int(m.keep));std::fclose(f);}
 #endif
     m.keptFrames=m.drawnFrames=m.skippedFrames=0;m.shownValid=false;

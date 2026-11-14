@@ -5,14 +5,14 @@
 # opponents. New 3DS gets 124 MB, 804 MHz, L2 cache and core 2 (render
 # thread, job worker and audio). Based on 2gifts/melee-3ds port/3ds/melee.rsf.
 BasicInfo:
-  Title: MKW3DS
+  Title: MKWiiDS
   ProductCode: CTR-P-MKW3
   Logo: Nintendo # the stock "Nintendo 3DS" splash; custom logos crash the HOME Menu
 RomFs:
   RootPath: $(APP_ROMFS)
 TitleInfo:
   Category: Application
-  UniqueId: 0xF4B57
+  UniqueId: 0xF4B60
 Option:
   UseOnSD: true
   FreeProductCode: true
