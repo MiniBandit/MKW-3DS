@@ -135,6 +135,7 @@ bool RaceEffects::loadMemory(const void* bytes,size_t size){
     if(ok)loadError_="none";
     return ready=ok;
 }
+int RaceEffects::findDecorative(const char* name) const {return renderQuality().reduced?-1:find(name);}
 int RaceEffects::find(const char* name) const {
     const auto& res=system_->resources;
     for(size_t i=0;i<res.size();++i)if(!std::strcmp(res[i].name,name))return int(i);

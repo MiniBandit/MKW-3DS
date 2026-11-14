@@ -76,13 +76,13 @@ public:
         volcanoSpecs_[0]=effects.find("rk_volcTail");volcanoSpecs_[1]=effects.find("rk_volcFire_L");
         volcanoSpecs_[2]=effects.find("rk_volcErupt");volcanoSpecs_[3]=effects.find("rk_volcBrk");
         propellerSpec_=effects.find("rk_epropeller");
-        rockBreak_=effects.find("rk_DKrockGC");
+        rockBreak_=effects.findDecorative("rk_DKrockGC");
         blockBreak_=effects.find("rk_block");
         woodBreak_=effects.find("rk_woodbox");
         moleSpecs_[0]=effects.find("rk_choropuMoko1");moleSpecs_[1]=effects.find("rk_choropuMoko0");
         spinSmall_=effects.find("rk_pgnSpin_s");
         spinMedium_=effects.find("rk_pgnSpin_m_l");
-        slider_=effects.find("rk_pgnSlider_s");
+        slider_=effects.findDecorative("rk_pgnSlider_s");
         crabSpecs_[0]=effects.find("rk_crabHide");crabSpecs_[1]=effects.find("rk_crabPocha");
         crabSpecs_[2]=effects.find("rk_crab");
         cannonSmoke_=effects.find("rk_dkCannon");cannonSnow_=effects.find("rk_dkCannonSnw");

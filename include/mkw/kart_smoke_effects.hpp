@@ -221,7 +221,7 @@ public:
     void step(RaceEffects& e,unsigned racer,const EffectFrame& pose,unsigned vehicle,bool local,bool ghost,
               float speed,float baseSpeed,bool hasSea,float seaHeight,bool inAction,bool preview,bool hidden,bool lod){
         if(racer>=MaxRacers)return;
-        if(generation_!=e.generation()){generation_=e.generation();spec_=e.find("rk_gasSmoke");}
+        if(generation_!=e.generation()){generation_=e.generation();spec_=e.findDecorative("rk_gasSmoke");}
         const unsigned base=FirstSlot+racer*Pipes;
         if(spec_<0||ghost||preview||hidden||lod||inAction){for(unsigned p=0;p<Pipes;++p)e.kill(base+p);return;}
         const float top=std::max(baseSpeed,50.f),t=std::clamp(speed,0.f,top)/top;
