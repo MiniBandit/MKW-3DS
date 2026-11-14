@@ -426,7 +426,6 @@ inline constexpr UiSpriteInfo UiSprites[]={
 {"cup_5","textures/ui_cup_5.t3x",128.00000000f,128.00000000f,0.93750000f,0.79687500f,"",0,0,16384},
 {"cup_6","textures/ui_cup_6.t3x",128.00000000f,128.00000000f,0.66406250f,0.53125000f,"",0,0,65536},
 {"cup_7","textures/ui_cup_7.t3x",128.00000000f,128.00000000f,0.66406250f,0.53125000f,"",0,0,65536},
-{"cup_mirror","textures/ui_cup_mirror.t3x",128.00000000f,128.00000000f,0.66406250f,0.53125000f,"",0,0,65536},
 {"battle_cup_0","textures/ui_battle_cup_0.t3x",128.00000000f,128.00000000f,0.93750000f,0.56250000f,"",0,0,16384},
 {"battle_cup_1","textures/ui_battle_cup_1.t3x",128.00000000f,128.00000000f,0.93750000f,0.56250000f,"",0,0,16384},
 {"class_0","textures/ui_class_0.t3x",64.00000000f,64.00000000f,0.96875000f,0.53125000f,"",0,0,8192},
@@ -3976,6 +3975,7 @@ inline constexpr UiSpriteInfo UiSprites[]={
 {"map_29","textures/ui_map_29.t3x",256.00000000f,256.00000000f,1.00000000f,1.00000000f,"",0,0,262144},
 {"map_30","textures/ui_map_30.t3x",256.00000000f,256.00000000f,1.00000000f,1.00000000f,"",0,0,262144},
 {"map_31","textures/ui_map_31.t3x",256.00000000f,256.00000000f,1.00000000f,1.00000000f,"",0,0,262144},
+{"cup_mirror","textures/ui_cup_mirror.t3x",128.00000000f,128.00000000f,0.66406250f,0.53125000f,"",0,0,65536},
 #include <mkw/menu_name_glyphs.hpp>
 #include <mkw/battle_menu_text.inc>
 #include <mkw/menu_record_text.inc>
