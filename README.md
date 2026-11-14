@@ -20,7 +20,7 @@ No game files are included. Everything is converted from your own disc.
 - Course effects, lighting, cameras and items matched to the Wii
 - Runs on New 3DS and Old 3DS, optimized for both
 - 3D at 60 FPS
-- 800px Mode on New 3DS for a sharper top screen
+- 800px Mode on New 3DS for a sharper top screen, on by default; turn it off in Settings for more performance
 - Settings for texture quality, dynamic shadows, bloom, opponent detail and minimap frame rate
 - Surround sound, following the 3DS sound setting
 - Speedometer, race timer options and notification LED effects
