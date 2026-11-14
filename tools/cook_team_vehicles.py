@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """Cook original red/blue standard vehicles; reuse normal driver banks."""
 import argparse, copy, json
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+import multiprocessing
+SPAWN = multiprocessing.get_context('spawn')  # the same on every OS; fork with threads alive can hang
+from functools import partial
 from pathlib import Path
 from cook_garage import ROOT, cook_choice, inspect_kart, unpack, Disc, data_partition
 
@@ -23,15 +26,15 @@ def main():
     if partition is None:partition=data_partition(Disc(a.disc))
     compressed.write_bytes(partition.read(entry['offset'],entry['size']))
    row=copy.deepcopy(original);row['prefix']+=team+'_';row['archive']=archive_name;row['team']=team
-   archive=source/row['prefix'].rstrip('_')
-   if not (archive/'kart_model.brres').exists():unpack(compressed,archive)
-   kart=inspect_kart(archive);row['parts']=[m['model'] for m in kart['nodes']]
-   work.append(row)
+   work.append((row,compressed))
+ # Unpacking and node inspection side by side, then the cooks in separate processes (mostly Python); rows keep their order.
+ def inspect(item):
+  row,compressed=item;archive=source/row['prefix'].rstrip('_')
+  if not (archive/'kart_model.brres').exists():unpack(compressed,archive)
+  kart=inspect_kart(archive);row['parts']=[m['model'] for m in kart['nodes']];return row
+ with ThreadPoolExecutor(max_workers=a.jobs) as pool:work=list(pool.map(inspect,work))
  a.output.mkdir(parents=True,exist_ok=True)
- def process(row):
-  cooked=cook_choice(row,a.output,source_root=source,export_root=ROOT/'assets/team-vehicle-parts',include_driver=False)
-  print(row['prefix'],flush=True);return cooked
- with ThreadPoolExecutor(max_workers=a.jobs) as pool:rows=list(pool.map(process,work))
+ with ProcessPoolExecutor(max_workers=a.jobs,mp_context=SPAWN) as pool:rows=list(pool.map(partial(cook_choice,output=a.output,source_root=source,export_root=ROOT/'assets/team-vehicle-parts',include_driver=False),work))
  (a.output/'team-vehicles.json').write_text(json.dumps({'version':1,'choices':rows},indent=2)+'\n')
  print(f'Cooked {len(rows)} source team vehicle variants',flush=True)
 if __name__=='__main__':main()

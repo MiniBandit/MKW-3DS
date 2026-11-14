@@ -6,6 +6,7 @@ Layout reference: BrawlCrate's REFF.cs; emission / dimensions: NW4R EF
 The audit retains source curves and names, including unsupported interpolation.
 """
 import argparse, struct, io, sys, subprocess, json, hashlib
+import tex3ds_cache
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'vendor/gclib'))
 from gclib.texture_utils import decode_image
@@ -167,7 +168,7 @@ def cook(archive, output, bike=False):
         png = output / ('drift_' + name + '.png')
         im.save(png)
         # Original colour and 8-bit alpha matter for these small bright textures.
-        subprocess.run([str(tool('tex3ds')), '-f', 'rgba8', '-z', 'none',
+        tex3ds_cache.run([str(tool('tex3ds')), '-f', 'rgba8', '-z', 'none',
                         '-o', str(png.with_suffix('.t3x')), str(png)], check=True, stdout=subprocess.DEVNULL)
     br = archive.with_suffix('.breff').read_bytes()
     idx = entries(br)

@@ -1,7 +1,10 @@
 # Building by hand
 
-`tools/build.py` runs every stage below, in this order (`--list-stages` prints
-it). This page is for understanding a stage or running one yourself.
+`tools/build.py` runs every stage below (`--list-stages` prints them in
+order). It starts each stage once the earlier stages it reads from are done,
+so several run at once (`Builder.AFTER` in `tools/build.py`); `--jobs 1` runs
+them one at a time, in this order. `--only STAGE` runs one stage again. This
+page is for understanding a stage or running one yourself.
 
 The converters write next to themselves, into `data/`, `assets/`, `build/`,
 `sd-card/` and `include/mkw/`. Run them on a copy of the tree, not your
@@ -75,12 +78,12 @@ before the menu texture fit.
 | awards | `prepare_award_assets.py {disc}`, `node build/export_award_scene.mjs build/award-source`, `cook_award_cameras.py`, `cook_award_drive.py`, `cook_award_lighting.py`, `cook_award_models.py --jobs {jobs}`, `cook_race_effects.py --award-source build/award-source --output build/vfx/textures` |
 | credits | `cook_staff_camera.py`, `generate_staff_crowd.py`, `cook_staff_ui.py --retail-rel build/itembox-retail.rel --output build/staff` |
 | maps | `cook_race_map.py --jobs {jobs}`, `cook_map_objects.py` |
-| menus, part 2 | `cook_menu_models.py --machines --jobs {jobs}`, `generate_runtime_tables.py audio`, `cook_menu_ui.py`, `cook_menu_footer.py`, `cook_menu_styles.py`, `cook_menu_record_text.py`, `cook_cup_record_icons.py`, `cook_menu_movies.py --jobs {jobs}`, `cook_menu_movie_chapters.py`, `cook_menu_audio.py`, `cook_staff_movies.py --output build/staff` |
+| menus, part 2 | `cook_menu_models.py --machines --jobs {jobs}`, `generate_runtime_tables.py audio`, `cook_menu_ui.py --jobs {jobs}`, `cook_menu_footer.py`, `cook_menu_styles.py`, `cook_menu_record_text.py`, `cook_cup_record_icons.py`, `cook_menu_movies.py --header-only`, `cook_menu_movies.py --jobs {jobs} --skip-header`, `cook_menu_movie_chapters.py`, `cook_menu_audio.py`, `cook_staff_movies.py --output build/staff --jobs {jobs}` |
 | Mii racers | `cook_mii_racers.py {disc} build/mii-racers --jobs {jobs}`, `finish_mii_racers.py {disc} build/mii-racers --jobs {jobs}`, `cook_mii_awards.py build/mii-racers` |
-| vehicles | `cook_vehicle_rest.py`, `cook_item_shadows.py`, `cook_driver_effects.py --jobs {jobs}`, `cook_vehicle_shadows.py --jobs {jobs}`, `cook_team_vehicles.py {disc} --jobs {jobs}`, `cook_racer_lod.py --output build/racer-lod --work build/racer-lod-cook`, `cook_vehicle_lod.py --disc {disc} --output build/racer-lod --work build/vehicle-lod-cook` |
+| vehicles | `cook_vehicle_rest.py`, `cook_item_shadows.py`, `cook_driver_effects.py --jobs {jobs}`, `cook_vehicle_shadows.py --jobs {jobs}`, `cook_team_vehicles.py {disc} --jobs {jobs}`, `cook_racer_lod.py --output build/racer-lod --work build/racer-lod-cook`, `cook_vehicle_lod.py --disc {disc} --output build/racer-lod --work build/vehicle-lod-cook --jobs {jobs}` |
 | textures | `cook_water_mipmaps.py`, `cook_world_mipmaps.py --jobs {jobs}`, `cook_battle_course_feedback.py` |
 | drift | `cook_effects.py assets/common/Effect/RKRace.breft sd-card/3ds/mkw-3ds/textures`, and again with `--bike` |
-| menu fit | compile `tools/menu_sprite_scales.cpp` with `src/menu_{ui,state,transition,focus,index,text_motion}.cpp`, run it to write `build/host-tools/sprite-scales.json`, then `optimize_menu_textures.py` |
+| menu fit | compile `tools/menu_sprite_scales.cpp` with `src/menu_{ui,state,transition,focus,index,text_motion}.cpp`, run it to write `build/host-tools/sprite-scales.json`, then `optimize_menu_textures.py --jobs {jobs}` |
 
 Each command is `python tools/<script>` unless it starts with `node`.
 [MANUAL-RESOURCE-STAGES.md](MANUAL-RESOURCE-STAGES.md) lists each converter's

@@ -1,7 +1,7 @@
 /* Repack an MPK1 archive (tools/pack_race_assets.py) as MPK2: entries laid out
  * in a given order and LZ4-compressed where that saves space.
  *
- * usage: pakpack [--stored] [--align N] in.pak|- order.txt out.pak [name=file | @list ...]
+ * usage: pakpack [--stored] [--align N] [--threads N] in.pak|- order.txt out.pak [name=file | @list ...]
  * name=file adds a loose file as entry name (e.g. a stream the game reads whole);
  * @list reads name=file lines from list. in.pak "-" starts from no entries.
  * order.txt lists entry names, one per line, in the order their data is
@@ -9,7 +9,8 @@
  * reads together then sits together, so one SD request covers several entries.
  * --stored keeps every entry raw (files the game streams, already compressed
  * or compressed inside); --align puts each entry at an N-byte offset (512:
- * SD sectors), 32 by default.
+ * SD sectors), 32 by default. --threads sets the compression threads (default:
+ * online CPUs); the output is the same for any count.
  *
  * usage: pakpack --gmv in.gmv out.gmv
  * Rewrites a GMV1 movie (tools/cook_menu_movies.py: raw ETC1 frames) as GMV2,
@@ -29,12 +30,20 @@
  * band. Each frame starts on a 512-byte boundary, its bands back to back:
  * an LZ4 block, or raw when its stored size equals its raw size. A band is
  * a run of 8-pixel tile rows, so a crop reads and decodes only its bands.
- * Build: gcc -O2 -o pakpack pakpack.c
+ * Build: gcc -O2 -pthread -o pakpack pakpack.c
  */
+#include <pthread.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+#else
+#include <unistd.h>
+#endif
 
 typedef struct {uint32_t name, offset, size, stored, rank; uint8_t *data; const char *source;} Entry;
 
@@ -74,8 +83,8 @@ static void best(const uint8_t *in, size_t n, size_t i, const int32_t *head, con
     (void)n;
 }
 
-static size_t lz4(const uint8_t *in, size_t n, uint8_t *out) {
-    static int32_t head[1 << HASH_BITS];
+/* head: scratch of 1 << HASH_BITS, one per thread. */
+static size_t lz4(const uint8_t *in, size_t n, uint8_t *out, int32_t *head) {
     int32_t *prev = malloc((n ? n : 1) * sizeof *prev);
     for (size_t i = 0; i < (1u << HASH_BITS); i++) head[i] = -1;
     size_t o = 0, anchor = 0, i = 0;
@@ -141,9 +150,7 @@ static int addLoose(uint32_t *count, uint32_t *namesBytes, const char *spec) {
     entries = realloc(entries, (*count + 1) * sizeof *entries);
     Entry e = {*namesBytes, 0, (uint32_t)bytes, 0, 0xffffffffu, NULL, strdup(eq + 1)};
     *namesBytes += (uint32_t)len + 1;
-    if (findName(*count, names + e.name) >= 0) {fprintf(stderr, "already packed: %s\n", names + e.name); return 1;}
     entries[(*count)++] = e;
-    qsort(entries, *count, sizeof *entries, byName);
     return 0;
 }
 
@@ -158,6 +165,42 @@ static uint8_t *readData(const Entry *e, FILE *in) {
     return data;
 }
 
+/* Compression workers take entries in index order, each reading the input
+ * pack through its own handle and holding one entry's buffers at a time. */
+static struct {const char *pack; uint32_t next, count; pthread_mutex_t lock;} jobs = {NULL, 0, 0, PTHREAD_MUTEX_INITIALIZER};
+static void *compressEntries(void *arg) {
+    (void)arg;
+    FILE *in = jobs.pack ? fopen(jobs.pack, "rb") : NULL;
+    if (jobs.pack && !in) {perror(jobs.pack); exit(1);}
+    int32_t *head = malloc(sizeof *head << HASH_BITS);
+    for (;;) {
+        pthread_mutex_lock(&jobs.lock); uint32_t i = jobs.next++; pthread_mutex_unlock(&jobs.lock);
+        if (i >= jobs.count) break;
+        Entry *e = &entries[i];
+        if (i % 2000 == 0) fprintf(stderr, "%u/%u\r", i, jobs.count);
+        if (e->size < 64) continue;
+        uint8_t *data = readData(e, in);
+        uint8_t *block = malloc(e->size + e->size / 255 + 16);
+        size_t n = lz4(data, e->size, block, head);
+        if (n < e->size && n + 512 <= e->size && n * 10 <= (size_t)e->size * 9) {
+            uint8_t *check = malloc(e->size);
+            if (!unlz4(block, n, check, e->size) || memcmp(check, data, e->size)) {fprintf(stderr, "lz4 check failed: %s\n", names + e->name); exit(1);}
+            free(check); e->data = block; e->stored = (uint32_t)n;
+        } else free(block);
+        free(data);
+    }
+    free(head); if (in) fclose(in);
+    return NULL;
+}
+
+static int cpus(void) {
+#ifdef _WIN32
+    SYSTEM_INFO s; GetSystemInfo(&s); return (int)s.dwNumberOfProcessors;
+#else
+    long n = sysconf(_SC_NPROCESSORS_ONLN); return n > 0 ? (int)n : 1;
+#endif
+}
+
 #define GMV_BAND_ROWS 4
 static int gmv(const char *inPath, const char *outPath) {
     FILE *in = fopen(inPath, "rb"); if (!in) {perror(inPath); return 1;}
@@ -170,6 +213,7 @@ static int gmv(const char *inPath, const char *outPath) {
     const uint32_t record = 4 + 2 * bands, dataOffset = (64 + count * record + 511u) & ~511u;
     uint8_t *index = calloc(count, record), *frame = malloc(frameBytes), *block = malloc(frameBytes + frameBytes / 255 + 16 * bands);
     uint8_t *check = malloc(GMV_BAND_ROWS * rowBytes), zero[512] = {0};
+    int32_t *head = malloc(sizeof *head << HASH_BITS);
     FILE *out = fopen(outPath, "wb"); if (!out) {perror(outPath); return 1;}
     if (fseek(out, (long)dataOffset, SEEK_SET)) return 1;
     uint64_t at = dataOffset, stored = 0;
@@ -181,7 +225,7 @@ static int gmv(const char *inPath, const char *outPath) {
         for (uint32_t b = 0; b < bands; b++) {
             const uint32_t top = b * GMV_BAND_ROWS, n = ((top + GMV_BAND_ROWS < rows ? top + GMV_BAND_ROWS : rows) - top) * rowBytes;
             const uint8_t *raw = frame + (size_t)top * rowBytes;
-            size_t packed = lz4(raw, n, block);
+            size_t packed = lz4(raw, n, block, head);
             /* LZ4 only where it saves a tenth; every block is checked. */
             const int keep = packed * 10 <= (size_t)n * 9;
             if (keep && (!unlz4(block, packed, check, n) || memcmp(check, raw, n))) {fprintf(stderr, "lz4 check failed: frame %u band %u\n", f, b); return 1;}
@@ -209,13 +253,14 @@ static int gmv(const char *inPath, const char *outPath) {
 
 int main(int argc, char **argv) {
     if (argc == 4 && !strcmp(argv[1], "--gmv")) return gmv(argv[2], argv[3]);
-    int stored = 0; uint32_t align = 32;
+    int stored = 0, threads = cpus(); uint32_t align = 32;
     while (argc > 1 && !strncmp(argv[1], "--", 2)) {
         if (!strcmp(argv[1], "--stored")) {stored = 1; argv++; argc--;}
         else if (!strcmp(argv[1], "--align") && argc > 2) {align = (uint32_t)atoi(argv[2]); argv += 2; argc -= 2;}
+        else if (!strcmp(argv[1], "--threads") && argc > 2) {threads = atoi(argv[2]); argv += 2; argc -= 2;}
         else break;
     }
-    if (argc < 4 || align < 32 || (align & (align - 1))) {fprintf(stderr, "usage: pakpack [--stored] [--align N] in.pak|- order.txt out.pak [name=file | @list ...]\n       pakpack --gmv in.gmv out.gmv\n"); return 2;}
+    if (argc < 4 || align < 32 || (align & (align - 1)) || threads < 1) {fprintf(stderr, "usage: pakpack [--stored] [--align N] [--threads N] in.pak|- order.txt out.pak [name=file | @list ...]\n       pakpack --gmv in.gmv out.gmv\n"); return 2;}
     FILE *in = NULL;
     uint8_t header[12]; uint32_t count = 0, namesBytes = 0;
     if (strcmp(argv[1], "-")) {
@@ -243,6 +288,11 @@ int main(int argc, char **argv) {
             fclose(list);
         } else {int rc = addLoose(&count, &namesBytes, argv[x]); if (rc) return rc;}
     }
+    /* One sort after all loose files (a sort per file took 9 s for race.pak). */
+    if (argc > 4) {
+        qsort(entries, count, sizeof *entries, byName);
+        for (uint32_t i = 1; i < count; i++) if (!strcmp(names + entries[i - 1].name, names + entries[i].name)) {fprintf(stderr, "already packed: %s\n", names + entries[i].name); return 1;}
+    }
     if (!count) {fprintf(stderr, "no entries\n"); return 1;}
     put32(header + 4, count); put32(header + 8, namesBytes);
     /* Order: named entries first, in file order; the rest keep index order. */
@@ -255,27 +305,20 @@ int main(int argc, char **argv) {
     fclose(order);
     for (uint32_t i = 0; i < count; i++) if (entries[i].rank == 0xffffffffu) entries[i].rank = ranked + i;
     const uint32_t traced = ranked;
-    /* Compress each entry; keep the LZ4 block only when it saves 10% and a
-     * sector's worth. Raw entries are read again when written, so only the
-     * compressed blocks stay in memory. */
+    /* Compress each entry on the worker threads; keep the LZ4 block only when
+     * it saves 10% and a sector's worth. Raw entries are read again when
+     * written, so only the compressed blocks stay in memory. */
     uint64_t raw = 0, packed = 0; uint32_t compressed = 0;
-    for (uint32_t i = 0; i < count; i++) {
-        Entry *e = &entries[i];
-        e->stored = e->size;
-        if (!stored && e->size >= 64) {
-            uint8_t *data = readData(e, in);
-            uint8_t *block = malloc(e->size + e->size / 255 + 16);
-            size_t n = lz4(data, e->size, block);
-            if (n < e->size && n + 512 <= e->size && n * 10 <= (size_t)e->size * 9) {
-                uint8_t *check = malloc(e->size);
-                if (!unlz4(block, n, check, e->size) || memcmp(check, data, e->size)) {fprintf(stderr, "lz4 check failed: %s\n", names + e->name); return 1;}
-                free(check); e->data = block; e->stored = (uint32_t)n; compressed++;
-            } else free(block);
-            free(data);
-        }
-        raw += e->size; packed += e->stored;
-        if (i % 2000 == 0) fprintf(stderr, "%u/%u\r", i, count);
+    for (uint32_t i = 0; i < count; i++) entries[i].stored = entries[i].size;
+    if (!stored) {
+        jobs.pack = in ? argv[1] : NULL; jobs.count = count;
+        if ((uint32_t)threads > count) threads = (int)count;
+        pthread_t *pool = malloc((size_t)threads * sizeof *pool);
+        for (int t = 0; t < threads; t++) if (pthread_create(&pool[t], NULL, compressEntries, NULL)) {fprintf(stderr, "pthread_create failed\n"); return 1;}
+        for (int t = 0; t < threads; t++) pthread_join(pool[t], NULL);
+        free(pool);
     }
+    for (uint32_t i = 0; i < count; i++) {raw += entries[i].size; packed += entries[i].stored; compressed += entries[i].data != NULL;}
     /* Lay out data by rank. */
     Entry *byOrder = malloc((size_t)count * sizeof *byOrder); memcpy(byOrder, entries, (size_t)count * sizeof *byOrder);
     qsort(byOrder, count, sizeof *byOrder, byRank);

@@ -3,7 +3,9 @@
 Uses original TPL/BRFNT, BRLYT pane trees, BRCTR transforms and BRLAN curves.
 No system fonts or replacement map silhouettes. See the emitted provenance.
 """
-import json, struct, subprocess, re, io, hashlib, math, sys
+import json, struct, subprocess, re, io, hashlib, math, sys, os, argparse
+from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from fractions import Fraction
 from pathlib import Path
 import numpy as np
@@ -17,6 +19,9 @@ from menu_movies import extract_movies,ThpMovie
 from menu_unlock_messages import entries as unlock_entries
 OUT=ROOT/'sd-card/3ds/mkw-3ds'
 UI=ROOT/'assets/menu-ui/MenuSingle'
+# Sprite PNG/T3X writes run on a thread pool (main() sets it); tex3ds waits
+# release the GIL while layouts render. Records are built here, in call order.
+pool=None;pending={};queue=deque()
 records={}; evidence={}; panel_records={}; pane_records={}; node_records={}; movie_records=[]; glow_records=[]; focus_records=[]; panel_layer_records={}; border_records=[]; border_slices=[]; runtime_palette=[]
 def source(p):
  key=str(p.relative_to(ROOT))
@@ -26,6 +31,19 @@ def save(name,img,p=None):
  if max(img.size)>1024:
   scale=1024/max(img.size);img=img.resize((round(img.width*scale),round(img.height*scale)),Image.Resampling.LANCZOS)
  width,height=img.size; padded=[max(8,1<<(v-1).bit_length()) for v in img.size]
+ # The record cook_image_sprite returns.
+ r={'name':'ui_'+name,'path':'textures/ui_'+name+'.t3x','width':width,'height':height,'padded':padded,'u':width/padded[0],'v':height/padded[1]}
+ if name in pending:pending.pop(name).result()
+ if not pool:write_sprite(name,img,padded)
+ else:
+  # A bounded queue keeps memory flat; the same name waits for its last write.
+  while len(queue)>=64:queue.popleft().result()
+  job=pool.submit(write_sprite,name,img.copy(),padded);pending[name]=job;queue.append(job)
+ if p:source(p);r.update(source=str(p.relative_to(ROOT)),source_sha256=evidence[str(p.relative_to(ROOT))])
+ if (native_width,native_height)!=(width,height):r.update(width=native_width,height=native_height,rasterWidth=width,rasterHeight=height)
+ records[name]=r
+ return r
+def write_sprite(name,img,padded):
  target=OUT/'textures'/('ui_'+name+'.png')
  cached=False
  if target.exists() and t3x_matches(target.with_suffix('.t3x'),padded,'rgba8'):
@@ -35,16 +53,15 @@ def save(name,img,p=None):
   full=Image.new('RGBA',tuple(padded));full.paste(img.convert('RGBA'),(0,0))
   with Image.open(target) as previous:
    cached=previous.size==tuple(padded) and previous.convert('RGBA').tobytes()==full.tobytes()
- r={'name':'ui_'+name,'path':'textures/ui_'+name+'.t3x','width':width,'height':height,'padded':padded,'u':width/padded[0],'v':height/padded[1]} if cached else cook_image_sprite(img,'ui_'+name,OUT)
- if p:source(p);r.update(source=str(p.relative_to(ROOT)),source_sha256=evidence[str(p.relative_to(ROOT))])
- if (native_width,native_height)!=(width,height):r.update(width=native_width,height=native_height,rasterWidth=width,rasterHeight=height)
+ if not cached:cook_image_sprite(img,'ui_'+name,OUT)
  if name in ('background','background_lines','background_option'):
   # One source row before/after content, filled periodically through POT padding.
   # Runtime adds 1/textureHeight to V. This preserves bilinear continuity.
   from menu_background_texture import write_wrapped_background
   write_wrapped_background(img,OUT,name)
- records[name]=r
- return r
+def drain():
+ while queue:queue.popleft().result()
+ pending.clear()
 def tpl(name,p):return save(name,decode_tpl(p),p)
 
 def font_style(image,colors,vertices):
@@ -357,8 +374,9 @@ def cook_strap():
   key='strap_a' if t['name'].startswith('strapA') else 'strap_b'
   record=save(key,img,brres);record['sourceTexture']=t['name'];panel_records[key]=[-304,-228,304,228]
 
-def main():
- global runtime_palette
+def main(jobs=1):
+ global runtime_palette,pool
+ if jobs>1:pool=ThreadPoolExecutor(max_workers=jobs)
  # Exact dynamic PushButton palette written by retail Update at0x805b60f4.
  # The values come from the original REL, not hand-picked UI colours.
  from verify_menu_retail import BASE,EXPECTED_HASH
@@ -742,6 +760,7 @@ def main():
  for p in controller_paths:
   if p.name.startswith('._'):continue
   source(p);data=controllers(p);ctr.setdefault(p.stem,{}).update(data);alphas.setdefault(p.stem,{}).update(controller_alphas(p));qualified_controllers[str(p.relative_to(ROOT))]=data
+ drain()
  manifest={'version':2,'canvas':{'width':608,'height':456,'artBleedWidth':832,'aspectAdjustScale':[608/832,1.0],'displayAspect':'16:9','target':'400x225 centered on top LCD; lower LCD unused'},'sprites':records,'maps':maps,'sourceHashes':evidence,'archiveInventory':inventory,'controllers':ctr,'controllerAlphas':alphas,'controllerSources':qualified_controllers,'messageSources':message_sources,'helpMessageIds':help_ids,'runtimePalette':{'source':'build/itembox-retail.rel','tableAddress':'0x8088fd18','slots':runtime_palette,'borderPane':'fuchi_pattern','basePane':'color_base'},'textStyles':text_styles,'driverStats':driver_stats,'vehicleStats':vehicle_stats,'panels':panel_records,'panes':pane_records,'paneNodes':node_records,'movies':movie_records,'glows':glow_records,'focusSprites':focus_records,'panelTails':list(panel_layer_records.values()),'borderLoops':border_records,'borderSlices':border_slices,'selectionScale60Hz':scales,'limitations':['This menu inventory uses 16 source samples across each retail loop for host previews and fallback. Full-rate streamed movies are cooked and receipted separately.','Offline pane rasterization supports 2D affine transforms and authored TEV arithmetic; live 3D preview objects are rendered separately.','Original font glyphs and spacing are retained; per-page dynamic text effects are runtime responsibilities.']}
  (OUT/'models/menu-ui.json').write_text(json.dumps(manifest,indent=2)+'\n')
  notice_header=['#pragma once','namespace mkw {','struct UiUnlockText {unsigned condition,bit;const char* title;const char* body;const char* kind;int retailId;};','inline constexpr UiUnlockText UiUnlockTexts[]={']
@@ -801,4 +820,6 @@ def main():
  # The runtime textures are fitted to the 3DS screen and LZ11-compressed from
  # these full-resolution PNGs; that pass also rewrites the header's UVs.
  # Texture fitting runs after menu movies generate its compile-time metadata.
-if __name__=='__main__':main()
+if __name__=='__main__':
+ a=argparse.ArgumentParser(description=__doc__);a.add_argument('--jobs',type=int,default=os.cpu_count() or 1)
+ main(max(1,a.parse_args().jobs))

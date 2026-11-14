@@ -1,5 +1,6 @@
 """Stage already-baked statue portraits as shared two-triangle billboard meshes."""
 import argparse,hashlib,json,shutil,struct,subprocess
+import tex3ds_cache
 from pathlib import Path
 from course_catalog import ROOT,courses
 from devkitpro import tool
@@ -20,7 +21,7 @@ def cook(course,out):
         name=f"mii_statue_{course['id']:02d}_{image['index']}"
         texture=out/'textures'/f'{name}.png';texture.parent.mkdir(parents=True,exist_ok=True)
         shutil.copyfile(source,texture)
-        subprocess.run([str(tool('tex3ds')),'-f','rgba8','-z','none','-o',str(texture.with_suffix('.t3x')),str(texture)],check=True,stdout=subprocess.DEVNULL)
+        tex3ds_cache.run([str(tool('tex3ds')),'-f','rgba8','-z','none','-o',str(texture.with_suffix('.t3x')),str(texture)],check=True,stdout=subprocess.DEVNULL)
         # Match the original portrait camera at its z=0 plane: 43.2 * 600/500.
         half=43.20000076293945*600/500
         vertices=[]

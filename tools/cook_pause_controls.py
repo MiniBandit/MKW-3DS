@@ -11,6 +11,7 @@ out on a transparent background. They are not in the repository; without
 them nothing is cooked and the pause screen shows no diagram.
 """
 import subprocess, sys
+import tex3ds_cache
 from pathlib import Path
 from PIL import Image, ImageDraw
 from cook_roster import ROOT
@@ -125,7 +126,7 @@ def cook(name):
     OUT.mkdir(parents=True, exist_ok=True)
     png = OUT / f'pause_controls_{name}.png'
     texture.save(png)
-    subprocess.run([str(tool('tex3ds')), '-f', 'rgba8', '-z', 'none', '-o', str(png.with_suffix('.t3x')), str(png)],
+    tex3ds_cache.run([str(tool('tex3ds')), '-f', 'rgba8', '-z', 'none', '-o', str(png.with_suffix('.t3x')), str(png)],
                    check=True, stdout=subprocess.DEVNULL)
     return png.with_suffix('.t3x')
 

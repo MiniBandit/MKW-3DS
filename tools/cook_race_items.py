@@ -20,6 +20,7 @@ from gclib.texture_utils import decode_image
 from PIL import Image
 from cook_race_hud import cook_hud
 from devkitpro import tool
+import tex3ds_cache
 
 WORLD = {
     0: ("koura_green", "koura_green", None),
@@ -133,8 +134,8 @@ def sparkle_levels(name, model, output, groups=3):
         channels[..., g] = np.where(label == k, mask, channels[..., g])
     png = output / "textures" / f"{name}_{mask_index:03d}.png"
     Image.fromarray(channels, "RGB").save(png)
-    subprocess.run([str(tool('tex3ds')), "-f", "rgb8", "-z", "none", "-o", str(png.with_suffix(".t3x")), str(png)],
-                   check=True, stdout=subprocess.DEVNULL)
+    tex3ds_cache.run([str(tool('tex3ds')), "-f", "rgb8", "-z", "none", "-o", str(png.with_suffix(".t3x")), str(png)],
+                     check=True, stdout=subprocess.DEVNULL)
     return centres
 
 
@@ -185,8 +186,8 @@ def cook_image_sprite(original, name, output):
     target = output / "textures" / (name + ".png")
     target.parent.mkdir(parents=True, exist_ok=True)
     padded.save(target)
-    subprocess.run([str(tool('tex3ds')), "-f", "rgba8", "-z", "none",
-                    "-o", str(target.with_suffix(".t3x")), str(target)], check=True, stdout=subprocess.DEVNULL)
+    tex3ds_cache.run([str(tool('tex3ds')), "-f", "rgba8", "-z", "none",
+                      "-o", str(target.with_suffix(".t3x")), str(target)], check=True, stdout=subprocess.DEVNULL)
     return {"name": name, "path": "textures/" + name + ".t3x", "width": width,
             "height": height, "padded": list(padded_size), "u": width / padded_size[0],
             "v": height / padded_size[1]}

@@ -2,7 +2,10 @@
 """Complete Mii race/menu resources and their generated source metadata."""
 import argparse,json,os,shutil,struct,subprocess
 from pathlib import Path
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ProcessPoolExecutor,ThreadPoolExecutor
+import multiprocessing
+SPAWN = multiprocessing.get_context('spawn')  # the same on every OS; fork with threads alive can hang
+from functools import partial
 from cook_roster import ROOT,data_partition,sha256
 from extract_disc import Disc
 from unpack_szs import unpack
@@ -56,7 +59,7 @@ def main():
                 row=dict(c,prefix=c['prefix']+team+'_',archive=name)
                 folder=source/row['prefix'].rstrip('_');unpack(packed,folder);inspect_kart(folder)
                 teams.append(row)
-        with ThreadPoolExecutor(max_workers=args.jobs) as pool:list(pool.map(lambda c:cook_choice(c,output,source_root=source,export_root=ROOT/'assets/mii-racer-parts',include_driver=False),teams))
+        with ProcessPoolExecutor(max_workers=args.jobs,mp_context=SPAWN) as pool:list(pool.map(partial(cook_choice,output=output,source_root=source,export_root=ROOT/'assets/mii-racer-parts',include_driver=False),teams))
     finally:disc.f.close()
     params=(ROOT/'assets/menu-ui/MenuSingle/parameter/kartDriverDispParam.bin').read_bytes()
     base_y=[20,20,20,47,65,50,45,33,60,31,24,66,68,48,21,40,30,37,45,51,60,60,62,59,35,38,54,51,45,60,60,48,60,48,60,51]

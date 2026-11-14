@@ -10,6 +10,7 @@ payload is preserved byte for byte, and the chain keeps the original level
 count, so the GPU memory is the same as a filtered chain.
 """
 import hashlib,io,json,struct,subprocess,sys,tempfile
+import tex3ds_cache
 from pathlib import Path
 from devkitpro import tool
 
@@ -114,7 +115,7 @@ def main():
             for level in range(1,n+1):
                 part=Path(scratch)/f'{name}_{level}.png';target=part.with_suffix('.t3x')
                 decoded[level].save(part)
-                subprocess.run([str(tool('tex3ds')),'-f','etc1a4' if fmt==13 else 'etc1','-q','high',
+                tex3ds_cache.run([str(tool('tex3ds')),'-f','etc1a4' if fmt==13 else 'etc1','-q','high',
                                 '-z','none','-o',str(target),str(part)],check=True,stdout=subprocess.DEVNULL)
                 w,h,f,m,raw=payload(target.read_bytes())
                 if (w,h,f,m)!=(width>>level,height>>level,fmt,0) or len(raw)!=len(base)>>(2*level):

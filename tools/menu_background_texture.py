@@ -1,8 +1,8 @@
 """Periodic gutter for the native scrolling stripe background (not other UI)."""
 from PIL import Image
 from pathlib import Path
-import subprocess
 from devkitpro import tool
+import tex3ds_cache
 
 def write_wrapped_background(content, output, name='background'):
     width,height=content.size
@@ -16,4 +16,4 @@ def write_wrapped_background(content, output, name='background'):
         row=content.crop((0,(y-1)%height,width,(y-1)%height+1))
         for x in range(0,tw,width):image.paste(row,(x,y))
     target=Path(output)/f'textures/ui_{name}.png';target.parent.mkdir(parents=True,exist_ok=True);image.save(target)
-    subprocess.run([str(tool('tex3ds')),'-f','rgba8','-z','none','-o',str(target.with_suffix('.t3x')),str(target)],check=True)
+    tex3ds_cache.run([str(tool('tex3ds')),'-f','rgba8','-z','none','-o',str(target.with_suffix('.t3x')),str(target)],check=True)
