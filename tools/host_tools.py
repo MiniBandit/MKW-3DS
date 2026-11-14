@@ -18,12 +18,21 @@ PROGRAMS={
 }
 def windows_compilers():
  """Usual Windows install folders, for a compiler that is not on PATH (winget
- and MSYS2 often leave it off PATH until a new window, or for good)."""
+ and MSYS2 often leave it off PATH until a new window, or for good). Every
+ match, most likely first: compiler() tries each until one builds C++."""
  import glob
  local=os.environ.get('LOCALAPPDATA','');programs=[os.environ.get(k,'') for k in ('ProgramFiles','ProgramFiles(x86)')]
- patterns=[os.path.join(local,'Microsoft','WinGet','Links','clang++.exe'),os.path.join(local,'Microsoft','WinGet','Links','g++.exe'),
-  os.path.join(local,'Microsoft','WinGet','Packages','MartinStorsjo.LLVM-MinGW*','*','bin','clang++.exe'),
-  os.path.join(local,'Microsoft','WinGet','Packages','BrechtSanders.WinLibs*','mingw64','bin','g++.exe')]
+ # A portable LLVM-MinGW unpacked into the builder (.toolchain/llvm-mingw, PR #127).
+ patterns=[str(ROOT/'.toolchain'/'llvm-mingw'/'bin'/'clang++.exe')]
+ for base in [local,*programs]:
+  if not base:continue
+  # winget: per-user installs under LOCALAPPDATA, machine-wide ones under Program Files.
+  patterns+=[os.path.join(base,'Microsoft','WinGet','Links','clang++.exe'),os.path.join(base,'Microsoft','WinGet','Links','g++.exe'),
+   os.path.join(base,'WinGet','Links','clang++.exe'),os.path.join(base,'WinGet','Links','g++.exe'),
+   os.path.join(base,'Microsoft','WinGet','Packages','MartinStorsjo.LLVM-MinGW*','*','bin','clang++.exe'),
+   os.path.join(base,'WinGet','Packages','MartinStorsjo.LLVM-MinGW*','*','bin','clang++.exe'),
+   os.path.join(base,'Microsoft','WinGet','Packages','BrechtSanders.WinLibs*','mingw64','bin','g++.exe'),
+   os.path.join(base,'WinGet','Packages','BrechtSanders.WinLibs*','mingw64','bin','g++.exe')]
  for drive in ('C:\\','D:\\'):
   for root in ('msys64','msys2','devkitPro\\msys2'):
    for env in ('ucrt64','mingw64','clang64'):
@@ -32,20 +41,39 @@ def windows_compilers():
    os.path.join(drive,'mingw64','bin','g++.exe'),os.path.join(drive,'MinGW','bin','g++.exe'),os.path.join(drive,'Strawberry','c','bin','g++.exe')]
  for program in programs:
   if program:patterns+=[os.path.join(program,'llvm-mingw*','bin','clang++.exe'),os.path.join(program,'mingw-w64','*','mingw64','bin','g++.exe')]
+ found=[]
  for pattern in patterns:
-  for found in sorted(glob.glob(pattern)):
-   if os.path.isfile(found):return found
- return None
+  for match in sorted(glob.glob(pattern)):
+   if os.path.isfile(match) and match not in found:found.append(match)
+ return found
+def builds_cpp(cxx):
+ """True when cxx builds a small C++ program with its standard library. The
+ clang++ from LLVM's own Windows installer has none unless Visual Studio is
+ installed ('array' file not found, #125), so finding a compiler is not enough."""
+ import tempfile
+ env=dict(os.environ);env['PATH']=os.path.dirname(cxx)+os.pathsep+env.get('PATH','')
+ with tempfile.TemporaryDirectory(prefix='mkw-cxx-') as d:
+  source=os.path.join(d,'probe.cpp');program=os.path.join(d,'probe'+('.exe' if os.name=='nt' else ''))
+  with open(source,'w') as f:f.write('#include <array>\n#include <string>\nint main(){std::array<int,1> a{};return int(std::string("x").size())-1+a[0];}\n')
+  try:
+   if subprocess.run([cxx,'-std=c++2b',source,'-o',program],capture_output=True,timeout=300,env=env).returncode:return False
+   return subprocess.run([program],capture_output=True,timeout=60,env=env).returncode==0
+  except (OSError,subprocess.SubprocessError):return False
+_chosen=None
 def compiler():
- for name in ('clang++','g++','c++'):
-  found=shutil.which(name)
-  if found:return found
- if os.name=='nt':
-  found=windows_compilers()
-  if found:
+ global _chosen
+ if _chosen:return _chosen
+ candidates=[shutil.which(name) for name in ('clang++','g++','c++')]
+ if os.name=='nt':candidates+=windows_compilers()
+ tried=[]
+ for found in dict.fromkeys(c for c in candidates if c):
+  tried.append(found)
+  if builds_cpp(found):
    # Its own DLLs (libstdc++, libwinpthread) beside it, for the programs it builds too.
-   os.environ['PATH']=os.path.dirname(found)+os.pathsep+os.environ.get('PATH','')
-   return found
+   if os.name=='nt':os.environ['PATH']=os.path.dirname(found)+os.pathsep+os.environ.get('PATH','')
+   _chosen=found;return found
+ if tried:print('These C++ compilers could not build a test program: '+', '.join(tried)+
+  ('. The clang++ from LLVM\'s own installer needs Visual Studio; LLVM-MinGW works on its own.' if os.name=='nt' else ''),file=sys.stderr)
  hint=('install the Xcode Command Line Tools (xcode-select --install)' if sys.platform=='darwin' else
        'none on PATH or in the usual folders (WinGet, MSYS2, llvm-mingw, w64devkit). Install one in a terminal: winget install MartinStorsjo.LLVM-MinGW.UCRT, then close this window and run the builder again in a new one' if os.name=='nt' else
        'install g++ or clang++')
