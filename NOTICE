@@ -9,7 +9,8 @@ This repository is a fork of the Redux snapshot
 (Epic0522/MarioKartWii-3DS-Redux, 0.8.14). Its own changes are listed at the
 top of CHANGELOG.md.
 
-The inherited LICENSE grants MIT terms for MiniBandit's contributions.
+The LICENSE grants MIT terms for MiniBandit's contributions and for this
+fork's own changes by ethanseagull.
 The inherited upstream notice states that dudewhat's original release did
 not include an explicit license; this snapshot does not expand that grant.
 The Redux author has chosen not to declare a separate license for the later

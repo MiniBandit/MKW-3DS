@@ -1,12 +1,13 @@
 MIT License
 
 Copyright (c) 2026 MiniBandit
+Copyright (c) 2026 ethanseagull
 
-This inherited license covers MiniBandit's changes and additions to the
-upstream project. It does not cover dudewhat's original port, third-party
-components, Nintendo artwork or automatically establish terms for later Redux
-changes. This publication snapshot does not include the upstream Git history;
-see NOTICE for scope and outstanding provenance questions.
+This license covers MiniBandit's changes and additions to the upstream
+project, and ethanseagull's changes in this fork (Mario Kart WiiDS). It does
+not cover dudewhat's original port, the Redux changes by epicreds, third-party
+components or Nintendo artwork. See NOTICE for scope and outstanding
+provenance questions.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
