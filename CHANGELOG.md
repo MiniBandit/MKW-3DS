@@ -6,6 +6,16 @@ Needs a new build: the builder now copies the staff ghosts from your disc, and t
 
 - **One CIA to install:** the builder makes a single `mkw-3ds.cia` with the game files inside (about 3 GB). Install it with FBI and start it once: its first start copies the game files to `sd:/3ds/mkw-3ds` (a few minutes, only once) so quick updates can find them. No folder to copy. For a small CIA plus a folder instead, build with `--sd-assets`.
 - **The builder reads RVZ disc images** (Dolphin's compressed format) directly; no need to convert to ISO.
+- **Smaller, faster-loading game files:** `race.pak` and `menu.pak` are LZ4-compressed in 64 KiB pieces on SD sectors (`race.pak` 1.48 GB to 0.80 GB), and every movie is compressed frame by frame. Less to read from the SD card while loading, and a smaller CIA.
+- **Movies at full rate:** the opening and both staff rolls play at 59.94 fps, as on the Wii.
+- **Graphics: Balanced** (full detail without the dynamic shadow and bloom) is what Auto now picks on New 3DS, for a steadier frame rate. Quality still has both.
+- **Instant unpause on New 3DS:** the race stays loaded while paused when the pause menu fits beside it.
+- **Time Trial ghosts replay exactly:** a ghost's Mushrooms now fire on the same frame as on the Wii. Checked on a computer: 63 of the disc's 64 staff and expert staff ghosts finish on their exact time beside you (the Grumble Volcano staff ghost is the exception). Ghosts you saved before this version may drift where they used a Mushroom.
+- **Time Trials start as on the Wii:** no course preview, straight to the camera swinging round your kart.
+- **Controls:** Circle Pad up/down dives in the air, as the Wii's stick does; steering has a round dead zone and full lock at the rim and on diagonals; R tricks off boost ramps, half-pipes and zippers too.
+- **Blue Shells always launch forward**, whatever the stick or a CPU's throw says.
+- **Grumble Volcano:** the falling ground uses its own 100cc and 50cc timings in those classes.
+- The speedometer (SELECT) is remembered per license.
 
 - **Online multiplayer:** a new Online button on the main menu. Host a race or join one by typing the host's 16-digit code on a number pad, in menus made from the Wii game's own Wi-Fi screens: the Wi-Fi menu buttons, the friend code pad and the room's player cards with everyone's driver and license name. Up to 12 players race VS on the host's course. The consoles connect straight to each other, so there's no server to pay for or go down. After a race, the host picks the next course while everyone else waits in the lobby. Online races can't be paused, as on the Wii. A player who can't reach another directly gets their kart through the host. If a player goes quiet, their kart races on as a CPU until they come back.
 - **Online races agree:** every console decides its own item roulette, the items it throws and whether its own kart is hit, and tells the others, so everyone sees the same items and hits. The results use each console's own finishing time, so every screen shows the same order; a player who drops out is placed last.

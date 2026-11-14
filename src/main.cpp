@@ -883,14 +883,26 @@ int main() {
             if(mkw::SoundSystem::instance().start())menuSound.resetAfterEngineRestart();
         }
         if(menu.page==mkw::UiPage::Pause){
-            if(suspendRaceGraphics)suspendRaceGraphics();
-            recordPauseStage("race-graphics-released");
             std::vector<mkw::UiQuad> paused,confirmation;
             residentQuads(menu,nullptr,paused);
             auto confirm=menu;confirm.enter(mkw::UiPage::QuitConfirm);
             residentQuads(confirm,nullptr,confirmation);
             paused.insert(paused.end(),confirmation.begin(),confirmation.end());
-            bool ready=menuRenderer.prepare(paused);
+            // New 3DS: the pause menu usually fits beside the race, so the racers
+            // and course objects stay loaded and resuming is immediate. If it
+            // does not fit (and always on Old 3DS) they are released as before
+            // and reloaded on resume.
+            bool ready=false,pauseNew3ds=false;APT_CheckNew3DS(&pauseNew3ds);
+            if(pauseNew3ds&&raceResident&&!raceGraphicsSuspended){
+                ready=menuRenderer.prepare(paused);
+                recordPauseStage(ready?"pause-menu-ready-race-kept":"pause-menu-needs-race-memory");
+                if(!ready){menuRenderer.release(renderer);renderer.waitForGpu();}
+            }
+            if(!ready){
+                if(suspendRaceGraphics)suspendRaceGraphics();
+                recordPauseStage("race-graphics-released");
+                ready=menuRenderer.prepare(paused);
+            }
             recordPauseStage(ready?"pause-menu-ready":"pause-menu-allocation-failed");
             if(!ready){
                 menuRenderer.release(renderer);renderer.waitForGpu();

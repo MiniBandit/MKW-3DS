@@ -3,14 +3,13 @@ One CIA to install: nothing to copy.
 Online multiplayer: race up to
   12 players. Host, or join with
   the host's code. No server needed.
-Time Trials: your best run is
-  saved as a ghost to race or watch.
-Camera: the original game's
-  chase camera; look behind with
-  X or ZL.
+Time Trials: exact ghosts to race,
+  watch and save.
+Smaller files, faster loading;
+  60 fps opening and credits.
 License Settings: Graphics, Race
   Timer and a map that turns.
-Sound: mono, stereo or surround,
-  as System Settings choose.
-A while holding R no longer hops.
+Sound: mono, stereo or surround.
+Controls: air dives, R tricks on
+  every ramp, no A+R hop.
 Old 3DS: fewer races fail to load.
