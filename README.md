@@ -14,11 +14,16 @@ No game files are included. Everything is converted from your own disc.
 - All characters and vehicles, unlocks, award ceremonies and credits
 - Mii drivers
 - Four licenses with their own settings and records
-- Staff ghosts, Expert Staff ghosts and your own saved ghosts
+- Staff ghosts, Expert Staff ghosts and your own saved ghosts, with replays
 - Dual-screen menus, results and maps using the game's original art, effects and audio
+- Touch screen support in the menus
+- Course effects, lighting, cameras and items matched to the Wii
 - Runs on New 3DS and Old 3DS, optimized for both
-- Settings for texture quality, dynamic shadows, bloom and opponent detail
-- Speedometer and notification LED effects
+- 3D at 60 FPS
+- 800px Mode on New 3DS for a sharper top screen
+- Settings for texture quality, dynamic shadows, bloom, opponent detail and minimap frame rate
+- Surround sound, following the 3DS sound setting
+- Speedometer, race timer options and notification LED effects
 
 ## What you need
 
@@ -60,8 +65,8 @@ Open a new terminal, then build:
 
 ```sh
 sudo dkp-pacman -S --needed --noconfirm 3ds-dev
-git clone https://github.com/ethanseagull/MarioKartWii-3DS-Redux.git
-cd MarioKartWii-3DS-Redux
+git clone https://github.com/ethanseagull/MarioKartWiiDS.git
+cd MarioKartWiiDS
 export CXX=g++-16
 export FFMPEG="$(brew --prefix ffmpeg-full)/bin/ffmpeg"
 python3.12 tools/build.py --disc ~/Games/RMCE01.wbfs
@@ -82,8 +87,8 @@ sudo dkp-pacman -S --needed --noconfirm 3ds-dev
 Then build:
 
 ```sh
-git clone https://github.com/ethanseagull/MarioKartWii-3DS-Redux.git
-cd MarioKartWii-3DS-Redux
+git clone https://github.com/ethanseagull/MarioKartWiiDS.git
+cd MarioKartWiiDS
 python3.12 tools/build.py --disc ~/Games/RMCE01.wbfs
 ```
 

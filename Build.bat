@@ -16,7 +16,7 @@ $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-$RepoUrl = 'https://github.com/ethanseagull/MarioKartWii-3DS-Redux.git'
+$RepoUrl = 'https://github.com/ethanseagull/MarioKartWiiDS.git'
 $MinFreeGB = 30
 
 # Testing only: MKW_BOOTSTRAP_ROOT installs everything under that folder (no
