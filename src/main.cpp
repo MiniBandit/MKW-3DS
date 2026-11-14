@@ -257,6 +257,9 @@ static bool ghostRace=false,watchReplay=false;
 // (sdmc:/3ds/mkw-3ds/ghosts/pb-XX.rkg). ttGhost: the one raced or watched.
 static mkw::TimeTrialGhost ttGhost;static mkw::GhostRecorder ghostRun;
 static bool recordGhost=false,ghostFinishLogged=false;static unsigned ghostTick=0;
+// The recorded frame waits a step for its item bit (see the recorder below).
+static mkw::GhostFrame ghostPending{};static bool ghostPendingValid=false;
+static void flushGhostPending(){if(ghostPendingValid)ghostRun.push(ghostPending);ghostPendingValid=false;}
 static bool ghostDrawable(unsigned character,unsigned vehicle){
     for(const auto& c:mkw::GarageChoices)if(c.character==character&&c.vehicle==vehicle)return true;
     return false;
@@ -2201,7 +2204,7 @@ int main() {
             // Execute and retire the first complete render, then its reuse
             // frame while still black. Resource allocation alone does not
             // prime pose uploads, shadow captures or their GPU dependencies.
-            raceWarmupFrames=fullRace?2u:0u;netWaiting=netRace;netCountdown=false;netLostMask=0;netAppliedTick={};netKart={};ghostRun.reset();recordGhost=timeTrial&&!replay&&!watchReplay;ghostFinishLogged=false;ghostTick=0;
+            raceWarmupFrames=fullRace?2u:0u;netWaiting=netRace;netCountdown=false;netLostMask=0;netAppliedTick={};netKart={};ghostRun.reset();ghostPendingValid=false;recordGhost=timeTrial&&!replay&&!watchReplay;ghostFinishLogged=false;ghostTick=0;
             if(fullRace)K::System::RaceManager::Instance()->setIntroHeld(true);
             raceResident=fullRace;return true;
         };
@@ -2596,7 +2599,12 @@ int main() {
                     // A Time Trials ghost uses its mushrooms when its recorded item button does.
                     // Its item button is read one step ahead of its pad (PR #76).
                     {const bool counting=K::System::RaceManager::Instance()->stage()>=K::System::RaceManager::Stage::Countdown;
-                     const bool item=counting&&ttGhost.item(ghostTick);
+                     // A Wii ghost's press at frame f boosts from f+1 (Kinoko's KartItem
+                     // runs after the karts); the item system acts before the step, so
+                     // it reads the press of the frame before: checked against all 64
+                     // staff ghosts in Kinoko: 63 of 64 finish exactly, as with Kinoko's own
+                     // items; reading this frame instead, 1 of 64 does.
+                     const bool item=counting&&ghostTick>0&&ttGhost.item(ghostTick-1);
                      if(ghostRace&&raceGrid.count()>1)inputs[1]={item,false,false};
                      if(watchReplay)inputs[0]={item,false,false};}
                     if(netRace)for(unsigned i=1;i<raceGrid.count();++i)if(raceGrid.remoteMask>>i&1u){
@@ -2694,13 +2702,18 @@ int main() {
                         const auto& in=K::System::KPadDirector::Instance()->hostController()->raceInputState();
                         // The stick as Kinoko uses it (the autopilot sets it without the raw value).
                         auto raw=[](float v){return uint8_t(std::clamp(int(std::lround(v*7.f))+7,0,14));};
-                        ghostRun.push({uint8_t((in.buttons&~4u)|(lanItemFlags&1?4u:0u)),raw(in.stick.x),raw(in.stick.y),uint8_t(in.trick)});
+                        // A Mushroom used this step (the item system's, before the step)
+                        // boosts from this step; on the Wii it would from the frame after
+                        // its press. So the press goes on the frame before, as a Wii ghost
+                        // stores it: Kinoko and Wii replays then boost on the same step.
+                        if(ghostPendingValid){if(lanItemFlags&1)ghostPending.buttons|=4u;ghostRun.push(ghostPending);}
+                        ghostPending={uint8_t(in.buttons&~4u),raw(in.stick.x),raw(in.stick.y),uint8_t(in.trick)};ghostPendingValid=true;
                     }
                     // QA: keep the controls-only run's first 2400 ticks as the course's ghost.
                     if(kQa&&qaDrive&&recordGhost&&!ghostRace&&ghostTick==2400){
                         mkw::GhostInfo info;info.course=uint8_t(Courses[courseChoice].id);info.character=uint8_t(selectedVehicle().character);
                         info.vehicle=uint8_t(selectedVehicle().vehicle);info.automaticDrift=automaticDrift;info.finish={9,59,999};
-                        LOGF("QA ghost kept: %d",int(mkw::TimeTrialGhost::save(ghostRun,info)));
+                        flushGhostPending();LOGF("QA ghost kept: %d",int(mkw::TimeTrialGhost::save(ghostRun,info)));
                     }
                     // Not online: a log line a tick stalls the test console, and its clock falls behind the others'.
                     if(kQa&&!netRace&&((ghostTick%5==0||(ghostTick>=500&&ghostTick<1000))&&ghostTick<2400||ghostTick%300==0)){const unsigned k=ghostRace?1u:0u;auto* o=K::Kart::KartObjectManager::Instance()->object(k);const auto p=o->pos();
@@ -2978,7 +2991,7 @@ int main() {
                                 for(unsigned c=0;c<info.name.size();++c)info.name[c]=char16_t(licenseSaves[activeLicense].name[c]);
                                 const std::time_t now=std::time(nullptr);
                                 if(const std::tm* d=std::gmtime(&now);d&&d->tm_year>=100&&d->tm_year<200){info.year=uint8_t(d->tm_year-100);info.month=uint8_t(d->tm_mon+1);info.day=uint8_t(d->tm_mday);}
-                                const bool ok=mkw::TimeTrialGhost::save(ghostRun,info);menu.ghostsCourse=~0u;
+                                flushGhostPending();const bool ok=mkw::TimeTrialGhost::save(ghostRun,info);menu.ghostsCourse=~0u;
                                 LOGF("ghost saved=%d time=%u frames=%u",int(ok),ms,ghostRun.frames());
                             }
                         }
