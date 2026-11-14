@@ -91,7 +91,9 @@ then also skip treads out of view or at the phase their copy already holds),
 `no-stadium-clear-skip.txt` (DK Summit, Waluigi Stadium and Funky Stadium capture frames
 without bloom clear the left LCD's colour again, although the capture then covers it),
 `no-shade-batch.txt` (shadow volumes' per-volume shade rectangles drawn one draw each again
-instead of as one batch of pixel-space quads), `no-clip-reuse.txt` (the clip fuse
+instead of as one batch of pixel-space quads), `no-flare-trim.txt` (lens flare elements
+drawn as full squares again instead of corner-cut squares and rk_lens03 as a ring; at most
+2 LSB on flare pixels), `no-clip-reuse.txt` (the clip fuse
 multiplies projection x modelView on every upload again instead of reusing an unchanged
 product or drawNow's culling product; exact: `cmd-hash.txt` equal either way),
 `no-soft-wall-skip.txt` (the chase camera runs its soft-wall pass on every course again,

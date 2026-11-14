@@ -2051,6 +2051,7 @@ int main() {
     // Retail lens flare (src/lens_flare.cpp). A/B: no-lens-flare.txt.
     mkw::LensFlare lensFlare;
     const bool lensFlareOn=!exists("sdmc:/3ds/mkw-3ds/no-lens-flare.txt");
+    lensFlare.trim=!exists("sdmc:/3ds/mkw-3ds/no-flare-trim.txt");
     // The lower LCD during races (docs/BOTTOM_SCREEN.md); menus keep it black.
     mkw::RaceBottomScreen bottomScreen;
     static mkw::BottomView bottomView;

@@ -19,6 +19,9 @@ public:
     void draw(Renderer& renderer) const;
     bool active() const {return hasSource_;}
     int fade() const {return fade_;}
+    // Draw each element only where its texture is non-zero: corner-cut
+    // squares, rk_lens03 as a ring (A/B: no-flare-trim.txt).
+    bool trim=true;
 private:
     std::array<Texture,4> textures_;
     bool loaded_=false,hasSource_=false,haveScreen_=false;
