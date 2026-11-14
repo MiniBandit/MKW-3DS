@@ -824,6 +824,7 @@ int main() {
     mkw::diag::lightZones=!exists("sdmc:/3ds/MKWiiDS/no-light-zones.txt");report(mkw::diag::lightZones?"light zones on":"light zones off");
     mkw::diag::wiiDriverLod=!exists("sdmc:/3ds/MKWiiDS/no-wii-driver-lod.txt");report(mkw::diag::wiiDriverLod?"wii driver lod on":"wii driver lod off");
     mkw::diag::stereoSixty=!exists("sdmc:/3ds/MKWiiDS/no-stereo-60.txt");
+    mkw::diag::introSixty=!exists("sdmc:/3ds/MKWiiDS/no-intro-60.txt");report(mkw::diag::introSixty?"intro 60 fps on":"intro 60 fps off");
     mkw::diag::stereoOpponentLod=!exists("sdmc:/3ds/MKWiiDS/no-stereo-opponent-lod.txt");
     mkw::diag::stereoEyeCull=!exists("sdmc:/3ds/MKWiiDS/no-stereo-eye-cull.txt");report(mkw::diag::stereoEyeCull?"stereo eye cull on":"stereo eye cull off");
     mkw::diag::stereoObjectLod=!exists("sdmc:/3ds/MKWiiDS/no-stereo-object-lod.txt");report(mkw::diag::stereoObjectLod?"stereo object lod on":"stereo object lod off");
@@ -3002,7 +3003,7 @@ int main() {
     // 30 FPS. New 3DS and New 2DS XL present at 60, or at 30 while the 3D
     // slider is up (stereo draws every frame twice). Dual-screen Intro also
     // presents every two ticks; its camera and simulation still step at 60 Hz.
-    auto raceTicksPerFrame=[&]{return mkw::racePresentationTicks(new3ds,renderer.stereoWanted(),fullRace&&intro.active(),mkw::diag::stereoSixty);};
+    auto raceTicksPerFrame=[&]{return mkw::racePresentationTicks(new3ds,renderer.stereoWanted(),fullRace&&intro.active(),mkw::diag::stereoSixty,mkw::diag::introSixty);};
     presentation.setTicksPerSlot(raceTicksPerFrame());
     LOGF("race presentation every %u ticks",presentation.ticksPerSlot());
     // accumulator: simulation ticks owed (1 = 1/60 s). Races owe one per top-screen

@@ -83,7 +83,7 @@ inline bool liveOpponents=false;
 inline bool wiiDriverLod=true;
 // Lighter 3D at 60 FPS (New 3DS, 3D slider up). A/B: no-stereo-60.txt (3D at
 // 30 FPS again), no-stereo-opponent-lod.txt (opponents as in 2D).
-inline bool stereoSixty=true,stereoOpponentLod=true;
+inline bool stereoSixty=true,stereoOpponentLod=true,introSixty=true;
 // 3D: whole models are also tested against each eye's own frustum when drawn
 // (record-time culling has to use both eyes' union). A/B: no-stereo-eye-cull.txt.
 inline bool stereoEyeCull=true;

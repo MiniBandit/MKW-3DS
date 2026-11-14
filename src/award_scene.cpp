@@ -5,6 +5,8 @@
 #include <mkw/award_camera_data.hpp>
 #include <mkw/award_ui.hpp>
 #include <mkw/color_fader.hpp>
+#include <mkw/console_model.hpp>
+#include <mkw/diag.hpp>
 #include <mkw/presentation_cadence.hpp>
 #include <mkw/renderer.hpp>
 #include <mkw/sound_ids.hpp>
@@ -223,8 +225,11 @@ AwardSceneResult runAwardPodium(Renderer& renderer,const AwardResults& results,v
  };
  auto previous=svcGetSystemTick();double pending=0;
  SkipDuck skipDuck{sound};
- PresentationCadence presentation;presentation.setTicksPerSlot(2);
+ // The race's cadence (presentation_cadence.hpp): 60 FPS on New 3DS, as the Wii.
+ auto ceremonyTicks=[&]{return racePresentationTicks(isNew3ds(),renderer.stereoWanted(),true,diag::stereoSixty,diag::introSixty);};
+ PresentationCadence presentation;presentation.setTicksPerSlot(ceremonyTicks());
  while(aptMainLoop()){
+  if(const unsigned ticks=ceremonyTicks();ticks!=presentation.ticksPerSlot())presentation.setTicksPerSlot(ticks);
   heartbeat.loop("input",unsigned(phase),frame,tick,pending,session.assets->drive.get(),soundReadyToLoad?int(sound.sceneReady()):-1,1);
   // AwardFade and AwardResults register only the Front input (80621178, 80621f70): A, not B or START.
   hidScanInput();bool advance=(hidKeysDown()&KEY_A)!=0;
