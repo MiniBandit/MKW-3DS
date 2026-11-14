@@ -744,6 +744,9 @@ bool translateMaterial(const DrawSetting& d,Material& m){
     const bool maskedFragments=sameStages(d,{{0,{14,2,8,15},{0,0,0,1,3},{7,1,4,7},{0,0,0,1,3},12,0},
                                              {1,{15,14,8,4},{0,0,0,1,0},{7,7,7,2},{0,0,0,1,0},13,0},
                                              {255,{6,15,15,0},{0,0,0,1,0},{7,3,0,7},{0,0,0,1,0},0,0}});
+    const TevStageKey starRing0{0,{15,14,8,2},{0,0,0,1,3},{7,1,4,7},{0,0,0,1,3},12,0},
+                      starRing1{1,{14,4,8,15},{0,0,0,1,0},{7,2,4,7},{0,0,0,1,0},13,0};
+    const bool starRingSum=sameStages(d,{starRing0,starRing1,{255,{6,15,15,0},{0,0,0,1,0},{7,3,0,7},{0,0,0,1,0},0,0}});
     if(sameStages(d,{lerp0})){
         m.vertex={RegC1,RegC0};m.lookup={RegC0,ValNone};
         m.stages=1;m.stage[0]=standard;
@@ -751,6 +754,18 @@ bool translateMaterial(const DrawSetting& d,Material& m){
         // Blooper's main blot: C = C0, A = A0 * TEX0A.
         m.vertex={RegC0,RegC0};m.stages=1;
         m.stage[0]=stage(Func::Replace,{{Src::Vertex,C}},Func::Modulate,{{Src::Tex0,A},{Src::Vertex,A}});
+    }else if(sameStages(d,{{0,{15,2,8,15},{0,0,0,1,0},{7,1,4,7},{0,0,0,1,0},0,0}})){
+        // GCN DK Mountain boulder pieces (rk_DKrockGC0/1): C = C0 * TEX0C, A = A0 * TEX0A.
+        m.vertex={RegC0,RegC0};m.stages=1;
+        m.stage[0]=stage(Func::Modulate,{{Src::Vertex,C},{Src::Tex0,C}},Func::Modulate,{{Src::Tex0,A},{Src::Vertex,A}});
+    }else if(sameStages(d,{{0,{3,2,8,15},{0,0,0,1,0},{7,1,4,7},{0,0,0,1,0},0,0},
+                          {255,{15,4,0,15},{0,0,0,1,0},{0,7,7,7},{0,0,0,1,0},0,0}})){
+        // Stone offroad (rk_stone): CPREV = lerp(A0, C0, TEX0C), A = A0 * TEX0A; then
+        // C = C1 * CPREV. Both values stay in [0, 1], so the clamps match.
+        m.vertex={RegC0,RegC0};m.lookup={RegC1,ValNone};
+        m.stages=2;
+        m.stage[0]=stage(Func::Interpolate,{{Src::Vertex,C},{Src::Vertex,A},{Src::Tex0,C}},Func::Modulate,{{Src::Tex0,A},{Src::Vertex,A}});
+        m.stage[1]=stage(Func::Modulate,{{Src::Prev,C},{Src::Lookup,C}},Func::Replace,{{Src::Prev,A}});
     }else if(sameStages(d,{{0,{15,15,15,8},{0,0,0,1,0},{7,1,4,7},{0,0,0,1,0},0,0}})){
         // C = TEX0C, A = A0 * TEX0A.
         m.vertex={ValNone,RegC0};
@@ -760,6 +775,11 @@ bool translateMaterial(const DrawSetting& d,Material& m){
         m.vertex={RegC1,RegC0};m.lookup={RegC0,ValNone};
         m.stages=2;m.stage[0]=standard;
         m.stage[1]=stage(Func::Modulate,{{Src::Prev,C},{Src::Tex1,C}},Func::Replace,{{Src::Prev,A}});
+    }else if(sameStages(d,{lerp0,{255,{15,15,15,0},{0,0,0,1,0},{7,2,0,7},{0,0,0,1,0},0,0}})){
+        // Then C = CPREV, A = A1 * APREV (sliding penguin rk_pgnSlider_s).
+        m.vertex={RegC1,RegC0};m.lookup={RegC0,RegC1};
+        m.stages=2;m.stage[0]=standard;
+        m.stage[1]=stage(Func::Replace,{{Src::Prev,C}},Func::Modulate,{{Src::Prev,A},{Src::Lookup,A}});
     }else if(sameStages(d,{lerp0,{1,{6,0,8,15},{0,0,0,1,0},{7,0,4,7},{0,0,0,1,0},0,0}})){
         // Then C = lerp(C2, CPREV, TEX1C), A = APREV * TEX1A (rk_slipStream). C2 is the
         // second layer's secondary colour, animated by emitter time: a stage constant.
@@ -837,11 +857,10 @@ bool translateMaterial(const DrawSetting& d,Material& m){
         m.stage[2].constant={RegK1,ValNone};
         m.stage[3]=stage(Func::Interpolate,{{Src::Buffer,C},{Src::Prev,C},{Src::Const,C}},Func::Modulate,{{Src::Buffer,A},{Src::Prev,A}});
         m.stage[3].constant={ValHalf,ValNone};
-    }else if(sameStages(d,{{0,{15,14,8,2},{0,0,0,1,3},{7,1,4,7},{0,0,0,1,3},12,0},
-                          {1,{14,4,8,15},{0,0,0,1,0},{7,2,4,7},{0,0,0,1,0},13,0},
-                          {255,{15,15,15,6},{0,0,0,1,0},{7,3,0,7},{0,0,0,1,0},0,0}})){
+    }else if(sameStages(d,{starRing0,starRing1,{255,{15,15,15,6},{0,0,0,1,0},{7,3,0,7},{0,0,0,1,0},0,0}})||starRingSum){
         // C2 = K0 * TEX0C + C0, A2 = A0 * TEX0A; CPREV = lerp(K1, C1, TEX1C), APREV = A1 * TEX1A;
-        // C = C2, A = A2 * APREV.
+        // C = C2 (rk_StarRing_houshi: clamp(C2 + CPREV)), A = A2 * APREV. GX clamps C2 as
+        // MULTIPLY_ADD does; the lerp and the products stay in [0, 1].
         m.vertex={RegK0,RegC0};m.lookup={RegC0,ValNone};
         m.stages=4;
         m.stage[0]=stage(Func::MultiplyAdd,{{Src::Tex0,C},{Src::Vertex,C},{Src::Lookup,C}},Func::Modulate,{{Src::Tex0,A},{Src::Vertex,A}});
@@ -850,7 +869,7 @@ bool translateMaterial(const DrawSetting& d,Material& m){
         m.stage[1].constant={RegC1,RegC1};
         m.stage[2]=stage(Func::MultiplyAdd,{{Src::Tex1,IC},{Src::Const,C},{Src::Prev,C}},Func::Replace,{{Src::Prev,A}});
         m.stage[2].constant={RegK1,ValNone};
-        m.stage[3]=stage(Func::Replace,{{Src::Buffer,C}},Func::Modulate,{{Src::Buffer,A},{Src::Prev,A}});
+        m.stage[3]=stage(starRingSum?Func::Add:Func::Replace,{{Src::Buffer,C},{Src::Prev,C}},Func::Modulate,{{Src::Buffer,A},{Src::Prev,A}});
     }else if(sameStages(d,{{0,{8,15,15,15},{0,2,3,1,0},{7,1,4,7},{0,0,0,1,0},0,0},
                           {1,{8,15,15,0},{0,2,0,1,0},{0,7,7,7},{0,0,0,1,0},0,0}})){
         // C = (TEX0C - 0.5) / 2 (clamped); then C = TEX1C + CPREV - 0.5. A = A0 * TEX0A.
