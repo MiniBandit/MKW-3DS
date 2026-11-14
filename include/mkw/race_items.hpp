@@ -99,6 +99,12 @@ struct ItemActor {
     uint8_t ownerImmunity=30;
     float blastInitialScale=1,bounceImpulse=0;
     uint8_t floorBounces=0;
+    // Shell straight travel (USA 0x807a6a94): the last contact direction (+0x1b0), frames
+    // without Q1 floor (+0x15c, starts at 5) and its airborne flag (+0x78 bit 0x20), and the
+    // solid-fall countdown (+0x15e).
+    Vec3 lastDirection{0,0,1};
+    uint8_t airFrames=5,solidFallTicks=0;
+    bool airborne=false,floorContact=false,reflected=false;
     ShellGuidance guidance{};
     Vec3 visualPosition()const{return kind==ItemKind::BlueShell&&!explosion&&guidance.phase<4?Vec3{position.x,guidance.visualY,position.z}:position;}
     bool diving()const{return kind==ItemKind::BlueShell&&!explosion&&guidance.phase==5;}
@@ -192,6 +198,9 @@ public:
     bool oddsReady()const{return odds_.ready();}
     bool loadShellRoute(const void* bytes,size_t size,unsigned course=0xffff){shellCourse_=course;return shellRoute_.load(bytes,size);}
     const ShellRoute& shellRoute()const{return shellRoute_;}
+    /// Walls-only course query (KCL mask 0xD010F000, invisible walls included) that the
+    /// shell straight travel runs while its slide timer is set. Null skips it.
+    void setWallQuery(ItemWorldQuery query){wallQuery_=query;}
     void resetFromCourse(unsigned racers,uint32_t seed=0x4d4b5749);
     /// Course-object phase: input latch and item box motion.
     void beforeStep(const ItemRacer* racers,const ItemInput* inputs,unsigned count,bool raceActive,uint16_t bulletNoEndPlayers=0);
@@ -317,6 +326,8 @@ private:
     int reclaimPressure_=0;
     unsigned reclaimPhase_=0;
     bool nativeReclaimPhase_=false;
+    ItemWorldQuery wallQuery_=nullptr;
+    uint32_t itemClock_=0; // RaceManager +0x20 (native), the Red search phase
     void forgetReclaimSlot(unsigned slot);
     void syncReclaimOrder();
     std::array<bool,MaxActors> freeAtStepStart_{};
@@ -407,9 +418,11 @@ private:
     void updateShell(ItemActor& actor,ItemWorldQuery query);
     void shatter(ItemActor& actor);
     void moveShellRoute(ItemActor& actor,ItemWorldQuery query,int target,bool blue);
-    void shellTerrain(ItemActor& actor,ItemWorldQuery query,bool blue,bool route,bool approach=false);
+    void shellTerrain(ItemActor& actor,ItemWorldQuery query,bool blue,bool route,bool approach=false,bool wallBreak=true);
+    void straightShell(ItemActor& actor,ItemWorldQuery query,float targetSpeed);
+    void launchStraight(ItemActor& actor,const ItemRacer& thrower);
     int redRouteTarget(unsigned player)const;
-    int redTarget(const ItemActor& actor,bool ranked)const;
+    int redTarget(const ItemActor& actor,bool ranked,bool staggered=false)const;
     int blueTarget(const ItemActor& actor)const;
     void trackShellRacers(bool advance);
     uint16_t itemPoint(unsigned racer);

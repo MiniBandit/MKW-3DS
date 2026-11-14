@@ -93,15 +93,13 @@ ItemActor& RaceItems::spawn(unsigned player,ItemKind kind,bool backwards,const V
     // Green update 297f88 expires only after age 1500. Its launch starts a
     // bounce counter at 9 forward / 4 backward and destroys it below zero.
     if(kind==ItemKind::GreenShell){
-        a.lifetime=1501;a.bounceLimit=backwards?5:10;
+        // 297ebc: the bounce counter starts at 4 backward / 9 forward, 3 / 7 in Battle
+        // (item global +3), and the shell breaks below zero.
+        a.lifetime=1501;a.bounceLimit=battleOdds_?(backwards?4:8):(backwards?5:10);
         // 297ebc -> 29a6e4 -> 27fe48/27fff0: ordinary straight driving
         // inherits signed speed, including the source backward subtraction.
         // Drift-side aim/special movement predicates remain in the audit.
-        const Vec3 motion=itemMotion(racers_[player]);const float speed=length(motion);
-        const bool movingForward=dot(motion,racers_[player].forward)>0;
-        a.travelSpeed=backwards?(movingForward?30.f-speed:30.f+speed):(movingForward?85.f+speed:85.f-speed);
-        a.flightDirection=normalized(direction*(backwards?40.f:35.f)+(movingForward?(backwards?-motion:motion):Vec3{}),direction);
-        a.velocity=a.flightDirection*a.travelSpeed;
+        launchStraight(a,racers_[player]);
     }
     if(trapItem(kind)){
         const auto& r=racers_[player];const Vec3 motion=itemMotion(r);
@@ -267,6 +265,9 @@ void RaceItems::updateActors(ItemWorldQuery query){
         for(unsigned k=0;k<n;++k){
             auto& a=actors_[order[k]];if(!a.active)continue;
             updateActor(a,query);
+            // Base calc 0x80796734: any item below y = 0 is removed (Blooper and Thunder
+            // Cloud are exempt; neither is an actor here). Every course runs above y 400.
+            if(a.active&&!a.explosion&&a.position.y<0)a.active=false;
             if(!a.active){h.remove(order[k]);continue;}
             if(a.settled&&(a.scattered||a.kind==ItemKind::Banana))h.land(order[k]);
             resolveCourseObjects(a);if(!a.active)continue;
@@ -295,6 +296,12 @@ void RaceItems::updateActor(ItemActor& a,ItemWorldQuery query){
             a.radius=bombBlastRadius(a.age,a.blastInitialScale);
             if(a.age>=a.lifetime)a.active=false;
             return;
+        }
+        if(!a.scattered&&(a.kind==ItemKind::GreenShell||a.kind==ItemKind::RedShell)){
+            // Base calc 0x807960b8 / 0x80796580 / 0x80796764: frames without a Q1 floor,
+            // capped at 6; the airborne flag is the previous update's count >= 5.
+            if(a.age>1){if(a.floorContact)a.airFrames=0;a.airborne=a.airFrames>=5;}
+            a.floorContact=a.reflected=false;if(a.airFrames<=5)++a.airFrames;
         }
         const auto prop=itemProperties(unsigned(a.kind));
         a.scale=std::min(prop.releasedScale,a.scale+(a.backwards?prop.dropGrowth:prop.growth));
@@ -326,9 +333,14 @@ void RaceItems::updateActor(ItemActor& a,ItemWorldQuery query){
             updateScattered(a,query);
         }else if(a.kind==ItemKind::RedShell||a.kind==ItemKind::BlueShell){
             updateShell(a,query);
+        }else if(a.kind==ItemKind::GreenShell){
+            // Green calc 0x807a3fbc: past age 900 the counter is held at zero, so the next
+            // wall, ceiling or steep entry breaks it; then straight travel toward 105.
+            if(a.age>900&&a.bounces+1<a.bounceLimit)a.bounces=uint8_t(a.bounceLimit-1);
+            straightShell(a,query,105);
         }else{
-            // Green's retail update moves first, projects at KCL contact, then
-            // applies gravity/speed convergence for the following frame.
+            // Thrown traps (and any other unguided item) move first, then resolve the
+            // KCL contact. Green has its own straight travel above.
             if(trapItem(a.kind)&&!a.settled){
                 const float drag=a.kind==ItemKind::Banana?(a.backwards?.97f:.999f):a.kind==ItemKind::FakeBox?(a.backwards?.97f:.996f):(a.backwards?.973f:.999f);
                 a.velocity=a.velocity*drag;
@@ -341,10 +353,7 @@ void RaceItems::updateActor(ItemActor& a,ItemWorldQuery query){
                 if(length(surface.floorNormal)>.1f){
                     const Vec3 normal=normalized(surface.floorNormal);const float into=dot(a.velocity,normal);
                     a.up=normal;
-                    if(a.kind==ItemKind::GreenShell){
-                        a.flightDirection=normalized(a.flightDirection-normal*dot(a.flightDirection,normal),a.flightDirection);
-                        a.velocity=a.flightDirection*a.travelSpeed-normal*2.5f;
-                    }else if(trapItem(a.kind)){
+                    if(trapItem(a.kind)){
                         // fn_1_294794: a Bob-omb thuds on every floor hit.
                         if(a.kind==ItemKind::Bobomb&&!a.settled)sound(ItemSoundCue::Bounce,a);
                         if(a.floorBounces){
@@ -358,8 +367,7 @@ void RaceItems::updateActor(ItemActor& a,ItemWorldQuery query){
                             a.velocity={};a.settled=true;
                         }
                     }else if(into<0)a.velocity=a.velocity-normal*into;
-                }else if(a.kind==ItemKind::GreenShell)a.velocity.y-=a.velocity.y>0?4.2f:2.f;
-                else if(trapItem(a.kind)){
+                }else if(trapItem(a.kind)){
                     a.settled=false;
                     const float gravity=a.kind==ItemKind::Banana?(a.backwards?1.8f:2.2f):a.kind==ItemKind::FakeBox?(a.backwards?1.8f:2.1f):(a.backwards?2.8f:2.3f);
                     const float terminal=std::clamp(100.f+150.f*(float(a.age)-150.f)/(30.f-150.f),100.f,250.f);
@@ -369,7 +377,7 @@ void RaceItems::updateActor(ItemActor& a,ItemWorldQuery query){
                     if(a.kind==ItemKind::RedShell){shatter(a);return;}
                     if(into<0){
                         a.velocity=a.velocity-normal*(2*into);a.flightDirection=normalized(a.flightDirection-normal*(2*dot(a.flightDirection,normal)),a.flightDirection);
-                        if(++a.bounces>=a.bounceLimit||(a.kind==ItemKind::GreenShell&&a.age>900)){shatter(a);return;}
+                        if(++a.bounces>=a.bounceLimit){shatter(a);return;}
                         if(shell(a.kind))sound(ItemSoundCue::WallBounce,a);   // fn_1_2A5140: SE_ITM_KAME_HANSHA
                     }
                 }
@@ -377,10 +385,6 @@ void RaceItems::updateActor(ItemActor& a,ItemWorldQuery query){
                 const float gravity=a.kind==ItemKind::Banana?(a.backwards?1.8f:2.2f):a.kind==ItemKind::FakeBox?(a.backwards?1.8f:2.1f):(a.backwards?2.8f:2.3f);
                 const float terminal=std::clamp(100.f+150.f*(float(a.age)-150.f)/(30.f-150.f),100.f,250.f);
                 a.velocity.y=std::max(-terminal,a.velocity.y-gravity);
-            }
-            if(a.kind==ItemKind::GreenShell){
-                if(!query)a.velocity.y-=a.velocity.y>0?4.2f:2.f;
-                a.travelSpeed+=.01f*(105.f-a.travelSpeed);
             }
             if(a.position.y<-100000){a.active=false;return;}
         }
@@ -485,8 +489,9 @@ void RaceItems::actorKartContact(ItemActor& a,unsigned player){
         // pursuing in special state 5 instead of breaking; the contact still requests the hit.
         const float close=r.radius+1.5f*a.radius;
         if(shellXZ2(a.position-r.position)>=close*close){
+            // 0x807a5350 resets the aim but keeps the pursuit vector (+0x2a0).
             a.target=int8_t(player);a.guidance.pending=5;a.guidance.hasRoute=false;
-            a.guidance.targetBack=-normalized(r.forward,{0,0,1});a.guidance.homing={};
+            a.guidance.targetBack=-normalized(r.forward,{0,0,1});
         }
     }
     if(!a.explosion){

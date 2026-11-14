@@ -53,6 +53,14 @@ ItemSurface nativeSurfaceAt(Vec3 previous,Vec3 position,float radius,unsigned ti
     return {nativeVec(info.tangentOff),nativeVec(info.floorNrm),nativeVec(info.wallNrm),bool(mask&(KCL_TYPE_BIT(COL_TYPE_FALL_BOUNDARY)|KCL_TYPE_BIT(COL_TYPE_SOLID_OOB))),bool(mask&KCL_TYPE_BIT(COL_TYPE_CANNON_TRIGGER)),uint32_t(mask),true,info.floorObject,supportY,carry};
 }
 ItemSurface nativeSurface(Vec3 previous,Vec3 position,float radius){return nativeSurfaceAt(previous,position,radius,0);}
+// Shell straight travel's second probe (USA 0x807a6c4c): walls only, invisible walls
+// included, run while the slide timer is set.
+ItemSurface nativeWallSurface(Vec3 previous,Vec3 position,float radius){
+    K::Field::CollisionInfo info{};info.reset();K::Field::KCLTypeMask mask=0;
+    if(!K::Field::CollisionDirector::Instance()->checkSphereFull(radius,sourceVec(position),sourceVec(previous),K::Field::KCLTypeMask(KCL_TYPE_WALL),&info,&mask,0))return {};
+    ItemSurface s{};s.correction=nativeVec(info.tangentOff);s.wallNormal=nativeVec(info.wallNrm);s.floorTypes=uint32_t(mask);s.collided=true;
+    return s;
+}
 // The patched Kinoko KartAction/KartMove carry the retail gates; this only forwards.
 class NativeKarts final:public ItemKarts{
 public:
@@ -154,7 +162,8 @@ ItemRacer snapshotFast(unsigned i){
     r.shellTargetUnavailable=status.onBit(S::TriggerRespawn,S::InRespawn,S::AfterRespawn,static_cast<S>(83));
     auto bit=[&](unsigned n){return status.onBit(static_cast<S>(n));};
     r.shellAcquireUnavailable=r.shellTargetUnavailable||bit(40)||bit(82)||bit(89);
-    r.shellTargetProtected=r.shellAcquireUnavailable||bit(4)||bit(32)||bit(35)||bit(36)||bit(63)||bit(79)||bit(91);
+    r.shellTargetProtected=r.shellAcquireUnavailable||bit(4)||bit(32)||bit(35)||bit(36)||bit(63)||bit(79)||bit(91)||bit(135);
+    r.halfPipe=status.onBit(S::HalfPipeRamp,S::OverZipper);
     r.mushroomBoost=status.onBit(S::MushroomBoost);
     r.inkCleaningBoost=move->boostActive(K::Kart::KartBoost::Type::MushroomAndBoostPanel);
     r.trickRotating=status.onBit(S::ZipperTrick,S::TrickRot);
@@ -198,7 +207,8 @@ ItemRacer snapshotProxy(unsigned i){
     // where Kinoko has no producer yet; do not substitute unrelated flags.
     auto bit=[&](unsigned n){return status.onBit(static_cast<S>(n));};
     r.shellAcquireUnavailable=r.shellTargetUnavailable||bit(40)||bit(82)||bit(89);
-    r.shellTargetProtected=r.shellAcquireUnavailable||bit(4)||bit(32)||bit(35)||bit(36)||bit(63)||bit(79)||bit(91);
+    r.shellTargetProtected=r.shellAcquireUnavailable||bit(4)||bit(32)||bit(35)||bit(36)||bit(63)||bit(79)||bit(91)||bit(135);
+    r.halfPipe=status.onBit(S::HalfPipeRamp,S::OverZipper);
     r.mushroomBoost=status.onBit(S::MushroomBoost);
     r.inkCleaningBoost=k->move()->boostActive(K::Kart::KartBoost::Type::MushroomAndBoostPanel);
     r.trickRotating=status.onBit(S::ZipperTrick,S::TrickRot);
@@ -497,10 +507,12 @@ void RaceItems::beforeStepNative(const ItemInput* inputs,unsigned count,bool act
 }
 void RaceItems::afterStepNative(unsigned count){
     // Retail Item globals read RaceManager +0x20, not the active-item clock.
-    reclaimPhase_=K::System::RaceManager::Instance()->timer()&7;nativeReclaimPhase_=true;
+    itemClock_=K::System::RaceManager::Instance()->timer();
+    reclaimPhase_=itemClock_&7;nativeReclaimPhase_=true;
     std::array<ItemRacer,MaxRacers> states;{MKW_SIM_SCOPE(ItSnapshot);snapshotNative(count,states);}
     for(unsigned i=0;i<std::min(count,MaxRacers);++i)
         states[i].inkCleaningBoost=kart(i)->move()->takeFloorInkClear()||states[i].inkCleaningBoost;
+    wallQuery_=nativeWallSurface;
     afterStep(states.data(),count,nativeSurface);
     // Watch Replay: Kinoko's KartItem holds the ghost's Triple Mushroom, so the item
     // window, the mushroom pop and the boost burst read its count from there.

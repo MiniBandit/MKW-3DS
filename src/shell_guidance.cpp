@@ -12,6 +12,13 @@ Vec3 project(Vec3 v,Vec3 axis){return axis*dot(v,axis);}
 float sinAngle(uint32_t angle){return std::sin(float(uint16_t(angle))*(2*Pi/65536.f));}
 float cosAngle(uint32_t angle){return std::cos(float(uint16_t(angle))*(2*Pi/65536.f));}
 bool missing(const ItemRacer& r){return r.shellTargetUnavailable||(r.unavailable&&!r.inCannon);}
+// 0x807a68cc: a Red leaving the route or its target goes straight along its current
+// velocity: that speed, and the direction flattened onto its floor up.
+void resumeStraight(ItemActor& a){
+    a.travelSpeed=length(a.velocity);
+    const Vec3 d=normalized(a.velocity,a.flightDirection),up=a.guidance.up;
+    a.flightDirection=a.lastDirection=normalized(d-up*dot(d,up),d);
+}
 }
 void RaceItems::trackShellRacers(bool advance){
     // USA 0x8078e82c starts every holder at item point 0; 0x8078f144 advances it
@@ -100,15 +107,24 @@ int RaceItems::blueTarget(const ItemActor& a)const{
     }
     return result;
 }
-int RaceItems::redTarget(const ItemActor& a,bool ranked)const{
-    // 298d88: nearest XZ within 4000, forward cone (sin=.95), signed
-    // floor-normal height [-1500,1000], source rank and protection filters.
-    int result=-1;float best=16000000.f;unsigned ownerRank=rank(unsigned(a.owner));
+int RaceItems::redTarget(const ItemActor& a,bool ranked,bool staggered)const{
+    // 0x807a514c -> 298d88: nearest XZ within 4000, forward cone (sin=.95), signed
+    // floor-normal height [-1500,1000], source rank and protection filters. Past 16
+    // ticks only racers whose index matches the item clock (RaceManager +0x20) mod 4
+    // are tested each frame. Finished racers stay eligible, and the thrower is left out
+    // only by the rank test, so an unranked (straight) Red can lock onto its thrower.
+    int result=-1;float best=16000000.f;
+    const bool owned=a.owner>=0&&unsigned(a.owner)<count_;
+    const unsigned ownerRank=owned?rank(unsigned(a.owner)):0;
+    const uint32_t clock=nativeReclaimPhase_?itemClock_:frame_;
     for(unsigned i=0;i<count_;++i){const auto& r=racers_[i];unsigned candidateRank=rank(i);
+        if(staggered&&clock>0&&(i&3u)!=(clock&3u))continue;
+        if(ranked&&owned&&ownerRank<=candidateRank){if(ownerRank!=1||candidateRank>3||(candidateRank==1&&count_>1))continue;}
+        // 0x8058aaf0 at every rank, 0x8058aa40 below the lead.
+        if(r.shellTargetUnavailable)continue;
+        if(candidateRank!=1&&(r.shellTargetProtected||r.inCannon||invincible(i)||hud_[i].mega))continue;
         // RMCU 807a4eec calls 8079a3d4 before acquiring: ignore same-team racers.
-        if(int(i)==a.owner||r.finished||missing(r)||(a.owner>=0&&unsigned(a.owner)<count_&&sameRaceTeam(racers_[unsigned(a.owner)].team,r.team)))continue;
-        if(ranked&&ownerRank<=candidateRank){if(ownerRank!=1||candidateRank>3||(candidateRank==1&&count_>1))continue;}
-        if(candidateRank!=1&&(r.shellTargetProtected||r.controlLocked||r.inCannon||invincible(i)||hud_[i].mega))continue;
+        if(owned&&sameRaceTeam(racers_[unsigned(a.owner)].team,r.team))continue;
         Vec3 d=r.position-a.position;float xz=shellXZ2(d);if(xz>best)continue;
         float f=dot(a.velocity,d),squared=dot(a.velocity,a.velocity)*dot(d,d);
         if(f<=0||f*f<=(1-.95f*.95f)*squared)continue;
@@ -122,14 +138,39 @@ int RaceItems::redRouteTarget(unsigned player)const{
     for(unsigned i=0;i<count_;++i)if(rank(i)==desired)return int(i);
     return -1;
 }
+void RaceItems::launchStraight(ItemActor& a,const ItemRacer& r){
+    // Shared launch 0x807a6718 (Green, and Red straight or route): 0x8078be7c forward,
+    // 0x8078c024 backward. A backward throw always starts from 30; moving forward it
+    // subtracts the smaller of |velocity| and KartMove's speed, and its aim leaves out the
+    // kart's vertical motion. Only x/z velocity is written.
+    const Vec3 v=motion(r);const float speed=length(v);const bool forward=dot(v,r.forward)>0;
+    const Vec3 facing=normalized(r.forward,{0,0,1});
+    if(a.backwards){
+        a.travelSpeed=forward?30.f-std::min(speed,r.speed):30.f+speed;
+        a.flightDirection=normalized(-(facing*40.f+(forward?Vec3{v.x,0,v.z}:Vec3{})),-facing);
+    }else{
+        const float base=a.kind==ItemKind::GreenShell?85.f:75.f;
+        a.travelSpeed=forward?base+speed:base-speed;
+        a.flightDirection=normalized(facing*35.f+(forward?v:Vec3{}),facing);
+    }
+    a.velocity.x=a.flightDirection.x*a.travelSpeed;a.velocity.z=a.flightDirection.z*a.travelSpeed;a.velocity.y=0;
+    a.lastDirection=a.flightDirection;
+    // 0x807a6880: thrown on a half-pipe ramp or above one, the slide timer starts at 30.
+    a.guidance.slopeTicks=r.halfPipe?30:0;
+    a.airFrames=5;a.airborne=false;
+}
 void RaceItems::launchShell(ItemActor& a,unsigned player){
     auto& s=a.guidance;const auto& r=racers_[player];const bool blue=a.kind==ItemKind::BlueShell;
     const Vec3 v=motion(r);float speed=length(v);bool forward=dot(v,r.forward)>0;
-    Vec3 direction=normalized(a.backwards?-r.forward:r.forward,{0,0,1});
-    const float base=blue?60.f:a.backwards?30.f:75.f;
-    a.travelSpeed=a.backwards?(forward?base-speed:base+speed):(forward?base+speed:base-speed);
-    a.flightDirection=normalized(direction*(a.backwards?40.f:35.f)+(forward?(a.backwards?-v:v):Vec3{}),direction);
-    a.velocity=a.flightDirection*a.travelSpeed;a.velocity.y=0;s.up=normalized(r.up,{0,1,0});a.target=-1;
+    if(blue){
+        // 0x807a198c always takes the forward helper: a Blue has no backward throw (use()
+        // never passes one).
+        const Vec3 direction=normalized(r.forward,{0,0,1});
+        a.travelSpeed=forward?60.f+speed:60.f-speed;
+        a.flightDirection=normalized(direction*35.f+(forward?v:Vec3{}),direction);
+        a.velocity=a.flightDirection*a.travelSpeed;a.velocity.y=0;
+    }else launchStraight(a,r);
+    s.up=normalized(r.up,{0,1,0});a.target=-1;
     a.lifetime=blue?65535:2401;a.bounceLimit=1;
     s.current={itemPoint(player),true};if(!shellRoute_.valid(s.current))s.current=shellRoute_.nearest(r.position);
     s.hasRoute=shellRoute_.valid(s.current)&&shellRoute_.valid(shellRoute_.edge(s.current))&&!a.backwards;
@@ -140,7 +181,7 @@ void RaceItems::launchShell(ItemActor& a,unsigned player){
     s.launchTicks=blue?20:45;s.visualY=a.position.y;s.approachSpeed=260;
     if(blue){a.target=int8_t(target);s.ownerLed=target==a.owner;if(target>=0){s.lastTarget=racers_[target].position;s.leaderMask|=uint16_t(1u<<target);}if(!s.hasRoute){a.travelSpeed=85+(forward?speed:-speed);a.velocity=a.flightDirection*a.travelSpeed;s.approachSpeed=length(a.velocity);}}
 }
-void RaceItems::shellTerrain(ItemActor& a,ItemWorldQuery query,bool blue,bool route,bool approach){
+void RaceItems::shellTerrain(ItemActor& a,ItemWorldQuery query,bool blue,bool route,bool approach,bool wallBreak){
     auto& s=a.guidance;ItemSurface surface=query?query(a.previous,a.position,a.terrainRadius):ItemSurface{};
     // 29a558 / 29b494: cannon KCL destroys ordinary shells; object ID 5
     // (Spiny) is explicitly exempt. It follows the authored airborne route.
@@ -148,13 +189,15 @@ void RaceItems::shellTerrain(ItemActor& a,ItemWorldQuery query,bool blue,bool ro
     if(surface.kill&&!blue){a.active=false;return;}
     if(blue){a.position.y+=std::max(0.f,surface.correction.y);}else a.position+=surface.correction+surface.floorMotion;
     bool floor=length(surface.floorNormal)>.1f;
+    if(floor&&!blue)a.floorContact=true;
     if(floor){s.up=normalized(surface.floorNormal);if(s.up.y<.00300002f)s.slopeTicks=30;else if(s.slopeTicks)--s.slopeTicks;
         if(!route){
             if(approach)a.velocity=tangent(a.velocity,s.up);
             else{a.flightDirection=normalized(tangent(a.flightDirection,s.up),a.flightDirection);a.velocity=a.flightDirection*a.travelSpeed;}
         }else a.velocity=tangent(a.velocity,s.up);
     }
-    if(length(surface.wallNormal)>.1f&&!blue){
+    // Red state 5 (0x807a0590) homes with wall breaking off: a wall only pushes it out.
+    if(length(surface.wallNormal)>.1f&&!blue&&wallBreak){
         // Acquired/route reds break against ordinary walls. Unacquired and
         // backwards reds retain the shared shell reflection controller.
         if(route||approach){shatter(a);return;}
@@ -170,17 +213,126 @@ void RaceItems::shellTerrain(ItemActor& a,ItemWorldQuery query,bool blue,bool ro
         if(blue){if(a.velocity.y>0)a.velocity.y*=a.velocity.y>100?.125f:.9f;else a.velocity.y=std::max(-100.f,a.velocity.y);}
     }
 }
+namespace {
+constexpr uint32_t KclSolidFall=1u<<0x0a,KclFallBoundary=1u<<0x10,KclHalfPipeRamp=1u<<0x13;
+constexpr uint32_t KclFloorNoSolidFall=0x20E80BFF;
+// Kinoko keeps a hit's push as bounding-box min + max; merging a second probe's push
+// keeps the extremes per axis (0x80085520 / 0x800854e0).
+float mergePush(float a,float b){return std::min({a,b,0.f})+std::max({a,b,0.f});}
+// The wall reflection used by both the wall and the timed floor branch (0x807ce298 run
+// twice): the horizontal part of the normal, unnormalized, and a rising result eased .7
+// back toward the old height.
+bool reflectShell(Vec3& direction,Vec3 normal){
+    const Vec3 h{normal.x,0,normal.z};const float into=dot(direction,h);
+    const float oldY=direction.y;direction=direction-h*(2*into);
+    if(direction.y>0&&direction.y>-oldY)direction.y+=.7f*(-oldY-direction.y);
+    direction=normalized(direction,{0,0,1});
+    return into<0;
+}
+}
+void RaceItems::straightShell(ItemActor& a,ItemWorldQuery query,float targetSpeed){
+    // Shell straight travel, USA 0x807a6a94: Green, Red states 0/1/2/6 and the Red route
+    // launch. Timer +0x1d8 (guidance.slopeTicks) suspends speed convergence and wall
+    // bounces and lets the shell slide; counter +0x1c8 is bounceLimit-1-bounces.
+    auto& s=a.guidance;const bool green=a.kind==ItemKind::GreenShell;Vec3& up=green?a.up:s.up;
+    a.position+=a.velocity;
+    if(green)a.yaw=std::atan2(a.velocity.x,a.velocity.z);
+    const ItemSurface q=query?query(a.previous,a.position,a.terrainRadius):ItemSurface{};
+    a.floorTypes=q.floorTypes;
+    const bool floor=length(q.floorNormal)>.1f,wall=length(q.wallNormal)>.1f;
+    Vec3 floorNormal=floor?normalized(q.floorNormal):Vec3{},wallNormal=wall?normalized(q.wallNormal):Vec3{};
+    Vec3 push=q.correction;
+    bool hit=q.collided||floor||wall||q.kill||q.cannon,steep=false,sideWall=false;
+    // 0x807a6b64: a near-vertical floor or a half-pipe ramp starts the 30-frame timer; an
+    // old shell entering one loses a bounce.
+    if(floor&&(floorNormal.y<.003f||(q.floorTypes&KclHalfPipeRamp))){
+        if(a.age>300&&!s.slopeTicks)++a.bounces;
+        s.slopeTicks=30;steep=true;
+    }
+    // 0x807a6bf0: while timed, a walls-only probe; a ceiling costs a bounce and turns the
+    // contact direction down, any other wall becomes a floor to slide along.
+    if(s.slopeTicks&&wallQuery_){
+        const ItemSurface w=wallQuery_(a.previous,a.position,a.terrainRadius);
+        if(w.collided||length(w.wallNormal)>.1f){
+            hit=true;push={mergePush(push.x,w.correction.x),mergePush(push.y,w.correction.y),mergePush(push.z,w.correction.z)};
+            const Vec3 n=normalized(w.correction,normalized(w.wallNormal,{0,1,0}));
+            if(normalized(w.wallNormal,{0,0,0}).y<-.98f){
+                if(a.lastDirection.y>0)a.lastDirection.y=-a.lastDirection.y;
+                ++a.bounces;
+            }else{
+                sideWall=true;
+                if(!floor||length(w.correction)>dot(q.correction,floorNormal))floorNormal=n;
+            }
+        }
+    }
+    if(hit){
+        a.position+=push+q.floorMotion;
+        if(floor||sideWall){
+            const Vec3 n=floorNormal;
+            if(s.slopeTicks){
+                if(a.bounces>=a.bounceLimit){
+                    reflectShell(a.flightDirection,n);a.lastDirection=a.flightDirection;a.reflected=true;
+                    sound(ItemSoundCue::WallBounce,a);
+                }else{
+                    // 0x807a7150: slide with the velocity, keeping the heading if it is
+                    // nearly vertical.
+                    const Vec3 slide=normalized(a.velocity-n*dot(a.velocity,n),a.lastDirection);
+                    a.lastDirection=slide;if(slide.x*slide.x+slide.z*slide.z>=1e-4f)a.flightDirection=slide;
+                }
+            }else{
+                a.lastDirection=normalized(a.flightDirection-n*dot(a.flightDirection,n),a.flightDirection);
+                a.flightDirection=a.lastDirection;
+            }
+            if(n.y>=-.98f)up=n;
+        }
+        if(!s.slopeTicks&&wall){
+            // 0x807a7240: a wall facing straight up removes the shell without an effect.
+            if(wallNormal.y>=.98f){a.active=false;return;}
+            Vec3 direction=a.flightDirection;
+            if(dot(direction,Vec3{wallNormal.x,0,wallNormal.z})<0){
+                reflectShell(direction,wallNormal);a.flightDirection=a.lastDirection=direction;a.reflected=true;
+                sound(ItemSoundCue::WallBounce,a);   // SE 249, also on the breaking hit
+                ++a.bounces;if(a.solidFallTicks)a.bounces=a.bounceLimit;
+            }
+        }
+        if(floor||wall)a.velocity=a.lastDirection*a.travelSpeed;
+        // 0x807a7450: on a floor with no wall, keep at least the height climbed this frame.
+        if(a.age>2&&floor&&!wall){
+            float rise=a.position.y-a.previous.y;if(!s.slopeTicks)rise=std::min(rise,50.f);
+            a.velocity.y=std::max(a.velocity.y,rise);
+        }
+        if(a.bounces>=a.bounceLimit){shatter(a);return;}
+        // 29a558 / 29b494: cannon KCL removes the shell; object ID 5 (Spiny) is exempt.
+        if(q.cannon){a.active=false;return;}
+    }
+    if(!s.slopeTicks)a.travelSpeed+=.01f*(targetSpeed-a.travelSpeed);
+    if(hit&&!steep&&!sideWall&&s.slopeTicks)--s.slopeTicks;
+    if(floor&&!s.slopeTicks)a.velocity=a.velocity-up*2.5f;
+    else if(a.velocity.y>0){a.velocity.y-=4.2f;if(a.airborne)a.velocity.y*=a.velocity.y>100?.125f:.9f;}
+    else{a.velocity.y-=2.f;if(a.airborne)a.velocity.y=std::max(a.velocity.y,-100.f);}
+    if(floor)a.floorContact=true;
+    // Base calc 0x80796524..0x8079667c: solid-fall KCL is a floor that starts a 60-frame
+    // countdown; frames on any other floor pause it. A fall boundary removes the item.
+    if(floor&&(q.floorTypes&KclSolidFall)&&!a.reflected&&!a.solidFallTicks)a.solidFallTicks=60;
+    if(a.solidFallTicks&&!(q.floorTypes&KclFloorNoSolidFall)&&--a.solidFallTicks==0){a.active=false;return;}
+    if(q.kill&&(!q.floorTypes||(q.floorTypes&KclFallBoundary))){a.active=false;return;}
+}
 void RaceItems::moveShellRoute(ItemActor& a,ItemWorldQuery query,int target,bool blue){
     auto& s=a.guidance;const Vec3* targetPos=target>=0?&racers_[target].position:nullptr;
     ShellRoute::Cursor targetPoint=target>=0?ShellRoute::Cursor{itemPoint(unsigned(target)),true}:ShellRoute::Cursor{};
-    if(!shellRoute_.valid(s.next)){s.hasRoute=false;s.pending=blue?2:1;a.position+=a.velocity;shellTerrain(a,query,blue,false);return;}
+    if(!shellRoute_.valid(s.next)){s.hasRoute=false;s.pending=blue?2:1;
+        if(blue){a.position+=a.velocity;shellTerrain(a,query,blue,false);}else{resumeStraight(a);straightShell(a,query,130);}
+        return;}
     if(s.launchTicks>=0){
-        // 29a050 initial straight travel; turn into the path over 45/20 ticks.
-        a.position+=a.velocity;shellTerrain(a,query,blue,false);if(!a.active)return;
-        if(!s.slopeTicks)a.travelSpeed+=.01f*((blue?260.f:130.f)-a.travelSpeed);
+        // 29a050 initial straight travel (0x807a6a94 for a Red); turn into the path over
+        // 45/20 ticks.
+        if(blue){
+            a.position+=a.velocity;shellTerrain(a,query,blue,false);if(!a.active)return;
+            if(!s.slopeTicks)a.travelSpeed+=.01f*(260.f-a.travelSpeed);
+        }else{straightShell(a,query,130);if(!a.active)return;}
         Vec3 next=shellRoute_.point(s.next).position,current=shellRoute_.point(s.current).position;
         if(shellXZ2(next-a.position)<shellXZ2(current-a.position)){s.current=s.next;s.next=shellRoute_.select(s.current,targetPos,targetPoint,blue);}
-        if(!shellRoute_.valid(s.next)){s.pending=blue?2:1;s.hasRoute=false;return;}
+        if(!shellRoute_.valid(s.next)){s.pending=blue?2:1;s.hasRoute=false;if(!blue)resumeStraight(a);return;}
         Vec3 delta=shellRoute_.point(s.next).position-a.position;
         Vec3 desired=normalized(delta,a.flightDirection);bool behind=dot(a.flightDirection,delta)<0;
         if(behind){Vec3 side=cross(a.flightDirection,s.up);desired=dot(side,delta)>0?side:-side;}
@@ -201,10 +353,10 @@ void RaceItems::moveShellRoute(ItemActor& a,ItemWorldQuery query,int target,bool
     unsigned advances=0;
     while(s.spline.t>=1&&advances++<=shellRoute_.size()){
         s.current=s.next;s.next=shellRoute_.select(s.current,targetPos,targetPoint,blue);
-        if(!shellRoute_.valid(s.next)){s.hasRoute=false;s.pending=blue?2:1;break;}
+        if(!shellRoute_.valid(s.next)){s.hasRoute=false;s.pending=blue?2:1;if(!blue)resumeStraight(a);break;}
         s.spline.shift(shellRoute_.point(s.next).position);
     }
-    if(!s.hasRoute||advances>shellRoute_.size()+1){s.hasRoute=false;s.pending=blue?2:1;return;}
+    if(!s.hasRoute||advances>shellRoute_.size()+1){if(s.hasRoute&&!blue)resumeStraight(a);s.hasRoute=false;s.pending=blue?2:1;return;}
     Vec3 p=s.spline.sample(s.spline.t);float oldY=a.position.y;
     a.position.x+=(p.x-a.position.x)*s.blend;a.position.z+=(p.z-a.position.z)*s.blend;
     if(blue){float y=s.spline.control[0].y+(s.spline.control[3].y-s.spline.control[0].y)*s.spline.t;a.position.y=std::max(a.position.y,y);}
@@ -214,12 +366,6 @@ void RaceItems::moveShellRoute(ItemActor& a,ItemWorldQuery query,int target,bool
 }
 void RaceItems::updateShell(ItemActor& a,ItemWorldQuery query){
     auto& s=a.guidance;const bool blue=a.kind==ItemKind::BlueShell;
-    // Acquisition already excludes finished racers. Retire an existing red lock
-    // as well: finished racers reject contact, so retaining it pins the shell
-    // to a target it can never hit. Keep Blue Shell leader selection separate.
-    if(!blue&&a.target>=0&&unsigned(a.target)<count_&&racers_[a.target].finished){
-        a.target=-1;shatter(a);return;
-    }
     if(s.pending>=0){s.phase=uint8_t(s.pending);s.pending=-1;s.ticks=0;
         if(blue){
             if(s.phase==2){s.approachSpeed=length(a.velocity);s.orbitRadius=300;}
@@ -231,12 +377,24 @@ void RaceItems::updateShell(ItemActor& a,ItemWorldQuery query){
     if(!blue){
         if(s.phase==3){
             moveShellRoute(a,query,redRouteTarget(unsigned(a.owner)),false);
-            if(s.ticks>1800){s.pending=1;s.hasRoute=false;}
+            if(s.ticks>1800&&a.active){s.pending=1;s.hasRoute=false;resumeStraight(a);}
         }else if((s.phase==4||s.phase==5)&&a.target>=0){
             const auto& r=racers_[a.target];
-            if(s.phase==5&&(missing(r)||s.ticks>60)){a.active=false;return;}
-            if(missing(r)){a.velocity+=s.homing;s.homing={};s.pending=6;a.target=-1;}
-            else{
+            // 0x807a037c / 0x807a0590 drop the lock on 0x8058aaf0 alone: triggered, in or
+            // just after a respawn, or hidden in Battle. A kart that has only touched a
+            // fall boundary is still chased, and a finished racer stays a target.
+            const bool lost=r.shellTargetUnavailable;
+            if(s.phase==5&&(lost||s.ticks>60)){a.active=false;return;}
+            if(lost){a.velocity+=s.homing;s.homing={};s.pending=6;a.target=-1;resumeStraight(a);}
+            else if(a.airborne){
+                // 0x807a4588: after five frames without a floor the Red stops steering;
+                // its horizontal speed only eases, more when close (.93 at 500, 1 at 3000).
+                const float d=length(a.position-r.position);
+                const float keep=std::clamp(.93f+.07f*(d-500.f)/2500.f,.93f,1.f);
+                a.velocity.x*=keep;a.velocity.z*=keep;
+                a.position+=a.velocity+s.homing;shellTerrain(a,query,false,false,true,s.phase==4);
+                if(s.phase==5&&a.active){float close=r.radius+1.5f*a.radius;if(shellXZ2(a.position-r.position)<close*close)shatter(a);}
+            }else{
                 // 2984c0 (0x807a44f4): retain kart-follow velocity and a separate capped
                 // pursuit velocity. The aim (+0x288) lies behind the target along its
                 // back axis (+0x294 eases toward -zAxis: componentZAxis 0x8058a4c0
@@ -246,24 +404,24 @@ void RaceItems::updateShell(ItemActor& a,ItemWorldQuery query){
                 s.targetBack=lerp(s.targetBack,-normalized(r.forward,{0,0,1}),r.trickRotating?.01f:.05f);
                 Vec3 aim=r.position+s.targetBack*(std::clamp(length(r.position-a.position)/4000.f,0.f,1.f)*2000*r.speedRatio);
                 Vec3 d=aim-a.position;
-                if((dot(s.up,d)>1050||dot(s.up,d)<-1550)&&shellXZ2(d)<22500){a.velocity+=s.homing;s.homing={};s.pending=6;a.target=-1;}
+                if((dot(s.up,d)>1050||dot(s.up,d)<-1550)&&shellXZ2(d)<22500){a.velocity+=s.homing;s.homing={};s.pending=6;a.target=-1;resumeStraight(a);}
                 else{
-                    float pursuit=s.phase==5?160.f:(r.shellTargetProtected||r.controlLocked||r.inCannon||invincible(unsigned(a.target)))?25.f:50.f;
+                    float pursuit=s.phase==5?160.f:(r.shellTargetProtected||r.inCannon||invincible(unsigned(a.target)))?25.f:50.f;
                     s.homing=lerp(s.homing,normalized(d,{})*pursuit,.2f);
                     s.homing=shellLimit(s.homing,std::max(0.f,75-50*r.speedRatio));
                     Vec3 follow=(motion(r)-a.velocity)*.2f;follow.y=0;
                     // Do not accelerate back through the owner at close range.
                     Vec3 fromOwner=a.position-racers_[unsigned(a.owner)].position;float ownerDistance=length(fromOwner);
                     if(dot(follow,fromOwner)<0)follow=follow-project(follow,normalized(fromOwner,{}))*std::clamp((ownerDistance-2000.f)/(500.f-2000.f),0.f,1.f);
-                    a.velocity+=follow;a.position+=a.velocity+s.homing;shellTerrain(a,query,false,false,true);
+                    a.velocity+=follow;a.position+=a.velocity+s.homing;shellTerrain(a,query,false,false,true,s.phase==4);
                     if(s.phase==5){float close=r.radius+1.5f*a.radius;if(shellXZ2(a.position-r.position)<close*close)shatter(a);}
                 }
             }
         }else{
-            a.position+=a.velocity;shellTerrain(a,query,false,false);if(!s.slopeTicks)a.travelSpeed+=.01f*((s.phase==6?140.f:105.f)-a.travelSpeed);
+            straightShell(a,query,s.phase==6?140.f:105.f);   // states 0/1/2 and 6
         }
         if(a.active&&(s.phase==2||s.phase==3)&&s.pending<0&&s.ticks>4){
-            int target=redTarget(a,s.phase==3);
+            int target=redTarget(a,s.phase==3,s.ticks>16);
             // Acquisition (0x807a4dbc) seeds +0x294 with the target's back axis.
             if(target>=0){a.target=int8_t(target);s.pending=4;s.targetBack=-normalized(racers_[target].forward,{0,0,1});s.homing={};}
         }
