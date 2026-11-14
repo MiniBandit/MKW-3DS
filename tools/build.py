@@ -35,6 +35,7 @@ BUILD_PYTHON = (3, 12)
 DEPENDENCIES = [('noclip', 'noclip'), ('gclib', 'gclib'), ('cfl_tool', 'cfl-tool'), ('pycgfx', 'pycgfx')]
 TITLE_ID = '000400000F4B6000'
 GAME_3DSX = 'MarioKartWiiDS.3dsx'  # shipped name; the compile stage's own file stays mkw-3ds.3dsx
+BUILT_3DSX = 'mkw-3ds.3dsx'  # that file's name in resource_manifest.py's listing
 CXX_STD = 'c++23'
 
 
@@ -876,7 +877,7 @@ class Builder:
         held = set(mpk_index(menu)) | set(mpk_index(stage / 'race.pak'))
         loose = {'menu': [], 'race': [], 'stream': []}
         for name, source in sorted(listing.items()):
-            if name in held or name in ('menu.pak', 'race.pak', GAME_3DSX):
+            if name in held or name in ('menu.pak', 'race.pak', BUILT_3DSX):
                 continue
             pack = 'stream' if name.startswith(('movies/', 'audio/')) else 'menu' if name.startswith('mii/') else 'race'
             loose[pack].append(f'{name}={source}')
@@ -917,10 +918,10 @@ class Builder:
                 if name in packed:
                     raise BuildError(f'{name} is in two packs')
                 packed[name] = archive.name
-        unpacked = sorted(set(listing) - set(packed) - {'menu.pak', 'race.pak', GAME_3DSX})
+        unpacked = sorted(set(listing) - set(packed) - {'menu.pak', 'race.pak', BUILT_3DSX})
         if unpacked:
             raise BuildError('Files left out of the packs: ' + ', '.join(unpacked[:10]))
-        shutil.copy2(listing[GAME_3DSX], sd / GAME_3DSX)
+        shutil.copy2(listing[BUILT_3DSX], sd / GAME_3DSX)
         manifest = {name: {'storage': 'packed', 'archive': archive} for name, archive in packed.items()}
         for name in ('menu.pak', 'race.pak', 'stream.pak', GAME_3DSX):
             manifest[name] = {'storage': 'loose', 'bytes': (sd / name).stat().st_size, 'sha256': digest(sd / name)}
