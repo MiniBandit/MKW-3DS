@@ -2531,8 +2531,12 @@ int main() {
             // Y tricks/wheelies anywhere; hold X or ZL for rear view. ZR equals D-pad Up. QA owns X/Y.
             static unsigned rampTrickFrames=0;
             if(down&KEY_R)rampTrickFrames=8;else if(rampTrickFrames)--rampTrickFrames;
+            // Trick ramps, boost ramps (Kinoko KartJump: boostRampType) and
+            // half-pipes / zippers (KartHalfPipe) all accept a trick.
+            auto* trickKart=K::Kart::KartObjectManager::Instance()->object(0);
             const bool rampTrick=fullRace&&rampTrickFrames&&(held&KEY_R)&&
-                K::Kart::KartObjectManager::Instance()->object(0)->status().onBit(K::Kart::eStatus::Trickable);
+                (trickKart->status().onBit(K::Kart::eStatus::Trickable)||trickKart->state()->boostRampType()>=0||
+                 trickKart->status().onBit(K::Kart::eStatus::HalfPipeRamp)||trickKart->status().onBit(K::Kart::eStatus::OverZipper));
             if(trick==K::System::Trick::None){
                 if(rampTrick){trick=padTrick();buttons=(buttons&~10u)|(held&KEY_B?2u:0u);}
                 else if(!qaMode&&(held&KEY_Y))trick=padTrick();
@@ -2540,8 +2544,11 @@ int main() {
             lookBehind=fullRace&&!qaMode&&!replay&&!raceGrid.finished()&&bool(held&(KEY_X|KEY_ZL));
             if(auto* camera=K::Render::KartCamera::Instance())camera->requestLookBack(lookBehind);
             // Preserve the Wii input lattice used by ghost records.
-            int stick=mkw::circlePadSteering(pad.dx);
-            if(garageTest){buttons=1;stick=frames%fixtureFrames<32?-4:4;}
+            // Round dead zone, full lock at the rim; the vertical axis dives in
+            // the air (Kinoko KartMove: stickY with airtime), as the Wii stick does.
+            const auto lattice=mkw::circlePadLattice(pad.dx,pad.dy);
+            int stick=lattice.x,stickY=lattice.y;
+            if(garageTest){buttons=1;stick=frames%fixtureFrames<32?-4:4;stickY=0;}
             auto* controller=K::System::KPadDirector::Instance()->hostController();
             auto start=svcGetSystemTick();
             if(replay||effectsTest||animationTest)accumulator=1;
@@ -2558,7 +2565,7 @@ int main() {
                     if(raceTrick==K::System::Trick::Left)raceTrick=K::System::Trick::Right;
                     else if(raceTrick==K::System::Trick::Right)raceTrick=K::System::Trick::Left;
                 }
-                controller->setInputsRawStick(buttons,(selectedMirror?-stick:stick)+7,7,raceTrick);
+                controller->setInputsRawStick(buttons,(selectedMirror?-stick:stick)+7,stickY+7,raceTrick);
                 lanButtons=uint16_t(buttons);lanStick=int8_t(selectedMirror?-stick:stick);lanTrick=uint8_t(raceTrick);
                 if(fullRace){
                     // After the goal retail hands the player to its AI

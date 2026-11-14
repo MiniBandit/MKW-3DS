@@ -12,4 +12,18 @@ inline int circlePadSteering(int x){
  constexpr int DeadZone=20;
  return std::abs(x)<=DeadZone?0:std::clamp(int(std::lround(x*7.f/156.f)),-7,7);
 }
+// Both stick axes on the Wii's -7..7 lattice. The dead zone is round (a pad
+// resting 20 units off centre in any direction is neutral), and the circle
+// maps onto the square: the rim gives full lock, diagonals included, from
+// RimFull outwards (the pad's physical edge is about 156).
+struct StickLattice {int x=0,y=0;};
+inline StickLattice circlePadLattice(int x,int y){
+ constexpr float DeadZone=20.f,RimFull=145.f;
+ const float m=std::sqrt(float(x)*x+float(y)*y);
+ if(m<=DeadZone)return {};
+ const float reach=std::clamp((m-DeadZone)/(RimFull-DeadZone),0.f,1.f);
+ const float edge=std::max(std::abs(float(x)),std::abs(float(y)));
+ auto axis=[&](float v){return std::clamp(int(std::lround(v/edge*reach*7.f)),-7,7);};
+ return {axis(float(x)),axis(float(y))};
+}
 }
