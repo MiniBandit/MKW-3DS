@@ -30,12 +30,14 @@ def payload(data):
     width=1<<((data[2]&7)+3);height=1<<(((data[2]>>3)&7)+3)
     return width,height,data[3],data[4],raw
 
-# GX block width, height and bits per texel of the formats Psea uses (I4, CMPR).
-BLOCKS={0:(8,8,4),14:(8,8,4)}
+# GX block width, height and bits per texel of the unpaletted formats (I4, I8,
+# IA4, IA8, RGB565, RGB5A3, RGBA8, CMPR). Course mip chains use no others.
+BLOCKS={0:(8,8,4),1:(8,4,8),2:(8,4,8),3:(4,4,16),4:(4,4,16),5:(4,4,16),6:(4,4,32),14:(8,8,4)}
 
-def textures(brres):
+def textures(brres,path=BRRES):
     """name -> (width, height, GX format, image count, data from level 0 on)."""
-    if brres[:4]!=b'bres':raise ValueError('Not a BRRES: '+str(BRRES))
+    if brres[:4]!=b'bres':raise ValueError('Not a BRRES: '+str(path))
+    view=memoryview(brres)
     def group(at):
         count=struct.unpack_from('>I',brres,at+4)[0];out={}
         for i in range(1,count+1):
@@ -45,23 +47,27 @@ def textures(brres):
         return out
     root=struct.unpack_from('>H',brres,12)[0]
     if brres[root:root+4]!=b'root':raise ValueError('BRRES has no root section')
-    out={}
-    for name,at in group(group(root+8)['Textures(NW4R)']).items():
+    groups=group(root+8);out={}
+    if 'Textures(NW4R)' not in groups:return out
+    for name,at in group(groups['Textures(NW4R)']).items():
         if brres[at:at+4]!=b'TEX0':raise ValueError('Not a TEX0: '+name)
+        # Version 2 has one more header word (noclip parseTEX0); courses use 3.
+        if struct.unpack_from('>I',brres,at+8)[0]!=3:raise ValueError('Unsupported TEX0 version: '+name)
         data=struct.unpack_from('>I',brres,at+0x10)[0]
         width,height=struct.unpack_from('>HH',brres,at+0x1c)
         fmt,images=struct.unpack_from('>II',brres,at+0x20)
-        out[name]=(width,height,fmt,images,brres[at+data:])
+        out[name]=(width,height,fmt,images,view[at+data:])
     return out
 
-def levels(width,height,fmt,images,data):
-    """Each original level as RGBA, decoded like tools/cook_model.py's level 0."""
+def levels(width,height,fmt,images,data,count=None):
+    """The first count (default all) original levels as RGBA, decoded like
+    tools/cook_model.py's level 0."""
     sys.path.insert(0,str(ROOT/'vendor/gclib'))
     from gclib.texture_utils import decode_image
     from gclib.gx_enums import ImageFormat,PaletteFormat
-    if fmt not in BLOCKS:raise ValueError('Unsupported Psea texture format %d'%fmt)
+    if fmt not in BLOCKS:raise ValueError('Unsupported TEX0 format %d'%fmt)
     bw,bh,bits=BLOCKS[fmt];out=[];offset=0
-    for level in range(images):
+    for level in range(images if count is None else min(count,images)):
         w,h=max(1,width>>level),max(1,height>>level)
         size=-(-w//bw)*bw*-(-h//bh)*bh*bits//8
         if offset+size>len(data):raise ValueError('Truncated original mip level')
@@ -69,8 +75,9 @@ def levels(width,height,fmt,images,data):
         offset+=size
     return out
 
-def main():
-    output=OUT/'textures';output.mkdir(parents=True,exist_ok=True)
+def owned():
+    """Our Psea texture name -> TEX0 name, for the textures a mip-filtered
+    sampler reads. These chains are this cook's, not cook_world_mipmaps.py's."""
     selected={}
     for model in ('psea1sand','psea2dark','psea3nami','psea4tex','psea5spc'):
         data=json.loads((ASSETS/f'models/obj16_psea__{model}-receipt.json').read_text())
@@ -79,6 +86,11 @@ def main():
             for sampler in shape['sourceMaterial']['samplers']:
                 if sampler['minFilter']>=2:
                     selected[textures_[sampler['name']]]=sampler['name']
+    return selected
+
+def main():
+    output=OUT/'textures';output.mkdir(parents=True,exist_ok=True)
+    selected=owned()
     brres=BRRES.read_bytes();originals=textures(brres)
     receipt={'version':2,'levels':'original','brresSha256':digest(brres),'textures':{},'extra_gpu_bytes':0}
     from PIL import Image
