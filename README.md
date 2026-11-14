@@ -70,7 +70,7 @@ your disc image when asked.
 it **in a new, empty folder** (not your old builder folder).
 
 The first build takes a few hours. Your CIA is saved to
-`build/release/mkw-3ds.cia` and the game files to `build/release/sd-card/3ds`.
+`build/release/mkw-3ds.cia` and the game files to `build/release/sd-card/3ds/mkw-3ds`.
 If a build stops partway, run it again: finished steps are skipped. If it fails,
 share `build-cia-log.txt` when asking for help.
 
@@ -104,7 +104,9 @@ You can also generate your `.cia` file using [Docker Engine](https://docs.docker
 
 You need a 3DS with custom firmware ([3ds.hacks.guide](https://3ds.hacks.guide)).
 
-1. Copy `build/release/sd-card/3ds` to the **root of your SD card** (about 3 GB; the game reads its files from here).
+1. Copy the game files (about 3 GB; the game reads its files from here): open `build/release/sd-card/3ds` and copy the **`mkw-3ds`** folder inside it into the **`3ds`** folder on your SD card, so it ends up at `3ds/mkw-3ds`. If your card has no `3ds` folder, make one.
+   - **Don't copy the `3ds` folder itself onto your card**: on a Mac, Finder can *replace* your card's whole `3ds` folder and delete your other apps.
+   - **Updating an older version?** Your saves are in the card's `mkw-3ds` folder, so don't replace that folder. Open the new `mkw-3ds`, select everything in it and copy it into the card's `mkw-3ds`, replacing the files. (Windows does this when you copy the folder over and choose *Replace the files*; on a Mac, Finder's folder *Replace* would delete the saves.)
 2. Install `mkw-3ds.cia` with FBI. It's small, because the game files are on the card.
 3. For sound, run DSP1 once to dump your sound firmware.
 

@@ -532,7 +532,7 @@ def main():
     cia=stage_package(a.version,False,a.keep_stage or a.cci,a.embed_assets)
     if a.cci:stage_package(a.version,True,a.keep_stage)
     log('done:',cia)
-    log('1. Copy build/release/sd-card/3ds to the root of your SD card (the game files; merge with the 3ds folder there).')
+    log('1. Copy the mkw-3ds folder from build/release/sd-card/3ds into the 3ds folder on your SD card (the game files). Updating? Copy the files inside it into the card\'s mkw-3ds folder; don\'t replace that folder (it holds your saves).')
     if a.embed_assets:log('2. Copy the CIA to your SD card and install it with FBI, or use FBI remote install.')
     else:log('2. Install the CIA with FBI (it is small: the game reads its files from the SD card).')
 
