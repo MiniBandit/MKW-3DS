@@ -1753,6 +1753,16 @@ void Renderer::drawNow(const Model& model,const Vertex* vertices,const C3D_Mtx& 
             C3D_FVUnifSet(GPU_VERTEX_SHADER,uvScrollLoc_,s.uvVelocity[0]*frame,s.uvVelocity[1]*frame,s.uvVelocity[2]*frame,s.uvVelocity[3]*frame);
         }
         if(hasTint){constexpr float s=kVertexColorScale;C3D_FVUnifSet(GPU_VERTEX_SHADER,tintLoc_,o->tint[0]*s,o->tint[1]*s,o->tint[2]*s,o->tint[3]*s);tintDirty_=true;}
+        // Two-sided GX alpha test A <= lo or A >= hi (tools/gx_material.py
+        // alpha_band; Peach Beach's sea sparkles): compare NEVER, lo+1 in
+        // bits 16..23 and hi in 24..31 of animationFrames. Exact when the
+        // material's alpha is final by stage 3 (alpha modes 3/6) and stages
+        // 4-5 are free; otherwise a one-sided A >= hi stands in.
+        const bool alphaBand=(s.flags&1)&&(s.flags>>31)&&!((s.flags>>26)&7)&&((s.animationFrames>>16)&255);
+        const uint8_t bandLow=uint8_t(((s.animationFrames>>16)&255)-1),bandHigh=uint8_t(s.animationFrames>>24);
+        const bool starStage=additiveColor||((s.menuReflection!=7&&s.menuReflection!=8&&s.menuReflection!=14)&&o&&(o->flags&SubmeshOverride::Add));
+        const bool exactBand=alphaBand&&(((s.flags>>20)&7)==3||((s.flags>>20)&7)==6)&&!material&&!starStage&&!menuIconLayer_&&
+            !inkBlack&&!model.nativeMiiLighting&&!(s.lighting&retail::Fog);
         // The previous drawn submesh's material and textures, without overrides
         // or a binder: its whole state is still bound, only UVs and draws differ.
         const bool sameState=last&&!o&&!material&&sameMaterial(*last,s);
@@ -2273,6 +2283,28 @@ void Renderer::drawNow(const Model& model,const Vertex* vertices,const C3D_Mtx& 
             C3D_TexEnvSrc(remap,C3D_RGB,GPU_PREVIOUS,GPU_CONSTANT);C3D_TexEnvFunc(remap,C3D_RGB,GPU_ADD);
             C3D_TexEnvSrc(remap,C3D_Alpha,GPU_PREVIOUS,GPU_CONSTANT);C3D_TexEnvFunc(remap,C3D_Alpha,GPU_MODULATE);
         }
+        if(exactBand){
+            // Stage 3 holds the final colour C and alpha A (stage 4's vertex
+            // alpha is 1: the cook refuses the band otherwise). With
+            // T=(hi-lo)/2, max(A-(hi-T),(lo+T)-A) >= T exactly when A <= lo or
+            // A >= hi. Stage 4: RGB = (lo+T)-A, alpha = A-(hi-T), both clamped
+            // (one is zero); stage 5: alpha = their sum, RGB = C*A from the
+            // buffer (stage 3 writes it, stage 5 reads it), blended with ONE.
+            const unsigned t=(bandHigh-bandLow)/2;
+            tevBuf(C3D_RGB,tevBufRgb_|8);tevBuf(C3D_Alpha,tevBufAlpha_|8);
+            auto* split=C3D_GetTexEnv(4);C3D_TexEnvInit(split);
+            C3D_TexEnvColor(split,(bandLow+t)*0x010101u|uint32_t(bandHigh-t)<<24);
+            C3D_TexEnvSrc(split,C3D_RGB,GPU_CONSTANT,GPU_PREVIOUS);
+            C3D_TexEnvOpRgb(split,GPU_TEVOP_RGB_SRC_COLOR,GPU_TEVOP_RGB_SRC_ALPHA);C3D_TexEnvFunc(split,C3D_RGB,GPU_SUBTRACT);
+            C3D_TexEnvSrc(split,C3D_Alpha,GPU_PREVIOUS,GPU_CONSTANT);C3D_TexEnvFunc(split,C3D_Alpha,GPU_SUBTRACT);
+            auto* sum=C3D_GetTexEnv(5);C3D_TexEnvInit(sum);
+            const bool premultiply=(s.flags&2)&&!(s.flags&128);
+            C3D_TexEnvSrc(sum,C3D_RGB,GPU_PREVIOUS_BUFFER,GPU_PREVIOUS_BUFFER);
+            C3D_TexEnvOpRgb(sum,GPU_TEVOP_RGB_SRC_COLOR,GPU_TEVOP_RGB_SRC_ALPHA);
+            C3D_TexEnvFunc(sum,C3D_RGB,premultiply?GPU_MODULATE:GPU_REPLACE);
+            C3D_TexEnvSrc(sum,C3D_Alpha,GPU_PREVIOUS,GPU_PREVIOUS);
+            C3D_TexEnvOpAlpha(sum,GPU_TEVOP_A_SRC_ALPHA,GPU_TEVOP_A_SRC_R);C3D_TexEnvFunc(sum,C3D_Alpha,GPU_ADD);
+        }
         } // !blockHit
         retail=(courseLighting_||(s.lighting&mkw::retail::Menu))&&retailLight(s);
         if(!retail){
@@ -2289,12 +2321,14 @@ void Renderer::drawNow(const Model& model,const Vertex* vertices,const C3D_Mtx& 
         // animationFrames bits 16..31 (tools/gx_material.py): an exact alpha
         // reference and PICA blend factors (+1) the flags cannot express.
         const uint32_t extended=sourceState?s.animationFrames>>16:0;
-        C3D_AlphaTest((s.flags&1)!=0,sourceState?alphaComparisons[(s.flags>>26)&7]:GPU_GREATER,
+        if(alphaBand)C3D_AlphaTest(true,GPU_GEQUAL,exactBand?uint8_t((bandHigh-bandLow)/2):bandHigh);
+        else C3D_AlphaTest((s.flags&1)!=0,sourceState?alphaComparisons[(s.flags>>26)&7]:GPU_GREATER,
                      sourceState?((extended&255)?uint8_t(extended&255):alphaReferences[(s.flags>>29)&3]):127);
-        auto sourceFactor=blended&&!(sourceState&&(s.flags&128))?GPU_SRC_ALPHA:GPU_ONE;
+        // An exact band premultiplies in its last stage (alpha is the test value).
+        auto sourceFactor=blended&&!(sourceState&&(s.flags&128))&&!exactBand?GPU_SRC_ALPHA:GPU_ONE;
         auto destinationFactor=blended?(sourceState&&(s.flags&64)?GPU_ONE:GPU_ONE_MINUS_SRC_ALPHA):GPU_ZERO;
-        if(blended&&((extended>>8)&15))sourceFactor=GPU_BLENDFACTOR(((extended>>8)&15)-1);
-        if(blended&&((extended>>12)&15))destinationFactor=GPU_BLENDFACTOR(((extended>>12)&15)-1);
+        if(blended&&!alphaBand&&((extended>>8)&15))sourceFactor=GPU_BLENDFACTOR(((extended>>8)&15)-1);
+        if(blended&&!alphaBand&&((extended>>12)&15))destinationFactor=GPU_BLENDFACTOR(((extended>>12)&15)-1);
         C3D_AlphaBlend(GPU_BLEND_ADD,GPU_BLEND_ADD,menuIconLayer_?GPU_SRC_ALPHA:sourceFactor,
                       menuIconLayer_?(menuIconAdditive_?GPU_ONE:GPU_ONE_MINUS_SRC_ALPHA):destinationFactor,
                       GPU_ONE,menuIconLayer_?(menuIconAdditive_?GPU_ONE:GPU_ONE_MINUS_SRC_ALPHA):destinationFactor);
