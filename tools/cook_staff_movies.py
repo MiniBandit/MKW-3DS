@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Cook both original Staff THPs at half source rate (29.97fps) with original PCM, no downloads."""
+"""Cook both original Staff THPs at the full source rate (59.94fps, as on the Wii) with original PCM, no downloads."""
 import argparse,json
 from pathlib import Path
 import cook_menu_movies as movie
@@ -13,8 +13,7 @@ def main():
   if args.only and args.only!=variant:continue
   source=movie.ROOT/f'data/extracted/thp/ending/ending_{variant}.thp'
   spec=movie.make_spec(dict(source=source.relative_to(movie.ROOT).as_posix(),regions=[]),f'staff_{variant}')
-  spec['sourceFrames']=spec['frames'];spec['sourceFrameStep']=2
-  spec['frames']=(spec['frames']+1)//2;spec['fps']/=2;spec['fpsDenominator']*=2
+  spec['sourceFrames']=spec['frames'];spec['sourceFrameStep']=1
   spec['workers']=6
   print(json.dumps(spec),flush=True)
   video=movie.encode(spec,'medium',False)

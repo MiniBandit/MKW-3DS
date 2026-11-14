@@ -24,8 +24,42 @@ void put32(std::vector<unsigned char>& out,uint32_t v){for(int i=0;i<4;++i)out.p
 int fail(const char* message){std::fprintf(stderr,"mpk2: %s\n",message);return 1;}
 }
 
+// GMV1 -> GMV2 (src/menu_movie.cpp): the 64-byte header (magic GMV2, data
+// offset 64 + 4 x frames), u32 end[frames] (each frame's end after the data
+// start; top bit: kept as is), then each frame LZ4-compressed on its own.
+int movie(const char* input,const char* output){
+    std::ifstream in(input,std::ios::binary);
+    std::vector<unsigned char> gmv((std::istreambuf_iterator<char>(in)),{});
+    if(gmv.size()<64||std::memcmp(gmv.data(),"GMV1",4))return fail("input is not a GMV1 movie");
+    const uint32_t count=u32(&gmv[12]),frameBytes=u32(&gmv[24]),offset=u32(&gmv[28]);
+    if(offset!=64||std::size_t(offset)+std::size_t(frameBytes)*count!=gmv.size())return fail("damaged GMV1 movie");
+    std::vector<unsigned char> body;std::vector<uint32_t> ends(count);
+    std::vector<uint8_t> check(frameBytes);
+    for(uint32_t f=0;f<count;++f){
+        const unsigned char* frame=&gmv[offset+std::size_t(f)*frameBytes];
+        auto packed=mkw::lz4Encode(frame,frameBytes);
+        const bool raw=packed.size()*10>std::size_t(frameBytes)*9;
+        if(!raw&&(!mkw::lz4Decode(packed.data(),packed.size(),check.data(),frameBytes)||std::memcmp(check.data(),frame,frameBytes)))
+            return fail("a movie frame did not decode back to its original bytes");
+        if(raw)body.insert(body.end(),frame,frame+frameBytes);else body.insert(body.end(),packed.begin(),packed.end());
+        if(body.size()>0x7fffffffu)return fail("movie over 2 GiB");
+        ends[f]=uint32_t(body.size())|(raw?0x80000000u:0);
+    }
+    std::vector<unsigned char> out(gmv.begin(),gmv.begin()+64);
+    std::memcpy(out.data(),"GMV2",4);
+    const uint32_t data=64+4*count;for(int i=0;i<4;++i)out[28+i]=uint8_t(data>>(8*i));
+    for(uint32_t e:ends)put32(out,e);
+    out.insert(out.end(),body.begin(),body.end());
+    std::FILE* f=std::fopen(output,"wb");if(!f)return fail("cannot write the output");
+    bool ok=std::fwrite(out.data(),1,out.size(),f)==out.size();if(std::fclose(f))ok=false;
+    if(!ok)return fail("writing the output failed");
+    std::printf("{\"frames\":%u,\"raw_bytes\":%zu,\"stored_bytes\":%zu}\n",count,gmv.size(),out.size());
+    return 0;
+}
+
 int main(int argc,char** argv){
-    if(argc!=3)return fail("usage: mpk2 input.pak output.pak");
+    if(argc==4&&!std::strcmp(argv[1],"--gmv"))return movie(argv[2],argv[3]);
+    if(argc!=3)return fail("usage: mpk2 input.pak output.pak | mpk2 --gmv input.gmv output.gmv");
     std::ifstream in(argv[1],std::ios::binary);
     std::vector<unsigned char> pak((std::istreambuf_iterator<char>(in)),{});
     if(pak.size()<12||std::memcmp(pak.data(),"MPK1",4))return fail("input is not an MPK1 archive");

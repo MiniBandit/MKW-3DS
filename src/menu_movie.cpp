@@ -1,6 +1,7 @@
 #include <mkw/menu_movie.hpp>
 #include <mkw/renderer.hpp>
 #include <mkw/render_metrics.hpp>
+#include <mkw/lz4_block.hpp>
 #include <3ds.h>
 #include <algorithm>
 #include <atomic>
@@ -31,6 +32,11 @@ struct MenuMovie::Impl {
  std::FILE* file=nullptr;
  Texture image;
  std::uint32_t count=0,numerator=0,denominator=0,frameBytes=0,offset=0,width=0,height=0;
+ // GMV2 (tools/mpk2.cpp --gmv): each frame LZ4-compressed on its own; ends[f]
+ // is frame f's end after the data start (top bit: kept as is). The stream
+ // thread decodes a frame once into `decoded` and copies its row bands.
+ std::vector<std::uint32_t> ends;std::vector<unsigned char> packed,decoded;
+ std::uint32_t decodedFrame=std::numeric_limits<std::uint32_t>::max();
  // Single staging buffer owned by the stream thread while Reading and by the
  // main thread while Ready.
  enum Stage {Free,Reading,Ready};
@@ -92,11 +98,24 @@ private:
   std::FILE* file=std::fopen(path.c_str(),"rb");if(!file)return false;
   std::setvbuf(file,nullptr,_IONBF,0);
   unsigned char header[64];
-  if(std::fread(header,1,sizeof header,file)!=sizeof header||std::memcmp(header,"GMV1",4)!=0||u32(header+4)!=1){std::fclose(file);return false;}
+  if(std::fread(header,1,sizeof header,file)!=sizeof header||(std::memcmp(header,"GMV1",4)!=0&&std::memcmp(header,"GMV2",4)!=0)||u32(header+4)!=1){std::fclose(file);return false;}
+  const bool compressed=header[3]=='2';
   const unsigned width=u16(header+8),height=u16(header+10);
   const std::uint32_t count=u32(header+12),numerator=u32(header+16),denominator=u32(header+20),frameBytes=u32(header+24),offset=u32(header+28);
-  const std::uint64_t total=std::uint64_t(offset)+std::uint64_t(frameBytes)*count;
-  if(!powerOfTwo(width)||!powerOfTwo(height)||!count||count>50000||!numerator||!denominator||denominator>1000000||std::uint64_t(numerator)>std::uint64_t(denominator)*120||frameBytes!=width*height/2||offset!=64||total>std::uint64_t(std::numeric_limits<long>::max())){std::fclose(file);return false;}
+  std::uint64_t total=std::uint64_t(offset)+std::uint64_t(frameBytes)*count;
+  // GMV2: the frame end table follows the header; data starts at offset.
+  if(compressed){
+   if(count>50000){std::fclose(file);return false;}
+   s.ends.resize(count);
+   if(std::fread(s.ends.data(),4,count,file)!=count){std::fclose(file);return false;}
+   for(std::uint32_t f=0;f<count;++f){
+    const std::uint32_t end=s.ends[f]&0x7fffffffu,begin=f?s.ends[f-1]&0x7fffffffu:0;
+    if(end<begin||end-begin>frameBytes||((s.ends[f]>>31)&&end-begin!=frameBytes)){std::fclose(file);return false;}
+   }
+   total=std::uint64_t(offset)+(count?(s.ends[count-1]&0x7fffffffu):0);
+   s.packed.resize(frameBytes);s.decoded.resize(frameBytes);
+  }
+  if(!powerOfTwo(width)||!powerOfTwo(height)||!count||count>50000||!numerator||!denominator||denominator>1000000||std::uint64_t(numerator)>std::uint64_t(denominator)*120||frameBytes!=width*height/2||offset!=(compressed?64+4*count:64)||total>std::uint64_t(std::numeric_limits<long>::max())){std::fclose(file);return false;}
   if(std::fseek(file,0,SEEK_END)!=0||std::ftell(file)!=long(total)){std::fclose(file);return false;}
   if(!s.image.initMovieEtc1(width,height)){std::fclose(file);return false;}
   s.staging.resize(frameBytes);
@@ -124,8 +143,23 @@ private:
   if(frame==s.lastFrame&&first>=s.lastFirst&&end<=s.lastEnd){LightLock_Unlock(&s.lock);return false;}
   s.stage=MenuMovie::Impl::Reading;LightLock_Unlock(&s.lock);
   const unsigned rowBytes=s.rowBytes(),bytes=(end-first)*rowBytes;
-  const long position=long(std::uint64_t(s.offset)+std::uint64_t(frame)*s.frameBytes+std::uint64_t(first)*rowBytes);
-  const bool ok=std::fseek(s.file,position,SEEK_SET)==0&&std::fread(s.staging.data(),1,bytes,s.file)==bytes;
+  bool ok;
+  if(s.ends.empty()){
+   const long position=long(std::uint64_t(s.offset)+std::uint64_t(frame)*s.frameBytes+std::uint64_t(first)*rowBytes);
+   ok=std::fseek(s.file,position,SEEK_SET)==0&&std::fread(s.staging.data(),1,bytes,s.file)==bytes;
+  }else{
+   // GMV2: decode the whole frame once, then copy the wanted rows.
+   ok=true;
+   if(s.decodedFrame!=frame){
+    const std::uint32_t begin=frame?s.ends[frame-1]&0x7fffffffu:0,end=s.ends[frame]&0x7fffffffu,stored=end-begin;
+    const bool raw=(s.ends[frame]>>31)!=0;
+    ok=std::fseek(s.file,long(std::uint64_t(s.offset)+begin),SEEK_SET)==0&&
+       std::fread(raw?s.decoded.data():s.packed.data(),1,stored,s.file)==stored&&
+       (raw||lz4Decode(s.packed.data(),stored,s.decoded.data(),s.frameBytes));
+    s.decodedFrame=ok?frame:std::numeric_limits<std::uint32_t>::max();
+   }
+   if(ok)std::memcpy(s.staging.data(),s.decoded.data()+std::size_t(first)*rowBytes,bytes);
+  }
   LightLock_Lock(&s.lock);
   if(ok){s.stagedFrame=frame;s.stagedFirst=first;s.stagedRows=end-first;s.stage=MenuMovie::Impl::Ready;
    s.lastFrame=frame;s.lastFirst=first;s.lastEnd=end;s.fullFrame=true;}

@@ -76,6 +76,11 @@ for archive in ('menu.pak','race.pak'):
  packed=out/(archive+'.mpk2')
  print(archive,subprocess.check_output([program,str(out/archive),str(packed)],text=True).strip())
  packed.replace(out/archive);manifest[archive]=hashlib.sha256((out/archive).read_bytes()).hexdigest()
+# And every movie becomes GMV2: each frame LZ4-compressed (src/menu_movie.cpp).
+for movie in sorted(out.glob('movies/*.gmv')):
+ packed=movie.with_suffix('.gmv2')
+ print(movie.name,subprocess.check_output([program,'--gmv',str(movie),str(packed)],text=True).strip())
+ packed.replace(movie);manifest[movie.relative_to(out).as_posix()]=hashlib.sha256(movie.read_bytes()).hexdigest()
 (out/'CONTROLS.txt').write_text(controls);manifest['CONTROLS.txt']=hashlib.sha256((out/'CONTROLS.txt').read_bytes()).hexdigest()
 (out/'manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
 # This directory is generated package staging. Keep it as strict as the ZIP,

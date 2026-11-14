@@ -70,7 +70,8 @@ def make_spec(record, identifier):
     if identifier == 'cup_select': target_width, target_height = 400, round(height*400/width)
     texture_width, texture_height = power_of_two(target_width), power_of_two(target_height)
     fps_denominator = 100000
-    source_step = 2 if identifier == 'title' and movie.fps > 30 else 1
+    # Every source frame, the opening included (59.94 fps, as on the Wii).
+    source_step = 1
     fps_numerator = round(movie.fps/source_step*fps_denominator)
     regions = []
     if identifier == 'top_menu':
