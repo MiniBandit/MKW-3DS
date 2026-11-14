@@ -1,4 +1,5 @@
 New in 0.8.0:
+One CIA to install: nothing to copy.
 Online multiplayer: race up to
   12 players. Host, or join with
   the host's code. No server needed.

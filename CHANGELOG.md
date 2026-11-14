@@ -4,6 +4,9 @@
 
 Needs a new build: the builder now copies the staff ghosts from your disc, and the menus have new labels.
 
+- **One CIA to install:** the builder makes a single `mkw-3ds.cia` with the game files inside (about 3 GB). Install it with FBI and start it once: its first start copies the game files to `sd:/3ds/mkw-3ds` (a few minutes, only once) so quick updates can find them. No folder to copy. For a small CIA plus a folder instead, build with `--sd-assets`.
+- **The builder reads RVZ disc images** (Dolphin's compressed format) directly; no need to convert to ISO.
+
 - **Online multiplayer:** a new Online button on the main menu. Host a race or join one by typing the host's 16-digit code on a number pad, in menus made from the Wii game's own Wi-Fi screens: the Wi-Fi menu buttons, the friend code pad and the room's player cards with everyone's driver and license name. Up to 12 players race VS on the host's course. The consoles connect straight to each other, so there's no server to pay for or go down. After a race, the host picks the next course while everyone else waits in the lobby. Online races can't be paused, as on the Wii. A player who can't reach another directly gets their kart through the host. If a player goes quiet, their kart races on as a CPU until they come back.
 - **Online races agree:** every console decides its own item roulette, the items it throws and whether its own kart is hit, and tells the others, so everyone sees the same items and hits. The results use each console's own finishing time, so every screen shows the same order; a player who drops out is placed last.
 - **Online races start together and the other karts move smoothly:** the host names a start time half a second ahead and every console begins its countdown at that moment by its own clock, so nobody's GO! comes early. Each console replays the other karts' paths a fraction of a second behind (about 0.04 s on a good connection, more on a poor one) instead of moving them to each position as it arrives, so they no longer jump or stutter on uneven Wi-Fi.
@@ -25,6 +28,8 @@ Needs a new build: the builder now copies the staff ghosts from your disc, and t
 - Pressing A while already holding R no longer hops: R drifts when you press it with A held, and brakes otherwise.
 - New 3DS: frame jobs (the opponents' poses and course objects) run on another processor core beside the racing physics, instead of sharing its core.
 - Mirror: the lower-screen map lines up with the karts and items on it.
+- **Exhaust smoke:** a puff from each exhaust pipe when you press A, using the original game's own effect.
+- **Coconut Mall:** the big Pianta between each pair of escalators is back.
 - Circle Pad: a released pad resting slightly off centre no longer keeps steering.
 - Notification LED: Waluigi's second colour is purple.
 - Builder (Windows): a C++ compiler installed with winget, MSYS2, llvm-mingw or w64devkit is found even when it isn't on PATH; the menu movie step no longer fails when a virus scanner holds its files.
