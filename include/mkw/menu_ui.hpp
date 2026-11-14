@@ -45,6 +45,8 @@ struct UiSelection {
  unsigned graphics=0;
  // Race lower screen: the race time shown, and the map turning with the kart.
  bool raceTimer=true,mapTurns=true;
+ // The race speedometer (SELECT toggles it), remembered per license.
+ bool speedometer=false;
  bool operator==(const UiSelection&)const=default;
 };
 struct UiCharacterInfo {const char* name;unsigned retailId,weight;};

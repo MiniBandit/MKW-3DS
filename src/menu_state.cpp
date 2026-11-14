@@ -33,6 +33,14 @@ unsigned moveMainMenu(unsigned cursor,const UiInput& key){
  return key.left?(cursor==first?last:cursor-1):(cursor==last?first:cursor+1);
 }
 
+// License Settings > Graphics in screen order: Auto, Quality, Balanced, Performance
+// (stored 0, 1, 3, 2: Balanced was added after saves already held 0..2).
+unsigned nextGraphics(unsigned value,bool back){
+ constexpr unsigned order[]={0,1,3,2};unsigned at=0;
+ while(at<4&&order[at]!=value)++at;
+ if(at==4)at=0;
+ return order[(at+(back?3:1))%4];
+}
 void normalize(UiSelection& s){
  if(s.driver>=UiCharacters.size())s.driver=0;
  if(s.vehicle>=12)s.vehicle=0;
@@ -40,7 +48,7 @@ void normalize(UiSelection& s){
  if(s.battleStage>=10)s.battleStage=0;
  if(s.license>=4)s.license=0;
  if(s.ledMode>3)s.ledMode=0;
- s.ledBrightness=std::clamp(s.ledBrightness/10,5u,10u)*10;s.graphics=std::min(s.graphics,2u);
+ s.ledBrightness=std::clamp(s.ledBrightness/10,5u,10u)*10;s.graphics=std::min(s.graphics,3u);
  s.battleCpu=std::min(s.battleCpu,2u);s.battleVehicles=std::min(s.battleVehicles,2u);
  s.battleCourses=std::min(s.battleCourses,2u);s.battleItems=std::min(s.battleItems,2u);
  if(std::find(std::begin(UiBattleWinCounts),std::end(UiBattleWinCounts),s.battleWins)==std::end(UiBattleWinCounts))s.battleWins=2;
@@ -307,7 +315,7 @@ UiAction MenuState::input(UiInput key){
  if(page==UiPage::LicenseSettings&&cursor>=2&&cursor<8&&(key.left||key.right)){
   if(cursor==2)selection.ledMode=(selection.ledMode+(key.left?3:1))%4;
   else if(cursor==3)selection.dynamicShadows=!selection.dynamicShadows;
-  else if(cursor==5)selection.graphics=(selection.graphics+(key.left?2:1))%3;
+  else if(cursor==5)selection.graphics=nextGraphics(selection.graphics,key.left);
   else if(cursor==6)selection.raceTimer=!selection.raceTimer;
   else if(cursor==7)selection.mapTurns=!selection.mapTurns;
   else selection.ledBrightness=unsigned(std::clamp(int(selection.ledBrightness)+(key.left?-10:10),50,100));
@@ -388,7 +396,7 @@ UiAction MenuState::input(UiInput key){
   else if(cursor==2)selection.ledMode=(selection.ledMode+1)%4;
   else if(cursor==3)selection.dynamicShadows=!selection.dynamicShadows;
   else if(cursor==4)selection.ledBrightness=selection.ledBrightness>=100?50:selection.ledBrightness+10;
-  else if(cursor==5)selection.graphics=(selection.graphics+1)%3;
+  else if(cursor==5)selection.graphics=nextGraphics(selection.graphics,false);
   else if(cursor==6)selection.raceTimer=!selection.raceTimer;
   else if(cursor==7)selection.mapTurns=!selection.mapTurns;
   break;

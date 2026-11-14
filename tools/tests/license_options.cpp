@@ -19,11 +19,11 @@ int main(){
  for(unsigned i=0;i<4;++i){auto& s=saves[i];s.occupied=true;s.settings.license=i;s.nativeMii[0]=3;s.nativeMii[4]=i+1;s.miiId=licenseMiiId(s.nativeMii);assert(writeLicenseSave(root,i,s));}
  assert(loadLicenseSaves(root,saves)==LicenseLoad::Loaded);
  const auto retail=bytes(file);
- for(unsigned i=0;i<4;++i){auto& s=saves[i];s.settings.ledMode=i;s.settings.dynamicShadows=i%2;s.settings.ledBrightness=50+10*i;s.settings.raceTimer=i!=1;s.settings.mapTurns=i!=2;assert(writeLicenseSave(root,i,s));}
+ for(unsigned i=0;i<4;++i){auto& s=saves[i];s.settings.ledMode=i;s.settings.dynamicShadows=i%2;s.settings.ledBrightness=50+10*i;s.settings.raceTimer=i!=1;s.settings.mapTurns=i!=2;s.settings.speedometer=i==3;s.settings.graphics=i;assert(writeLicenseSave(root,i,s));}
  assert(bytes(file)==retail); // Port settings must not alter any retail/ghost byte.
  std::array<LicenseSave,4> loaded;assert(loadLicenseSaves(root,loaded)==LicenseLoad::Loaded);
  for(unsigned i=0;i<4;++i){assert(loaded[i].settings.ledMode==i);assert(loaded[i].settings.ledBrightness==50+10*i);assert(loaded[i].settings.dynamicShadows==bool(i%2));
-  assert(loaded[i].settings.raceTimer==(i!=1)&&loaded[i].settings.mapTurns==(i!=2));}
+  assert(loaded[i].settings.raceTimer==(i!=1)&&loaded[i].settings.mapTurns==(i!=2)&&loaded[i].settings.speedometer==(i==3)&&loaded[i].settings.graphics==i);}
  assert(bytes(std::filesystem::path(root)/"license-options-1.dat").size()==32&&!bytes(std::filesystem::path(root)/"license-options-1.dat").compare(0,8,"MKWO0002"));
  {// An MKWO0001 file (older builds) keeps its options; the new ones default to on, then it is rewritten as MKWO0002.
   const auto path=std::filesystem::path(root)/"license-options-3.dat";std::string v2=bytes(path);
@@ -56,6 +56,9 @@ int main(){
  assert(m.selection.raceTimer&&m.selection.mapTurns);
  m.cursor=6;key={};key.right=true;m.input(key);assert(!m.selection.raceTimer);key={};key.accept=true;m.input(key);assert(m.selection.raceTimer);
  m.cursor=7;key={};key.left=true;m.input(key);assert(!m.selection.mapTurns);key={};key.accept=true;m.input(key);assert(m.selection.mapTurns&&m.page==UiPage::LicenseSettings);
+ // Graphics cycles Auto, Quality, Balanced (3), Performance (2).
+ m.selection.graphics=0;m.cursor=5;key={};key.accept=true;m.input(key);assert(m.selection.graphics==1);m.input(key);assert(m.selection.graphics==3);m.input(key);assert(m.selection.graphics==2);m.input(key);assert(m.selection.graphics==0);
+ key={};key.left=true;m.input(key);assert(m.selection.graphics==2);
  std::vector<UiQuad> source,top,bottom;
  for(unsigned level=0;level<4;++level){m.selection.ledMode=level;composeMenu(m,{},source);layoutMenuScreens(m,source,top,bottom);
   std::set<unsigned> rows;unsigned glyphs[8]{};float lowest=0;

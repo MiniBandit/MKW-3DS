@@ -1922,7 +1922,7 @@ int main() {
     int trackCourse=-1; // Course whose scenery is completely resident, or -1.
     auto resetRaceSystems=[&](bool reload){
         if(!fullRace)return;
-        battleTicks=0;raceHud.speedometer=false;raceHud.resetBattleView();
+        battleTicks=0;raceHud.speedometer=menu.selection.speedometer;raceHud.resetBattleView();
         if(battleMode){
             size_t ruleSize=0;
             const void* ruleData=K::System::ResourceManager::Instance()->getFile("minigame.kmg",&ruleSize,K::System::ArchiveId::Core);
@@ -1987,7 +1987,7 @@ int main() {
     // first, so the course's first bloom request (below) still finds its room.
     auto loadBottomScreen=[&](){
         const auto* bloom=mkw::courseBloom(Courses[courseChoice].archive);
-        if(!effectsTest&&bloom&&bloom->enabled()&&!renderer.reserveBloom()){report("FAIL required bloom targets");return false;}
+        if(!effectsTest&&mkw::renderQuality().bloom&&bloom&&bloom->enabled()&&!renderer.reserveBloom()){report("FAIL required bloom targets");return false;}
         if(!effectsTest&&!renderer.configurePlayerShadow(menu.selection.dynamicShadows&&mkw::renderQuality().dynamicShadow))report("WARN player shadow target unavailable; native volume retained");
         if(!renderer.configureStadiumScreen(!effectsTest&&(int(Courses[courseChoice].id)==18||int(Courses[courseChoice].id)==6||int(Courses[courseChoice].id)==35))){report("FAIL stadium screen targets");return false;}
         if(!bottomScreen.load(renderer,courseChoice)){report("FAIL required bottom screen");return false;}
@@ -2490,7 +2490,7 @@ int main() {
                 scenes.currentScene()->heap()->enableAllocation();scenes.changeSiblingScene(2);courseObjects.invalidate();
                 animationPass&=loadDriver();prepareGarageFixture();driftEffects.reset();raceEffects.reset();resetKartFx();accumulator=0;
             }
-            if(fullRace&&(down&KEY_SELECT))raceHud.speedometer=!raceHud.speedometer;
+            if(fullRace&&(down&KEY_SELECT))menu.selection.speedometer=raceHud.speedometer=!raceHud.speedometer; // saved with the license
             if(qaMode&&((down&KEY_SELECT)||(!replay&&(down&(KEY_X|KEY_Y))))){
                 renderer.waitForGpu();
                 if(!replay&&(down&(KEY_X|KEY_Y))){
@@ -3589,7 +3589,7 @@ int main() {
             }
             profiler->mark(Profile::UiPrepare);
             if(fullRace&&!effectsTest&&(int(Courses[courseChoice].id)==18||int(Courses[courseChoice].id)==6||int(Courses[courseChoice].id)==35))courseObjects.requestStadiumScreen(renderer);
-            if(fullRace&&!effectsTest)if(const auto* bloom=mkw::courseBloom(Courses[courseChoice].archive))renderer.requestBloom(*bloom);
+            if(fullRace&&!effectsTest&&mkw::renderQuality().bloom)if(const auto* bloom=mkw::courseBloom(Courses[courseChoice].archive))renderer.requestBloom(*bloom);
             {
                 // Fog follows the camera through KMP fog areas, one retail step per simulation step.
                 const unsigned steps=physicsSteps>retailFogSteps?physicsSteps-retailFogSteps:0;retailFogSteps=physicsSteps;

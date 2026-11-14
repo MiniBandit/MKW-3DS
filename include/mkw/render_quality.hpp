@@ -39,6 +39,8 @@ struct RenderQuality {
     // while the top screen presents at 60). A skipped frame leaves the lower
     // LCD showing its last image: citro3d only transfers targets drawn to.
     bool lowerScreenHalfRate=false;
+    // Course bloom (retail posteffect.bblm); Balanced turns it off.
+    bool bloom=true;
     // Course, sky and course-object textures move from LINEAR (FCRAM) to VRAM
     // after the race's VRAM users have loaded, leaving vramReserve bytes free.
     bool vramCourseTextures=true;
@@ -52,12 +54,14 @@ struct RenderQuality {
         reduced=true;minScreenRatio=.015f;objectLowDistance=4000.f;
         shadowVolumes=false;dynamicShadow=false;lowerScreenHalfRate=true;bloomBlurRounds=1;boxSparkleRatio=.04f;particleBudget=96;kartEffectScreens=2;animationStep=4;vramCourseTextures=true;
     }
-    // License Settings > Graphics: 0 Auto (Performance on Old 3DS, Quality on
-    // New 3DS), 1 Quality, 2 Performance (reduced detail, no dynamic shadow,
-    // the race's lower screen at 30 FPS).
+    // License Settings > Graphics: 0 Auto (Balanced on New 3DS, Performance on
+    // Old 3DS), 1 Quality, 2 Performance (reduced detail, no dynamic shadow,
+    // the race's lower screen at 30 FPS), 3 Balanced (full detail without the
+    // dynamic shadow and bloom, the two biggest drawing costs).
     void setGraphics(unsigned choice,bool new3ds){
-        if(choice==0)choice=new3ds?1:2;
+        if(choice==0)choice=new3ds?3:2;
         setReduced(choice==2);
+        if(choice==3){dynamicShadow=false;bloom=false;}
     }
 #ifdef MKW_RENDER_QUALITY_C3D
     // True when bounds b placed by transform t are too small to draw from camera.

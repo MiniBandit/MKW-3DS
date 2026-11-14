@@ -37,14 +37,14 @@ bool read(const std::string& p,Core& b){
 // slot companion to the stored Mii ID, so importing a different license does
 // not silently inherit the previous license's settings.
 // MKWO0002 (32 bytes): MKWO0001's 24 (magic, Mii ID, LED mode, shadows, LED
-// brightness, graphics) with the race timer and turning map at 20/21, spare
-// zeros to 27 and the CRC of bytes 0..27 at 28. MKWO0001 files (CRC of 0..19
+// brightness, graphics) with the race timer, turning map and speedometer at
+// 20/21/22, spare zeros to 27 and the CRC of bytes 0..27 at 28. MKWO0001 files (CRC of 0..19
 // at 20) still load; the new options then keep their defaults (shown/turning).
 using Options=std::array<unsigned char,32>;
 constexpr unsigned OptionsV1Size=24,OptionsV2Body=28;
 std::uint32_t optionsCrc(const unsigned char* b,unsigned n){std::uint32_t c=~0u;for(unsigned i=0;i<n;++i)c=(c>>8)^CrcTable[(c^b[i])&255];return ~c;}
 std::string optionsPath(const char* root,unsigned slot){return std::string(root)+"/license-options-"+std::to_string(slot)+".dat";}
-bool commonOptions(const Options& b){return b[16]<4&&b[17]<2&&b[18]>=50&&b[18]<=100&&b[18]%10==0&&b[19]<3;}
+bool commonOptions(const Options& b){return b[16]<4&&b[17]<2&&b[18]>=50&&b[18]<=100&&b[18]%10==0&&b[19]<4;}
 bool readOptions(const std::string& path,Options& b){
  b={};FILE* f=std::fopen(path.c_str(),"rb");if(!f)return false;
  const std::size_t n=std::fread(b.data(),1,b.size(),f);const bool end=std::fgetc(f)==EOF;std::fclose(f);
@@ -52,19 +52,19 @@ bool readOptions(const std::string& path,Options& b){
  if(n==OptionsV1Size&&!std::memcmp(b.data(),"MKWO0001",8)&&commonOptions(b)&&be32(b.data()+20)==optionsCrc(b.data(),20)){
   b[20]=1;b[21]=1;b[22]=b[23]=0;return true;
  }
- return n==b.size()&&!std::memcmp(b.data(),"MKWO0002",8)&&commonOptions(b)&&b[20]<2&&b[21]<2&&be32(b.data()+OptionsV2Body)==optionsCrc(b.data(),OptionsV2Body);
+ return n==b.size()&&!std::memcmp(b.data(),"MKWO0002",8)&&commonOptions(b)&&b[20]<2&&b[21]<2&&b[22]<2&&be32(b.data()+OptionsV2Body)==optionsCrc(b.data(),OptionsV2Body);
 }
 void loadOptions(const char* root,unsigned slot,LicenseSave& r){
  if(!r.occupied)return;
  Options b{};const auto file=optionsPath(root,slot);
  if(!(readOptions(file,b)||readOptions(file+".bak",b))||!std::equal(r.miiId.begin(),r.miiId.end(),b.begin()+8))return;
  r.settings.ledMode=b[16];r.settings.dynamicShadows=b[17]!=0;r.settings.ledBrightness=b[18];r.settings.graphics=b[19];
- r.settings.raceTimer=b[20]!=0;r.settings.mapTurns=b[21]!=0;
+ r.settings.raceTimer=b[20]!=0;r.settings.mapTurns=b[21]!=0;r.settings.speedometer=b[22]!=0;
 }
 bool writeOptions(const char* root,unsigned slot,const LicenseSave& r,const unsigned char* identity){
  Options b{},old{};std::memcpy(b.data(),"MKWO0002",8);std::copy_n(identity,8,b.begin()+8);
- b[16]=r.occupied?r.settings.ledMode:0;b[17]=r.occupied?r.settings.dynamicShadows:true;b[18]=r.occupied?r.settings.ledBrightness:100;b[19]=r.occupied?uint8_t(std::min(r.settings.graphics,2u)):0;
- b[20]=r.occupied?r.settings.raceTimer:true;b[21]=r.occupied?r.settings.mapTurns:true;
+ b[16]=r.occupied?r.settings.ledMode:0;b[17]=r.occupied?r.settings.dynamicShadows:true;b[18]=r.occupied?r.settings.ledBrightness:100;b[19]=r.occupied?uint8_t(std::min(r.settings.graphics,3u)):0;
+ b[20]=r.occupied?r.settings.raceTimer:true;b[21]=r.occupied?r.settings.mapTurns:true;b[22]=r.occupied&&r.settings.speedometer;
  put32(b.data()+OptionsV2Body,optionsCrc(b.data(),OptionsV2Body));const auto file=optionsPath(root,slot),tmp=file+".tmp",bak=file+".bak";
  // An unchanged MKWO0002 file is kept; an MKWO0001 file is rewritten as 0002.
  if(readOptions(file,old)&&!std::memcmp(old.data(),"MKWO0002",8)&&b==old)return true;

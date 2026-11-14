@@ -303,7 +303,9 @@ void RaceBottomScreen::draw(Renderer& renderer,const BottomView& view){
     const bool atlas=m.atlas.ready;
 
     // 1. Opaque fills: the whole screen, then the standings column (no clear).
-    m.add(RaceMapWhite,0,0,ScreenW,ScreenH,0x0b0f17ffu);
+    // The baked course maps are opaque and cover the whole screen (turned or
+    // not), so the screen fill is drawn only when no map picture is loaded.
+    if(!(((m.course>=32||smooth(m.blend)>.5f)&&m.overview.ready)||m.map.ready))m.add(RaceMapWhite,0,0,ScreenW,ScreenH,0x0b0f17ffu);
     const unsigned fills=m.count;
 
     // 2. The map: the view's world rectangle over the course texture. Clamped

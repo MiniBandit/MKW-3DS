@@ -985,8 +985,8 @@ static void composeMenuImpl(const MenuState& s,const UiRaceView& race,std::vecto
   const char* variants[]={"ChangeMii","Delete","ChangeMii","ChangeMii","ChangeMii","ChangeMii","ChangeMii","ChangeMii"};
   const char* modes[]={"Off","Items","Items + Events","Items + Events + Drifts"};
   char ledLabel[64],shadowLabel[64],brightnessLabel[48],graphicsLabel[48],timerLabel[48],mapLabel[48];
-  const char* graphicsNames[]={"Auto","Quality","Performance"};
-  std::snprintf(graphicsLabel,sizeof graphicsLabel,"Graphics: %s",graphicsNames[std::min(s.selection.graphics,2u)]);
+  const char* graphicsNames[]={"Auto","Quality","Performance","Balanced"};
+  std::snprintf(graphicsLabel,sizeof graphicsLabel,"Graphics: %s",graphicsNames[std::min(s.selection.graphics,3u)]);
   std::snprintf(brightnessLabel,sizeof brightnessLabel,"LED Brightness: %u%%",s.selection.ledBrightness);
   std::snprintf(ledLabel,sizeof ledLabel,"LED: %s",modes[std::min(s.selection.ledMode,3u)]);
   std::snprintf(shadowLabel,sizeof shadowLabel,"Dynamic Shadows: %s",s.selection.dynamicShadows?"On":"Off");
