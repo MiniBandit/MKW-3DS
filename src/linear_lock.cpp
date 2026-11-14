@@ -280,7 +280,7 @@ void checkTransfer(u32* in,u32 indim,u32* out,u32 outdim){
  const u32* topRight=reinterpret_cast<u32*>(gfxGetFramebuffer(GFX_TOP,GFX_RIGHT,nullptr,nullptr));
  const char* screen=out==bottom?"bottom":out==topLeft?"top-left":out==topRight&&topRight!=topLeft?"top-right":nullptr;
  if(!screen)return; // captures and copies into textures
- const u32 expected=out==bottom?GX_BUFFER_DIM(240,320):GX_BUFFER_DIM(240,400);
+ const u32 expected=out==bottom?GX_BUFFER_DIM(240,320):out==topLeft&&gfxIsWide()?GX_BUFFER_DIM(240,800):GX_BUFFER_DIM(240,400);
  if(indim!=expected||outdim!=expected){
   ++bad;log("SCREEN TRANSFER to %s with size %lux%lu (expected %lux%lu), source %08lx",screen,
       (unsigned long)(indim&0xffff),(unsigned long)(indim>>16),(unsigned long)(expected&0xffff),(unsigned long)(expected>>16),(unsigned long)uintptr_t(in));

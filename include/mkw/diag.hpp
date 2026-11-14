@@ -81,6 +81,21 @@ inline bool liveOpponents=false;
 // Opponent Detail Full: opponents' drivers swap to model_lod beyond 4,000 units
 // of camera distance, as on the Wii (wiiLowDriver). A/B: no-wii-driver-lod.txt.
 inline bool wiiDriverLod=true;
+// Lighter 3D at 60 FPS (New 3DS, 3D slider up). A/B: no-stereo-60.txt (3D at
+// 30 FPS again), no-stereo-opponent-lod.txt (opponents as in 2D).
+inline bool stereoSixty=true,stereoOpponentLod=true;
+// 3D: whole models are also tested against each eye's own frustum when drawn
+// (record-time culling has to use both eyes' union). A/B: no-stereo-eye-cull.txt.
+inline bool stereoEyeCull=true;
+// 3D: course objects take -low LODs nearer and drop tiny parts sooner
+// (RenderQuality::objectLow/tinyRatio). A/B: no-stereo-object-lod.txt.
+inline bool stereoObjectLod=true;
+// Lighter 3D: course-object and opponent shadow volumes under ~8 px on screen are
+// skipped while 3D draws (RenderQuality::stereoShadowRatio). A/B: no-stereo-shadow-cull.txt.
+inline bool stereoShadowCull=true;
+// 3D: shadow volumes shade the rectangle their bounds cover in either eye, not
+// the whole screen (Renderer::shadowVolumesNow). A/B: no-stereo-shadow-rects.txt.
+inline bool stereoShadowRects=true;
 // Light zones: racers take BLIGHT light and ambient k from the floor's KCL
 // bits 8-10 (RacerLightZone). A/B: no-light-zones.txt.
 inline bool lightZones=true;

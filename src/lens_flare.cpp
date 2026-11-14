@@ -114,10 +114,14 @@ void LensFlare::draw(Renderer& renderer) const{
     }
     // Retail TEV (80547110, 805458a0): additive (SRCALPHA, ONE); textures are
     // one quadrant of the element, mirrored over texture coordinates 0..2.
+    // 3D: at the sun's depth (the far sky), not on the screen plane, so the
+    // element over the sun doesn't come apart between the eyes.
+    renderer.setScreenDepth(renderer.stereoParallax(1e9f));
     for(unsigned t=0;t<4;++t)if(counts[t]){
         const bool own=t==2;
         renderer.drawScreenMaterialQuads(&textures_[t],quads[t].data(),counts[t],own?0x000000ffu:0xffffff00u,0xffffffffu,
                                          GPU_MIRRORED_REPEAT,GPU_MIRRORED_REPEAT,true);
     }
+    renderer.setScreenDepth(0);
 }
 }

@@ -182,6 +182,7 @@ void Texture::reset() {
     gpu={};noMipSampler={};materialSamplers={};ready=false;
 }
 C3D_Tex* Texture::sampledGpu(){
+    if(stereoSmall&&halvable&&renderQuality().mipmaps){noMipSampler=gpu;noMipSampler.minLevel=1;return &noMipSampler;}
     if(renderQuality().mipmaps||!gpu.maxLevel)return &gpu;
     // A sampler view, not a smaller allocation. Keep gpu.maxLevel unchanged
     // for byte accounting, VRAM moves and deletion of the actual full chain.
@@ -199,6 +200,8 @@ C3D_Tex* Texture::sampledGpu(const MaterialSampler* s,unsigned unit){
     // GX NEAR/LINEAR have no mip sampling, even when another material shares
     // this texture and needs its chain. The allocation always retains it.
     if(!renderQuality().mipmaps||s->minFilter<2)view.minLevel=view.maxLevel=0;
+    // 3D: halvable textures start one level down (Texture::stereoSmall).
+    if(stereoSmall&&halvable&&renderQuality().mipmaps){view.minLevel=1;view.maxLevel=std::max<u8>(view.maxLevel,1);}
     return &view;
 }
 namespace {
@@ -262,6 +265,7 @@ bool Texture::loadMemory(const void* data,size_t size,bool vram,int halveLarge) 
     // about the size they had before the texel budgets. Skies have no mips and
     // stay. Level 1 onward is already laid out as a complete chain, so it
     // moves into a smaller allocation.
+    halvable=false;
     if((halveLarge<0?renderQuality().halfLargeTextures:halveLarge>0)&&!vram&&gpu.maxLevel&&gpu.width*gpu.height>=256*256){
         C3D_Tex small{};
         const C3D_TexInitParams params{u16(gpu.width/2),u16(gpu.height/2),u8(gpu.maxLevel-1),gpu.fmt,GPU_TEX_2D,false};
@@ -269,7 +273,7 @@ bool Texture::loadMemory(const void* data,size_t size,bool vram,int halveLarge) 
             std::memcpy(small.data,static_cast<const uint8_t*>(gpu.data)+gpu.size,C3D_TexCalcTotalSize(small.size,small.maxLevel));
             C3D_TexDelete(&gpu);gpu=small;++renderQuality().halvedTextures;
         }
-    }
+    }else halvable=!vram&&gpu.maxLevel&&gpu.width*gpu.height>=256*256;
     C3D_TexFlush(&gpu); // Make decoded LINEAR pixels visible before first sampling.
     C3D_TexSetFilter(&gpu,GPU_LINEAR,GPU_LINEAR);
     // HW10: retain the full mip chain and bilinear texel filtering, but
@@ -775,14 +779,31 @@ bool Renderer::init(){
     if(!C3D_Init(0x100000))return false;
     deviceReady_=true;
     auto fail=[this](){shutdown();return false;};
-    target_=C3D_RenderTargetCreate(240,400,GPU_RB_RGBA8,GPU_RB_DEPTH24_STENCIL8);
-    if(!target_)return fail();
-    C3D_RenderTargetSetOutput(target_,GFX_TOP,GFX_LEFT,TopTransfer);
     // libctru's gfxInit already allocates both top-screen eyes (800 rows) and
-    // gfxSet3D only switches the display mode: the right eye adds this VRAM
-    // target and no LINEAR. It is transferred only in frames that draw it.
-    if(stereoScreen(stereoDisplay_)&&(targetRight_=C3D_RenderTargetCreate(240,400,GPU_RB_RGBA8,GPU_RB_DEPTH24_STENCIL8)))
-        C3D_RenderTargetSetOutput(targetRight_,GFX_TOP,GFX_RIGHT,TopTransfer);
+    // gfxSet3D/gfxSetWide only switch the display mode. New 3DS family: one
+    // 240x800 block (wideTarget_) serves 800px frames whole and 2D/3D frames
+    // as two 240x400 halves; the right half is transferred only in frames
+    // that draw it. 400 rows of 8x8 tiles are 384,000 bytes of colour and of
+    // depth, so each half is a complete 240x400 buffer.
+    if(mkw::isNew3ds()&&(wideTarget_=C3D_RenderTargetCreate(240,800,GPU_RB_RGBA8,GPU_RB_DEPTH24_STENCIL8))){
+        auto half=[this](unsigned i){
+            auto* colour=static_cast<uint8_t*>(wideTarget_->frameBuf.colorBuf)+size_t(i)*240*400*4;
+            auto* depth=static_cast<uint8_t*>(wideTarget_->frameBuf.depthBuf)+size_t(i)*240*400*4;
+            C3D_Tex view{};view.data=colour;view.width=240;view.height=400;view.fmt=GPU_RGBA8;
+            C3D_RenderTarget* t=C3D_RenderTargetCreateFromTex(&view,GPU_TEXFACE_2D,0,C3D_DEPTHTYPE(-1));
+            if(t)C3D_FrameBufDepth(&t->frameBuf,depth,GPU_RB_DEPTH24_STENCIL8);
+            return t;
+        };
+        leftEye_=half(0);if(!leftEye_)return fail();
+        target_=leftEye_;
+        C3D_RenderTargetSetOutput(target_,GFX_TOP,GFX_LEFT,TopTransfer);
+        if(stereoScreen(stereoDisplay_)&&(targetRight_=half(1)))
+            C3D_RenderTargetSetOutput(targetRight_,GFX_TOP,GFX_RIGHT,TopTransfer);
+    }else{
+        target_=C3D_RenderTargetCreate(240,400,GPU_RB_RGBA8,GPU_RB_DEPTH24_STENCIL8);
+        if(!target_)return fail();
+        C3D_RenderTargetSetOutput(target_,GFX_TOP,GFX_LEFT,TopTransfer);
+    }
     {C3D_Mtx tilt;Mtx_PerspTilt(&tilt,C3D_AngleFromDegrees(90.f),1.f,1.f,2.f,false);horizontalSign_=tilt.r[1].x<0?-1.f:1.f;verticalSign_=tilt.r[0].y<0?-1.f:1.f;}
     shader_=DVLB_ParseFile(reinterpret_cast<u32*>(const_cast<uint8_t*>(mkw_shader)),sizeof mkw_shader);if(!shader_)return fail();
     shaderProgramInit(&program_);programReady_=true;
@@ -1141,8 +1162,14 @@ void Renderer::shutdown(){
     targetRight_=nullptr;
     if(stereoShown_)gfxSet3D(false);
     stereoShown_=false;
-    if(target_)C3D_RenderTargetDelete(target_);
-    target_=nullptr;
+    if(wideShown_)gfxSetWide(false);
+    wideShown_=false;
+    // The halves own no memory; the block is freed with wideTarget_.
+    if(leftEye_)C3D_RenderTargetDelete(leftEye_);
+    else if(target_)C3D_RenderTargetDelete(target_);
+    leftEye_=target_=nullptr;
+    if(wideTarget_)C3D_RenderTargetDelete(wideTarget_);
+    wideTarget_=nullptr;
     C3D_Fini();ready_=deviceReady_=false;
 }
 void Renderer::beginNow(const C3D_Mtx& view,const C3D_Mtx& projection,bool sync,bool begun){
@@ -1168,7 +1195,17 @@ void Renderer::beginNow(const C3D_Mtx& view,const C3D_Mtx& projection,bool sync,
     // frame's eyes before its FrameEnd transfers the right eye (gfxGetFramebuffer
     // addresses the right half only in 3D mode).
     const bool stereo=execStereo_.active()&&targetRight_;
-    if(stereo!=stereoShown_){gfxSet3D(stereo);stereoShown_=stereo;}
+    // 800px and 3D exclude each other: leave one mode before entering the
+    // other, and link the screen to this frame's target.
+    const bool wide=wideTarget_&&target_==wideTarget_;
+    if(wide!=wideShown_||stereo!=stereoShown_){
+        if(!wide&&wideShown_)gfxSetWide(false);
+        if(!stereo&&stereoShown_)gfxSet3D(false);
+        if(stereo&&!stereoShown_)gfxSet3D(true);
+        if(wide&&!wideShown_)gfxSetWide(true);
+        if(wide!=wideShown_)C3D_RenderTargetSetOutput(target_,GFX_TOP,GFX_LEFT,TopTransfer);
+        stereoShown_=stereo;wideShown_=wide;
+    }
     eye_=0;
     // The GPU reads nothing of this buffer's last frame any more (see swapFrameBuffers).
     facingUsed_=facingFlushed_=0;for(auto& l:facingLists_)l.model=nullptr;
@@ -1247,7 +1284,6 @@ void Renderer::decideStadiumFrame(){
     // immutable until then: the capture quad exists only in the left eye,
     // so the two eyes do not necessarily use matching quad slots.
     if(!eye_&&!bottomWorldPass_)bloomCount_=0;
-    if(stadiumFrame_&&!initBloom(true))stadiumFrame_=false;
 }
 void Renderer::beginFrame(){
     execSceneRegion_=3;
@@ -1273,13 +1309,10 @@ void Renderer::beginFrame(){
         // Both eyes replay the frame's bloom request.
         // So does a menu backdrop drawn opaque over the whole LCD (setFrameCover).
         const auto lcd=(bloomFrame_&&bloomMerge)||execTopCovered_?C3D_CLEAR_DEPTH:C3D_CLEAR_ALL;
-        // A stadium capture frame without bloom draws the scene off-screen,
-        // then copies it over every LCD pixel (captureStadiumScreenNow, ONE/ZERO),
-        // which clears a shared depth buffer again: only an own depth needs the clear.
-        if(stadiumEarly&&stadiumFrame_&&!bloomFrame_){if(!sharedDepth_)C3D_RenderTargetClear(target_,C3D_CLEAR_DEPTH,0x071326FF,0);}
         // A shared depth buffer holds the scene first: the left LCD's depth is
-        // cleared after it (topDepthAfterSceneNow).
-        else if(bloomFrame_&&sharedDepth_){if(lcd==C3D_CLEAR_ALL)C3D_RenderTargetClear(target_,C3D_CLEAR_COLOR,0x071326FF,0);}
+        // cleared after it (topDepthAfterSceneNow). Stadium capture frames draw
+        // on the LCD like any other (captureStadiumScreenNow copies the crop).
+        if(bloomFrame_&&sharedDepth_){if(lcd==C3D_CLEAR_ALL)C3D_RenderTargetClear(target_,C3D_CLEAR_COLOR,0x071326FF,0);}
         else C3D_RenderTargetClear(target_,lcd,0x071326FF,0);
         if(execStereo_.active())C3D_RenderTargetClear(targetRight_,lcd,0x071326FF,0);
         // A race map covers the whole lower LCD opaquely and nothing there
@@ -1289,7 +1322,7 @@ void Renderer::beginFrame(){
             C3D_RenderTargetClear(bottomTarget_,bottomTarget_->frameBuf.depthBuf?C3D_CLEAR_ALL:C3D_CLEAR_COLOR,0x071326FF,0);
     }
     if(!stadiumEarly)decideStadiumFrame();
-    if(bloomFrame_||stadiumFrame_){
+    if(bloomFrame_){
         if(!eye_){
             // Memory fills run in queue order, ahead of this frame's command list.
             C3D_RenderTargetClear(sceneTarget_,C3D_CLEAR_ALL,0x071326FF,0);
@@ -1455,8 +1488,10 @@ void Renderer::drawMenuIconNow(const Model& model,const Vertex* vertices,const C
     const float x=q.x+(!bottomPass_&&execStereo_.active()?(eye_?.5f:-.5f)*screenParallax_:0.f);
     const unsigned l=unsigned(std::clamp(std::floor(240.f-q.y-q.h),0.f,240.f));
     const unsigned r=unsigned(std::clamp(std::ceil(240.f-q.y),0.f,240.f));
-    const unsigned t=unsigned(std::clamp(std::floor(screenWidth_-x-q.w),0.f,screenWidth_));
-    const unsigned b=unsigned(std::clamp(std::ceil(screenWidth_-x),0.f,screenWidth_));
+    // Target rows: 800px mode doubles the top's (the bottom screen's stay).
+    const float rowScale=bottomPass_?1.f:float(topScale);
+    const unsigned t=unsigned(std::clamp(std::floor((screenWidth_-x-q.w)*rowScale),0.f,screenWidth_*rowScale));
+    const unsigned b=unsigned(std::clamp(std::ceil((screenWidth_-x)*rowScale),0.f,screenWidth_*rowScale));
     if(l<r&&t<b){
         C3D_SetScissor(GPU_SCISSOR_NORMAL,l,t,r,b);
         courseLighting_=false;menuIconLayer_=true;menuIconAlpha_=q.alpha;
@@ -1577,6 +1612,17 @@ void Renderer::drawNow(const Model& model,const Vertex* vertices,const C3D_Mtx& 
         staticFrustum=ClipFrustum(rows);
         if(!staticFrustum.intersects({model.minimum,model.maximum})){stats_.culledTriangles+=model.indexCount/3;return;}
     }
+    // 3D: what was recorded for both eyes (culled against their union) is
+    // tested against this eye alone (projection_ is the eye's). Only models
+    // whose bounds hold every vertex drawn: own vertices, no skin or rigid
+    // bones, and bounds that were set.
+    else if(diag::stereoEyeCull&&execStereo_.active()&&!backdrop&&!bottomWorldPass_&&!execDualScreenIntro_&&!skinPalette_&&!rigid_&&
+            vertices==model.vertices&&model.minimum.x<=model.maximum.x&&model.minimum.y<=model.maximum.y&&model.minimum.z<=model.maximum.z&&
+            (model.minimum.x<model.maximum.x||model.minimum.y<model.maximum.y||model.minimum.z<model.maximum.z)){
+        C3D_Mtx clip;Mtx_Multiply(&clip,&projection_,&mv);float rows[16];
+        for(unsigned r=0;r<4;++r)for(unsigned c=0;c<4;++c)rows[r*4+c]=clip.r[r].c[3-c];
+        if(!ClipFrustum(rows).intersects({model.minimum,model.maximum})){stats_.culledTriangles+=model.indexCount/3;return;}
+    }
     flushSprites();
     if(model.nativeMiiLighting)C3D_BindProgram(&miiProgram_);
     const uint32_t animationFrame=execFrame_,additiveColor=execAdditive_&0xffffff00u;
@@ -1620,7 +1666,9 @@ void Renderer::drawNow(const Model& model,const Vertex* vertices,const C3D_Mtx& 
     const bool skinCull=!backdrop&&skinPalette_&&model.skinVisibility.size()==model.submeshes.size();
     ClipFrustum frustum;
     // Reduced quality: course-object parts under minScreenRatio from the eye
-    // (model space). Menu models keep every part.
+    // (model space). Menu models keep every part. A stereo frame's top screen
+    // (this list's execStereo_, drawn twice) uses the 3D ratio (tinyRatio).
+    const bool stereoParts=diag::stereoObjectLod&&execStereo_.active()&&!bottomPass_;
     float partTiny=0;Vec3 eye{};
     if(cull||partCull||skinCull){
         if(!backdrop&&!model.visibility.empty())frustum=staticFrustum;
@@ -1629,7 +1677,7 @@ void Renderer::drawNow(const Model& model,const Vertex* vertices,const C3D_Mtx& 
             for(unsigned r=0;r<4;++r)for(unsigned c=0;c<4;++c)rows[r*4+c]=clip.r[r].c[3-c];
             frustum=ClipFrustum(rows);
         }
-        if(partCull&&courseLighting_&&(partTiny=renderQuality().minScreenRatio)>0){
+        if(partCull&&courseLighting_&&(partTiny=renderQuality().tinyRatio(stereoParts))>0){
             C3D_Mtx inverse=mv;
             if(Mtx_Inverse(&inverse)!=0.f)eye={inverse.r[0].w,inverse.r[1].w,inverse.r[2].w};else partTiny=0;
         }
@@ -2272,7 +2320,8 @@ void Renderer::drawNow(const Model& model,const Vertex* vertices,const C3D_Mtx& 
         C3D_TexBind(0,texture);
         if(stadium){
             // Landscape authored UVs to the cropped portrait texture region.
-            constexpr auto origin=stadium::displayUv(0,0),dx=stadium::displayUv(1,0),dy=stadium::displayUv(0,1);
+            const unsigned scale=stadiumScale_[stadiumRead_];
+            const auto origin=stadium::copyUv(0,0,scale),dx=stadium::copyUv(1,0,scale),dy=stadium::copyUv(0,1,scale);
             C3D_FVUnifSet(GPU_VERTEX_SHADER,uvRowLoc_[0],dx.u-origin.u,dy.u-origin.u,origin.u,0);
             C3D_FVUnifSet(GPU_VERTEX_SHADER,uvRowLoc_[1],dx.v-origin.v,dy.v-origin.v,origin.v,0);
             C3D_FVUnifSet(GPU_VERTEX_SHADER,uvScrollLoc_,0,0,0,0);uvDirty_=true;
@@ -2595,7 +2644,27 @@ void Renderer::shadowVolumesNow(const ShadowVolume* volumes,unsigned count,float
     // right eye or the intro's lower-screen pass replays the first pass's quad
     // vertices with its own projection: those frames keep the whole screen.
     float rect[4];
-    const bool bounded=shadowRects&&!execStereo_.active()&&!execDualScreenIntro_&&
+    // 3D: both eyes shade one rectangle, the union of the volumes' bounds
+    // through each eye's projection (the right eye's are derived from this
+    // eye's: perspectiveEye is linear in the eye). The left eye writes the quad
+    // and the right eye replays it, so the quad is always drawn, an empty one
+    // as a zero-area quad, and both eyes take the same path.
+    const bool stereoRect=diag::stereoShadowRects&&shadowRects&&execStereo_.active()&&!execDualScreenIntro_&&!bottomPass_&&!bottomWorldPass_;
+    bool bounded=false;
+    if(stereoRect){
+        float r[2][4];bounded=true;
+        for(unsigned e=0;e<2&&bounded;++e){
+            float m[4][4];for(unsigned i=0;i<4;++i)for(unsigned c=0;c<4;++c)m[i][c]=projection_.r[i].c[3-c];
+            stereo::perspectiveEye(m,1,horizontalSign_,(e?1.f:-1.f)-(eye_?1.f:-1.f),execStereo_);
+            C3D_Mtx p;for(unsigned i=0;i<4;++i)for(unsigned c=0;c<4;++c)p.r[i].c[3-c]=m[i][c];
+            bounded=shadowVolumeRect(volumes,count,view_,p,screenWidth_,r[e]);
+        }
+        if(bounded){
+            const bool a=r[0][2]>r[0][0]&&r[0][3]>r[0][1],b=r[1][2]>r[1][0]&&r[1][3]>r[1][1];
+            if(a&&b)for(unsigned k=0;k<4;++k)rect[k]=k<2?std::min(r[0][k],r[1][k]):std::max(r[0][k],r[1][k]);
+            else std::copy(a?r[0]:r[1],(a?r[0]:r[1])+4,rect);
+        }
+    }else bounded=shadowRects&&!execStereo_.active()&&!execDualScreenIntro_&&
         shadowVolumeRect(volumes,count,view_,projection_,screenWidth_,rect);
     if(!bounded)++diag::shadowRectStats.full;
     else if(rect[2]>rect[0]&&rect[3]>rect[1]){++diag::shadowRectStats.bounded;diag::shadowRectStats.area+=uint64_t((rect[2]-rect[0])*(rect[3]-rect[1]));}
@@ -2606,7 +2675,7 @@ void Renderer::shadowVolumesNow(const ShadowVolume* volumes,unsigned count,float
     // rectangle to reach it shades it and clears its count: the same pixels.
     constexpr unsigned MaxVolumeRects=32;
     float rects[MaxVolumeRects][4];unsigned rectCount=0;bool perVolume=false;
-    if(bounded&&volumeRects&&count>1&&count<=MaxVolumeRects&&rect[2]>rect[0]&&rect[3]>rect[1]){
+    if(bounded&&!stereoRect&&volumeRects&&count>1&&count<=MaxVolumeRects&&rect[2]>rect[0]&&rect[3]>rect[1]){
         float sum=0;bool each=true;
         for(unsigned i=0;i<count;++i){
             const auto& v=volumes[i];if(!v.model||!v.model->indexCount)continue;
@@ -2620,7 +2689,7 @@ void Renderer::shadowVolumesNow(const ShadowVolume* volumes,unsigned count,float
     }
     // No volume's own rectangle on screen: no pixel holds a count.
     if(perVolume){if(rectCount)shadeRectsNow(1.f-float(shade)/255.f,shadowUnion_?4:0,rects,rectCount);}
-    else if(!bounded||(rect[2]>rect[0]&&rect[3]>rect[1]))
+    else if(!bounded||stereoRect||(rect[2]>rect[0]&&rect[3]>rect[1]))
         screenFadeNow(1.f-float(shade)/255.f,false,false,shadowUnion_?4:0,bounded?rect:nullptr);
     // The fullscreen shade temporarily binds an orthographic projection.
     // Consecutive volume groups must return to this eye's perspective.
@@ -3375,14 +3444,16 @@ bool Renderer::configureStadiumScreen(bool enabled){
     if(enabled&&stadiumTex_[0].data)return true;
     waitForGpu();
     if(!enabled){freeStadiumScreen();if(releaseIdleBloom&&!bloomEnabled&&(sceneTarget_||bloomVertices_))freeBloom();return true;}
-    // Allocate capture/composite scratch at scene load, never at first visibility.
-    if(!initBloom())return false;
+    // The captures are copies of the finished scene (captureStadiumScreenNow):
+    // no scene scratch. With the 800px block the textures hold 512 rows for
+    // 800px frames' crop; their height is set per capture.
     for(unsigned i=0;i<2;++i){
         auto& t=stadiumTex_[i];
-        if(!C3D_TexInitVRAM(&t,stadium::TextureWidth,stadium::TextureHeight,GPU_RGBA8)||
+        if(!C3D_TexInitVRAM(&t,stadium::TextureWidth,stadium::TextureHeight*(wideTarget_?2u:1u),GPU_RGBA8)||
            !(stadiumTarget_[i]=C3D_RenderTargetCreateFromTex(&t,GPU_TEXFACE_2D,0,-1))){freeStadiumScreen();return false;}
         C3D_TexSetFilter(&t,GPU_LINEAR,GPU_LINEAR);C3D_TexSetWrap(&t,GPU_CLAMP_TO_EDGE,GPU_CLAMP_TO_EDGE);
         C3D_RenderTargetClear(stadiumTarget_[i],C3D_CLEAR_COLOR,0x000000FF,0);
+        stadiumScale_[i]=1;t.height=stadium::TextureHeight;
     }
     return true;
 }
@@ -3395,49 +3466,40 @@ void Renderer::freeStadiumScreen(){
 }
 void Renderer::captureStadiumScreenNow(){
     stadiumFrame_=false;
-    if(eye_||!sceneTarget_)return;
-    topDepthAfterSceneNow();
-    // Retail WLscreenGC copies the scene EFB before HUD. Keep that ordering
-    // and the existing half-render-frame/visible-screen policy. Rendering a
-    // crop directly into the next native target avoids LCD cache invalidation,
-    // CPU pixel conversion, a synchronous readback and all captured UI.
+    if(eye_)return;
+    // Retail WLscreenGC copies the scene EFB before the HUD. This runs at the
+    // same point (applyBloom, after the effects) and copies the crop's 8x8
+    // tiles straight out of the finished scene with the GX engine, queued in
+    // order with the frame's command lists: no second scene, no full-screen
+    // copy back. Bloom frames hold the scene in its 256-wide texture (the
+    // 240x400 rows end at row 512). 800px frames copy twice the rows into a
+    // texture twice as tall; the screens sample both alike (copyUv).
     flushSprites();
-    auto replace=[](){
-        C3D_TexEnvBufUpdate(C3D_Both,0);
-        for(unsigned i=0;i<6;++i)C3D_TexEnvInit(C3D_GetTexEnv(i));
-        auto* e=C3D_GetTexEnv(0);C3D_TexEnvSrc(e,C3D_Both,GPU_TEXTURE0);
-        C3D_TexEnvFunc(e,C3D_Both,GPU_REPLACE);
-        C3D_AlphaBlend(GPU_BLEND_ADD,GPU_BLEND_ADD,GPU_ONE,GPU_ZERO,GPU_ONE,GPU_ZERO);
-    };
-    bloomPass(stadiumTarget_[stadiumRead_^1],stadium::CaptureWidth,stadium::CaptureHeight);
-    replace();
-    constexpr float cropY=184.f*10.f/19.f;
-    bloomQuad(sceneTex_,stadium::CaptureWidth,stadium::CaptureHeight,
-              stadium::CaptureWidth,stadium::CaptureHeight,
-              float(stadium::CaptureWidth)-400.f+stadium::CaptureX,
-              float(stadium::CaptureHeight)-240.f+cropY);
-    C3D_TexBind(0,nullptr);
+    const bool bloomScene=bloomFrame_&&sceneTarget_;
+    const unsigned scale=bloomScene?1u:topScale;
+    const auto* source=static_cast<const uint8_t*>(bloomScene?sceneTex_.data:target_->frameBuf.colorBuf);
+    const unsigned sourceTiles=bloomScene?256u/8u:240u/8u,rowOffset=bloomScene?512u-400u:0u;
+    constexpr unsigned Tile=8*8*4;
+    const unsigned line=stadium::CopyColumns/8*Tile,rows=stadium::CopyRows*scale/8;
+    auto& t=stadiumTex_[stadiumRead_^1];
+    if(!t.data||scale>(wideTarget_?2u:1u))return; // the texture holds 256 rows x the block's scale
+    const uint8_t* from=source+size_t((rowOffset+stadium::CopyRow*scale)/8)*sourceTiles*Tile+stadium::CopyColumn/8*Tile;
+    C3D_SyncTextureCopy(reinterpret_cast<u32*>(const_cast<uint8_t*>(from)),GX_BUFFER_DIM(line>>4,(sourceTiles*Tile-line)>>4),
+        static_cast<u32*>(t.data),GX_BUFFER_DIM(line>>4,(stadium::TextureWidth/8*Tile-line)>>4),line*rows,8);
+    t.height=u16(stadium::TextureHeight*scale);stadiumScale_[stadiumRead_^1]=uint8_t(scale);
     stadiumPending_=true; // both eyes still sample the previous complete image
-    if(!bloomFrame_){
-        bloomPass(topTarget(),400,240);replace();
-        bloomQuad(sceneTex_,400,240,400,240,0,0);
-        C3D_TexBind(0,nullptr);
-        C3D_AlphaBlend(GPU_BLEND_ADD,GPU_BLEND_ADD,GPU_SRC_ALPHA,GPU_ONE_MINUS_SRC_ALPHA,GPU_ONE,GPU_ONE_MINUS_SRC_ALPHA);
-        uploadProjection(projectionLoc_,projection_);
-        spriteStateReady_=false;
-    }
 }
-
 bool Renderer::capturePausedTop(){
     releasePausedTop();
     if(!target_||!target_->frameBuf.colorBuf)return false;
     waitForGpu();
     pausedVertices_=static_cast<Vertex*>(linearAlloc(6*sizeof(Vertex)));
-    if(!pausedVertices_||!C3D_TexInit(&pausedTop_,256,512,GPU_RGBA8)){releasePausedTop();return false;}
+    if(!pausedVertices_||!C3D_TexInit(&pausedTop_,256,512*topScale,GPU_RGBA8)){releasePausedTop();return false;}
     // The 240x400 target's rows of 8x8 tiles into the 256-wide texture: the
     // layout bloom's scene texture has when rendered into directly. Targets
     // store rows bottom-up, so the 50 rows end at the texture's 64th.
-    constexpr u32 line=240*8*4,gap=(256-240)*8*4,rows=400/8,rowOffset=512/8-rows;
+    // 800px mode: 100 tile rows into a 256x1024 texture; the same UVs below.
+    const u32 line=240*8*4,gap=(256-240)*8*4,rows=400*topScale/8,rowOffset=512*topScale/8-rows;
     auto* to=static_cast<u8*>(pausedTop_.data)+size_t(rowOffset)*256*8*4;
     C3D_SyncTextureCopy(static_cast<u32*>(target_->frameBuf.colorBuf),GX_BUFFER_DIM(line>>4,0),
         reinterpret_cast<u32*>(to),GX_BUFFER_DIM(line>>4,gap>>4),line*rows,8);
@@ -3513,7 +3575,10 @@ bool Renderer::initBloomTargets(bool inFrame){
     // colour); the scene texture goes opposite that, as citro3d places a
     // target's own depth opposite its colour.
     void* shared=nullptr;
-    const bool share=shareDepth&&!depthGrid&&target_&&target_->ownsDepth&&target_->frameBuf.depthBuf;
+    // Never with the 800px block: its 240x800 depth is larger than this
+    // 256x512 buffer (800px draws ran past it into other VRAM, corrupting
+    // the lower screen on DK Summit), and its halves can't be freed.
+    const bool share=shareDepth&&!wideTarget_&&!depthGrid&&target_&&target_->ownsDepth&&target_->frameBuf.depthBuf;
     if(share){
         const size_t bytes=C3D_CalcDepthBufSize(256,512,GPU_RB_DEPTH24_STENCIL8);
         const auto bank=addrGetVRAMBank(target_->frameBuf.depthBuf);
@@ -3592,7 +3657,8 @@ void Renderer::keepProbeRowsNow(){
     if(!probeCopy_)probeCopy_=static_cast<uint32_t*>(linearAlloc(2*(256/8)*64*sizeof(uint32_t)));
     if(!probeCopy_)return;
     const int cx=int(probeExec_.x);
-    const unsigned y0=399u-unsigned(std::clamp(cx+1,0,399)),y1=399u-unsigned(std::clamp(cx-1,0,399));
+    const int last=int(400*topScale)-1,px=cx*int(topScale);
+    const unsigned y0=unsigned(last-std::clamp(px+int(topScale),0,last)),y1=unsigned(last-std::clamp(px-int(topScale),0,last));
     const unsigned first=y0>>3,rows=(y1>>3)-first+1,rowWords=probeExec_.stride*64;
     C3D_SyncTextureCopy(const_cast<u32*>(probeExec_.depth)+size_t(first)*rowWords,0,reinterpret_cast<u32*>(probeCopy_),0,rows*rowWords*4,8);
     probeExec_.depth=probeCopy_;probeExec_.firstRow=first;probeExec_.rows=rows;
@@ -3609,7 +3675,7 @@ void Renderer::freeBloom(){
 }
 void Renderer::bloomPass(C3D_RenderTarget* target,unsigned width,unsigned height){
     // Landscape width x height region of a portrait render target.
-    C3D_FrameDrawOn(target);C3D_SetViewport(0,0,height,width);
+    C3D_FrameDrawOn(target);C3D_SetViewport(0,0,height,width*(target==target_?topScale:1u));
     C3D_Mtx projection,identity;Mtx_OrthoTilt(&projection,0,float(width),float(height),0,-1,1,false);Mtx_Identity(&identity);
     C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER,projectionLoc_,&projection);
     C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER,modelViewLoc_,&identity);

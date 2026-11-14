@@ -293,6 +293,14 @@ check `gpu-guard.log` has no `4-BIT VRAM` line, and run it on the console
 through kart select and a race load before making it the default.
 `stereo-slider.txt` (a number from 0 to 1) pins the 3D slider for comparable
 runs. As with the slider, the right eye turns on above 0.03 and off at or below 0.01.
+3D reductions, each on while the slider is up (`runtime.log`: `stereo ...`):
+`no-stereo-60.txt` (3D at 30 FPS), `no-stereo-opponent-lod.txt` (opponents as in
+2D), `no-stereo-small-textures.txt` (full-size textures), `no-stereo-eye-cull.txt`
+(models tested only against both eyes' union), `no-stereo-object-lod.txt` (course
+objects' 2D LOD distance and size), `no-stereo-shadow-cull.txt` (every shadow
+volume), `no-stereo-shadow-rects.txt` (shadow volumes shade the whole screen).
+`stereo-strength.txt` (0.25 to 2) replaces the depth strength (default 1.05,
+Mario Kart 7's disparities x 1.05).
 `lod-bias.txt` (a number from -2 to 0, default 0) is added to the LOD of every
 mip-mapped texture: negative values sample sharper levels (`runtime.log`:
 `texture lod bias N`).

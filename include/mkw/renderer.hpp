@@ -88,6 +88,14 @@ public:
     // Loaded for a race and kept past it (set reuse): a later race's placement
     // takes it as one of its own.
     bool raceKept=false;
+    // Started at full size with a mip chain of 256x256 texels or more: the
+    // textures Texture Quality: Low halves (loadMemory).
+    bool halvable=false;
+    // Render thread, per executed frame: while the 3D slider is up and Texture
+    // Quality is High, halvable textures sample from their first mip level, as
+    // Low loads them, without a reload (Renderer::execute). A/B (DIAG):
+    // no-stereo-small-textures.txt.
+    static inline bool stereoSmall=false,stereoSmallAllowed=true;
     // Every texture currently loaded from a file, under a lock: f must not load
     // or reset textures. Race VRAM placement and DIAG texture-use.txt use it.
     static void forEachLoaded(const std::function<void(Texture&)>& f);
@@ -462,6 +470,11 @@ public:
     // next call. Fades, cinema bars and bloom stay on the screen plane.
     // Ignored in 2D frames, which therefore record nothing.
     void setScreenDepth(float parallax);
+    // 3D only: clip the following top-screen draws to this layout rectangle
+    // in both eyes (a window at the screen plane, e.g. the Settings preview,
+    // whose scene would otherwise spill past its frame by its disparity);
+    // on=false ends it. Nothing is recorded in 2D.
+    void setScreenClip(bool on,float x=0,float y=0,float w=0,float h=0);
     // Retail lens flare occlusion (src/lens_flare.cpp): the scene depth in the
     // 3x3 top-screen pixels around (x,y), read once the GPU has finished the
     // frame that recorded it (one frame late; retail copies its EFB depth in
@@ -479,7 +492,9 @@ public:
     void setSliderOverride(float slider){sliderOverride_=slider;}
     // Whether the next begin() draws both eyes: a 3D screen with the slider
     // (or its QA override) on at the last frame's read (sampleSlider).
-    bool stereoWanted() const {return targetRight_&&sliderOn_;}
+    // 800px Mode on: the slider never turns 3D on (user, Nov 13: switching
+    // looked bad), so no 3D-only reductions either.
+    bool stereoWanted() const {return targetRight_&&sliderOn_&&!(wideTarget_&&wideSetting);}
     Vec3 cameraBackward() const { return {mainView_.r[2].x,mainView_.r[2].y,mainView_.r[2].z}; }
     // World point -> top-screen pixels with the active camera; viewZ < 0 is in front.
     bool projectTop(Vec3 world,float& x,float& y,float& viewZ) const;
@@ -907,6 +922,13 @@ private:
     C3D_Mtx eyeProjection(const C3D_Mtx& center) const;
     C3D_Mtx screenProjection(float parallax) const;
     C3D_RenderTarget* topTarget() const {return eye_?targetRight_:target_;}
+public:
+    // 800px mode (Settings: Top Screen 800px; New 3DS family): the top screen
+    // shows its 800 columns as one image (gfxSetWide). Every top draw keeps
+    // its 400-wide layout, stretched by the viewport. topScale: target rows
+    // per layout pixel in the executed frame (2 in 800px frames, else 1).
+    static inline unsigned topScale=1;
+private:
     void beginEyeNow(const C3D_Mtx& view,const C3D_Mtx& projection);
     void beginBottomWorldNow(const C3D_Mtx& view,const C3D_Mtx& projection);
     void endEyeNow();
@@ -976,9 +998,25 @@ private:
     Stats stats_{};
     bool skyBehind_=false,execBehind_=false;
     uint32_t execFrame_=0,execAdditive_=0;uint8_t execGhostPass_=0,execGhostAlpha_=0;
+    // The executed frame's top target: leftEye_ (2D and 3D's left eye) or
+    // wideTarget_ (800px frames). Old 3DS: its own 240x400 target.
     C3D_RenderTarget* target_=nullptr;
     // Right eye (VRAM, New 3DS with a 3D screen only; linked to GFX_RIGHT).
     C3D_RenderTarget* targetRight_=nullptr;
+    // New 3DS family: one 240x800 colour and depth block. 800px frames draw
+    // all of it; 2D and 3D draw its halves as two 240x400 targets (leftEye_,
+    // and targetRight_ on a 3D screen), so switching costs no VRAM: the old
+    // left and right targets took the same 1.5 MB. Their depth is part of the
+    // block and is never shared with bloom's scene target.
+    C3D_RenderTarget* wideTarget_=nullptr;
+    C3D_RenderTarget* leftEye_=nullptr;
+    bool wideShown_=false;
+    // Main thread: the Settings page's 800px option; recorded per frame.
+    bool frameWide_=false;
+public:
+    bool wideSetting=false;
+    bool wideCapable() const {return wideTarget_!=nullptr;}
+private:
     C3D_RenderTarget* bottomTarget_=nullptr;
     float screenWidth_=400.f;
     void countPixels(float x0,float y0,float x1,float y1);
@@ -1108,6 +1146,8 @@ private:
     void freeStadiumScreen();
     void captureStadiumScreenNow();
     C3D_Tex stadiumTex_[2]{};
+    // Rows per layout pixel each capture was copied at (1, or 2 from 800px).
+    uint8_t stadiumScale_[2]{1,1};
     C3D_RenderTarget* stadiumTarget_[2]{};
     unsigned stadiumRead_=0;
     bool stadiumRequested_=false,stadiumFrame_=false,stadiumPending_=false;

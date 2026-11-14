@@ -26,6 +26,7 @@
 #include "mkw/console_model.hpp"
 #include <mkw/diag.hpp>
 #include "mkw/renderer.hpp"
+#include "mkw/render_quality.hpp"
 #include "mkw/menu_ui.hpp"
 #include "mkw/race_effects.hpp"
 #include "mkw/nw4r_ef_draw.hpp"
@@ -70,6 +71,7 @@ enum : uint16_t {
     CmdDiagPass, // diagnostic overlay: GPU pass boundary (mkw/diag.hpp)
     CmdRacerLight,
     CmdDepthProbe,
+    CmdScreenClip,
 };
 // begun: C3D_FrameBegin already ran on the recording thread (stereo immediate frames).
 struct DiagPassCommand {static constexpr uint16_t Type=CmdDiagPass;uint8_t pass;};
@@ -132,6 +134,7 @@ struct TextCommand {static constexpr uint16_t Type=CmdText;const char* text;floa
 // Renderer::quadMerge: at most this many consecutive commands in one draw.
 constexpr unsigned MaxMergedQuads=64;
 struct ScreenDepthCommand {static constexpr uint16_t Type=CmdScreenDepth;float parallax;};
+struct ScreenClipCommand {static constexpr uint16_t Type=CmdScreenClip;bool on;float x,y,w,h;};
 struct DepthProbeCommand {static constexpr uint16_t Type=CmdDepthProbe;float x,y,depth;};
 }
 
@@ -171,7 +174,8 @@ struct Renderer::FrameList {
     std::vector<std::unique_ptr<ef::DrawList>> sceneEffects;unsigned sceneEffectsUsed=0;
     unsigned frame=0;
     // Recorded at begin(): both eyes are drawn when active.
-    stereo::Frame stereo{};bool dualIntro=false,bottomCovered=false,topCovered=false,bottomKept=false,bottomFlat=false;
+    // wide: an 800px frame (2D with Settings' 800px on; never with bloom).
+    stereo::Frame stereo{};bool wide=false,dualIntro=false,bottomCovered=false,topCovered=false,bottomKept=false,bottomFlat=false;
     // Diagnostic overlay: the pass this frame leaves out, and whether it is a profiled race frame.
     uint8_t diagSkip=0,diagProbe=0;bool diagActive=false,diagGrid=false;
     // passSample's tag for this frame (diag::ProbeTag marks a probed pass).
@@ -465,6 +469,9 @@ void Renderer::execute(FrameList& list){
     execPipelined_=pipelineFrames&&renderThread&&!localReplay_;
     bool began=false;
     execStereo_=targetRight_?list.stereo:stereo::Frame{};
+    // 800px or 400 for this frame (beginNow switches the display mode).
+    if(wideTarget_){const bool wide=list.wide&&!execStereo_.active();target_=wide?wideTarget_:leftEye_;topScale=wide?2:1;}
+    Texture::stereoSmall=Texture::stereoSmallAllowed&&execStereo_.active()&&!renderQuality().halfLargeTextures;
     const unsigned eyes=execStereo_.active()?2:1;
     execDualScreenIntro_=list.dualIntro&&bottomTarget_;
     execBottomCovered_=list.bottomCovered;execTopCovered_=list.topCovered;execBottomKept_=list.bottomKept;execBottomFlat_=list.bottomFlat;
@@ -633,13 +640,22 @@ void Renderer::execute(FrameList& list){
         }
         case CmdText:{const auto& c=*static_cast<const TextCommand*>(body);drawScreenText(c.text,c.x,c.y,c.size,c.rgba);break;}
         case CmdScreenDepth:screenDepthNow(static_cast<const ScreenDepthCommand*>(body)->parallax);break;
+        case CmdScreenClip:{
+            // Top-screen layout rectangle to target scissor (drawNow's menu
+            // icon mapping: x runs down the target's rows, y across columns).
+            const auto& c=*static_cast<const ScreenClipCommand*>(body);
+            if(!c.on||bottomPass_){C3D_SetScissor(GPU_SCISSOR_DISABLE,0,0,0,0);break;}
+            const float rows=float(topScale);
+            const unsigned l=unsigned(std::clamp(std::floor(240.f-c.y-c.h),0.f,240.f)),r=unsigned(std::clamp(std::ceil(240.f-c.y),0.f,240.f));
+            const unsigned t=unsigned(std::clamp(std::floor((400.f-c.x-c.w)*rows),0.f,400.f*rows)),b=unsigned(std::clamp(std::ceil((400.f-c.x)*rows),0.f,400.f*rows));
+            C3D_SetScissor(GPU_SCISSOR_NORMAL,l,t,r,b);break;}
         case CmdDepthProbe:{
-            // The left eye's scene depth (bloom and stadium frames draw the scene
+            // The left eye's scene depth (bloom frames draw the scene
             // off-screen), where the left eye shows the point: eye*parallax/2
             // pixels from the centre camera's position (stereo::perspectiveEye).
             const auto& c=*static_cast<const DepthProbeCommand*>(body);
             const float x=execStereo_.active()?c.x-.5f*execStereo_.parallax(c.depth):c.x;
-            if(!bottomWorldPass_&&!eye)if(auto* t=(bloomFrame_||stadiumFrame_)?sceneTarget_:target_)
+            if(!bottomWorldPass_&&!eye)if(auto* t=bloomFrame_?sceneTarget_:target_)
                 probeExec_={x,c.y,static_cast<const uint32_t*>(t->frameBuf.depthBuf),t->frameBuf.depthBuf!=nullptr&&!topDepthCleared_,unsigned(t->frameBuf.width)/8u};
             break;}
         }
@@ -663,7 +679,7 @@ void Renderer::execute(FrameList& list){
     if(courseDrawn)++courseDrawFrames;
     if(grid)diag::gridFrame();
     if(diag::textureUse)diag::textureFrame();
-    eye_=0;execStereo_={};execDualScreenIntro_=false;execBottomCovered_=false;execTopCovered_=execBottomKept_=false;execBottomFlat_=false;bottomWorldPass_=false;
+    eye_=0;execStereo_={};Texture::stereoSmall=false;execDualScreenIntro_=false;execBottomCovered_=false;execTopCovered_=execBottomKept_=false;execBottomFlat_=false;bottomWorldPass_=false;
     // A pipelined frame still open here continues in the next list (drain()
     // no longer splits frames, but keep it safe): its hook needs this list,
     // which the recording thread reuses only after that frame has ended.
@@ -731,10 +747,12 @@ float Renderer::sampleSlider(){
 // whole scene: the subject's depth, set per frame, times the scene's ratio.
 void Renderer::beginStereo(float targetDistance){
     frameStereo_={};frameSlider_=0;cullProjection_=mainProjection_;
+    // 800px Mode: every frame is 800px and the 3D slider is ignored.
+    frameWide_=wideTarget_&&wideSetting;
     const stereo::Scene scene=stereoSubjectSet_?stereoScene_:stereo::Race;
     const float subject=stereoSubjectSet_?stereoSubject_:targetDistance;
     stereoSubjectSet_=false;
-    if(!targetRight_)return;
+    if(!targetRight_||frameWide_)return;
     const float slider=sampleSlider();
     if(!(slider>0))return;
     frameSlider_=std::min(slider,1.f);
@@ -760,7 +778,8 @@ void Renderer::readDepthProbe(){
     // A copy (shared depth) is in cached LINEAR memory, written by the GPU.
     if(rows)GSPGPU_InvalidateDataCache(const_cast<uint32_t*>(depth),rows*stride*64*sizeof(uint32_t));
     auto covered=[depth,stride,first,rows](int sx,int sy){
-        const unsigned x=239u-unsigned(std::clamp(sy,0,239)),y=399u-unsigned(std::clamp(sx,0,399));
+        const int last=int(400*topScale)-1;
+        const unsigned x=239u-unsigned(std::clamp(sy,0,239)),y=unsigned(last-std::clamp(sx*int(topScale),0,last));
         if(rows&&((y>>3)<first||(y>>3)>=first+rows))return false;
         unsigned m=0;for(unsigned b=0;b<3;++b)m|=((x>>b)&1u)<<(2*b)|((y>>b)&1u)<<(2*b+1);
         return (depth[(((y>>3)-first)*stride+(x>>3))*64+m]&0xffffffu)!=0;
@@ -777,6 +796,10 @@ bool Renderer::takeDepthGrid(char (&rows)[15][26]){
     if(!depthGridReady_.load(std::memory_order_acquire))return false;
     std::memcpy(rows,depthGridRows_,sizeof rows);depthGridReady_.store(false,std::memory_order_release);
     return true;
+}
+void Renderer::setScreenClip(bool on,float x,float y,float w,float h){
+    if(!frameStereo_.active()||!recording())return;
+    auto& c=command<ScreenClipCommand>();c.on=on;c.x=x;c.y=y;c.w=w;c.h=h;
 }
 void Renderer::setScreenDepth(float parallax){
     if(!frameStereo_.active())return;
@@ -861,7 +884,7 @@ void Renderer::beginRecorded(){
         stats_.previousGpuMs=C3D_GetDrawingTime();
         renderMetrics={};retired_.clear();
         if(!localList_)localList_=std::make_unique<FrameList>();
-        localList_->reset();localList_->stereo=frameStereo_;localList_->dualIntro=frameDualScreenIntro_;
+        localList_->reset();localList_->stereo=frameStereo_;localList_->wide=frameWide_;localList_->dualIntro=frameDualScreenIntro_;
         localList_->topCovered=topCovered;localList_->bottomKept=bottomKept;
         recording_=localList_.get();localRecording_=true;
         auto& c=command<BeginCommand>();c.view=mainView_;c.projection=mainProjection_;c.lightingTick=animationFrame;c.loading=loadingFrame;c.sync=frameSync;c.begun=true;
@@ -874,7 +897,7 @@ void Renderer::beginRecorded(){
     renderMetrics={};
     releaseRetired();
     auto& c=command<BeginCommand>();c.view=mainView_;c.projection=mainProjection_;c.lightingTick=animationFrame;c.loading=loadingFrame;c.sync=frameSync;c.begun=false;
-    recording_->stereo=frameStereo_;recording_->dualIntro=frameDualScreenIntro_;
+    recording_->stereo=frameStereo_;recording_->wide=frameWide_;recording_->dualIntro=frameDualScreenIntro_;
     recording_->topCovered=topCovered;recording_->bottomKept=bottomKept;
     recording_->diagSkip=diag::passState.skip;recording_->diagProbe=diag::passState.probe;recording_->diagActive=diag::passState.active;recording_->diagGrid=diag::drawGrid.load(std::memory_order_relaxed);
     writeTarget_.store(recording_,std::memory_order_release);

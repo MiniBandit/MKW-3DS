@@ -27,6 +27,14 @@ struct RenderQuality {
     float minScreenRatio=.003f;
     // Course objects switch to their authored -low LOD beyond this distance.
     float objectLowDistance=7000.f;
+    // 3D slider up (New 3DS): both eyes draw every course-object triangle.
+    // Their -low LODs come in at the Old 3DS distance, and parts drop at twice
+    // the 2D ratio (about 8 px by the measure above: still specks, where the
+    // Old 3DS's .015, about 20 px, pops visibly). Reduced values win.
+    // Course objects pass stereo=true only for a frame drawn in stereo.
+    static constexpr float stereoObjectLowDistance=4000.f,stereoMinScreenRatio=.006f;
+    float objectLow(bool stereo) const {return stereo&&!reduced?stereoObjectLowDistance:objectLowDistance;}
+    float tinyRatio(bool stereo) const {return stereo&&!reduced?stereoMinScreenRatio:minScreenRatio;}
     // Retail stencil shadow volumes; bloom blur rounds (horizontal + vertical).
     bool shadowVolumes=true;
     unsigned bloomBlurRounds=2;
@@ -71,11 +79,12 @@ struct RenderQuality {
     }
 #ifdef MKW_RENDER_QUALITY_C3D
     // True when bounds b placed by transform t are too small to draw from camera.
-    bool tooSmall(const Bounds& b,const C3D_Mtx& t,Vec3 camera) const {
-        if(minScreenRatio<=0)return false;
+    bool tooSmall(const Bounds& b,const C3D_Mtx& t,Vec3 camera,bool stereo=false) const {
+        const float ratio=tinyRatio(stereo);
+        if(ratio<=0)return false;
         // Compare squared radii/distances: this hot path runs for every
         // object and racer part. Preserve uncertain/borderline geometry.
-        if(!(minScreenRatio<1.f))return screenRatio(b,t,camera)<minScreenRatio;
+        if(!(ratio<1.f))return screenRatio(b,t,camera)<ratio;
         const Vec3 c=(b.minimum+b.maximum)*.5f,h=(b.maximum-b.minimum)*.5f;
         float scale2=0;
         for(unsigned col=0;col<3;++col){
@@ -85,7 +94,7 @@ struct RenderQuality {
         const Vec3 d{t.r[0].x*c.x+t.r[0].y*c.y+t.r[0].z*c.z+t.r[0].w-camera.x,
                      t.r[1].x*c.x+t.r[1].y*c.y+t.r[1].z*c.z+t.r[1].w-camera.y,
                      t.r[2].x*c.x+t.r[2].y*c.y+t.r[2].z*c.z+t.r[2].w-camera.z};
-        return dot(h,h)*scale2 < minScreenRatio*minScreenRatio*dot(d,d)*(1.f-1e-5f);
+        return dot(h,h)*scale2 < ratio*ratio*dot(d,d)*(1.f-1e-5f);
     }
     static float screenRatio(const Bounds& b,const C3D_Mtx& t,Vec3 camera){
         const Vec3 c=(b.minimum+b.maximum)*.5f,h=(b.maximum-b.minimum)*.5f;
@@ -99,6 +108,20 @@ struct RenderQuality {
                      t.r[2].x*c.x+t.r[2].y*c.y+t.r[2].z*c.z+t.r[2].w};
         const float radius=length(h)*scale,distance=length(w-camera);
         return distance>radius?radius/distance:1.f;
+    }
+    // Lighter 3D (diag::stereoShadowCull): the screenRatio below which a shadow
+    // volume is skipped, its bounds' sphere under 8 px across on the 240 px top
+    // screen at vertical FOV fovy (4 px radius = r/d * 120/tan(fovy/2); about 52
+    // sphere radii away at 60 degrees). The visible shadow is where the volume
+    // meets the ground: at most ~6 px wide (a box's footprint is under 0.71 of
+    // its diagonal), and seen that far from a race camera a few hundred units
+    // up, a pixel or two tall at half darkness. Off-centre it projects up to ~2x
+    // wider; still a sliver.
+    static float stereoShadowRatio(float fovy){return 4.f*std::tan(fovy*(3.14159265f/360.f))/120.f;}
+    // True when a volume with bounds b at t is skipped for ratio (0: never).
+    // Empty or unknown bounds always draw.
+    static bool shadowTooSmall(const Bounds& b,const C3D_Mtx& t,Vec3 camera,float ratio){
+        return ratio>0&&(b.maximum.x>b.minimum.x||b.maximum.y>b.minimum.y||b.maximum.z>b.minimum.z)&&screenRatio(b,t,camera)<ratio;
     }
 #endif
 };

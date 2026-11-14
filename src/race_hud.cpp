@@ -894,7 +894,7 @@ void RaceHud::drawOverlay(Renderer& renderer,const RaceItems& items,unsigned sta
     // Their position belongs to the fixed HUD camera, never the race camera.
     if(impl_->coinStack&&stage>=2&&!finished){
         CoinHudStack stack;stack.update(impl_->battle.points);
-        renderer.setScreenDepth(renderer.stereoLayer(stereo::HudLayer));
+        renderer.setScreenDepth(renderer.stereoLayer(stereo::RaceHudLayer));
         renderer.setSkinPalette(nullptr,0,12);renderer.setRigidPose(nullptr);
         for(unsigned i=0;i<stack.size();++i){const auto& c=stack.column(i);
             const auto transform=coinHudColumnTransform(c);
@@ -941,9 +941,9 @@ void RaceHud::drawOverlay(Renderer& renderer,const RaceItems& items,unsigned sta
         renderer.drawScreenSprite(texture,rect.x,rect.y,rect.w,rect.h,art.u,art.v,alpha,tint);
     };
     // Stereo (Mario Kart 7's layers): the ink and the name balloons sit at
-    // the depth they are anchored to; the HUD panes 4 px behind the screen;
-    // the countdown, GO, FINISH and the position come out of it.
-    const float hudDepth=renderer.stereoLayer(stereo::HudLayer);
+    // the depth they are anchored to; the HUD panes, the countdown, GO,
+    // FINISH and the position come out of the screen (RaceHudLayer).
+    const float hudDepth=renderer.stereoLayer(stereo::RaceHudLayer);
     // Original single-player BRCTR corner anchors and BRLYT pane sizes. 3DS is
     // 5:3: retain uniform glyph scaling and each corner's source safe margin.
     // Name balloons. Retail anchors kart pos + (0,120,0) (static init 0x807ea268),

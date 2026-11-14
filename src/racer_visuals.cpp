@@ -72,10 +72,14 @@ struct RacerVisuals::Impl {
     unsigned lowDrivers=0; // QA: Wii LOD drivers drawn by the last draw()
     std::array<Job,11> jobs;
     std::array<bool,11> queued{};
-    struct Frame {Impl* impl=nullptr;ViewFrustum view{};const RaceItems* items=nullptr;Vec3 viewer{};unsigned tick=0;bool open=false;Vec3 camera{};ClipFrustum world{};float fov=60;bool fullDetail=true;} frame;
+    struct Frame {Impl* impl=nullptr;ViewFrustum view{};const RaceItems* items=nullptr;Vec3 viewer{};unsigned tick=0;bool open=false;Vec3 camera{};ClipFrustum world{};float fov=60;bool fullDetail=true;bool stereoLod=false;float shadowRatio=0;} frame;
     void openFrame(const Renderer& renderer,const RaceItems& items,Vec3 viewer,unsigned tick,bool fullDetail=true){
         C3D_Mtx identity;Mtx_Identity(&identity);
         frame={this,renderer.viewFrustum(),&items,viewer,tick,true,renderer.cameraPosition()};frame.world=frame.view.model(identity);frame.fov=renderer.cameraFov();frame.fullDetail=fullDetail;
+        // Lighter 3D: opponents take the staged Reduced-detail LOD while the slider is up.
+        frame.stereoLod=diag::stereoOpponentLod&&renderer.stereoWanted();
+        // Lighter 3D: far opponents' shadow volumes are skipped (stereoShadowRatio).
+        frame.shadowRatio=diag::stereoShadowCull&&renderer.stereoWanted()?RenderQuality::stereoShadowRatio(frame.fov):0;
     }
     std::array<std::pair<Impl*,unsigned>,11> jobContext{};
     void prepareRacer(unsigned i);
@@ -283,9 +287,10 @@ void RacerVisuals::Impl::prepareRacer(unsigned i){
     if(dot(position-frame.viewer,position-frame.viewer)>25000.f*25000.f)return;
     const auto& quality=renderQuality();const Vec3 camera=frame.camera;
     const float lodScale=std::max(.01f,r->vehicle.maxScale());
-    out.lod=r->lod.update(dot(position-camera,position-camera)/(lodScale*lodScale),frame.fov,frame.fullDetail||!quality.racerLod||!r->driverLod||!r->bodyLod||!r->bodyLodRear||(VehicleLodLayout[r->choice->vehicle].handle&&(!r->handleLod||!r->handleLodRear)));
+    const bool stagedLod=quality.racerLod||frame.stereoLod;
+    out.lod=r->lod.update(dot(position-camera,position-camera)/(lodScale*lodScale),frame.fov,frame.fullDetail||!stagedLod||!r->driverLod||!r->bodyLod||!r->bodyLodRear||(VehicleLodLayout[r->choice->vehicle].handle&&(!r->handleLod||!r->handleLodRear)));
     // Opponent Detail Full: the Wii's rule, the driver alone (wiiLowDriver).
-    out.lowDriver=!quality.racerLod&&!frame.fullDetail&&diag::wiiDriverLod&&r->driverLod&&wiiLowDriver(dot(position-camera,position-camera));
+    out.lowDriver=!stagedLod&&!frame.fullDetail&&diag::wiiDriverLod&&r->driverLod&&wiiLowDriver(dot(position-camera,position-camera));
     // Reduced detail: parts too small to see are neither posed nor drawn.
     auto tiny=[&](const Model& model,const C3D_Mtx& matrix){return quality.tooSmall({model.minimum,model.maximum},matrix,camera);};
     auto animate=[&](DriverAnimation* bank,Model& model,Racer::Clock& clock,bool handle,const C3D_Mtx& matrix){
@@ -369,7 +374,9 @@ void RacerVisuals::draw(Renderer& renderer,const RaceItems& items,Vec3 viewer,un
     for(unsigned i=0;i<11;++i)if(auto* r=d.racers[i].get()){
         if(d.queued[i])jobWorker().finish(d.jobs[i]);else d.prepareRacer(i);
         const auto& out=d.prepared[i];
-        if(out.draw&&!r->ghost&&r->shadow&&d.frame.view.visible(*r->shadow,out.body))shadows[shadowCount++]={r->shadow.get(),out.body};
+        if(out.draw&&!r->ghost&&r->shadow&&d.frame.view.visible(*r->shadow,out.body)&&
+           !RenderQuality::shadowTooSmall({r->shadow->minimum,r->shadow->maximum},out.body,d.frame.camera,d.frame.shadowRatio))
+            shadows[shadowCount++]={r->shadow.get(),out.body};
     }
     // Submit all racers in one stencil batch: overlaps darken once. Resolve
     // before the racer models, so their own volumes cannot shade the casters.

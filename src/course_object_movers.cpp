@@ -88,7 +88,7 @@ void drawFlyer(ObjectDraw& d,Visual& v){
     C3D_Mtx m;
     if(castle){m=v.placement;m.r[0].w=p.x;m.r[1].w=p.y;m.r[2].w=p.z;}
     else m=orthonormal(v.heading,p,placementScale(v));
-    const bool far=v.low.model&&length(p-d.camera)>renderQuality().objectLowDistance;
+    const bool far=v.low.model&&length(p-d.camera)>renderQuality().objectLow(d.stereo);
     d.submit(far?v.low.model:v.main.model,m,{});
     if(v.shadow.model)d.shadow(v.shadow.model,m);
     drawn(v,m);

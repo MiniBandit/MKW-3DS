@@ -417,6 +417,10 @@ struct CourseObjects::Impl {
     float palmDistance=0,escalatorDistance=0;
     // Retail's FOV factor (min(fovy, 55) / 55) squared; 0: draw at any distance.
     float distanceScale=0;
+    // The recorded frame draws in stereo (read in begin, on the main thread).
+    bool stereo=false;
+    // ObjectDraw::shadowRatio for this frame, set at record time (begin).
+    float shadowRatio=0;
     bool beyond(Vec3 position,float limit) const {
         return distanceScale>0&&limit>0&&dot(position-camera,position-camera)*distanceScale>limit;
     }
@@ -617,20 +621,23 @@ void CourseObjects::Impl::begin(const Renderer& renderer,unsigned frameTick,Vec3
     assets.serial=renderer.frameSerial();
     const float fov=std::min(renderer.cameraFov(),55.f)/55.f;
     distanceScale=renderer.drawDistance?fov*fov:0;
+    stereo=diag::stereoObjectLod&&renderer.stereoWanted();
+    // This recorded frame's stereo, read here on the main thread: the object job may run later.
+    shadowRatio=diag::stereoShadowCull&&renderer.stereoWanted()?RenderQuality::stereoShadowRatio(renderer.cameraFov()):0;
 }
 // The sky pass precedes the object pass, which restarts the per-model
 // CPU-skin copies, exactly as drawSky then draw ran them.
 void CourseObjects::Impl::recordSky(){
     sky.clear();skyShadows.clear();
     if(!linkedReady)return;
-    ObjectDraw context{view,assets,tick,camera,course,scratch,skyShadows,sky,true,allocationReserve};
+    ObjectDraw context{view,assets,tick,camera,course,scratch,skyShadows,sky,true,allocationReserve};context.stereo=stereo;
     for(auto& v:visuals)if(skyObject(v))drawObject(context,v);
 }
 void CourseObjects::Impl::recordObjects(){
     objects.clear();water.clear();
     if(palm)for(const auto& matrix:palms)
         if(beyond({matrix.r[0].w,matrix.r[1].w,matrix.r[2].w},palmDistance))diag::tallyHidden("PalmTree");
-        else if(!renderQuality().tooSmall({palm->minimum,palm->maximum},matrix,camera))objects.records.push_back({ObjectDrawRecord::Plain,false,0,palm.get(),nullptr,0,0,0,0,0,matrix});
+        else if(!renderQuality().tooSmall({palm->minimum,palm->maximum},matrix,camera,stereo))objects.records.push_back({ObjectDrawRecord::Plain,false,0,palm.get(),nullptr,0,0,0,0,0,matrix});
     // Includes the children of paired escalators. Kinoko updates these transforms
     // after its 60 Hz step, including stops/reversals and the looping tread offset.
     // Query each frame so restart/map changes cannot leave stale scene pointers.
@@ -663,6 +670,8 @@ void CourseObjects::Impl::recordObjects(){
     assets.beginFrame();
     ObjectDraw context{view,assets,tick,camera,course,scratch,shadows,objects,false,allocationReserve};
     ObjectDraw waterContext{view,assets,tick,camera,course,scratch,shadows,water,false,allocationReserve};
+    context.stereo=waterContext.stereo=stereo;
+    context.shadowRatio=waterContext.shadowRatio=shadowRatio;
     // The static precull's one world-space frustum.
     C3D_Mtx identity;Mtx_Identity(&identity);
     const ClipFrustum worldView=view.model(identity);
@@ -931,6 +940,8 @@ void CourseObjects::drawSky(Renderer& renderer,unsigned tick,Vec3 camera){
 void ObjectDraw::shadow(ObjModel* m,const C3D_Mtx& transform,const Anim& anim){
     if(hidden||!renderQuality().shadowVolumes)return;
     if(!m||!m->model||!view.model(transform).intersects(m->bounds))return;
+    // Before the skin pass below, so a skipped skinned volume is not posed either.
+    if(RenderQuality::shadowTooSmall(m->bounds,transform,camera,shadowRatio))return;
     if(anim.clip>=0&&m->bank&&m->cpuSkin){
         // Reuse the deferred per-instance skin path, then move its posed
         // mesh into the stencil pass instead of the colour draw list.
@@ -984,7 +995,7 @@ void ObjectDraw::submit(ObjModel* m,const C3D_Mtx& transform,const Anim& source)
     const float step=float(renderQuality().animationStep);
     if(m->crowd&&step>0&&anim.clip>=0&&!anim.palette)anim.frame=std::floor(anim.frame/step)*step;
     if(!view.model(transform).intersects(anim.bounds?*anim.bounds:m->bounds))return;
-    if(renderQuality().tooSmall(anim.bounds?*anim.bounds:m->bounds,transform,camera))return;
+    if(renderQuality().tooSmall(anim.bounds?*anim.bounds:m->bounds,transform,camera,stereo))return;
     const ObjectBank* bank=m->bank.get();
     // GPU-skinned meshes hold bone-local positions: unanimated, they draw the bind pose.
     const bool posed=bank&&(anim.palette||anim.clip>=0||m->rigid||m->gpuSkin);

@@ -821,6 +821,16 @@ int main() {
     mkw::diag::liveLight=!exists("sdmc:/3ds/MKWiiDS/no-live-light.txt");mkw::diag::rearBake=!exists("sdmc:/3ds/MKWiiDS/no-rear-bake.txt");mkw::diag::liveOpponents=kQa&&exists("sdmc:/3ds/MKWiiDS/live-opponents.txt");
     mkw::diag::lightZones=!exists("sdmc:/3ds/MKWiiDS/no-light-zones.txt");report(mkw::diag::lightZones?"light zones on":"light zones off");
     mkw::diag::wiiDriverLod=!exists("sdmc:/3ds/MKWiiDS/no-wii-driver-lod.txt");report(mkw::diag::wiiDriverLod?"wii driver lod on":"wii driver lod off");
+    mkw::diag::stereoSixty=!exists("sdmc:/3ds/MKWiiDS/no-stereo-60.txt");
+    mkw::diag::stereoOpponentLod=!exists("sdmc:/3ds/MKWiiDS/no-stereo-opponent-lod.txt");
+    mkw::diag::stereoEyeCull=!exists("sdmc:/3ds/MKWiiDS/no-stereo-eye-cull.txt");report(mkw::diag::stereoEyeCull?"stereo eye cull on":"stereo eye cull off");
+    mkw::diag::stereoObjectLod=!exists("sdmc:/3ds/MKWiiDS/no-stereo-object-lod.txt");report(mkw::diag::stereoObjectLod?"stereo object lod on":"stereo object lod off");
+    mkw::Texture::stereoSmallAllowed=!exists("sdmc:/3ds/MKWiiDS/no-stereo-small-textures.txt");
+    mkw::diag::stereoShadowCull=!exists("sdmc:/3ds/MKWiiDS/no-stereo-shadow-cull.txt");report(mkw::diag::stereoShadowCull?"stereo shadow cull on":"stereo shadow cull off");
+    mkw::diag::stereoShadowRects=!exists("sdmc:/3ds/MKWiiDS/no-stereo-shadow-rects.txt");report(mkw::diag::stereoShadowRects?"stereo shadow rects on":"stereo shadow rects off");
+    if(FILE* f=fopen("sdmc:/3ds/MKWiiDS/stereo-strength.txt","r")){float s=0;if(fscanf(f,"%f",&s)==1&&s>=.25f&&s<=2.f)mkw::stereo::DepthStrength=s;fclose(f);}
+    {char line[112];snprintf(line,sizeof line,"stereo: 60 fps %s, opponent lod %s, small textures %s, strength %.2f",mkw::diag::stereoSixty?"on":"off",
+        mkw::diag::stereoOpponentLod?"on":"off",mkw::Texture::stereoSmallAllowed?"on":"off",double(mkw::stereo::DepthStrength));report(line);}
     report(mkw::diag::liveLight?"live light on":"live light off");report(mkw::diag::rearBake?"rear bake on":"rear bake off");report(mkw::diag::liveOpponents?"live opponents on":"live opponents off");
 #ifndef MKW_RELEASE
     mkw::loadprof::data.on=kQa;
@@ -848,6 +858,7 @@ int main() {
         renderer.setSliderOverride(slider);
         LOGF("stereo capable slider_override=%.2f",slider);
     }else report("stereo unavailable (2D model)");
+    report(renderer.wideCapable()?"top screen: 800px Mode available":"top screen: 400px only");
     // secondCore: see pipelineFrames above.
     if(!secondCore)report("Old 3DS: race frames on core 0");
     // DIAG: memory latency and core-1 share, once, when running as an Old 3DS (mkw/hw_probe.hpp).
@@ -1229,6 +1240,8 @@ int main() {
             return result;
         };
         while(aptMainLoop()){
+            // 800px Mode follows the Settings page live (never with bloom).
+            renderer.wideSetting=menu.settings.wide800&&!menu.settings.bloom;
             if(selectionSave&&selectionSave->done()){
                 menu.saveFailed=!selectionSave->ok;
                 if(selectionSave->ok)licenseSaves[selectionSave->slot]=selectionSave->value;
@@ -2705,9 +2718,9 @@ int main() {
             if(fullRace&&!loadBottomScreen())return false;stage("bottom screen");
             moveCourseTexturesToVram();stage("texture VRAM transfer");
             if(kQa){const auto& q=mkw::renderQuality();
-                snprintf(line,sizeof line,"settings in race: texture %s (halved %u), dynamic shadows %s (player target %d), bloom %s, opponents %s",
+                snprintf(line,sizeof line,"settings in race: texture %s (halved %u), dynamic shadows %s (player target %d), bloom %s, opponents %s, 800px %s",
                          menu.settings.textureQuality?"Low":"High",q.halvedTextures,menu.settings.dynamicShadows?"On":"Off",int(renderer.playerShadowReady()),
-                         renderer.bloomEnabled?"On":"Off",q.racerLod?"Low":"Full");report(line);mkw::renderQuality().halvedTextures=0;}
+                         renderer.bloomEnabled?"On":"Off",q.racerLod?"Low":"Full",renderer.wideSetting?"On":"Off");report(line);mkw::renderQuality().halvedTextures=0;}
             mkw::pack::cacheReads(true);
             resetRaceSystems(true);mkw::pack::cacheReads(false);if(trackLoadFailed)return false;stage("grid and opponents");
             if(fullRace){moveRaceTexturesToVram(since);stage("race texture VRAM transfer");}
@@ -2970,7 +2983,7 @@ int main() {
     // 30 FPS. New 3DS and New 2DS XL present at 60, or at 30 while the 3D
     // slider is up (stereo draws every frame twice). Dual-screen Intro also
     // presents every two ticks; its camera and simulation still step at 60 Hz.
-    auto raceTicksPerFrame=[&]{return mkw::racePresentationTicks(new3ds,renderer.stereoWanted(),fullRace&&intro.active());};
+    auto raceTicksPerFrame=[&]{return mkw::racePresentationTicks(new3ds,renderer.stereoWanted(),fullRace&&intro.active(),mkw::diag::stereoSixty);};
     presentation.setTicksPerSlot(raceTicksPerFrame());
     LOGF("race presentation every %u ticks",presentation.ticksPerSlot());
     // accumulator: simulation ticks owed (1 = 1/60 s). Races owe one per top-screen
@@ -3016,6 +3029,7 @@ int main() {
     // From here the game writes into its folder: exists() opens files again.
     bootListed=false;bootNames.clear();bootNames.shrink_to_fit();
     while(aptMainLoop()){
+        renderer.wideSetting=menu.settings.wide800&&!menu.settings.bloom;
         // DIAG: report the iteration that ended the intro or reached GO, then three more.
         {const auto now=mkw::diag::iterationBegin();
          static int lastStage=-1;const auto* raceManager=K::System::RaceManager::Instance();

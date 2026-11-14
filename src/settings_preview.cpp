@@ -411,19 +411,29 @@ void SettingsPreview::begin(Renderer& renderer,const MenuState& state){
   renderer.requestBloom(previewBloom(),Window);m.bloomUsed=m.bloomFrame=true;
  }
  const auto view=viewFor(m.lift);
+ // 3D: the racer (view depth EyeDistance-RacerZ) on the screen plane, as
+ // races put the kart near it, and the road behind it. Without this the
+ // reference plane fell at the race camera's ratio of the target distance and
+ // the racer stood well in front of the screen.
+ renderer.setStereoSubject(stereo::Race,(EyeDistance-RacerZ)/stereo::Race.levelRatio);
  renderer.begin(view.eye,view.target,view.up);
 }
 void SettingsPreview::draw(Renderer& renderer,const MenuState& state,const UiTransitionView&){
  if(state.page!=UiPage::Settings)return;
  auto& m=*impl_;const auto& o=state.settings;
  drawFrame(renderer);
- const unsigned row=std::min(state.cursor,3u);
+ // 800px Mode (row 4) shows the plain racer: the whole top screen is the sample.
+ const unsigned row=std::min(state.cursor,4u);
  if(!m.roadResident())return;
  if(row==0){drawRoad(renderer,o.textureQuality?*m.standard:*m.high,state.age);return;}
  // The other samples: the racer on the road at the chosen quality.
  if(!m.groundReady()){drawRoad(renderer,o.textureQuality?*m.standard:*m.high,state.age,.5f);return;}
  C3D_Mtx identity;Mtx_Identity(&identity);
  const Model& ground=o.textureQuality?*m.groundStandard:*m.groundHigh;
+ // 3D: the scene stays inside the window in both eyes (its road is exactly
+ // the window only in the centre view).
+ renderer.setScreenClip(true,X,Y,W,H);
+ struct EndClip {Renderer& r;~EndClip(){r.setScreenClip(false);}} endClip{renderer};
  renderer.setSkinPalette(nullptr,0,12);renderer.draw(ground,identity);
  auto& a=m.racer->assets;
  const C3D_Mtx chassis=chassisFor(m.lift,state.age);

@@ -71,7 +71,7 @@ Vec3 vec(const K::EGG::Vector3f& v){return {v.x,v.y,v.z};}
 Vec3 position(const C3D_Mtx& m){return {m.r[0].w,m.r[1].w,m.r[2].w};}
 bool named(const Visual& v,const char* name){return !std::strcmp(v.name,name);}
 C3D_Mtx liveMatrix(const K::Field::ObjectBase& object){return objectMatrix(object.transform(),object.scale());}
-// Beyond renderQuality().objectLowDistance a model's authored -low LOD replaces it.
+// Beyond renderQuality().objectLow (nearer in 3D) a model's authored -low LOD replaces it.
 int clip(const Tracks& t,const char* name){return t.model&&t.model->bank?t.model->bank->clip(name):-1;}
 int pattern(const Tracks& t,const char* name){return t.model&&t.model->bank?t.model->bank->pattern(name):-1;}
 int scroll(const Tracks& t,const char* name){return t.model&&t.model->bank?t.model->bank->scroll(name):-1;}
@@ -164,7 +164,7 @@ void drawGeneric(ObjectDraw& d,Visual& v){
         !static_cast<const K::Field::ObjectFlamePoleV*>(v.object)->modelVisible())return;
     const C3D_Mtx m=v.kinetic&&v.object?liveMatrix(*v.object):v.placement;
     const float frame=float(d.tick)*v.rate+v.phase;
-    const bool far=v.low.model&&length(position(m)-d.camera)>renderQuality().objectLowDistance;
+    const bool far=v.low.model&&length(position(m)-d.camera)>renderQuality().objectLow(d.stereo);
     const Tracks& t=far?v.low:v.main;
     Anim a=loopAt(t,frame);
     if(v.object&&v.object->id()==ObjectId::TownBridge)
@@ -230,7 +230,7 @@ void drawBeltCurve(ObjectDraw& d,Visual& v){
     const auto timing=BeltCurveTiming::fromSettings(v.geo->setting(1),v.geo->setting(2),v.geo->setting(3));
     const unsigned timer=K::System::RaceManager::Instance()->timer();
     const C3D_Mtx& m=v.placement;
-    const bool far=v.low.model&&length(position(m)-d.camera)>renderQuality().objectLowDistance;
+    const bool far=v.low.model&&length(position(m)-d.camera)>renderQuality().objectLow(d.stereo);
     const float scroll=timing.scroll(d.tick,timer);
     const Tracks& belt=far?v.low:v.main;
     d.submit(belt.model,m,animAt(belt,scroll));
@@ -345,7 +345,7 @@ void drawHanachan(ObjectDraw& d,Visual& v){
 void drawPuchiPakkun(ObjectDraw& d,Visual& v){
     const auto& p=*static_cast<const K::Field::ObjectDokan*>(v.object);
     const auto m=liveMatrix(p);
-    const bool far=v.low.model&&length(position(m)-d.camera)>renderQuality().objectLowDistance;
+    const bool far=v.low.model&&length(position(m)-d.camera)>renderQuality().objectLow(d.stereo);
     const Tracks& tracks=far?v.low:v.main;
     d.submit(tracks.model,m,loopAt(tracks,p.animationFrame()));
     if(v.shadow.model)d.shadow(v.shadow.model,m);
@@ -823,7 +823,7 @@ void drawTruckWagon(ObjectDraw& d,Visual& v){
         if(!cart.isActive())continue;
         const C3D_Mtx m=liveMatrix(cart);
         if(d.partBeyond(position(m)))continue;
-        const bool far=v.low.model&&length(position(m)-d.camera)>renderQuality().objectLowDistance;
+        const bool far=v.low.model&&length(position(m)-d.camera)>renderQuality().objectLow(d.stereo);
         // Clip indices belong to each model's own bank; the LOD has no tire SRT.
         Anim a;a.clip=v.clips[far?2:0];a.frame=float(d.tick);a.srt=far?-1:v.clips[1];a.srtFrame=float(d.tick);
         d.submit(far?v.low.model:v.main.model,m,a);
@@ -936,7 +936,7 @@ void drawAurora(ObjectDraw& d,Visual& v){
 void drawTwistedWay(ObjectDraw& d,Visual& v){
     const auto& road=*static_cast<const K::Field::ObjectTwistedWay*>(v.object);
     const C3D_Mtx m=liveMatrix(road);
-    const bool far=v.low.model&&length(position(m)-d.camera)>renderQuality().objectLowDistance;
+    const bool far=v.low.model&&length(position(m)-d.camera)>renderQuality().objectLow(d.stereo);
     ObjModel* model=far?v.low.model:v.main.model;
     const ObjectBank* bank=beginPose(v,model);
     // picks (classifyObject): joint1, then joint3..joint20, of main then low.
@@ -1014,7 +1014,7 @@ void drawPress(ObjectDraw& d,Visual& v){
     float frame=0;
     if(state==3)frame=age<15.f?std::min(age*2.f,last):std::max(last+1.f-(age-15.f)*2.f,0.f);
     const C3D_Mtx m=liveMatrix(p);
-    const bool far=v.low.model&&length(position(m)-d.camera)>renderQuality().objectLowDistance;
+    const bool far=v.low.model&&length(position(m)-d.camera)>renderQuality().objectLow(d.stereo);
     d.submit(far?v.low.model:v.main.model,m,animAt(far?v.low:v.main,frame));
     if(v.shadow.model)d.shadow(v.shadow.model,m);
 }

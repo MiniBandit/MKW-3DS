@@ -467,7 +467,7 @@ public:
   // is preloaded once: the full list ran past the 128-glyph cap, so Settings
   // never loaded "F", "R" or "p" and drew "Opponent Detail: educed".
   const bool preload=!fixed&&transition&&transition->preload;
-  if(preload)value="0123456789% Change Miis Erase License LED: Off Items + Events Drifts Brightness Texture Quality High Low Dynamic Shadows On Bloom Opponent Detail Full";
+  if(preload)value="0123456789% Change Miis Erase License LED: Off Items + Events Drifts Brightness Texture Quality High Low Dynamic Shadows On Bloom Opponent Detail Full 800px Mode";
   bool seen[256]{};
   unsigned indices[128]{},count=0;float widths[128]{},total=0;
   for(const unsigned char* ch=reinterpret_cast<const unsigned char*>(value);*ch&&count<128;++ch){
@@ -1010,13 +1010,14 @@ static void composeMenuImpl(const MenuState& s,const UiRaceView& race,std::vecto
  case UiPage::Settings:{
   // The Wii's Settings page (its buttons, background and music) with the
   // port's whole-game options. A, left and right switch the chosen row.
-  const char* variants[]={"Rumble","Network","ChannelInstall","ChannelInstall"};
-  const auto& o=s.settings;char captions[4][40];
+  const char* variants[]={"Rumble","Network","ChannelInstall","ChannelInstall","ChannelInstall"};
+  const auto& o=s.settings;char captions[5][40];
   std::snprintf(captions[0],sizeof captions[0],"Texture Quality: %s",o.textureQuality?"Low":"High");
   std::snprintf(captions[1],sizeof captions[1],"Dynamic Shadows: %s",o.dynamicShadows?"On":"Off");
   std::snprintf(captions[2],sizeof captions[2],"Bloom: %s",o.bloom?"On":"Off");
   std::snprintf(captions[3],sizeof captions[3],"Opponent Detail: %s",o.opponentDetail?"Low":"Full");
-  for(unsigned i=0;i<4;++i){auto p=control("OptionTopButton",variants[i],i);c.group(UiMenuRole::Choice,i,p,"settings_button_free");c.button("settings_button",i,p,captions[i]);}
+  std::snprintf(captions[4],sizeof captions[4],"800px Mode: %s",o.wide800?"On":"Off");
+  for(unsigned i=0;i<5;++i){auto p=control("OptionTopButton",variants[i],i);c.group(UiMenuRole::Choice,i,p,"settings_button_free");c.button("settings_button",i,p,captions[i]);}
   c.chrome("Settings");
   // The upper screen is only a live sample of the chosen row at its
   // current value (SettingsPreview); the rows below name the values.
@@ -1485,7 +1486,7 @@ MenuRect menuChoiceRect(const UiQuad& q,const MenuState& state){
  case UiPage::BattleStage:return {12,34.f+35.f*i,296,30};
  case UiPage::VSRules:return {0,32.f+27.f*i,304,25};
  case UiPage::BattleRules:return {0,42.f+29.f*i,304,27};
- case UiPage::Settings:return {12,34.f+45.f*i,296,38};
+ case UiPage::Settings:return {12,34.f+35.f*i,296,31}; // five rows above Back
  case UiPage::LicenseSettings:return {12,33.f+29.f*i,296,26}; // six rows above Back
  case UiPage::TeamConfirm:return {52,95,216,48};
  case UiPage::Confirm:return {72,83,176,80};

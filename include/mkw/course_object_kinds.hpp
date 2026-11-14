@@ -178,7 +178,12 @@ struct ObjectDraw {
     // Retail's squared draw distance and FOV factor for presenters that clip
     // each spawned part at its own position (partsClipped); 0 draws at any distance.
     float partLimit=0,partScale=0;
+    // Lighter 3D: shadow volumes whose bounds span a screenRatio below this are
+    // skipped (RenderQuality::stereoShadowRatio); 0 in 2D.
+    float shadowRatio=0;
     bool partBeyond(Vec3 p)const{return partScale>0&&partLimit>0&&dot(p-camera,p-camera)*partScale>partLimit;}
+    // This frame draws in stereo (CourseObjects::begin): RenderQuality::objectLow/tinyRatio.
+    bool stereo=false;
     void submit(ObjModel* model,const C3D_Mtx& transform,const Anim& anim);
     // -shadow meshes are stencil shadow volumes, resolved after all objects.
     void shadow(ObjModel* model,const C3D_Mtx& transform,const Anim& anim={});

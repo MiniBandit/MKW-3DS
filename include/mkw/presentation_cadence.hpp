@@ -3,9 +3,10 @@
 
 namespace mkw {
 // Intro draws both screens from the authored 60 Hz camera; budget two ticks
-// per presentation without slowing animation or simulation.
-constexpr uint32_t racePresentationTicks(bool new3ds,bool stereo,bool intro){
-    return intro||!new3ds||stereo?2u:1u;
+// per presentation without slowing animation or simulation. stereoSixty: New 3DS
+// stereo presents every tick too (its lighter 3D: race_visuals' stereo cuts).
+constexpr uint32_t racePresentationTicks(bool new3ds,bool stereo,bool intro,bool stereoSixty=false){
+    return intro||!new3ds||(stereo&&!stereoSixty)?2u:1u;
 }
 // One presentation per slot of source ticks: 1 tick (60 FPS, New 3DS in 2D) or
 // 2 ticks (30 FPS: Old 3DS, which cannot present every tick and would otherwise
