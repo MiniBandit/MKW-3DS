@@ -130,6 +130,9 @@ keep your licenses, records, ghosts and settings from an earlier version, copy
 `sd:/3ds/MKWiiDS/`. Delete `sd:/3ds/mkw-3ds/` and the old title in FBI if you no
 longer want them.
 
+You can tell 1.1.0 or later in the HOME Menu: its banner shows Funky Kong on
+the Flame Runner and plays the Disc Channel jingle.
+
 See the [releases](https://github.com/ethanseagull/MarioKartWiiDS/releases) for what's new.
 
 ## Controls
