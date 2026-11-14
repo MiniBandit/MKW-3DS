@@ -91,7 +91,7 @@ unsigned MenuState::count()const{
  switch(page){
  case UiPage::License:return 4;
  case UiPage::Drift:case UiPage::VSMode:return 3;
- case UiPage::Settings:return 5;
+ case UiPage::Settings:return 6;
  case UiPage::LicenseSettings:return 6;
  case UiPage::VSRules:return 7;
  case UiPage::BattleRules:return 6;
@@ -202,7 +202,7 @@ void MenuState::confirmRaceMii(unsigned weight,unsigned character){
 
 void MenuState::toggleSetting(unsigned row){
  // Old 3DS: every setting is fixed (Texture Quality Low, Dynamic Shadows,
- // Bloom Off, Opponent Detail Low, 800px Mode Off).
+ // Bloom Off, Opponent Detail Low, 800px Mode Off, Minimap 30fps).
  if(old3dsSettings){unavailable=true;return;}
  switch(row){
  case 0:settings.textureQuality=settings.textureQuality?0:1;break;
@@ -210,6 +210,7 @@ void MenuState::toggleSetting(unsigned row){
  case 2:settings.bloom=!settings.bloom;break;
  case 3:settings.opponentDetail=settings.opponentDetail?0:1;break;
  case 4:settings.wide800=!settings.wide800;break;
+ case 5:settings.minimap60=!settings.minimap60;break;
  default:break;
  }
 }

@@ -422,7 +422,8 @@ void SettingsPreview::draw(Renderer& renderer,const MenuState& state,const UiTra
  if(state.page!=UiPage::Settings)return;
  auto& m=*impl_;const auto& o=state.settings;
  drawFrame(renderer);
- // 800px Mode (row 4) shows the plain racer: the whole top screen is the sample.
+ // 800px Mode (row 4) and Minimap (row 5, a race's lower screen) show the plain
+ // racer: the whole top screen is the sample.
  const unsigned row=std::min(state.cursor,4u);
  if(!m.roadResident())return;
  if(row==0){drawRoad(renderer,o.textureQuality?*m.standard:*m.high,state.age);return;}

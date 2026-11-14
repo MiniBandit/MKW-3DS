@@ -1697,7 +1697,7 @@ int main() {
     if((kQa&&exists("sdmc:/3ds/MKWiiDS/menu-test.txt"))){
         struct Snapshot {const char* name;mkw::UiPage page;unsigned cursor;mkw::UiEngineClass engine=mkw::UiEngineClass::CC150;int flip=-1;};
         const Snapshot pages[]={{"strap",mkw::UiPage::Strap,0},{"license",mkw::UiPage::License,0},{"class",mkw::UiPage::EngineClass,1},{"title",mkw::UiPage::Title,0},{"main",mkw::UiPage::MainMenu,0},{"single-player",mkw::UiPage::Mode,0},{"character",mkw::UiPage::Character,8},{"vehicle",mkw::UiPage::Vehicle,0},{"drift",mkw::UiPage::Drift,1},{"cup",mkw::UiPage::Cup,0},{"course",mkw::UiPage::Course,0},{"confirm",mkw::UiPage::Confirm,0},{"pause",mkw::UiPage::Pause,0},
-            {"vs-mode",mkw::UiPage::VSMode,0},{"vs-rules",mkw::UiPage::VSRules,0},{"battle-mode",mkw::UiPage::BattleMode,0},{"battle-cup",mkw::UiPage::BattleCup,0},{"battle-stage",mkw::UiPage::BattleStage,0},{"team-confirm",mkw::UiPage::TeamConfirm,0},{"drift-help",mkw::UiPage::DriftHelp,0},{"settings",mkw::UiPage::Settings,0},{"settings-bloom",mkw::UiPage::Settings,2},{"settings-texture-standard",mkw::UiPage::Settings,0,mkw::UiEngineClass::CC150,0},{"settings-shadows",mkw::UiPage::Settings,1},{"settings-shadows-off",mkw::UiPage::Settings,1,mkw::UiEngineClass::CC150,1},{"settings-bloom-off",mkw::UiPage::Settings,2,mkw::UiEngineClass::CC150,2},{"settings-detail",mkw::UiPage::Settings,3},{"settings-detail-reduced",mkw::UiPage::Settings,3,mkw::UiEngineClass::CC150,3},{"license-option",mkw::UiPage::License,4},{"license-settings",mkw::UiPage::LicenseSettings,0},{"erase-license",mkw::UiPage::EraseLicense,1},{"quit-confirm",mkw::UiPage::QuitConfirm,1},
+            {"vs-mode",mkw::UiPage::VSMode,0},{"vs-rules",mkw::UiPage::VSRules,0},{"battle-mode",mkw::UiPage::BattleMode,0},{"battle-cup",mkw::UiPage::BattleCup,0},{"battle-stage",mkw::UiPage::BattleStage,0},{"team-confirm",mkw::UiPage::TeamConfirm,0},{"drift-help",mkw::UiPage::DriftHelp,0},{"settings",mkw::UiPage::Settings,0},{"settings-bloom",mkw::UiPage::Settings,2},{"settings-texture-standard",mkw::UiPage::Settings,0,mkw::UiEngineClass::CC150,0},{"settings-shadows",mkw::UiPage::Settings,1},{"settings-shadows-off",mkw::UiPage::Settings,1,mkw::UiEngineClass::CC150,1},{"settings-bloom-off",mkw::UiPage::Settings,2,mkw::UiEngineClass::CC150,2},{"settings-detail",mkw::UiPage::Settings,3},{"settings-detail-reduced",mkw::UiPage::Settings,3,mkw::UiEngineClass::CC150,3},{"settings-minimap",mkw::UiPage::Settings,5},{"settings-minimap-60",mkw::UiPage::Settings,5,mkw::UiEngineClass::CC150,5},{"license-option",mkw::UiPage::License,4},{"license-settings",mkw::UiPage::LicenseSettings,0},{"erase-license",mkw::UiPage::EraseLicense,1},{"quit-confirm",mkw::UiPage::QuitConfirm,1},
             {"vehicle-karts",mkw::UiPage::Vehicle,0,mkw::UiEngineClass::CC50},{"vehicle-bikes",mkw::UiPage::Vehicle,0,mkw::UiEngineClass::CC100}};
         bool snapshotsOnly=false;
         if(FILE* f=fopen("sdmc:/3ds/MKWiiDS/menu-test.txt","r")){char mode[24]{};if(fscanf(f,"%23s",mode)==1)snapshotsOnly=!strcmp(mode,"snapshots");fclose(f);}
@@ -1744,6 +1744,7 @@ int main() {
             if(page.flip==1)menu.settings.dynamicShadows=false;
             if(page.flip==2)menu.settings.bloom=false;
             if(page.flip==3)menu.settings.opponentDetail=1;
+            if(page.flip==5)menu.settings.minimap60=true;
             if(page.page==mkw::UiPage::Vehicle||page.page==mkw::UiPage::Drift||page.page==mkw::UiPage::Cup||page.page==mkw::UiPage::Confirm){menu.selection.driver=10;menu.selection.vehicle=page.page==mkw::UiPage::Vehicle?0:4;}
             menu.enter(page.page);menu.cursor=page.cursor;menu.advance(54);
             for(unsigned tick=0;tick<6;++tick){menu.advance(1);capture(page.name,menu,{},false);}
@@ -2840,11 +2841,12 @@ int main() {
     mkw::RacerVisuals::setReuse=mkw::RaceHud::setReuse=new3ds&&!exists("sdmc:/3ds/MKWiiDS/no-set-reuse.txt");
     report(mkw::RacerVisuals::setReuse?"set reuse on":"set reuse off");
     mkw::renderQuality().setReduced(!new3ds&&!(kQa&&exists("sdmc:/3ds/MKWiiDS/full-quality.txt")));
-    // New 3DS: the race's lower screen redraws every other frame (30 Hz); Old 3DS
-    // races run at 30 fps and draw it every frame. A/B: no-bottom-30hz.txt.
-    // DIAG bottom-half-rate.txt sets 2 on Old 3DS too.
-    mkw::renderQuality().bottomInterval=new3ds&&!exists("sdmc:/3ds/MKWiiDS/no-bottom-30hz.txt")?2:1;
-    if(kQa&&exists("sdmc:/3ds/MKWiiDS/bottom-half-rate.txt"))mkw::renderQuality().bottomInterval=2;
+    // New 3DS: the race's lower screen redraws every other frame (30 Hz) unless
+    // the Settings page's Minimap is 60fps (applyGameSettings); Old 3DS races run
+    // at 30 fps and draw it every frame. A/B: no-bottom-30hz.txt. DIAG
+    // bottom-half-rate.txt sets 2 on Old 3DS too, whatever the setting.
+    const bool bottomHalfRate=new3ds&&!exists("sdmc:/3ds/MKWiiDS/no-bottom-30hz.txt");
+    const bool bottomHalfRateForced=kQa&&exists("sdmc:/3ds/MKWiiDS/bottom-half-rate.txt");
     mkw::DriverAnimation::verifyLook=kQa&&exists("sdmc:/3ds/MKWiiDS/look-verify.txt");
     // Old 3DS Kinoko speed-ups (exact physics). Batched prism tests for a kart's wheels
     // and body hitboxes are off by default (in Azahar and on the PC they cost more
@@ -2900,6 +2902,7 @@ int main() {
         quality.halfLargeTextures=quality.reduced||menu.settings.textureQuality!=0;
         quality.racerLod=quality.reduced||racerLodFile||menu.settings.opponentDetail!=0;
         renderer.bloomEnabled=menu.settings.bloom;
+        quality.bottomInterval=bottomHalfRateForced||(bottomHalfRate&&!menu.settings.minimap60)?2:1;
     };
     applyGameSettings();mkw::UiSettings appliedSettings=menu.settings;
     // Crowds and animated item models drop to 30/15 Hz when frames run slow:
