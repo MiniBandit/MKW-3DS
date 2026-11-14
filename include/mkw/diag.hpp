@@ -141,11 +141,11 @@ unsigned deferredLogBytes();
 extern std::atomic<unsigned> deferredOpens;
 
 enum Pass : uint8_t {PassNone,PassSky,PassCourse,PassScenery,PassOpponents,PassItems,PassPlayer,PassTranslucent,
-                     PassPlayerShadow,PassShadowVolumes,PassEffects,PassBloom,PassHud,PassBottom,PassBottomQuads,PassCount};
+                     PassPlayerShadow,PassShadowVolumes,PassEffects,PassBloom,PassHud,PassFlare,PassBottom,PassBottomQuads,PassCount};
 // bottom_quads is a leave-out only: the lower screen's target bind and
 // display transfer stay, its draws go (fixed cost = bottom - bottom_quads).
 inline constexpr const char* PassNames[PassCount]={"none","sky","course","scenery","opponents","items","player","translucent",
-                                                   "player_shadow","shadow_volumes","effects","bloom","hud","bottom","bottom_quads"};
+                                                   "player_shadow","shadow_volumes","effects","bloom","hud","lens_flare","bottom","bottom_quads"};
 inline constexpr unsigned PassPeriod=8;
 // Passes the vertex probe rotates through (those drawn as models).
 inline constexpr uint8_t ProbePasses[]={PassSky,PassCourse,PassScenery,PassOpponents,PassItems,PassPlayer,PassTranslucent};
@@ -156,6 +156,7 @@ struct PassStats {double delta=0,deltaSq=0,neighbours=0;unsigned samples=0;};
 struct PassState {
     LightLock lock;
     bool enabled=false;     // marker gpu-passes.txt or menu autoplay
+    bool noBottom=false;    // no-bottom-passes.txt: the rotation leaves out bottom and bottom_quads
     bool active=false;      // main thread: this frame is a profiled racing frame
     uint8_t skip=PassNone;  // main thread: the frame being recorded drops this pass
     uint8_t probe=PassNone; // main thread: the frame being recorded draws this pass twice (vertex probe)
@@ -400,7 +401,7 @@ inline void passFrame(bool racing){
     s.active=racing&&s.enabled;s.skip=PassNone;s.probe=PassNone;
     if(!s.active)return;
     ++s.frame;
-    if(s.frame%PassPeriod==PassPeriod/2)s.skip=uint8_t(PassSky+s.rotation++%(PassCount-1));
+    if(s.frame%PassPeriod==PassPeriod/2)s.skip=uint8_t(PassSky+s.rotation++%(s.noBottom?PassBottom-PassSky:PassCount-1));
     else if(s.frame%PassPeriod==0)s.probe=ProbePasses[s.probeRotation++%std::size(ProbePasses)];
 }
 inline bool passMarkers(){return passState.active;}

@@ -66,6 +66,10 @@ row leaves out the whole lower screen (no target bind, no draws, no display
 transfer); `bottom_quads` keeps the lower target and its display transfer
 (nothing is drawn on it, so its picture stays) and drops only its draws, so `bottom` minus `bottom_quads` is the lower
 screen's fixed cost and `bottom_quads` its draws and fill.
+`lens_flare` is the flare drawn after bloom. Outside the unattended benchmark,
+`gpu-passes.txt` turns the leave-out frames on for races you play yourself;
+`no-bottom-passes.txt` leaves `bottom` and `bottom_quads` out of the rotation,
+so the other passes get more samples.
 
 ## A/B switches
 

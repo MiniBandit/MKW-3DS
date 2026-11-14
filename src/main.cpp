@@ -670,6 +670,7 @@ int main() {
     // GPU pass leave-out (mkw/diag.hpp): unattended runs, or gpu-passes.txt.
     // no-gpu-passes.txt: no leave-out frames, so every racing frame draws every pass (cross-build comparisons).
     mkw::diag::passState.enabled=kQa&&(autoplay||exists("sdmc:/3ds/MKWiiDS/gpu-passes.txt"))&&!exists("sdmc:/3ds/MKWiiDS/no-gpu-passes.txt");
+    mkw::diag::passState.noBottom=kQa&&exists("sdmc:/3ds/MKWiiDS/no-bottom-passes.txt");
     using MenuStage=mkw::MenuProfile::Stage;
     uint64_t raceLoadStart=0;
     // QA: race load stage timing with file-open counts.
@@ -4622,7 +4623,7 @@ int main() {
             {MKW_SIM_SCOPE(EfFinish);mkw::jobWorker().finishAll();}
             if(fullRace&&!pauseImageFrame)lensFlare.update(renderer,physicsSteps);
             {MKW_SIM_SCOPE(EfBloom);renderer.applyBloom();}
-            if(fullRace&&!pauseImageFrame)lensFlare.draw(renderer);
+            if(fullRace&&!pauseImageFrame){renderer.diagPass(mkw::diag::PassFlare);lensFlare.draw(renderer);renderer.diagPass(mkw::diag::PassNone);}
 #ifndef MKW_RELEASE
             if(renderer.depthGrid){char rows[15][26];static unsigned gridStep=~0u;
                 if(physicsSteps/600!=gridStep&&renderer.takeDepthGrid(rows)){gridStep=physicsSteps/600;
