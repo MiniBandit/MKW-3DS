@@ -68,6 +68,14 @@ for source in [*(ROOT/'include/mkw').iterdir(),*(ROOT/'src').glob('*.cpp')]:
 absent=sorted(name for name in referenced if name not in in_paks and not (out/name).is_file())
 for name in absent[:40]:print(f'WARNING: {name} (named in {referenced[name]}) is not in the package',file=sys.stderr)
 if absent:print(f'WARNING: {len(absent)} of {len(referenced)} referenced assets are not in the package',file=sys.stderr)
+# Last: menu.pak and race.pak become MPK2, LZ4-compressed where it saves
+# space, on 512-byte sectors (tools/mpk2.cpp). Every pak tool above reads MPK1;
+# the game reads both.
+program=subprocess.check_output([sys.executable,str(ROOT/'tools/host_tools.py'),'mpk2'],cwd=ROOT,text=True).strip().splitlines()[-1]
+for archive in ('menu.pak','race.pak'):
+ packed=out/(archive+'.mpk2')
+ print(archive,subprocess.check_output([program,str(out/archive),str(packed)],text=True).strip())
+ packed.replace(out/archive);manifest[archive]=hashlib.sha256((out/archive).read_bytes()).hexdigest()
 (out/'CONTROLS.txt').write_text(controls);manifest['CONTROLS.txt']=hashlib.sha256((out/'CONTROLS.txt').read_bytes()).hexdigest()
 (out/'manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
 # This directory is generated package staging. Keep it as strict as the ZIP,
