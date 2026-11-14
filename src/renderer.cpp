@@ -1789,11 +1789,12 @@ void Renderer::drawNow(const Model& model,const Vertex* vertices,const C3D_Mtx& 
         // alpha_band; Peach Beach's sea sparkles): compare NEVER, lo+1 in
         // bits 16..23 and hi in 24..31 of animationFrames. Exact when the
         // material's alpha is final by stage 3 (alpha modes 3/6) and stages
-        // 4-5 are free; otherwise a one-sided A >= hi stands in.
+        // 4-5 are free; otherwise a one-sided A >= hi stands in. Old 3DS
+        // (reduced quality) keeps the one-sided test: fewer sparkles to blend.
         const bool alphaBand=(s.flags&1)&&(s.flags>>31)&&!((s.flags>>26)&7)&&((s.animationFrames>>16)&255);
         const uint8_t bandLow=uint8_t(((s.animationFrames>>16)&255)-1),bandHigh=uint8_t(s.animationFrames>>24);
         const bool starStage=additiveColor||((s.menuReflection!=7&&s.menuReflection!=8&&s.menuReflection!=14)&&o&&(o->flags&SubmeshOverride::Add));
-        const bool exactBand=alphaBand&&(((s.flags>>20)&7)==3||((s.flags>>20)&7)==6)&&!material&&!starStage&&!menuIconLayer_&&
+        const bool exactBand=alphaBand&&!renderQuality().reduced&&(((s.flags>>20)&7)==3||((s.flags>>20)&7)==6)&&!material&&!starStage&&!menuIconLayer_&&
             !inkBlack&&!model.nativeMiiLighting&&!(s.lighting&retail::Fog);
         // The previous drawn submesh's material and textures, without overrides
         // or a binder: its whole state is still bound, only UVs and draws differ.
