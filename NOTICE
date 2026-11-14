@@ -5,12 +5,14 @@ This source snapshot continues dudewhat's original Mario Kart Wii 3DS port
 and MiniBandit's continuation, with Redux development by epicreds. It does
 not carry the original repositories' commit history.
 
-The inherited LICENSE grants MIT terms for MiniBandit's contributions.
+MiniBandit's contributions up to and including release 0.7.0 are MIT
+(licenses/MIT-MiniBandit-up-to-0.7.0.txt); later work is under the MKW 3DS
+Licence (LICENSE).
 The inherited upstream notice states that dudewhat's original release did
 not include an explicit license; this snapshot does not expand that grant.
 The Redux author has chosen not to declare a separate license for the later
 Redux contributions at this time.
-Do not interpret the root MIT text as a blanket license for every file.
+Neither licence is a blanket license for every file.
 
 MiniBandit's work from 0.8.0 onward
 -----------------------------------

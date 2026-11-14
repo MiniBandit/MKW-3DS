@@ -169,4 +169,6 @@ Keep game assets, saves and system files out of pull requests.
 - **CFL contributors**: native Mii rendering
 - **Font Awesome** (CC BY 4.0): the LAN play handshake icon
 
-See [NOTICE](NOTICE) for licence details.
+## Licence
+
+From version 0.8.0 this project's own code is under the **MKW 3DS Licence** ([LICENSE](LICENSE)): you can read it, build it for yourself and send pull requests, but you can't publish it, publish changed versions or builds of it, or copy it into another port. Only official builds can race each other online. Versions up to 0.7.0 stay MIT. Other contributors' work and third-party parts keep their own terms: see [NOTICE](NOTICE).
