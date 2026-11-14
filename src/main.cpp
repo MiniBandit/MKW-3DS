@@ -95,6 +95,7 @@
 #include <mkw/ghost_record.hpp>
 #include <ctime>
 #include <mkw/menu_transition.hpp>
+#include <mkw/menu_touch.hpp>
 #include <mkw/menu_vehicle_icons.hpp>
 #include <mkw/menu_renderer.hpp>
 #include <mkw/menu_models.hpp>
@@ -1198,6 +1199,7 @@ int main() {
         auto last=svcGetSystemTick();double pending=0;
         int activeAudio=-1;
         mkw::MenuTransition transition;
+        mkw::MenuTouch touch;
         if(sectionFadeIn){sectionFadeIn=false;menu.age=menu.focusAge=0;transition.enterSection(menu);}
         else if(menu.page==mkw::UiPage::Pause){menu.age=menu.focusAge=0;transition.enterPage(menu);}
         std::vector<mkw::UiQuad> quads,topMenuQuads,bottomMenuQuads,visualResident,incomingResident;
@@ -1236,7 +1238,7 @@ int main() {
             if(mkw::SoundSystem::instance().start())menuSound.resetAfterEngineRestart();
             activeAudio=-1;visualKeyed=incomingKeyed=prefetched=false;revealed=false;
             stable=heldFrames=0;loadWaitStart=0;loadRecovery=false;
-            last=svcGetSystemTick();pending=0;hidScanInput();
+            last=svcGetSystemTick();pending=0;hidScanInput();touch.reset();
             return result;
         };
         while(aptMainLoop()){
@@ -1276,6 +1278,19 @@ int main() {
             // Diagnostic overlay: a pending license save discards input (below), so the
             // script waits instead of spending its next token on a dropped press.
             if(autoplay){input=autopilot->menu(menu,revealed&&!transition.active()&&!selectionSave&&!pendingRaceMiiConfirm);if(autopilot->finished())return leave(mkw::UiAction::Exit);}
+            {   // The touch screen: lower-screen buttons as last drawn (DIAG scripts: T:x,y).
+                touchPosition point{};bool touching=(hidKeysHeld()&KEY_TOUCH)!=0;if(touching)hidTouchRead(&point);
+                float x=point.px,y=point.py;
+                if(autoplay)touching=autopilot->touch(x,y);
+                const auto tap=touch.update(menu,bottomMenuQuads,touching,x,y);
+                if(kQa&&(tap.accept||tap.back||tap.right||tap.switchType||tap.point!=~0u))
+                    LOGF("menu touch page=%u cursor=%u at %.0f,%.0f: point=%d accept=%d back=%d right=%d y=%d revealed=%d",unsigned(menu.page),menu.cursor,x,y,int(tap.point),int(tap.accept),int(tap.back),int(tap.right),int(tap.switchType),int(revealed));
+                if(revealed){
+                    const bool keyDirection=input.up||input.down||input.left||input.right;
+                    input.right|=tap.right;input.accept|=tap.accept;input.back|=tap.back;input.switchType|=tap.switchType;
+                    if(tap.point!=~0u&&!keyDirection)input.point=tap.point;
+                }
+            }
             const auto beforeInput=menu;
             if(selectionSave||pendingRaceMiiConfirm)input={};
             const bool acceptedInput=!transition.active()&&!selectionSave&&!pendingRaceMiiConfirm;

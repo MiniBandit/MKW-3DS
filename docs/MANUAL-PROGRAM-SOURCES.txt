@@ -235,6 +235,7 @@ src/menu_renderer.cpp
 src/menu_sound.cpp
 src/menu_state.cpp
 src/menu_text_motion.cpp
+src/menu_touch.cpp
 src/menu_transition.cpp
 src/menu_ui.cpp
 src/menu_vehicle_icons.cpp

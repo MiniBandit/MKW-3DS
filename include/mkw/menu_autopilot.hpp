@@ -75,8 +75,14 @@ public:
   if((*token)[0]=='w'){if(++wait_>=unsigned(std::atoi(token->c_str()+1))){wait_=0;++cursor_;}return key;}
   if(!token->compare(0,5,"race:")||!token->compare(0,5,"auto:")||!token->compare(0,4,"cpu:")||*token=="skip"){if(++raceWait_>1800)fail("race did not start");return key;}
   if(*token=="end"){done_=true;return key;}
+  // T:x,y taps the lower screen at pixel x,y: four frames down, then lifted.
+  if(!token->compare(0,2,"T:")&&touchFrames_){if(++touchFrames_>5){touchFrames_=0;++cursor_;}return key;}
   if(!idle||state.page==UiPage::Race)return key;
   if(++gap_<8)return key;gap_=0;
+  if(!token->compare(0,2,"T:")){
+   if(std::sscanf(token->c_str()+2,"%f,%f",&touchX_,&touchY_)!=2){fail("bad touch token");return key;}
+   touchFrames_=1;return key;
+  }
   switch((*token)[0]){
   case 'A':key.accept=true;break;case 'B':key.back=true;break;case 'U':key.up=true;break;
   case 'D':key.down=true;break;case 'L':key.left=true;break;case 'R':key.right=true;break;
@@ -85,6 +91,8 @@ public:
   }
   ++cursor_;return key;
  }
+ // The stylus this frame (a T:x,y token); main reads it after menu().
+ bool touch(float& x,float& y)const{if(touchFrames_<1||touchFrames_>4)return false;x=touchX_;y=touchY_;return true;}
  // Race context, course intro: true once for a "skip" token (press A to skip it).
  bool introSkip(){
   if(!active_||done_)return false;
@@ -153,7 +161,7 @@ private:
  void fail(const char* reason){failed_=true;done_=true;failure_=reason;}
  std::vector<std::string> tokens_;
  size_t cursor_=0;unsigned wait_=0,gap_=0,menuFrames_=0,raceWait_=0,raceStart_=0,races_=0,bestAt_=0,forcedAt_=0;
- float best_=0.f;
+ float best_=0.f,touchX_=0,touchY_=0;unsigned touchFrames_=0;
  bool active_=false,done_=false,failed_=false,racing_=false,route_=false,leaving_=false,forced_=false,forceRequest_=false;
  const char* failure_="";const char* stuckReason_="";
  std::string stuck_;

@@ -22,7 +22,8 @@ inline constexpr std::array<UiMainMenuControl,7> UiMainMenuControls{{
  {0,-135.f,68.8f},{1,86.4f,68.8f},{1,135.f,68.8f},{1,183.6f,68.8f},
  {2,-172.8f,-93.2f},{2,-97.2f,-93.2f},{3,135.f,-93.2f}
 }};
-struct UiInput {bool up=false,down=false,left=false,right=false,accept=false,back=false,start=false,switchType=false;};
+// point: the touch screen highlights this cursor slot (~0u: none).
+struct UiInput {bool up=false,down=false,left=false,right=false,accept=false,back=false,start=false,switchType=false;unsigned point=~0u;};
 inline constexpr unsigned UiBattleWinCounts[]={2,3,4,5,8,10}; // original808a6d58
 inline constexpr unsigned UiVsRaceCounts[]={2,3,4,5,8,10,12,16,32};
 struct UiSelection {

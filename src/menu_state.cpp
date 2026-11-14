@@ -264,6 +264,12 @@ UiAction MenuState::input(UiInput key){
  if(cursor!=auxiliarySlot())cursor=std::min(cursor,count()-1);
  if(page==UiPage::Race){if(key.start)enter(UiPage::Pause);return UiAction::None;}
  if(page==UiPage::Pause&&(key.start||key.back)){enter(UiPage::Race);return UiAction::ResumeRace;}
+ // The stylus highlights the button under it, as the Wii pointer does.
+ if(key.point!=~0u&&key.point!=cursor&&(key.point==auxiliarySlot()||choiceVisible(key.point))){
+  const unsigned previousCursor=cursor;
+  if(key.point==auxiliarySlot())auxiliaryReturnCursor=cursor;
+  cursor=key.point;focusAge=0;uiFocusSelect(*this,previousCursor);unavailable=false;
+ }
  if(key.back){
   switch(page){
   case UiPage::Intro:enter(UiPage::Title);break;
