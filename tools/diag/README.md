@@ -74,7 +74,9 @@ Create an empty file in `sd:/3ds/MKWiiDS/` to turn one change off:
 `no-shadow-rect.txt`, `no-player-vram.txt`, `no-draw-distance.txt`,
 `no-spatial-course.txt`, `no-hud-shrink.txt`, `no-fakebox-rainbow.txt`,
 `no-fakebox-sparkle.txt` and `no-itembox-sparkle.txt` (Fake Item Box or Item Box sparkle groups share one noise offset), `no-sky-last.txt` (Rainbow
-Road always draws its sky first), `no-load-cache.txt`, `no-plain-uv.txt`,
+Road always draws its sky first), `no-mip-cap.txt` (course textures sample their
+whole cooked mip chain again instead of `include/mkw/course_mip_caps.hpp`'s caps:
+roads level 0, others the source's level count), `no-load-cache.txt`, `no-plain-uv.txt`,
 `no-fast-vertex.txt` (model draws without environment maps, projected
 textures, light textures or shadow passes go back to the vertex shader's
 general path; the `fast_vertex` column), `no-sparkle-pair.txt` (Item Box / Fake Item Box

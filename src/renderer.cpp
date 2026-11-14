@@ -13,6 +13,7 @@
 #include "mkw/render_quality.hpp"
 #include "mkw/coin_hud_camera.hpp"
 #include "mkw/bloom_math.hpp"
+#include "mkw/course_mip_caps.hpp"
 #include <c3d/texunit.h>
 // citro3d's context and its "already on the GPU" shadows (vendor/citro3d).
 extern "C" {
@@ -179,9 +180,21 @@ Texture::~Texture() { reset(); }
 void Texture::reset() {
     if(name[0]){auto& l=loadedTextures();LightLock_Lock(&l.lock);l.set.erase(this);LightLock_Unlock(&l.lock);name[0]=0;}
     if(ready) C3D_TexDelete(&gpu);
-    gpu={};noMipSampler={};materialSamplers={};ready=false;
+    gpu={};noMipSampler={};materialSamplers={};ready=false;mipCap=0xff;
+}
+namespace {
+// Texture::mipCap on a sampled view: no deeper than the cap, but never above the
+// view's first level (3D starts halvable textures at level 1: one level then).
+void capLevels(C3D_Tex& view,uint8_t cap){
+    if(Texture::mipCapOn&&cap<view.maxLevel)view.maxLevel=std::max<u8>(cap,view.minLevel);
+}
 }
 C3D_Tex* Texture::sampledGpu(){
+    if(mipCapOn&&mipCap<gpu.maxLevel&&renderQuality().mipmaps){
+        noMipSampler=gpu;
+        if(stereoSmall&&halvable)noMipSampler.minLevel=1;
+        capLevels(noMipSampler,mipCap);return &noMipSampler;
+    }
     if(stereoSmall&&halvable&&renderQuality().mipmaps){noMipSampler=gpu;noMipSampler.minLevel=1;return &noMipSampler;}
     if(renderQuality().mipmaps||!gpu.maxLevel)return &gpu;
     // A sampler view, not a smaller allocation. Keep gpu.maxLevel unchanged
@@ -202,6 +215,7 @@ C3D_Tex* Texture::sampledGpu(const MaterialSampler* s,unsigned unit){
     if(!renderQuality().mipmaps||s->minFilter<2)view.minLevel=view.maxLevel=0;
     // 3D: halvable textures start one level down (Texture::stereoSmall).
     if(stereoSmall&&halvable&&renderQuality().mipmaps){view.minLevel=1;view.maxLevel=std::max<u8>(view.maxLevel,1);}
+    capLevels(view,mipCap);
     return &view;
 }
 namespace {
@@ -238,6 +252,22 @@ bool rigidBones(const float* palette,unsigned bones,unsigned stride){
 }
 }
 namespace {
+// Texture::mipCap for a course texture "course_NN_MMM" (not skies), in the levels
+// of the chain as loaded: the cook may have scaled it down from its source and
+// Texture Quality: Low halves it again, so the source's cap moves up by as many
+// levels. A source shape that doesn't match keeps the whole chain.
+uint8_t courseMipCap(const char* name,const C3D_Tex& tex){
+    unsigned course=0,index=0;char tail=0;
+    if(!tex.maxLevel||!tex.width||!tex.height||std::sscanf(name,"course_%2u_%3u%c",&course,&index,&tail)!=2)return 0xff;
+    const auto& table=courseMipCaps::entries;
+    const auto* e=std::lower_bound(std::begin(table),std::end(table),std::pair<unsigned,unsigned>{course,index},
+        [](const courseMipCaps::Entry& a,const std::pair<unsigned,unsigned>& k){return a.course<k.first||(a.course==k.first&&a.index<k.second);});
+    if(e==std::end(table)||e->course!=course||e->index!=index)return 0xff;
+    const int shift=int(e->size&15)+3-__builtin_ctz(tex.width);
+    if(shift<0||int(e->size>>4)+3-__builtin_ctz(tex.height)!=shift)return 0xff;
+    const unsigned cap=e->maxLevel>shift?e->maxLevel-shift:0;
+    return cap<tex.maxLevel?uint8_t(cap):0xff;
+}
 // After a load from a file: name it and list it for Texture::forEachLoaded.
 bool listLoaded(Texture& t,const char* path,bool loaded){
     if(!loaded)return false;
@@ -245,6 +275,7 @@ bool listLoaded(Texture& t,const char* path,bool loaded){
     std::snprintf(t.name,sizeof t.name,"%s",base);
     if(char* dot=std::strrchr(t.name,'.'))*dot=0;
     if(!t.name[0])t.name[0]='?';
+    t.mipCap=courseMipCap(t.name,t.gpu);
     auto& l=loadedTextures();LightLock_Lock(&l.lock);l.set.insert(&t);t.serial=++l.serial;LightLock_Unlock(&l.lock);
     return true;
 }
@@ -765,6 +796,7 @@ void Renderer::readSwitches(){
     volumeRects=!exists("sdmc:/3ds/MKWiiDS/no-volume-rects.txt");
     DeferredWrites::directWrites=!exists("sdmc:/3ds/MKWiiDS/no-skin-direct.txt");
 #ifndef MKW_RELEASE
+    Texture::mipCapOn=!exists("sdmc:/3ds/MKWiiDS/no-mip-cap.txt");
     stateCacheVerify=exists("sdmc:/3ds/MKWiiDS/state-cache-verify.txt");
     drawTiming=exists("sdmc:/3ds/MKWiiDS/draw-timing.txt");
     cmdHash=exists("sdmc:/3ds/MKWiiDS/cmd-hash.txt");

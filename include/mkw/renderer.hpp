@@ -96,6 +96,13 @@ public:
     // Low loads them, without a reload (Renderer::execute). A/B (DIAG):
     // no-stereo-small-textures.txt.
     static inline bool stereoSmall=false,stereoSmallAllowed=true;
+    // The deepest mip level a course texture may sample (0xff: its whole chain),
+    // set when it loads from include/mkw/course_mip_caps.hpp. The PICA200 can
+    // pick a coarser level for whole patches of a surface (console only), which
+    // shows where levels differ: roads sample level 0 only, other course
+    // textures at most the levels their source has. Off (DIAG): no-mip-cap.txt.
+    uint8_t mipCap=0xff;
+    static inline bool mipCapOn=true;
     // Every texture currently loaded from a file, under a lock: f must not load
     // or reset textures. Race VRAM placement and DIAG texture-use.txt use it.
     static void forEachLoaded(const std::function<void(Texture&)>& f);
