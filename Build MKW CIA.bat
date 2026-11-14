@@ -5,6 +5,8 @@ rem devkitPro) is installed first, once you agree: tools\windows_setup.ps1.
 setlocal
 cd /d "%~dp0"
 
+rem Use the repo's portable C++ compiler only in this build's environment.
+if exist "%~dp0.toolchain\llvm-mingw\bin\clang++.exe" set "PATH=%~dp0.toolchain\llvm-mingw\bin;%PATH%"
 powershell -NoProfile -ExecutionPolicy Bypass -File "tools\windows_setup.ps1" -PythonOut "build\python-path.txt"
 if errorlevel 1 goto :end
 rem Programs installed just now aren't on this window's PATH yet: read it again.
@@ -27,10 +29,10 @@ if not exist ".venv\Scripts\python.exe" (%PY% -m venv .venv || goto :end)
 ".venv\Scripts\python.exe" -c "import sys; sys.exit(not ((3, 11) <= sys.version_info[:2] < (3, 15)))" || (echo The existing .venv uses an unsupported Python version. Delete .venv and rerun with Python 3.11 through 3.14. & goto :end)
 rem Install the packages whenever the build environment cannot import them
 rem (a marker file alone could say "installed" after a failed or partial install).
-".venv\Scripts\python.exe" -c "import numpy, PIL, Crypto" >nul 2>nul || (
+".venv\Scripts\python.exe" -c "import numpy, PIL, Crypto, unicorn" >nul 2>nul || (
     ".venv\Scripts\python.exe" -m pip install -r requirements.txt || goto :end
 )
-".venv\Scripts\python.exe" -c "import numpy, PIL, Crypto" || (echo The Python packages above did not load. Delete the .venv folder and run this again. If it happens again, share this message in an issue. & goto :end)
+".venv\Scripts\python.exe" -c "import numpy, PIL, Crypto, unicorn" || (echo The Python packages above did not load. Delete the .venv folder and run this again. If it happens again, share this message in an issue. & goto :end)
 rem Show the build and keep a copy in build-cia-log.txt. UTF-8 text on Windows too.
 set "PYTHONUTF8=1"
 set "MKW_DISC=%disc%"
