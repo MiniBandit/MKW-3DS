@@ -790,6 +790,18 @@ bool translateMaterial(const DrawSetting& d,Material& m){
         m.stage[2].constant={RegC1,ValNone};
         m.stage[3]=stage(Func::Add,{{Src::Buffer,C},{Src::Prev,C}},maskedFragments?Func::Modulate:Func::Replace,
                                            {{maskedFragments?Src::Buffer:Src::Prev,A},{Src::Prev,A}});
+    }else if(sameStages(d,{{0,{14,2,8,15},{0,0,0,1,0},{7,1,4,7},{0,0,0,1,0},12,0},
+                          {1,{4,6,8,0},{0,0,0,1,0},{0,7,7,7},{0,0,0,1,0},0,0}})){
+        // Cataquack lock-on !: CPREV = lerp(K0, C0, TEX0C), A = A0 * TEX0A;
+        // then C = CPREV + lerp(C1, C2, TEX1C). The sums are non-negative, so
+        // clamping after each PICA stage equals GX's one clamp.
+        m.vertex={RegC0,RegC0};m.lookup={RegK0,ValNone};
+        m.stages=3;
+        m.stage[0]=stage(Func::Interpolate,{{Src::Vertex,C},{Src::Lookup,C},{Src::Tex0,C}},Func::Modulate,{{Src::Tex0,A},{Src::Vertex,A}});
+        m.stage[1]=stage(Func::MultiplyAdd,{{Src::Tex1,C},{Src::Const,C},{Src::Prev,C}},Func::Replace,{{Src::Prev,A}});
+        m.stage[1].constant={RegC2,ValNone};
+        m.stage[2]=stage(Func::MultiplyAdd,{{Src::Tex1,IC},{Src::Const,C},{Src::Prev,C}},Func::Replace,{{Src::Prev,A}});
+        m.stage[2].constant={RegC1,ValNone};
     }else if(sameStages(d,{{0,{15,2,8,4},{0,0,0,1,0},{7,1,4,7},{0,0,0,1,0},0,0}})){
         // C = C0 * TEX0C + C1, A = A0 * TEX0A.
         m.vertex={RegC0,RegC0};m.lookup={RegC1,ValNone};
