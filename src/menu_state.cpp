@@ -430,7 +430,9 @@ UiAction MenuState::input(UiInput key){
  case UiPage::Vehicle:
   if(!vehicleUnlocked(vehicleChoice(cursor))||!raceVehicle(vehicleChoice(cursor))){unavailable=true;break;}
   selection.vehicle=vehicleChoice(cursor);
-  cpuRoster.vehicles(selection.vehicle,selection.mode==UiMode::VS?selection.vsVehicles:selection.mode==UiMode::Battle?selection.battleVehicles:2u,selection.mode==UiMode::Battle,unlocks(),cpuRandom);
+  // Retail engine-class buttons (USA 808a6fc8+192) also limit the CPUs:
+  // 50cc karts, 100cc bikes, unless Karts and Bikes is on.
+  cpuRoster.vehicles(selection.vehicle,selection.mode==UiMode::VS?selection.vsVehicles:selection.mode==UiMode::Battle?selection.battleVehicles:kartsOnly(*this)?0u:bikesOnly(*this)?1u:2u,selection.mode==UiMode::Battle,unlocks(),cpuRandom);
   enter(UiPage::Drift);break;
  case UiPage::DriftHelp:enter(UiPage::Drift);cursor=2;uiFocusReset(*this);break;
  case UiPage::Drift:selection.automatic=cursor==0;
