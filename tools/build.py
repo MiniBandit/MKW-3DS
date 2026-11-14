@@ -702,15 +702,14 @@ class Builder:
         self.banner_sound(art)
 
     def banner_sound(self, art):
-        """The HOME Menu sound is the game's Starting Grid jingle (Battle, Online,
-        Time Trials), sound/strm/o_Start2_32_fan.brstm: 3.824 s of 32 kHz PCM16,
-        resampled to 44.1 kHz and cut at the 3.000 s banner limit with a 0.2 s
-        fade. bannertool encodes it as a PCM16 CWAV, which replaces the sound
-        makebanner wrote next to the CGFX."""
-        import brstm_to_wav, wave
+        """The HOME Menu sound is the start of the Wii Disc Channel banner sound
+        (opening.bnr meta/sound.bin, 32 kHz stereo), resampled to 44.1 kHz and
+        cut at the 3.000 s banner limit with a 0.2 s fade. bannertool encodes it
+        as a PCM16 CWAV, which replaces the sound makebanner wrote next to the CGFX."""
+        import wii_banner_sound, wave
         temp = self.work / 'home-banner/sound'
         temp.mkdir(parents=True, exist_ok=True)
-        channels, rate, _, pcm = brstm_to_wav.decode((self.root / 'data/extracted/sound/strm/o_Start2_32_fan.brstm').read_bytes())
+        channels, rate, pcm = wii_banner_sound.decode((self.banner_work / 'archives/opening.bnr').read_bytes())
         with wave.open(str(temp / 'start.wav'), 'wb') as w:
             w.setnchannels(channels); w.setsampwidth(2); w.setframerate(rate); w.writeframes(pcm)
         trimmed = temp / 'banner.wav'
@@ -728,7 +727,7 @@ class Builder:
         rate, _, end = struct.unpack_from('<III', sound, info + 12)
         if encoding != 1 or loop or rate != 44100 or end > 132300:
             raise BuildError(f'Unexpected banner CWAV: encoding {encoding} loop {loop} rate {rate} samples {end}')
-        (art / 'banner-startgrid.bnr').write_bytes(release[:at] + sound)
+        (art / 'home-banner.bnr').write_bytes(release[:at] + sound)
 
     # -- compile ----------------------------------------------------------
 
@@ -950,7 +949,7 @@ class Builder:
         cia = out / f'MarioKartWiiDS-v{version}.cia'
         want = title_version()
         self.run('makerom', [self.tools['makerom'], '-f', 'cia', '-target', 't', '-exefslogo', '-elf', self.compile_dir / 'mkw-3ds.elf',
-                             '-rsf', self.work / 'package/external-sd.rsf', '-icon', art / 'icon.icn', '-banner', art / 'banner-startgrid.bnr',
+                             '-rsf', self.work / 'package/external-sd.rsf', '-icon', art / 'icon.icn', '-banner', art / 'home-banner.bnr',
                              '-ver', want, '-DAPP_REMASTER=0', '-o', cia])
         before = check_cia(cia, TITLE_ID, want)
         commit = subprocess.run(['git', '-C', str(REPO), 'rev-parse', 'HEAD'], capture_output=True, text=True).stdout.strip()
@@ -959,7 +958,7 @@ class Builder:
             'commit': commit + ('-dirty' if dirty else ''), 'version': version, 'title_id': TITLE_ID, 'title_version': want,
             'ticket_tmd_versions_before_fix': before, 'tmd_hashes_verified': True,
             'defines': ['MKW_RELEASE', 'KINOKO_QUIET'], 'cia_sha256': digest(cia), 'elf_sha256': digest(out / 'mkw-3ds.elf'),
-            'banner_sha256': digest(art / 'banner-startgrid.bnr'), 'disc_sha256': read_json(self.state_path)['disc_sha256']})
+            'banner_sha256': digest(art / 'home-banner.bnr'), 'disc_sha256': read_json(self.state_path)['disc_sha256']})
         self.cia_path = cia
 
     # -- after the converted data is deleted ------------------------------
@@ -1131,7 +1130,7 @@ class Builder:
              'sd-card/3ds/mkw-3ds/textures/drift-effects-bike.bin')
         add('menu-fit', self.fit_menu, R('build/host-tools/sprite-scales.json', 'sd-card/3ds/mkw-3ds/models/menu-texture-fit.json'),
             files=self.MENU_SCALE_SOURCES)
-        add('banner', self.banner, [self.banner_work / 'production/banner-startgrid.bnr', self.banner_work / 'production/icon.icn'])
+        add('banner', self.banner, [self.banner_work / 'production/home-banner.bnr', self.banner_work / 'production/icon.icn'])
         # Always rerun: both are incremental and pick up source changes.
         add('compile', self.compile, None)
         add('package', self.package, None, files=['tools/pak-order/*.txt'])

@@ -4,6 +4,8 @@
 MenuSingle BLIGHT/BLMAP is the light profile. The project retail generator
 supplies lm_0/lm_1; original grayscale metal maps and authored SRT are sampled.
 This is a fixed-view, fixed-pose authoring bake, not a dynamic Wii renderer.
+prepare_home_banner.py runs this module for its evaluator (raster lighting, light
+maps, view) and the decoded source images.
 """
 import hashlib
 import json
@@ -21,9 +23,9 @@ from cook_course_lighting import parse_blight,parse_blmap
 recipe=json.loads((WORK/'exports/scene_recipe.json').read_text())
 lighting=parse_blight((WORK/'source/menu_lighting/default.blight').read_bytes())
 lighting['textures']=parse_blmap((WORK/'source/menu_lighting/default.blmap').read_bytes())['textures']
-positions=np.load(WORK/'exports/mario_action_positions.npz')['good']
-normals=np.load(WORK/'exports/mario_action_normals.npz')['good']
-BAKE_FRAME=12
+positions=np.load(WORK/'exports/funky_action_positions.npz')['jump']
+normals=np.load(WORK/'exports/funky_action_normals.npz')['jump']
+BAKE_FRAME=0
 CAMERA=np.array([240.,200.,320.])
 TARGET=np.array([0.,62.,5.])
 unit=lambda x:x/np.maximum(1e-12,np.linalg.norm(x,axis=-1,keepdims=True))
@@ -139,8 +141,6 @@ def material_samples(folder,data,shape,weights,triangle,normal_triangle):
             stage_samples.append(np.ones((len(weights),4)));continue
         sampler=material['samplers'][tex_map]
         name=sampler['name']
-        if folder.name=='mario_1st' and name.startswith('mario_eye.'):
-            name=recipe['selectedFaceTexture']
         if name in light_maps:image=light_maps[name]
         else:
             image=IMAGE_CACHE[(folder.name,name)]
@@ -159,82 +159,9 @@ def material_samples(folder,data,shape,weights,triangle,normal_triangle):
 
 IMAGE_CACHE={}
 datasets={}
-for folder_name in ('mario_1st','standard_kart'):
+for folder_name in ('funky_pose','flame_runner'):
     folder=WORK/'exports'/folder_name
     data=json.loads((folder/'model.json').read_text());datasets[folder_name]=data
     for t in data['textures']:
         IMAGE_CACHE[(folder_name,t['name'])]=np.array(Image.open(folder/(t['file']+'.png')).convert('RGBA'))/255.
 
-
-def bake_model(key,folder_name,model_name,animated=False):
-    data=datasets[folder_name];folder=WORK/'exports'/folder_name
-    model=next(m for m in data['models'] if m['name']==model_name)
-    count=sum(len(s['vertices'])//3 for s in model['shapes'])
-    tiles=[];cursor=0
-    for shape in model['shapes']:
-        vs=np.array(shape['vertices'])
-        texture=data['textures'][shape['texture']]
-        if shape['material']=='mario_eye_tx':texture=next(t for t in data['textures'] if t['name']==recipe['selectedFaceTexture'])
-        for start in range(0,len(vs),3):
-            tri=vs[start:start+3]
-            span=np.ptp(tri[:,6:8],axis=0)*[texture['width'],texture['height']]
-            sizes=[max(16,min(128,1<<math.ceil(math.log2(max(1,float(v)+5))))) for v in span]
-            tiles.append(dict(shape=shape,tri=tri,sourceStart=cursor+start,w=sizes[0],h=sizes[1]))
-        cursor+=len(vs)
-    # Power-of-two rectangles, packed in descending-height shelves. Atlas
-    # texel density follows each face's source texture footprint; logos and
-    # long checker strips no longer get the same tiny cell as tiny polygons.
-    area=sum(t['w']*t['h'] for t in tiles)
-    size=max(max(max(t['w'],t['h']) for t in tiles),1<<math.ceil(math.log2(math.sqrt(area*1.15))))
-    while True:
-        x=y=shelf=0;fits=True
-        for t in sorted(tiles,key=lambda t:(-t['h'],-t['w'])):
-            if x+t['w']>size:x=0;y+=shelf;shelf=0
-            if y+t['h']>size:fits=False;break
-            t['x']=x;t['y']=y;x+=t['w'];shelf=max(shelf,t['h'])
-        if fits:break
-        size*=2
-    atlas=np.zeros((size,size,4),dtype=np.uint8)
-    atlas[:,:,3]=255
-    source_vertices=[];baked_uv=[];material_info=[];weight_cache={}
-    for shape in model['shapes']:
-        vs=np.array(shape['vertices'])
-        material_info.append(dict(name=shape['material'],triangles=len(vs)//3,
-                                  originalSamplers=[s['name'] for s in shape['sourceMaterial']['samplers']],
-                                  stages=len(shape['sourceMaterial']['gxMaterial']['tevStages'])))
-    for tile in tiles:
-        shape=tile['shape'];tri=tile['tri'];start=tile['sourceStart'];w=tile['w'];h=tile['h']
-        if (w,h) not in weight_cache:
-            yy,xx=np.mgrid[0:h,0:w]
-            w1=(xx.ravel()+.5-2.5)/(w-5);w2=(yy.ravel()+.5-2.5)/(h-5)
-            weights=np.column_stack((1-w1-w2,w1,w2));weights=np.maximum(weights,0);weights/=weights.sum(1,keepdims=True)
-            weight_cache[(w,h)]=weights
-        weights=weight_cache[(w,h)]
-        ns=normals[BAKE_FRAME,start:start+3] if animated else tri[:,3:6]
-        pixels=np.clip(np.rint(material_samples(folder,data,shape,weights,tri,ns)*255),0,255).astype(np.uint8).reshape(h,w,4)
-        bx,by=tile['x'],tile['y'];atlas[by:by+h,bx:bx+w]=pixels
-        coords=[(bx+2.5,by+2.5),(bx+w-2.5,by+2.5),(bx+2.5,by+h-2.5)]
-        baked_uv.extend([[x/size,1-y/size] for x,y in coords]);source_vertices.extend(tri.tolist())
-    image=OUT/(key+'.png');Image.fromarray(atlas).save(image)
-    item=dict(key=key,folder=folder_name,model=model_name,animated=animated,triangles=count,
-              atlas=image.name,atlasSize=size,sourceVertices=source_vertices,bakedUV=baked_uv,
-              materials=material_info,atlasOccupiedPixels=area,adaptiveSourceTexelDensity=True)
-    print('BAKED',key,count,'triangles',size,'pixels')
-    return item
-
-
-meshes=[bake_model('mario','mario_1st','model',True),
-        bake_model('kart_body','standard_kart','body'),
-        bake_model('tire_left','standard_kart','tire_fl'),
-        bake_model('tire_right','standard_kart','tire_fr')]
-scene=dict(recipe=recipe,meshes=meshes,bakeFrame=BAKE_FRAME,camera=CAMERA.tolist(),target=TARGET.tolist(),
-           view=view.tolist(),method='Original MenuSingle directional/ambient light, source Gouraud colours and normals, original TEV stages, exact project lm_0/lm_1 generator, original EnvCamera metal textures and SRT, baked into unique triangle UV atlases.',
-           limitations='Fixed camera and source good frame 12. Baked lighting/highlights do not move when the camera or animated limbs move. Floating-point TEV evaluation and atlas resampling, not byte-exact Wii framebuffer output. No invented lighting/AO/shader.',
-           bumper='Original source appearance; checker-only derivative is excluded.')
-(OUT/'baked_scene.json').write_text(json.dumps(scene,separators=(',',':'))+'\n')
-summary={k:v for k,v in scene.items() if k not in ('meshes','recipe')}
-summary['atlases']=[{k:m[k] for k in ('key','triangles','atlas','atlasSize','materials')} for m in meshes]
-summary['sources']={str(p.relative_to(WORK)):hashlib.sha256(p.read_bytes()).hexdigest()
-                    for p in (WORK/'source/menu_lighting').iterdir() if p.is_file()}
-summary['reference']='reference/original-menu-corrected-bumper.png'
-(OUT/'BAKE_RECEIPT.json').write_text(json.dumps(summary,indent=2)+'\n')

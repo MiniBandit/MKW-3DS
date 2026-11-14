@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Extract original Mario/Standard Kart banner inputs from an owner's RMCE01 disc.
+"""Extract the original banner inputs (Funky Kong on the Flame Runner, Race/Common.szs
+assembly data, MenuSingle lighting and the Disc Channel banner) from an owner's RMCE01 disc.
 
 This explicit banner-only stage does not compile the game or consume CGFX.
 """
@@ -12,12 +13,12 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[2]
 SOURCES = {
-    'mario-standard': 'Race/Kart/mdf_kart-mr.szs',
-    'menu-driver': 'Scene/Model/Driver.szs',
-    'menu-kart': 'Scene/Model/Kart/mr-allkart.szs',
+    'funky-flame': 'Race/Kart/la_bike-fk.szs',
     'common': 'Race/Common.szs',
     'menu-lighting': 'Scene/UI/MenuSingle.szs',
 }
+# Kept as is: its meta/sound.bin is the Disc Channel banner sound.
+RAW = {'opening': 'opening.bnr'}
 
 
 def main():
@@ -51,6 +52,13 @@ def main():
                         str(archive), str(output/'unpacked'/name)], check=True)
         receipt['sources'][source] = {'archive': str(archive.relative_to(output)),
                                      'sha256': hashlib.sha256(archive.read_bytes()).hexdigest()}
+    for name, source in RAW.items():
+        target = output / 'archives' / (name + Path(source).suffix)
+        subprocess.run([sys.executable, str(ROOT/'tools/extract_disc.py'),
+                        str(args.disc.resolve()), str(output/'inventory'),
+                        '--file', source, '--to', str(target)], check=True)
+        receipt['sources'][source] = {'archive': str(target.relative_to(output)),
+                                     'sha256': hashlib.sha256(target.read_bytes()).hexdigest()}
     (output/'banner-source-receipt.json').write_text(json.dumps(receipt, indent=2)+'\n')
     print('Extracted original banner model, animation, assembly and lighting inputs.')
     print('CGFX conversion and HOME packaging are separate steps.')

@@ -187,7 +187,7 @@ For the CIA, remove the `RomFs` block from a copy of
 then:
 
 ```sh
-makerom -f cia -target t -exefslogo -elf mkw-3ds.elf -rsf external-sd.rsf -icon icon.icn -banner banner-startgrid.bnr -ver 1040 -DAPP_REMASTER=0 -o MarioKartWiiDS-v1.1.0.cia
+makerom -f cia -target t -exefslogo -elf mkw-3ds.elf -rsf external-sd.rsf -icon icon.icn -banner home-banner.bnr -ver 1040 -DAPP_REMASTER=0 -o MarioKartWiiDS-v1.1.0.cia
 ```
 
 The title version is `major << 10 | minor << 4 | micro`, so 1.1.0 is 1040.

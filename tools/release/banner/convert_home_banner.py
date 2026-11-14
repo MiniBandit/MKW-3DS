@@ -20,13 +20,14 @@ class CompleteLogoSampler(TextureSampler):
  struct=struct.Struct('Iiifffff')
  def values(self):return (*super().values(),0.0)
 meta=json.loads((O/'production_data.json').read_text());gltf=gltflib.GLTF.load(str(O/'banner.gltf'),load_file_resources=True);cg=pc.convert_gltf(gltf);m=cg.data.models['COMMON']
+def is_joint(name):return name.startswith('driver_') and name[7:].isdigit()
 class MeshNode(StandardObject):
  struct=struct.Struct('iI')
  def __init__(self,name):self.name=name
  def values(self):return self.name,1
 # Restore source ordering, removing only the synthetic skin mesh node.
-old=list(m.skeleton.bones);order=['Scene root']+[n.name for n in gltf.model.nodes if n.name!='mario_mesh'];new={n:i for i,n in enumerate(order)}
-bones={n:m.skeleton.bones[n] for n in old};synthetic=bones['mario_mesh']
+old=list(m.skeleton.bones);order=['Scene root']+[n.name for n in gltf.model.nodes if n.name!='driver_mesh'];new={n:i for i,n in enumerate(order)}
+bones={n:m.skeleton.bones[n] for n in old};synthetic=bones['driver_mesh']
 for name,b in bones.items():
  if b.child is synthetic:b.child=synthetic.next_sibling
  if b.next_sibling is synthetic:b.next_sibling=synthetic.next_sibling
@@ -45,20 +46,21 @@ for name in order:
  b=bones[name];b.joint_id=new[name];b.parent_id=new[b.parent.name] if b.parent else -1;rows=trs_matrix(b);b.local=Matrix(*(Vector4(*r) for r in rows))
  # mode-1 skin vertices are already in bone-local space; retain the source
  # inverse bind for readers, while rigid skinning uses the current matrix.
- if name.startswith('mario_') and name[6:].isdigit():
+ if is_joint(name):
   scale=list(b.scale.values());inv=[[rows[j][i]/(scale[i]**2) for j in range(3)] for i in range(3)];b.inverse_base=Matrix(*(Vector4(*r,-sum(r[j]*rows[j][3] for j in range(3))) for r in inv))
 m.skeleton.bones['name'].billboard_mode=BillboardMode.YAxial
+BIKE_PARTS=('body_bob','handle','front_axle','swingarm','tire_f','tire_r')
 owners=[];vertex_count=0
 for mesh in m.meshes.data.contents:
  shape=m.shapes.data.contents[mesh.shape_index];ps=shape.primitive_sets.data.contents[0];related=[old[i] for i in ps.related_bones.data.contents];skin=ps.skinning_mode==2;owner=related[0]
  if skin:
-  assert owner=='mario_mesh';related=related[1:];ps.skinning_mode=1
+  assert owner=='driver_mesh';related=related[1:];ps.skinning_mode=1
  ps.related_bones.data.contents=[new[n] for n in related];mesh.mesh_node_name=owner;owners.append(owner)
- if owner.startswith('tire_') or owner=='body_bob':
-  # Original rim is a one-sided disc. Reuse its vertices for explicit back
-  # faces, because HOME ignores the high-level material cull enum. Not on
-  # Mario: doubling his skinned mesh's faces froze the HOME Menu on a New
-  # 3DS as soon as the banner was selected.
+ if owner in BIKE_PARTS:
+  # Bike parts are one-sided in places (rims, fenders). Reuse their vertices
+  # for explicit back faces, because HOME ignores the high-level material cull
+  # enum. Never on the skinned driver: doubling Mario's skinned mesh in the
+  # earlier banner froze the HOME Menu on a New 3DS as soon as it was selected.
   for primitive in ps.primitives.data.contents:
    for idx in primitive.index_streams.data.contents:
     assert int(idx.data_type)==5123
@@ -105,38 +107,51 @@ for name in m.materials:
   tx=cg.data.textures[texname];info=TexInfo(ReferenceTexture(tx));info.commands[0].head+=8*unit;info.commands[1].head+=8*unit+8;info.commands[2].head|=3|[0,2,3][sampler['wrapS']]<<12|[0,2,3][sampler['wrapT']]<<8
   mat.texture_mappers[unit]=info;mat.texture_coordinators[unit].source_coordinate=1
  mat.used_texture_coordinates_count=len(source['samplers'])
- if name.startswith('mario'):
+ if name=='funky_all_tx':
   # lm0 * raster.a + raster.rgb ; albedo * previous ; lm1 * mask + previous
   s0.src_rgb=0x004;s0.tev_ops=0x20;s0.combine_rgb=8
   s1.src_rgb=0x0F3;s1.combine_rgb=1;s1.src_alpha=0x003;s1.combine_alpha=1
   s2.src_rgb=0xFF5;s2.tev_ops=0x20;s2.combine_rgb=8;s2.src_alpha=0xEEE;s2.constant=ConstantColorSource.Constant1
  else:
+  # Flame Runner mat_body/mat_screen/mat_tire (GX): s0 rgb = tex0*ras, a = tex0.a*K;
+  # s1 rgb = prev + tex1*prev.a (body, screen) or prev + tex1*K (tyre).
+  stages=source['gxMaterial']['tevStages']
+  def konst(sel):
+   assert 16<=sel<=31,sel
+   return source['colorConstants'][(sel-16)%4]['rgba'[(sel-16)//4]]
   s0.src_rgb=0x003;s0.combine_rgb=1;s0.src_alpha=0x0E3;s0.combine_alpha=1
-  ka=source['colorConstants'][2]['a'] if name=='mat_body' else 1.;mat.material_color.constant[0]=ColorFloat(1,1,1,ka)
-  s1.src_rgb=0x0F4 if name=='mat_tire' else 0xFF4;s1.combine_rgb=2 if name=='mat_tire' else 8;s1.tev_ops=0 if name=='mat_tire' else 0x20
-  # PICA ADD is 2 (GX ADD enums differ).
+  mat.material_color.constant[0]=ColorFloat(1,1,1,konst(stages[0]['konstAlphaSel']))
   s1.src_alpha=0xEEE;s1.constant=ConstantColorSource.Constant1
+  if stages[1]['colorInC']==14:
+   k=konst(stages[1]['konstColorSel'])
+   if k==1:s1.src_rgb=0x0F4;s1.combine_rgb=2;s1.tev_ops=0
+   else:s1.src_rgb=0xFE4;s1.combine_rgb=8;s1.tev_ops=0;mat.material_color.constant[1]=ColorFloat(k,k,k,1)
+  else:
+   assert {stages[1]['colorInB'],stages[1]['colorInC']}=={8,1},stages[1]
+   s1.src_rgb=0xFF4;s1.combine_rgb=8;s1.tev_ops=0x20
 # Preserve vehicle periods while the 49-tick character track repeats independently.
-character_period=meta['frameCount'];total_ticks=math.lcm(360,character_period)
+character_period=meta['periodTicks'];total_ticks=math.lcm(360,character_period)
 anim=CANM();anim.name='COMMON';anim.target_animation_group_name='SkeletalAnimation';anim.frame_size=float(total_ticks);cg.data.skeletal_animations.add('COMMON',anim)
 def curve(keys,period=360):
  if max(v for _,v in keys)-min(v for _,v in keys)<5e-6:return float(keys[0][1])
  c=FloatAnimationCurve();c.start_frame=0.;c.end_frame=float(period);c.pre_repeat_method=c.post_repeat_method=RepeatMethod.Repeat;s=FloatSegment();s.start_frame=0.;s.end_frame=float(period);s.interpolation=InterpolationType.Linear;s.quantization=QuantizationType.StepLinear64;s.keys=[StepLinear64Key(float(t),float(v)) for t,v in keys];c.segments=[s];return c
 for name in order:
- if not (name in ('body_bob','mario_root') or name.startswith('tire_') or (name.startswith('mario_') and name[6:].isdigit())):continue
+ if not (name in ('body_bob','driver_root') or name in ('tire_f','tire_r') or is_joint(name)):continue
  b=bones[name];a=CANMBoneTransform();a.bone_path=name
  for pref,vals in [('scale',b.scale.values()),('rot',b.rotation.values()),('pos',b.position.values())]:
   for axis,v in zip('xyz',vals):setattr(a,pref+'_'+axis,float(v))
  if name=='body_bob':a.pos_y=curve([(i*10,.008*math.sin(i*math.pi/3)) for i in range(37)])
  elif name.startswith('tire_'):a.rot_x=curve([(0,-12*math.pi),(360,12*math.pi)])
- elif name!='mario_root':
-  j=int(name[6:]);nf=meta['frameCount']
+ elif name!='driver_root':
+  j=int(name[7:]);nf=meta['frameCount'];P=meta['periodTicks']
   for pref,src in [('scale',meta['scale']),('rot',meta['euler']),('pos',[[[row[3] for row in p] for p in frame] for frame in meta['poses']])]:
    for axis,k in zip('xyz',range(3)):
-    keys=[(f,src[f][j][k]) for f in range(nf)]+[(nf,src[0][j][k])];setattr(a,pref+'_'+axis,curve(keys,nf))
+    first=src[0][j][k];last=src[nf-1][j][k]
+    if pref=='rot':first+=2*math.pi*round((last-first)/(2*math.pi))  # close the loop without a spin
+    keys=[(f*P/nf,src[f][j][k]) for f in range(nf)]+[(P,first)];setattr(a,pref+'_'+axis,curve(keys,P))
  anim.member_animations_data.add(name,a)
 payload=pc.write(cg);assert len(payload)<512*1024,(len(payload),'CGFX size exceeds HOME budget');(O/'banner.cgfx').write_bytes(payload)
-receipt=dict(bytes=len(payload),limit=512*1024,vertices=vertex_count,triangles=sum(meta['counts'].values())+4+sum(v for k,v in meta['counts'].items() if k.startswith('tire_') or k=='body_bob'),bones=order,meshOwners=owners,animations=list(anim.member_animations_data),animationTicks=total_ticks,characterPeriodTicks=character_period,vehiclePeriodTicks=360,sourceFrameCount=meta['frameCount'],textureNames=list(cg.data.textures),sourceTRSError=meta['matrixReconstructionError'],materials={name:dict(offset=m.materials[name].offset,stages=[dict(rgb=s.src_rgb,alpha=s.src_alpha,op=s.tev_ops,rgbCombine=s.combine_rgb,alphaCombine=s.combine_alpha) for s in m.materials[name].fragment_shader.texture_combiners]) for name in m.materials},animationOffsets={n:anim.member_animations_data[n].offset for n in anim.member_animations_data},boneOffsets={n:bones[n].offset for n in order})
+receipt=dict(bytes=len(payload),limit=512*1024,vertices=vertex_count,triangles=sum(meta['counts'].values())+4+sum(v for k,v in meta['counts'].items() if k in BIKE_PARTS),bones=order,meshOwners=owners,animations=list(anim.member_animations_data),animationTicks=total_ticks,characterPeriodTicks=character_period,vehiclePeriodTicks=360,sourceFrameCount=meta['frameCount'],textureNames=list(cg.data.textures),sourceTRSError=meta['matrixReconstructionError'],materials={name:dict(offset=m.materials[name].offset,stages=[dict(rgb=s.src_rgb,alpha=s.src_alpha,op=s.tev_ops,rgbCombine=s.combine_rgb,alphaCombine=s.combine_alpha) for s in m.materials[name].fragment_shader.texture_combiners]) for name in m.materials},animationOffsets={n:anim.member_animations_data[n].offset for n in anim.member_animations_data},boneOffsets={n:bones[n].offset for n in order})
 mapper=m.materials['banner_logo_alpha'].texture_mappers[0]
 receipt['logoSampler']=dict(offset=mapper.sampler.offset,mapperOffset=mapper.offset,bytes=mapper.sampler.size(),param=mapper.commands[2].head,minFilter=mapper.sampler.min_filter,lodBias=0,textureFormat='RGBA4 single texture')
 receipt['shapes']=[dict(owner=mesh.mesh_node_name,streamOffset=m.shapes.data.contents[mesh.shape_index].vertex_attributes.data.contents[0].offset,primitiveOffset=m.shapes.data.contents[mesh.shape_index].primitive_sets.data.contents[0].offset,indexOffset=m.shapes.data.contents[mesh.shape_index].primitive_sets.data.contents[0].primitives.data.contents[0].index_streams.data.contents[0].offset) for mesh in m.meshes.data.contents]

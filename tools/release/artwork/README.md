@@ -2,7 +2,7 @@
 
 - `icon.png`: the supplied Mario icon, copied without modification.
 - `logo.png`: the supplied Mario Kart Wii logo, copied without modification.
-- `banneraudio.wav`: the earlier banner sound, kept for manual builds. `tools/build.py` uses the game's own Starting Grid jingle from your disc instead.
+- `banneraudio.wav`: the earlier banner sound, kept for manual builds. `tools/build.py` uses the start of the Disc Channel banner sound from your disc instead.
 - `manifest.json`: SHA-256 fingerprints and audio source/format details.
 
 These two PNGs and the banner sound are explicit publication

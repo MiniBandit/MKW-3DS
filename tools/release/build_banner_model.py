@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build Mario/Standard Kart M/good banner geometry from extracted Wii inputs.
+"""Build the banner geometry (Funky Kong on the Flame Runner, cannon pose) from extracted Wii inputs.
 
 Run each stage explicitly. Generated assets stay in the external work directory.
 This script neither compiles the game nor builds a CIA.
@@ -48,22 +48,22 @@ def main():
             del env[key]
     if args.stage == 'export':
         unpacked = work/'unpacked'
-        driver = unique(unpacked/'mario-standard', 'driver_model.brres')
-        kart = unique(unpacked/'mario-standard', 'kart_model.brres')
+        driver = unique(unpacked/'funky-flame', 'driver_model.brres')
+        kart = unique(unpacked/'funky-flame', 'kart_model.brres')
         tools = work/'tools';tools.mkdir(parents=True, exist_ok=True)
         exports = work/'exports';exports.mkdir(exist_ok=True)
         env['MKW_EXPORTER_OUTPUT'] = str(tools)
         for name in ['export_brres', 'export_driver']:
             run(['node','tools/bundle_cooker.mjs',f'tools/{name}.ts'],env)
-        run(['node',tools/'export_brres.mjs',driver,exports/'mario_1st','model','1st','20'],env)
-        run(['node',tools/'export_brres.mjs',kart,exports/'standard_kart'],env)
-        run(['node',tools/'export_driver.mjs',driver,exports/'mario_all_actions.dskm'],env)
-        source = work/'source';(source/'mario_standard').mkdir(parents=True,exist_ok=True)
+        run(['node',tools/'export_brres.mjs',driver,exports/'funky_pose','model','jump','0'],env)
+        run(['node',tools/'export_brres.mjs',kart,exports/'flame_runner'],env)
+        run(['node',tools/'export_driver.mjs',driver,exports/'funky_all_actions.dskm'],env)
+        source = work/'source';(source/'funky_flame').mkdir(parents=True,exist_ok=True)
         inventory = subprocess.check_output(['node',str(tools/'export_driver.mjs'),str(driver),'--inventory'],cwd=ROOT,env=env)
         json.loads(inventory)
-        (source/'mario_standard/driver-inventory.json').write_bytes(inventory)
+        (source/'funky_flame/driver-inventory.json').write_bytes(inventory)
         common = source/'common';(common/'bsp').mkdir(parents=True,exist_ok=True)
-        for name in ['kartPartsDispParam.bin','kartDriverDispParam.bin','mdf_kart.bsp']:
+        for name in ['bikePartsDispParam.bin','kartDriverDispParam.bin','la_bike.bsp']:
             dst = common/('bsp' if name.endswith('.bsp') else '')/name
             shutil.copyfile(unique(unpacked/'common',name),dst)
         lighting = source/'menu_lighting';lighting.mkdir(exist_ok=True)

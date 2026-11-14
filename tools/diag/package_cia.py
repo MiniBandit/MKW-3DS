@@ -7,7 +7,7 @@ title 000400000F4B5D00 "MKW3DSDIAG". It installs beside the release title and
 shares its SD data.
 
 The banner is the standard build's (tools/build.py; MKW_WORK, default
-build/standard) home-banner/production/banner-startgrid.bnr unless
+build/standard) home-banner/production/home-banner.bnr unless
 MKW_BANNER names another. makerom comes from MAKEROM, PATH or the standard build.
 Same makerom invocation and Ticket/TMD checks as the release package: the
 title version is forced to 142 and every content hash is verified.
@@ -26,7 +26,7 @@ TITLE, RSF, SUFFIX = {'': ('000400000F4B5D00', 'diag-external-sd.rsf', 'DIAG'),
                       'o3dstest': ('000400000F4B5E00', 'diag-o3ds-test.rsf', 'Old3DS'),
                       'o3dsrelease': ('000400000F4B5E00', 'diag-o3ds-test.rsf', 'Old3DS-release')}[VARIANT]
 WORK = Path(os.environ.get('MKW_WORK', ROOT / 'build/standard'))
-BANNER = Path(os.environ.get('MKW_BANNER', WORK / 'home-banner/production/banner-startgrid.bnr'))
+BANNER = Path(os.environ.get('MKW_BANNER', WORK / 'home-banner/production/home-banner.bnr'))
 # tools/build.py records the makerom it found or downloaded.
 MAKEROM = (os.environ.get('MAKEROM') or shutil.which('makerom')
            or ((WORK / 'tools.json').is_file() and json.loads((WORK / 'tools.json').read_text()).get('makerom')) or 'makerom')
