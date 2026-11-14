@@ -280,4 +280,5 @@ src/vehicle_animation.cpp
 src/vehicle_visual_assets.cpp
 src/net_session.cpp src/ghost_file.cpp src/time_trial_ghost.cpp src/ghost_share.cpp
 src/lan_handshake.cpp
+src/sd_unpack.cpp
 src/item_net.cpp

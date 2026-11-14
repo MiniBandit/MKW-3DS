@@ -528,7 +528,10 @@ def main():
     p.add_argument('--force-cook',action='store_true',help='re-run every cook step')
     p.add_argument('--skip-compile',action='store_true',help='package the existing build/mkw-3ds.elf')
     p.add_argument('--keep-stage',action='store_true',help='keep build/playable after packaging')
-    p.add_argument('--embed-assets',action='store_true',help='put the game files in the CIA too (several GB; the SD copy is still made)')
+    # One CIA (the default): the game files are inside it, and its first start
+    # copies them to the SD card for quick updates (src/sd_unpack.cpp).
+    p.add_argument('--sd-assets',action='store_true',help='small CIA instead, with the game files as a folder to copy to the SD card yourself')
+    p.add_argument('--embed-assets',action='store_true',help=argparse.SUPPRESS) # the default since 0.8.0
     p.add_argument('--check',action='store_true',help='verify tools, disc and cooked assets, then stop')
     p.add_argument('--cook-only',action='store_true',help='stop after cooking')
     a=p.parse_args()
@@ -536,11 +539,14 @@ def main():
     if a.check:log('check passed: ready to compile and package');return
     if a.cook_only:log('cook complete');return
     if not a.skip_compile:stage_compile(a.jobs)
-    cia=stage_package(a.version,False,a.keep_stage or a.cci,a.embed_assets)
+    cia=stage_package(a.version,False,a.keep_stage or a.cci,not a.sd_assets)
     if a.cci:stage_package(a.version,True,a.keep_stage)
     log('done:',cia)
-    log('1. Copy the mkw-3ds folder from build/release/sd-card/3ds into the 3ds folder on your SD card (the game files). Updating? Copy the files inside it into the card\'s mkw-3ds folder; don\'t replace that folder (it holds your saves).')
-    if a.embed_assets:log('2. Copy the CIA to your SD card and install it with FBI, or use FBI remote install.')
-    else:log('2. Install the CIA with FBI (it is small: the game reads its files from the SD card).')
+    if a.sd_assets:
+        log('1. Copy the mkw-3ds folder from build/release/sd-card/3ds into the 3ds folder on your SD card (the game files). Updating? Copy the files inside it into the card\'s mkw-3ds folder; don\'t replace that folder (it holds your saves).')
+        log('2. Install the CIA with FBI (it is small: the game reads its files from the SD card).')
+    else:
+        log('Install this one CIA with FBI: copy it to your SD card (or use FBI remote install), install it, and you can delete the copied CIA afterwards.')
+        log('Its first start copies the game files to sd:/3ds/mkw-3ds, once (a few minutes), so quick updates can find them. Your saves are kept.')
 
 if __name__=='__main__':main()

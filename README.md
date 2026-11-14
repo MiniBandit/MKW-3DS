@@ -103,17 +103,14 @@ You can also generate your `.cia` file using [Docker Engine](https://docs.docker
 
 You need a 3DS with custom firmware ([3ds.hacks.guide](https://3ds.hacks.guide)).
 
-1. Copy the game files (about 3 GB; the game reads its files from here): open `build/release/sd-card/3ds` and copy the **`mkw-3ds`** folder inside it into the **`3ds`** folder on your SD card, so it ends up at `3ds/mkw-3ds`. If your card has no `3ds` folder, make one.
-   - **Don't copy the `3ds` folder itself onto your card**: on a Mac, Finder can *replace* your card's whole `3ds` folder and delete your other apps.
-   - **Updating an older version?** Your saves are in the card's `mkw-3ds` folder, so don't replace that folder. Open the new `mkw-3ds`, select everything in it and copy it into the card's `mkw-3ds`, replacing the files. (Windows does this when you copy the folder over and choose *Replace the files*; on a Mac, Finder's folder *Replace* would delete the saves.)
-2. Install `mkw-3ds.cia` with FBI. It's small, because the game files are on the card.
+1. Copy `build/release/mkw-3ds.cia` (about 3.5 GB) to your SD card and install it with FBI, or send it with FBI's remote install. You can delete the copied CIA once it's installed.
+2. Start the game once. Its first start copies the game files to `sd:/3ds/mkw-3ds` (a few minutes, only once), so quick updates can find them. Your saves in that folder are kept.
 3. For sound, run DSP1 once to dump your sound firmware.
 
 Performance varies by console and course: New 3DS aims for 60 FPS and runs in
 the 40–60 range.
 
-To keep the game files inside the CIA instead, build with `--embed-assets`
-(several GB, and some consoles fail to install CIAs that large).
+**If FBI can't install a CIA this big** on your console, build with `--sd-assets`: you get a small CIA, plus the `mkw-3ds` folder from `build/release/sd-card/3ds` to copy into the `3ds` folder on your SD card yourself (not the `3ds` folder itself: on a Mac, Finder can replace your card's whole `3ds` folder).
 
 **Please don't share your built files**: they contain Nintendo's game files.
 Share this builder instead.
