@@ -37,6 +37,8 @@ ROOTS = ['rk_miniTurbo', 'rk_miniTurbo1T', 'rk_wheelie', 'rk_itemBox', 'rk_itemB
          'rk_hitA', 'rk_hitAS',
          # Effects::Items::CreateBananaEffect (RMCU 0x806893c0).
          'rk_bananaSmk',
+         # KartEffect's per-pipe exhaust smoke, listed beside rk_miniTurbo* in StaticR.
+         'rk_gasSmokeOneT', 'rk_gasSmokeOneTS',
          # HandleFibCollision (RMCU 8056e40c): fragments on a vulnerable
          # racer, smoke on Star/Mega/Bullet. Full and remote variants.
          'rk_niseBox', 'rk_niseBoxS', 'rk_niseBoxVan', 'rk_niseBoxBiri']

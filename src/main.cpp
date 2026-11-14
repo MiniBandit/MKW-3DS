@@ -1,3 +1,4 @@
+#include <mkw/sd_unpack.hpp>
 #include <mkw/drift_button.hpp>
 #include <mkw/mii_voice.hpp>
 #include <mkw/notification_led.hpp>
@@ -409,10 +410,10 @@ static bool sdContentReady(){
     if(!found[0]){
         printf("  This is a code update, not the whole game.\n  It needs the game files you build\n  yourself, on your computer, from your\n  own Mario Kart Wii disc.\n\n");
         printf("  Builder and instructions:\n  %s\n\n",ProjectUrl);
-        printf("  Copy the mkw-3ds folder from build/\n  release/sd-card/3ds into sd:/3ds, or\n  install your full CIA.\n");
+        printf("  Install the full CIA your builder made\n  (build/release/mkw-3ds.cia) and start it\n  once: it copies the game files to the\n  SD card. Then install this update.\n");
     }else{
         printf("  Your game files are from a different\n  builder than this update needs.\n\n");
-        printf("  Download the latest builder and build the\n  game again, then copy the mkw-3ds folder\n  from build/release/sd-card/3ds into sd:/3ds.\n\n");
+        printf("  Download the latest builder and build the\n  game again, then install its CIA\n  (build/release/mkw-3ds.cia) and start it\n  once before installing updates.\n\n");
         printf("  Help: %s\n",ProjectUrl);
     }
     printf("\n  Press any button to exit.");
@@ -460,6 +461,19 @@ int main() {
     // are used only when they are the content this code expects (content.txt,
     // MKW_CONTENT). Otherwise the files the builder put on the SD card must match.
     const bool embedded=assets.mounted&&contentMatches("romfs:");
+#ifndef MKW_EXTERNAL_ASSETS
+    // One-CIA install (include/mkw/sd_unpack.hpp): the first start of a full
+    // CIA installed on the SD card copies its game files to the card, once,
+    // so a quick update (which replaces the CIA) still finds them. The game
+    // itself keeps running from the CIA. Not for cartridge images or tests.
+    FS_MediaType launchedFrom=MEDIATYPE_NAND;
+    if(embedded&&!kQa&&R_SUCCEEDED(FSUSER_GetMediaType(&launchedFrom))&&launchedFrom==MEDIATYPE_SD){
+        const auto unpacked=mkw::unpackGameFiles("romfs:/",DATA,MKW_CONTENT,MKW_VERSION);
+        report(unpacked==mkw::UnpackResult::Copied?"SD copy: made":unpacked==mkw::UnpackResult::NotNeeded?"SD copy: present":
+               unpacked==mkw::UnpackResult::NoSpace?"SD copy: not enough space":unpacked==mkw::UnpackResult::Failed?"SD copy: failed":"SD copy: interrupted");
+        if(unpacked==mkw::UnpackResult::Interrupted){gfxExit();return 0;}
+    }
+#endif
     const char* assetRoot=embedded?"romfs:/":DATA;
     report(embedded?"assets: embedded RomFS":"assets: external SD package");
     if(mkw::net::session().configureFile())report(mkw::net::session().host()?"LAN: host (lan.txt)":"LAN: join (lan.txt)");
@@ -1724,6 +1738,9 @@ int main() {
     auto& raceEffects=*raceEffectsStorage;
     auto effectTextures=std::make_unique<std::vector<mkw::Texture>>();
     struct EffectIds{int flame,flameBurst,wheelie,itemBox,trick,speedLines,chip[6],shellTail[3],shellBreak[2],bombBlast,blueBlast,bananaBreak,blueBlastSmoke;} fx{};
+    // Exhaust smoke: KartEffect's per-pipe rk_gasSmokeOneT (S: fewer particles).
+    // Optional, so an effect bank cooked before 0.8.0 still races without it.
+    int gasSmoke=-1,gasSmokeS=-1;bool gasPuffPending=false;
     // Every racer's KartEffect power-up emitters (docs/POWERUPS_SOURCE.md); player 0 is local.
     mkw::KartFxSlots kartFxSlots;
     // Heap, like the other presentation state above: the slipstream timers grew it and
@@ -1784,6 +1801,7 @@ int main() {
                       fx.shellTail[0],fx.shellTail[1],fx.shellTail[2],fx.shellBreak[0],fx.shellBreak[1],
                       fx.bombBlast,fx.blueBlast,fx.bananaBreak,fx.blueBlastSmoke})
             if(spec<0){report("FAIL required kart/item effect root");return false;}
+        gasSmoke=raceEffects.find("rk_gasSmokeOneT");gasSmokeS=raceEffects.find("rk_gasSmokeOneTS");
         if(battleMode&&!coinRunnersMode&&(raceEffects.find("rk_baloonR")<0||raceEffects.find("rk_baloonB")<0)){report("FAIL original balloon burst roots");return false;}
         if(coinRunnersMode)for(const char* root:mkw::CoinPresentation::Roots)if(raceEffects.find(root)<0){report("FAIL original coin roots");return false;}
         if(!bikeDriftEffects.bind(raceEffects)){report("FAIL local bike chassis sparks");return false;}
@@ -2368,6 +2386,7 @@ int main() {
         // so a stale event costs one recheck and no refresh is ever missed.
         if(fullRace)for(unsigned waits=0;C3D_FrameCounter(0)==lastRefresh&&waits<3;++waits)gspWaitForEvent(GSPGPU_EVENT_VBlank0,false);
         hidScanInput();auto held=hidKeysHeld(),down=hidKeysDown();
+        if(down&KEY_A)gasPuffPending=true; // exhaust smoke on the next kart effect step
         const bool endMenu=menu.page==mkw::UiPage::Results&&results.phase()==mkw::RaceFlowPhase::Menu;
         gyroTrick.read(fullRace&&!qaMode&&!autoplay&&!replay&&dataReady&&
                        menu.page==mkw::UiPage::Race&&!intro.active()&&!results.active());
@@ -3205,6 +3224,24 @@ int main() {
                         raceEffects.attach(i,fx.flame,f,pipe&&boosting);
                     }
                     wasBoosting=boosting;
+                    // Exhaust smoke: KartEffect names rk_gasSmokeOneT once per pipe,
+                    // beside the boost flames (StaticR). A puff from every pipe when
+                    // A is pressed (the countdown's revs included), not while boosting.
+                    if(gasPuffPending){
+                        gasPuffPending=false;
+                        const int spec=mkw::renderQuality().reduced&&gasSmokeS>=0?gasSmokeS:gasSmoke;
+                        if(spec>=0&&fullRace&&!boosting&&!intro.active()&&!watchReplay&&!replay&&
+                           kart->status().offBit(K::Kart::eStatus::InRespawn,K::Kart::eStatus::AfterRespawn))
+                            for(unsigned i=0;i<exhaust.count&&i<4;++i){
+                                const float* e=exhaust.pipes[i];
+                                const float pitch=e[3]*float(M_PI)/180.f,yaw=e[4]*float(M_PI)/180.f;
+                                const float sp=std::sin(pitch),cp=std::cos(pitch),sy=std::sin(yaw),cy=std::cos(yaw);
+                                auto axis=[&](float x,float y,float z){const float y1=y*cp-z*sp,z1=y*sp+z*cp;return kx*(x*cy+z1*sy)+ky*y1+kz*(-x*sy+z1*cy);};
+                                mkw::EffectFrame f=kartFrame(kp);
+                                f.origin=kartFrame(kp).toWorld({e[0],e[1],e[2]});f.x=axis(1,0,0);f.y=axis(0,1,0);f.z=axis(0,0,1);f.scale=kart->scale().y*exhaust.flameScale;
+                                raceEffects.burst(spec,f);
+                            }
+                    }
                     // Bike wheelie wind trail from the rear wheel.
                     raceEffects.attach(4,fx.wheelie,kartFrame(left),(bike&&signals.wheelie)||(effectsTest&&frames>=120&&frames<180));
                     // Smoke and dust (KartEffect's rk_start*, rk_driftSmoke, rk_dirtSmokeA and
