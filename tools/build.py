@@ -24,7 +24,10 @@ The disc is only read.
 """
 import argparse, ast, fnmatch, hashlib, inspect, json, os, platform, posixpath, re, shutil, struct, subprocess, sys, textwrap, time
 import urllib.request, zipfile
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+import multiprocessing
+SPAWN = multiprocessing.get_context('spawn')  # the same on every OS; fork with threads alive can hang
+from functools import partial
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
@@ -71,6 +74,44 @@ def platform_key():
     arch = 'arm64' if machine in ('arm64', 'aarch64') else 'x86_64'
     system = {'win32': 'windows', 'darwin': 'darwin'}.get(sys.platform, 'linux')
     return f'{system}-{arch}'
+
+
+def free_memory():
+    """Bytes of memory free for new work, or None when unknown."""
+    try:
+        if os.name == 'nt':
+            import ctypes
+            class Status(ctypes.Structure):
+                _fields_ = [('length', ctypes.c_uint32), ('load', ctypes.c_uint32), ('total', ctypes.c_uint64), ('available', ctypes.c_uint64),
+                            ('page_total', ctypes.c_uint64), ('page_free', ctypes.c_uint64), ('virtual_total', ctypes.c_uint64),
+                            ('virtual_free', ctypes.c_uint64), ('extended', ctypes.c_uint64)]
+            status = Status(); status.length = ctypes.sizeof(Status)
+            return status.available if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)) else None
+        if sys.platform == 'darwin':
+            stats = subprocess.run(['vm_stat'], capture_output=True, text=True).stdout
+            page = int(re.search(r'page size of (\d+)', stats)[1])
+            pages = sum(int(re.search(rf'{k}:\s+(\d+)', stats)[1]) for k in ('Pages free', 'Pages inactive', 'Pages speculative'))
+            return pages * page
+        for line in Path('/proc/meminfo').read_text().splitlines():
+            if line.startswith('MemAvailable:'):
+                return int(line.split()[1]) * 1024
+    except Exception:
+        pass
+    return None
+
+
+def default_jobs():
+    """One job per core, fewer when memory is short: a job (a converter
+    process and its tex3ds or node children) peaks near 0.5 GB, so each
+    gets 0.75 GB, with 2 GB kept back for the rest of the machine."""
+    try:
+        cores = len(os.sched_getaffinity(0))
+    except AttributeError:
+        cores = os.cpu_count() or 4
+    free = free_memory()
+    jobs = cores if free is None else max(1, min(cores, (free - (2 << 30)) // (768 << 20)))
+    shown = f', {free / (1 << 30):.1f} GB free' if free is not None else ''
+    return int(jobs), f'{cores} cores{shown}'
 
 
 def title_version():
@@ -350,9 +391,12 @@ def bootstrap(args):
     sync_source(source, work / 'source-files.json')
     fetch_dependencies(source)
     prepare_venv(source)
+    if args.jobs is None:
+        args.jobs, why = default_jobs()
+        log(f'Jobs: {args.jobs} ({why}; --jobs N to change)')
     command = [str(VENV_PYTHON), str(Path(__file__).resolve()), '--worker', '--disc', str(disc), *(['--cfl', str(cfl)] if cfl else []),
                '--work', str(work), '--jobs', str(args.jobs)] + (['--from', args.start] if args.start else []) + (
-                   ['--delete-converted'] if args.delete_converted else [])
+                   ['--only', args.only] if args.only else []) + (['--delete-converted'] if args.delete_converted else [])
     return subprocess.run(command).returncode
 
 
@@ -467,7 +511,7 @@ class Builder:
         self.banner_work = self.work / 'home-banner'
         self.logs = self.work / 'logs'
         self.state_path = self.work / 'state.json'
-        self.disc, self.jobs = Path(args.disc or '-'), max(1, args.jobs)
+        self.disc, self.jobs = Path(args.disc or '-'), max(1, args.jobs or default_jobs()[0])
         self.cfl = Path(args.cfl) if args.cfl else None
         self.delete_after = args.delete_converted
         self.stages = self.define_stages()
@@ -490,7 +534,9 @@ class Builder:
         env['PATH'] = os.pathsep.join([*map(str, paths), env.get('PATH', '')])
         env.update(DEVKITPRO=str(self.sdk), DEVKITPRO_WIN=str(self.sdk), DEVKITARM=str(self.sdk / 'devkitARM'),
                    PYTHONUNBUFFERED='1', PYTHONIOENCODING='utf-8', GIT_TERMINAL_PROMPT='0',
-                   npm_config_cache=str(self.work / 'downloads/npm-cache'))
+                   npm_config_cache=str(self.work / 'downloads/npm-cache'),
+                   # tools/tex3ds_cache.py: each distinct encode runs once.
+                   MKW_TEX3DS_CACHE=str(self.work / 'cache/tex3ds'))
         # One temp folder for every tool: MSYS2's g++ misreads a temp path
         # inherited from another MSYS shell such as Git Bash.
         temp = self.work / 'tmp'
@@ -590,6 +636,13 @@ class Builder:
         write_json(base / 'statue-portraits.json', {'statues': statues})
         shutil.copytree(base, root / 'build/mii-parts/retail-defaults', dirs_exist_ok=True)
 
+    def pool_map(self, method, items):
+        """self.<method>(*item) for every item, in separate processes (cooking
+        is mostly Python), results in order."""
+        spec = (str(self.work), str(self.disc), str(self.cfl) if self.cfl else None, self.jobs, self.stage_key, self.adopt_checkpoints)
+        with ProcessPoolExecutor(max_workers=self.jobs, mp_context=SPAWN) as pool:
+            return list(pool.map(partial(pool_task, spec, method), items))
+
     def checkpointed(self, kind, key, action):
         """Per-course and per-vehicle resume inside the two longest stages. A
         checkpoint counts only under the stage fingerprint it was cooked with."""
@@ -604,8 +657,15 @@ class Builder:
         return result
 
     def courses(self):
-        root, sd = self.root, self.root / 'sd-card/3ds/mkw-3ds'
+        sd = self.root / 'sd-card/3ds/mkw-3ds'
         from course_catalog import courses
+        rows = self.pool_map('course_row', [(c,) for c in courses()])
+        write_json(sd / 'models/course-catalog.json', {'version': 1, 'courses': rows})
+        self.py('catalog-header', 'generate_runtime_tables.py', 'catalog')
+
+    def course_row(self, c):
+        """One course and its sky (a courses pool process)."""
+        root, sd = self.root, self.root / 'sd-card/3ds/mkw-3ds'
         from cook_model import cook, COURSE_TEXELS, LARGE_TEXELS
         from import_courses import kmp_database
 
@@ -632,15 +692,30 @@ class Builder:
             log(f"  course {c['id']:2d} {c['name']}")
             return {**c, 'archive_sha256': receipt['archive_sha256'], 'status': 'imported',
                     'receipt': target.relative_to(sd).as_posix(), 'model_lists': lists}
-        with ThreadPoolExecutor(max_workers=self.jobs) as pool:
-            rows = list(pool.map(lambda c: self.checkpointed('courses', c['prefix'], lambda: one(c)), courses()))
-        write_json(sd / 'models/course-catalog.json', {'version': 1, 'courses': rows})
-        self.py('catalog-header', 'generate_runtime_tables.py', 'catalog')
+        return self.checkpointed('courses', c['prefix'], lambda: one(c))
 
     def garage(self):
         root = self.root
-        from cook_roster import ROSTER, write_native_roster, sha256
-        from cook_garage import VEHICLES, inspect_driver, inspect_kart, cook_choice, write_native_garage
+        from cook_roster import ROSTER, write_native_roster
+        from cook_garage import VEHICLES, write_native_garage
+        display = (root / 'assets/common/kartDriverDispParam.bin').read_bytes()
+        rows = self.pool_map('garage_choice', [(driver, slot, vehicle, name, vstem) for driver in ROSTER
+                                               for slot, (vehicle, name, vstem) in enumerate(VEHICLES[driver[4]])])
+        target = root / 'build/roster/models'
+        write_json(target / 'garage.json', {'version': 1, 'choices': rows})
+        characters = [{'slug': d[0], 'name': d[1], 'character': d[2], 'prefix': d[0] + '_', 'vehicle': VEHICLES[d[4]][0][0]} for d in ROSTER]
+        write_json(target / 'roster.json', {'version': 1, 'characters': characters})
+        for name in ('garage.json', 'roster.json'):
+            shutil.copy2(target / name, root / 'sd-card/3ds/mkw-3ds/models' / name)
+        write_json(root / 'assets/vehicles/garage-audit.json', {'version': 1, 'choices': rows})
+        write_native_roster(display)
+        write_native_garage(rows)
+
+    def garage_choice(self, driver, slot, vehicle, name, vstem):
+        """One driver and vehicle (a garage pool process)."""
+        root = self.root
+        from cook_roster import ROSTER, sha256
+        from cook_garage import inspect_driver, inspect_kart, cook_choice
         from unpack_szs import unpack
         display = (root / 'assets/common/kartDriverDispParam.bin').read_bytes()
 
@@ -657,23 +732,7 @@ class Builder:
                        kart_sha256=sha256(folder / 'kart_model.brres'), clips=inspect_driver(folder)['chr0'],
                        parts=[m['model'] for m in inspect_kart(folder)['nodes']])
             return cook_choice(row, root / 'build/roster')
-
-        def driver_rows(driver):
-            rows = [self.checkpointed('garage', f'{driver[0]}_{vstem}', lambda: choice(driver, slot, vehicle, name, vstem))
-                    for slot, (vehicle, name, vstem) in enumerate(VEHICLES[driver[4]])]
-            log(f'  driver {driver[1]}')
-            return rows
-        with ThreadPoolExecutor(max_workers=self.jobs) as pool:
-            rows = [r for group in pool.map(driver_rows, ROSTER) for r in group]
-        target = root / 'build/roster/models'
-        write_json(target / 'garage.json', {'version': 1, 'choices': rows})
-        characters = [{'slug': d[0], 'name': d[1], 'character': d[2], 'prefix': d[0] + '_', 'vehicle': VEHICLES[d[4]][0][0]} for d in ROSTER]
-        write_json(target / 'roster.json', {'version': 1, 'characters': characters})
-        for name in ('garage.json', 'roster.json'):
-            shutil.copy2(target / name, root / 'sd-card/3ds/mkw-3ds/models' / name)
-        write_json(root / 'assets/vehicles/garage-audit.json', {'version': 1, 'choices': rows})
-        write_native_roster(display)
-        write_native_garage(rows)
+        return self.checkpointed('garage', f'{driver[0]}_{vstem}', lambda: choice(driver, slot, vehicle, name, vstem))
 
     MENU_SCALE_SOURCES = ['tools/menu_sprite_scales.cpp', *['src/' + n + '.cpp' for n in (
         'menu_ui', 'menu_state', 'menu_transition', 'menu_focus', 'menu_index', 'menu_text_motion')]]
@@ -682,9 +741,31 @@ class Builder:
         host = self.root / 'build/host-tools'
         host.mkdir(parents=True, exist_ok=True)
         exe = host / ('menu_sprite_scales' + ('.exe' if os.name == 'nt' else ''))
-        self.run('menu-scales-host', [self.cxx, '-std=' + CXX_STD, '-O2', '-Iinclude', '-o', exe, *self.MENU_SCALE_SOURCES])
+        objects = host / 'menu-scales-objects'
+        objects.mkdir(exist_ok=True)
+        # The measurement reads menu-ui's menu_assets.hpp. The last step below
+        # rewrites that header in place, so a second run must not measure its
+        # own output: keep menu-ui's copy and compile against it. The fit
+        # receipt's hash says whether the header is already fitted.
+        header, original = self.root / 'include/mkw/menu_assets.hpp', host / 'menu-scales-include/mkw/menu_assets.hpp'
+        fitted = read_json(self.root / 'sd-card/3ds/mkw-3ds/models/menu-texture-fit.json', {}).get('header_sha256')
+        if hashlib.sha256(header.read_bytes()).hexdigest() == fitted and not original.is_file():
+            # Fitted by an older build that kept no copy: menu-ui writes it again.
+            self.py('menu-ui-again', 'cook_menu_ui.py', '--jobs', str(self.jobs))
+        if hashlib.sha256(header.read_bytes()).hexdigest() != fitted:
+            original.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(header, original)
+
+        def compiled(source):
+            obj = objects / (Path(source).stem + '.o')
+            self.run('menu-scales-host-' + Path(source).stem, [self.cxx, '-std=' + CXX_STD, '-O2', '-I' + str(original.parent.parent), '-Iinclude',
+                                                               '-c', source, '-o', obj])
+            return obj
+        with ThreadPoolExecutor(max_workers=self.jobs) as pool:
+            objs = list(pool.map(compiled, self.MENU_SCALE_SOURCES))
+        self.run('menu-scales-host', [self.cxx, '-o', exe, *objs])
         self.run('menu-scales', [exe, host / 'sprite-scales.json'])
-        self.py('menu-fit', 'optimize_menu_textures.py')
+        self.py('menu-fit', 'optimize_menu_textures.py', '--jobs', str(self.jobs))
 
     # -- HOME banner ------------------------------------------------------
 
@@ -889,7 +970,7 @@ class Builder:
         # (its movies are LZ4 inside, its sound already compressed), each file
         # on a 512-byte SD sector, so the game's stream reads stay whole sectors.
         pakpack = stage / ('pakpack.exe' if os.name == 'nt' else 'pakpack')
-        self.run('pakpack-host', [self.cxx, '-x', 'c', '-O2', '-o', pakpack, 'tools/pakpack.c'])
+        self.run('pakpack-host', [self.cxx, '-x', 'c', '-O2', '-pthread', '-o', pakpack, 'tools/pakpack.c'])
         (stage / 'mpk2').mkdir(exist_ok=True)
         archives = []
         for name in ('menu', 'race', 'stream'):
@@ -904,6 +985,8 @@ class Builder:
                                        cwd=root, env=self.env, capture_output=True, text=True, check=True).stdout
                 (stage / f'{name}-order.txt').write_text(order, encoding='utf-8')
                 args = [source]
+            # A new file, never rewritten in place: output/sd links to the last one.
+            archives[-1].unlink(missing_ok=True)
             self.run('pakpack-' + name, [pakpack, *args, stage / f'{name}-order.txt', archives[-1], '@' + str(stage / f'{name}-loose.txt')])
 
         # SD folder: the three packs and the 3DSX.
@@ -913,7 +996,10 @@ class Builder:
         sd.mkdir(parents=True)
         packed = {}
         for archive in archives:
-            shutil.copy2(archive, sd / archive.name)
+            try:
+                os.link(archive, sd / archive.name)  # same bytes, no 1 GB copy
+            except OSError:
+                shutil.copy2(archive, sd / archive.name)
             for name, (at, length) in mpk_index(archive).items():
                 if name in packed:
                     raise BuildError(f'{name} is in two packs')
@@ -1098,17 +1184,20 @@ class Builder:
         tool('map-objects', ['cook_map_objects.py'], 'include/mkw/map_object_assets.hpp')
         tool('menu-models', ['cook_menu_models.py', '--machines', '--jobs', J], 'include/mkw/menu_model_params.hpp')
         tool('runtime-audio', ['generate_runtime_tables.py', 'audio'], 'include/mkw/race_voice_tables.hpp')
-        tool('menu-ui', ['cook_menu_ui.py'], 'include/mkw/menu_assets.hpp')
+        tool('menu-ui', ['cook_menu_ui.py', '--jobs', J], 'include/mkw/menu_assets.hpp')
         # The lower screen's UI atlas: its standings rows take the menus' selected-button frame.
         tool('map-ui', ['cook_race_map.py', '--atlas-only'], 'include/mkw/race_map_assets.hpp', 'build/race-map/textures/race_bottom_ui_256.t3x')
         tool('menu-footer', ['cook_menu_footer.py'], 'include/mkw/menu_footer_text.inc')
         tool('menu-styles', ['cook_menu_styles.py'], 'include/mkw/menu_text_styles.hpp')
         tool('menu-record-text', ['cook_menu_record_text.py'], 'include/mkw/menu_record_text.inc')
         tool('cup-icons', ['cook_cup_record_icons.py'], 'include/mkw/cup_record_icons.hpp')
-        tool('menu-movies', ['cook_menu_movies.py', '--jobs', J], 'sd-card/3ds/mkw-3ds/models/menu-movies.json', files=['tools/pakpack.c'])
+        # The movies' header first (menu-fit and compile need it); their frames
+        # are data only and encode alongside the rest.
+        tool('movie-header', ['cook_menu_movies.py', '--header-only'], 'include/mkw/menu_movie_assets.hpp')
+        tool('menu-movies', ['cook_menu_movies.py', '--jobs', J, '--skip-header'], 'sd-card/3ds/mkw-3ds/models/menu-movies.json', files=['tools/pakpack.c'])
         tool('menu-chapters', ['cook_menu_movie_chapters.py'], 'include/mkw/menu_movie_chapters.hpp')
         tool('menu-audio', ['cook_menu_audio.py'], 'include/mkw/menu_audio_assets.hpp')
-        tool('staff-movies', ['cook_staff_movies.py', '--output', 'build/staff'], 'build/staff/movies/staff_true.gmv', 'build/staff/movies/staff_normal.gmv',
+        tool('staff-movies', ['cook_staff_movies.py', '--output', 'build/staff', '--jobs', J], 'build/staff/movies/staff_true.gmv', 'build/staff/movies/staff_normal.gmv',
              files=['tools/pakpack.c'])
         tool('mii-racers', ['cook_mii_racers.py', D, 'build/mii-racers', '--jobs', J], 'build/mii-racers/models/mii-garage.json')
         tool('mii-finish', ['finish_mii_racers.py', D, 'build/mii-racers', '--jobs', J], 'build/mii-racers/models/mii-complete.json', 'include/mkw/mii_garage.hpp')
@@ -1120,7 +1209,8 @@ class Builder:
             ('vehicle-shadows', ['cook_vehicle_shadows.py', '--jobs', J], 'build/vehicle-shadows/models/vehicle-shadows.json'),
             ('team-vehicles', ['cook_team_vehicles.py', D, '--jobs', J], 'build/team-vehicles/team-vehicles.json'),
             ('driver-lod', ['cook_racer_lod.py', '--output', 'build/racer-lod', '--work', 'build/racer-lod-cook'], 'build/racer-lod-cook/receipt.json'),
-            ('vehicle-lod', ['cook_vehicle_lod.py', '--disc', D, '--output', 'build/racer-lod', '--work', 'build/vehicle-lod-cook'], 'build/vehicle-lod-cook/receipt.json'),
+            ('vehicle-lod', ['cook_vehicle_lod.py', '--disc', D, '--output', 'build/racer-lod', '--work', 'build/vehicle-lod-cook', '--jobs', J],
+             'build/vehicle-lod-cook/receipt.json'),
             ('water-mipmaps', ['cook_water_mipmaps.py'], 'build/water-mipmaps/receipt.json'),
             ('world-mipmaps', ['cook_world_mipmaps.py', '--jobs', J], 'build/world-mipmaps/receipt.json'),
             ('battle-feedback', ['cook_battle_course_feedback.py'], 'build/battle-course-feedback/receipt.json'),
@@ -1141,7 +1231,7 @@ class Builder:
         """A stage method's source with the Builder methods it calls."""
         seen.add(method.__name__)
         text = textwrap.dedent(inspect.getsource(method))
-        for called in re.findall(r'self\.(\w+)\(', text):
+        for called in re.findall(r'self\.(\w+)\(', text) + re.findall(r"self\.pool_map\('(\w+)'", text):
             if called not in seen and called not in ('run', 'py', 'node', 'checkpointed') and inspect.isfunction(getattr(Builder, called, None)):
                 text += self.method_source(getattr(self, called), seen)
         return text
@@ -1199,7 +1289,139 @@ class Builder:
                 return data
             return self.fingerprints(SourceIndex(listing.stdout.decode().split('\0')[:-1], read)), commit
 
-    def main(self, start):
+    # What each stage needs from earlier stages beyond converters, extract and
+    # startline, which every later stage follows (startline unpacks
+    # assets/courses again; cook_model reads its faces). From the files each
+    # script reads, plus the pairs that write the same files. Every entry
+    # names an earlier stage, so the list order is always a valid order and
+    # --jobs 1 runs exactly it.
+    AFTER = {
+        'startline': ['converters', 'extract'], 'banner': ['converters'], 'portraits': [],
+        'objects': ['portraits'], 'phases': ['courses'], 'roads': ['courses'], 'driver-look': ['garage'],
+        'battle-hud': ['courses'], 'race-intro': ['courses'],
+        # race-items rewrites assets/race-ui and its Scene/UI archives in place:
+        # the readers listed before it read them first, the rest after.
+        'race-items': ['menu-animation', 'battle-menu', 'battle-hud', 'battle-motion', 'battle-scores', 'battle-results', 'race-intro'],
+        'race-flow': ['race-items'], 'race-balloon': ['race-items'],
+        'object-audio': ['audio'], 'battle-objects': ['objects', 'battle-hud'], 'blast': ['race-items'], 'blooper': ['race-items'],
+        'award-scenes': ['award-inputs'], 'award-cameras': ['award-scenes'], 'award-drive': ['award-inputs'],
+        'award-lighting': ['award-inputs'], 'award-models': ['award-scenes', 'portraits'], 'award-effects': ['award-inputs', 'effects'],
+        'staff-camera': ['award-inputs'], 'staff-crowd': ['award-inputs'], 'staff-ui': ['race-items'],
+        'maps': ['courses', 'lighting'], 'map-objects': ['objects', 'coconut', 'lighting'], 'runtime-audio': ['audio', 'menu-models'],
+        'menu-ui': ['courses', 'garage', 'race-items'], 'map-ui': ['maps', 'menu-ui'], 'menu-footer': ['menu-ui'],
+        'menu-styles': ['menu-ui'], 'menu-record-text': ['menu-ui', 'race-items'], 'cup-icons': ['race-items'],
+        'movie-header': ['menu-ui'], 'menu-movies': ['movie-header'], 'menu-chapters': ['movie-header'],
+        'mii-finish': ['mii-racers'], 'mii-awards': ['award-inputs', 'award-models', 'mii-finish'],
+        'driver-effects': ['garage'], 'vehicle-shadows': ['garage'], 'team-vehicles': ['garage'], 'driver-lod': ['garage'],
+        'vehicle-lod': ['garage', 'driver-lod'], 'water-mipmaps': ['objects'], 'world-mipmaps': ['courses', 'objects'],
+        'drift-bike': ['drift'],
+        'menu-fit': ['menu-ui', 'garage', 'battle-menu', 'menu-animation', 'menu-footer', 'menu-styles', 'menu-record-text',
+                     'cup-icons', 'movie-header', 'menu-chapters'],
+    }
+    # Stages compile does not need (they only feed package).
+    DATA_ONLY = {'objects', 'battle-screens', 'battle-balloons', 'battle-coins', 'battle-objects', 'balloon-effects', 'coin-effects',
+                 'coin-hud', 'blooper', 'lens-flare', 'luma', 'coconut', 'firebar', 'native-resource', 'award-inputs', 'award-scenes',
+                 'award-effects', 'maps', 'menu-movies', 'staff-movies', 'mii-racers', 'item-shadows', 'driver-effects', 'vehicle-shadows',
+                 'team-vehicles', 'driver-lod', 'vehicle-lod', 'water-mipmaps', 'world-mipmaps', 'battle-feedback', 'drift', 'drift-bike'}
+    # Stages that run a pool of --jobs workers; the rest use about one core.
+    POOLED = {'courses', 'garage', 'objects', 'award-models', 'maps', 'menu-models', 'menu-ui', 'menu-movies', 'staff-movies', 'mii-racers',
+              'mii-finish', 'driver-effects', 'vehicle-shadows', 'team-vehicles', 'vehicle-lod', 'world-mipmaps', 'menu-fit', 'compile'}
+    # Rough seconds, only to start the longest chains first.
+    SECONDS = {'garage': 250, 'menu-movies': 250, 'vehicle-lod': 220, 'menu-ui': 185, 'staff-movies': 180, 'package': 140, 'world-mipmaps': 130,
+               'mii-racers': 130, 'courses': 120, 'maps': 120, 'menu-fit': 115, 'objects': 80, 'mii-finish': 75, 'team-vehicles': 70,
+               'compile': 60, 'menu-models': 55, 'audio': 36, 'award-models': 31, 'extract': 30, 'map-objects': 28}
+
+    def after(self, name):
+        names = [s[0] for s in self.stages]
+        earlier = names[:names.index(name)]
+        if name in ('converters', 'extract'):
+            return []
+        if name == 'compile':
+            return [n for n in earlier if n not in self.DATA_ONLY]
+        if name == 'package':
+            return earlier
+        found = self.AFTER.get(name)
+        base = [] if name in ('startline', 'banner') else ['converters', 'extract', 'startline']
+        needs = base + (found or [])
+        bad = [n for n in needs if n not in earlier]
+        if bad:
+            raise BuildError(f'Stage {name} is ordered after {bad}, which do not come before it.')
+        return needs
+
+    def run_stage(self, name, key, adopt):
+        """One stage, in its own process (--run-stage); the parent records it."""
+        self.prepare()
+        self.stage_key, self.adopt_checkpoints = key, adopt
+        action, outputs = next((a, o) for n, a, o in self.stages if n == name)
+        action()
+        absent = [str(p) for p in outputs or [] if not p.exists()]
+        if absent:
+            raise BuildError(f'{name} did not produce: ' + ', '.join(absent))
+
+    def schedule(self, todo, keys, state, recorded, adopt):
+        """Runs the stages in todo, each in its own process, as soon as the
+        stages it follows are done, up to --jobs workers at once: a pooled
+        stage takes the free workers (at least half), the others one. With
+        --jobs 1 it is the list order, one at a time, output on the console."""
+        names = [s[0] for s in self.stages]
+        index, outputs = {n: i for i, n in enumerate(names)}, {s[0]: s[2] for s in self.stages}
+        needs = {n: [d for d in self.after(n) if d in todo] for n in todo}
+        users = {n: [] for n in todo}
+        for n, ds in needs.items():
+            for d in ds:
+                users[d].append(n)
+        budget, serial = self.jobs, self.jobs == 1
+        rank = {}
+        for n in sorted(todo, key=index.get, reverse=True):
+            rank[n] = -index[n] if serial else self.SECONDS.get(n, 3) + max((rank[u] for u in users[n]), default=0)
+        (self.logs / 'stages').mkdir(parents=True, exist_ok=True)
+        self.times = {'jobs': budget}
+        waiting, running, failed, free = set(todo), {}, None, budget
+        while waiting or running:
+            if failed is None:
+                for n in sorted(waiting, key=lambda n: (-rank[n], index[n])):
+                    if any(d in waiting or d in running for d in needs[n]):
+                        continue
+                    take = min(free, budget) if n in self.POOLED else 1
+                    if free < 1 or (n in self.POOLED and take < max(1, budget // 2)):
+                        continue
+                    command = [sys.executable, str(Path(__file__).resolve()), '--worker', '--disc', str(self.disc),
+                               *(['--cfl', str(self.cfl)] if self.cfl else []), '--work', str(self.work), '--jobs', str(take),
+                               '--run-stage', n, '--stage-key', keys.get(n, '')] + (['--adopt'] if adopt(n) else [])
+                    changed = n in state.get('stages_before', ()) and recorded.get(n) != keys.get(n)
+                    log(f'[{index[n] + 1}/{len(names)}] {n}' + ('  (its code or inputs changed since it was cooked)' if changed else ''))
+                    stream = None if serial else (self.logs / 'stages' / (n + '.log')).open('w', encoding='utf-8', errors='replace')
+                    process = subprocess.Popen(command, env=self.env, stdout=stream, stderr=subprocess.STDOUT if stream else None)
+                    running[n] = (process, stream, take, time.monotonic())
+                    waiting.discard(n)
+                    free -= take
+            if not running:
+                break
+            time.sleep(0.2)
+            for n, (process, stream, take, began) in list(running.items()):
+                if process.poll() is None:
+                    continue
+                del running[n]
+                free += take
+                if stream:
+                    stream.close()
+                if process.returncode:
+                    failed = failed or n
+                    log(f'      {n} failed (exit {process.returncode})')
+                    continue
+                log(f'      {n} done in {time.monotonic() - began:.0f} s')
+                self.times[n] = round(time.monotonic() - began, 1)
+                write_json(self.logs / 'stage-times.json', self.times)
+                if outputs[n] is not None:
+                    state['stages'].append(n)
+                    recorded[n] = keys[n]
+                    write_json(self.state_path, state)
+        if failed:
+            tail = '' if serial else '\n' + '\n'.join((self.logs / 'stages' / (failed + '.log')).read_text(
+                encoding='utf-8', errors='replace').splitlines()[-30:])
+            raise BuildError(f'{failed} failed. Log: {self.logs / "stages" / (failed + ".log")}' + tail)
+
+    def main(self, start, only=None):
         self.prepare()
         state = read_json(self.state_path, {'stages': []})
         identity = disc_identity(self.disc, state.get('disc'))
@@ -1241,31 +1463,47 @@ class Builder:
             log('Game data changed, so this is a full build.')
             del state['converted_deleted']
             write_json(self.state_path, state)
-        for index, (name, action, outputs) in enumerate(self.stages, 1):
+        # A stage runs again when it is unfinished or its fingerprint changed;
+        # so do the stages that follow it (fingerprints chain in list order,
+        # so a changed stage changes every later one).
+        todo = set()
+        for name, action, outputs in self.stages:
             done = name in state['stages'] and outputs is not None and all(p.exists() for p in outputs)
-            if done and recorded.get(name) == keys[name]:
-                continue
-            # An unfinished or changed stage invalidates everything after it.
-            state['stages'] = [s for s in state['stages'] if names.index(s) < index - 1]
-            write_json(self.state_path, state)
-            log(f'[{index}/{len(self.stages)}] {name}' + ('  (its code or inputs changed since it was cooked)' if done else ''))
-            self.stage_key = keys.get(name, '')
-            # Unstamped checkpoints predate fingerprints; they count only if
-            # nothing they depend on changed since.
-            self.adopt_checkpoints = adopting and (base is None or base.get(name) == keys.get(name))
-            started = time.monotonic()
-            action()
-            absent = [str(p) for p in outputs or [] if not p.exists()]
-            if absent:
-                raise BuildError(f'{name} did not produce: ' + ', '.join(absent))
-            log(f'      {name} done in {time.monotonic() - started:.0f} s')
-            if outputs is not None:
-                state['stages'].append(name)
-                recorded[name] = keys[name]
-                write_json(self.state_path, state)
+            if not done or recorded.get(name) != keys.get(name) or any(d in todo for d in self.after(name)):
+                todo.add(name)
+        if only:
+            if only not in names:
+                raise BuildError(f'Unknown stage {only}; see --list-stages.')
+            todo = {only}
+        state['stages_before'] = [s for s in state['stages'] if s in todo]
+        state['stages'] = [s for s in state['stages'] if s not in todo]
+        write_json(self.state_path, state)
+        # Unstamped checkpoints predate fingerprints; they count only if
+        # nothing they depend on changed since.
+        self.schedule(todo, keys, state, recorded, lambda name: adopting and (base is None or base.get(name) == keys.get(name)))
+        state.pop('stages_before', None)
+        write_json(self.state_path, state)
+        self.cia_path = self.output / f"MarioKartWiiDS-v{(REPO / 'VERSION').read_text().strip()}.cia"
+        if only:
+            log(f'Ran {only} ({(time.monotonic() - began) / 60:.0f} min); later stages were not run again.')
+            return
         if self.delete_after:
             self.delete_converted(state, keys['package'])
         self.report_done(began)
+
+
+_pool_builders = {}
+
+
+def pool_task(spec, method, item):
+    """Builder.pool_map's worker: a Builder for the same work folder and stage."""
+    if spec not in _pool_builders:
+        work, disc, cfl, jobs, key, adopt = spec
+        builder = Builder(argparse.Namespace(work=work, disc=disc, cfl=cfl, jobs=jobs, delete_converted=False))
+        builder.prepare()
+        builder.stage_key, builder.adopt_checkpoints = key, adopt
+        _pool_builders[spec] = builder
+    return getattr(_pool_builders[spec], method)(*item)
 
 
 def disc_identity(path, previous):
@@ -1329,11 +1567,15 @@ def main():
     parser.add_argument('--disc', help='your Mario Kart Wii USA (RMCE01) ISO or WBFS')
     parser.add_argument('--cfl', help='optional CFL_Res.dat to package')
     parser.add_argument('--work', default=str(REPO / 'build/standard'), help='work directory (default: build/standard)')
-    parser.add_argument('--jobs', type=int, default=min(4, os.cpu_count() or 4), help='parallel converter jobs (default: 4)')
+    parser.add_argument('--jobs', type=int, help='parallel jobs (default: one per core, fewer when memory is short; 1 runs the stages one at a time in order)')
     parser.add_argument('--from', dest='start', metavar='STAGE', help='run this stage and all later ones again')
+    parser.add_argument('--only', metavar='STAGE', help='run just this stage again (to test it; later stages are not rerun)')
     parser.add_argument('--delete-converted', action='store_true', help='delete the converted data afterwards (about 20 GB); code-only updates still work')
     parser.add_argument('--list-stages', action='store_true', help='print the stage order and exit')
     parser.add_argument('--worker', action='store_true', help=argparse.SUPPRESS)
+    parser.add_argument('--run-stage', help=argparse.SUPPRESS)
+    parser.add_argument('--stage-key', default='', help=argparse.SUPPRESS)
+    parser.add_argument('--adopt', action='store_true', help=argparse.SUPPRESS)
     args = parser.parse_args()
     try:
         if args.list_stages:
@@ -1344,7 +1586,10 @@ def main():
             parser.error('--disc is required')
         if not args.worker:
             return bootstrap(args)
-        Builder(args).main(args.start)
+        if args.run_stage:
+            Builder(args).run_stage(args.run_stage, args.stage_key, args.adopt)
+        else:
+            Builder(args).main(args.start, args.only)
         return 0
     except BuildError as error:
         print(f'\nBuild stopped: {error}', file=sys.stderr, flush=True)

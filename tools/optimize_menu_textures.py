@@ -14,12 +14,15 @@ Outputs: textures/ui_*.t3x (LZ11), and the u/v (sprites) and atlas/slice UVs in
 include/mkw/menu_assets.hpp. Re-running is idempotent; cook_menu_ui.py runs it
 after regenerating menu_assets.hpp.
 """
-import argparse, hashlib, json, math, re, subprocess
-from concurrent.futures import ThreadPoolExecutor
+import argparse, hashlib, json, math, os, re, subprocess
+from concurrent.futures import ProcessPoolExecutor
+import multiprocessing
+SPAWN = multiprocessing.get_context('spawn')  # the same on every OS; fork with threads alive can hang
 from pathlib import Path
 import numpy as np
 from PIL import Image
 from devkitpro import tool
+import tex3ds_cache
 
 ROOT = Path(__file__).resolve().parents[1]
 ASSETS = ROOT / 'sd-card/3ds/mkw-3ds'
@@ -50,8 +53,8 @@ def encode(image, name):
     png = WORK / (name + '.png')
     image.save(png)
     target = ASSETS / 'textures' / (name + '.t3x')
-    subprocess.run([TEX3DS, '-f', 'rgba8', '-z', 'lz11', '-o', str(target), str(png)], check=True,
-                   stdout=subprocess.DEVNULL)
+    tex3ds_cache.run([TEX3DS, '-f', 'rgba8', '-z', 'lz11', '-o', str(target), str(png)], check=True,
+                     stdout=subprocess.DEVNULL)
     return target.stat().st_size
 
 
@@ -144,6 +147,14 @@ def fit_atlas(key, record, slices, screen):
             'sourceBytes': width * height * 4}
 
 
+def fit_sprite_job(job):
+    return fit_sprite(*job)
+
+
+def fit_atlas_job(job):
+    return fit_atlas(*job)
+
+
 def rewrite_header(sprites, atlases, slice_uvs):
     text = HEADER.read_text()
     head, rest = text.split('inline constexpr UiSpriteInfo UiSprites[]={\n', 1)
@@ -187,7 +198,7 @@ def rewrite_header(sprites, atlases, slice_uvs):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--jobs', type=int, default=8)
+    p.add_argument('--jobs', type=int, default=os.cpu_count() or 1)
     a = p.parse_args()
     WORK.mkdir(parents=True, exist_ok=True)
     manifest = json.loads((ASSETS / 'models/menu-ui.json').read_text())
@@ -223,9 +234,19 @@ def main():
         shared[leader] = keys
         screen[leader] = [max(screen[k][axis] for k in requested) for axis in range(2)]
     used = list(shared)
-    with ThreadPoolExecutor(max_workers=a.jobs) as pool:
-        sprite_results = dict(zip(used, pool.map(lambda k: fit_sprite(k, records[k], screen[k]), used)))
-        atlas_results = dict(zip(atlas_keys, pool.map(lambda k: fit_atlas(k, records[k], by_atlas[k], screen.get(k)), atlas_keys)))
+    sprite_jobs = [(k, records[k], screen[k]) for k in used]
+    atlas_jobs = [(k, records[k], by_atlas[k], screen.get(k)) for k in atlas_keys]
+    # Processes, not threads: the Python and Pillow work holds the GIL.
+    # map keeps input order. Windows allows at most 61 workers.
+    jobs = max(1, min(a.jobs, 61))
+    if jobs == 1:
+        sprite_results = dict(zip(used, map(fit_sprite_job, sprite_jobs)))
+        atlas_results = dict(zip(atlas_keys, map(fit_atlas_job, atlas_jobs)))
+    else:
+        with ProcessPoolExecutor(max_workers=jobs, mp_context=SPAWN) as pool:
+            atlases = pool.map(fit_atlas_job, atlas_jobs)
+            sprite_results = dict(zip(used, pool.map(fit_sprite_job, sprite_jobs, chunksize=max(1, len(used) // (jobs * 8)))))
+            atlas_results = dict(zip(atlas_keys, atlases))
     for leader, keys in shared.items():
         for key in keys:
             sprite_results[key] = sprite_results[leader]

@@ -12,6 +12,7 @@ way. Original assets remain untouched; package_sd overlays the result and
 pack_race_assets includes the same replacements in race.pak.
 """
 import argparse, concurrent.futures, hashlib, json, struct, subprocess, tempfile
+import tex3ds_cache
 from pathlib import Path
 from PIL import Image
 import cook_water_mipmaps
@@ -130,7 +131,7 @@ def main():
     if old_receipt.get('profile')!=profile:old_receipt={}
     encoder=str(tool('tex3ds'))
     def encode(png,target,fmt,box):
-        subprocess.run([encoder,'-f','etc1a4' if fmt==13 else 'etc1','-q','high',*(('-m','box') if box else ()),'-z','none','-o',str(target),str(png)],check=True,stdout=subprocess.DEVNULL)
+        tex3ds_cache.run([encoder,'-f','etc1a4' if fmt==13 else 'etc1','-q','high',*(('-m','box') if box else ()),'-z','none','-o',str(target),str(png)],check=True,stdout=subprocess.DEVNULL)
         return payload(target.read_bytes())
     # Source TEX0s; Psea's mip-filtered textures keep cook_water_mipmaps.py's chains.
     sources=original_sources();water=set(water_owned());archives={}

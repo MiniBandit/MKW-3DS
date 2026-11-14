@@ -15,6 +15,7 @@ from PIL import Image
 from cook_race_hud import sections, font_strings
 from cook_roster import ROOT
 from devkitpro import tool
+import tex3ds_cache
 
 PAGE=512
 
@@ -59,7 +60,7 @@ def cook():
  records=[];pages=[]
  for p,sheet in enumerate(sheets):
   name=f'ui_name_glyphs_{p}';png=textures/(name+'.png');sheet.save(png)
-  subprocess.run([str(tool('tex3ds')),'-f','la4','-z','lz11','-o',str(png.with_suffix('.t3x')),str(png)],check=True,stdout=subprocess.DEVNULL)
+  tex3ds_cache.run([str(tool('tex3ds')),'-f','la4','-z','lz11','-o',str(png.with_suffix('.t3x')),str(png)],check=True,stdout=subprocess.DEVNULL)
   path='textures/'+name+'.t3x'
   pages.append({'key':f'glyph_atlas_{p}','path':path,'width':sheet.width,'height':sheet.height,'sha256':hashlib.sha256((out/path).read_bytes()).hexdigest()})
  for (c,img),(p,x,y) in zip(cells,places):

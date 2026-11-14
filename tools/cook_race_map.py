@@ -24,6 +24,7 @@ race-map.json (sources, hashes, per-course statistics) and the generated
 include/mkw/race_map_assets.hpp. The shared sd-card is never written.
 """
 import argparse
+import tex3ds_cache
 import concurrent.futures
 import hashlib
 import json
@@ -115,9 +116,9 @@ def cook_course(index, course, out, reuse_rendered=False):
     else:
         image, stats = rb.bake(course['key'], course['models'], course['archive'], frame, size)
         image.save(png)
-        subprocess.run([TEX3DS, '-f', 'etc1', '-q', 'high', '-z', 'none', '-o', str(png.with_suffix('.t3x')), str(png)],check=True,stdout=subprocess.DEVNULL)
+        tex3ds_cache.run([TEX3DS, '-f', 'etc1', '-q', 'high', '-z', 'none', '-o', str(png.with_suffix('.t3x')), str(png)],check=True,stdout=subprocess.DEVNULL)
         image.resize(small, Image.Resampling.LANCZOS).save(overview)
-        subprocess.run([TEX3DS, '-f', 'etc1', '-q', 'high', '-z', 'none', '-o', str(overview.with_suffix('.t3x')), str(overview)],check=True,stdout=subprocess.DEVNULL)
+        tex3ds_cache.run([TEX3DS, '-f', 'etc1', '-q', 'high', '-z', 'none', '-o', str(overview.with_suffix('.t3x')), str(overview)],check=True,stdout=subprocess.DEVNULL)
     texel = (frame[2] - frame[0]) / size[0]
     view = min(max(UNITS_PER_PIXEL, 0.85 * texel), MAX_UNITS_PER_PIXEL)
     width = rb.road_width(kcl, route_length(kmp))
@@ -346,7 +347,7 @@ def cook_atlas(out, cci, manifest):
     atlas, rects = packed
     png = out / 'textures/race_bottom_ui_256.png'
     atlas.save(png)
-    subprocess.run([TEX3DS, '-f', 'rgba8', '-z', 'none', '-o', str(png.with_suffix('.t3x')), str(png)], check=True, stdout=subprocess.DEVNULL)
+    tex3ds_cache.run([TEX3DS, '-f', 'rgba8', '-z', 'none', '-o', str(png.with_suffix('.t3x')), str(png)], check=True, stdout=subprocess.DEVNULL)
     # Earlier layouts' files: packaging takes every race_*.t3x here.
     for stale in ('race_bottom_ui.t3x', 'race_bottom_ui.png', 'race_bottom_rows.t3x', 'race_bottom_rows.png'):
         (out / 'textures' / stale).unlink(missing_ok=True)
