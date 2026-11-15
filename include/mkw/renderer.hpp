@@ -103,6 +103,10 @@ public:
     // textures at most the levels their source has. Off (DIAG): no-mip-cap.txt.
     uint8_t mipCap=0xff;
     static inline bool mipCapOn=true;
+    // Course-object textures (obj*) sample level 0 only, as TPO: their world
+    // mips blurred signs and the Mushroom Gorge mushrooms; console GPU cost
+    // within noise (Nov 14). Off (DIAG): no-object-mip-cap.txt.
+    static inline bool objectMipCap=true;
     // Every texture currently loaded from a file, under a lock: f must not load
     // or reset textures. Race VRAM placement and DIAG texture-use.txt use it.
     static void forEachLoaded(const std::function<void(Texture&)>& f);

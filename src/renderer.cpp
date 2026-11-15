@@ -276,6 +276,7 @@ bool listLoaded(Texture& t,const char* path,bool loaded){
     if(char* dot=std::strrchr(t.name,'.'))*dot=0;
     if(!t.name[0])t.name[0]='?';
     t.mipCap=courseMipCap(t.name,t.gpu);
+    if(Texture::objectMipCap&&t.gpu.maxLevel&&!std::strncmp(t.name,"obj",3))t.mipCap=0;
     auto& l=loadedTextures();LightLock_Lock(&l.lock);l.set.insert(&t);t.serial=++l.serial;LightLock_Unlock(&l.lock);
     return true;
 }
@@ -797,6 +798,7 @@ void Renderer::readSwitches(){
     DeferredWrites::directWrites=!exists("sdmc:/3ds/MKWiiDS/no-skin-direct.txt");
 #ifndef MKW_RELEASE
     Texture::mipCapOn=!exists("sdmc:/3ds/MKWiiDS/no-mip-cap.txt");
+    Texture::objectMipCap=!exists("sdmc:/3ds/MKWiiDS/no-object-mip-cap.txt");
     stateCacheVerify=exists("sdmc:/3ds/MKWiiDS/state-cache-verify.txt");
     drawTiming=exists("sdmc:/3ds/MKWiiDS/draw-timing.txt");
     cmdHash=exists("sdmc:/3ds/MKWiiDS/cmd-hash.txt");
