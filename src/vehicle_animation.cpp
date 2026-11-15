@@ -158,8 +158,10 @@ bool VehicleAnimation::initialSnapshot(unsigned vehicle,const C3D_Mtx& chassis,S
         Vec3 position=wheel.position;
         if(!p.bike&&(slot&1))position.x=-position.x;
         position.y-=wheel.travel;
-        p.tirePositions[i]=transform(chassis,position);
+        // KartBodyBike::wheelMatrix: a bike's front wheel hangs from the handle
+        // frame (calcCollision), not the chassis setInitialState uses for one tick.
         p.wheelFrames[i]=p.bike&&slot==0?p.handle:chassis;
+        p.tirePositions[i]=transform(p.wheelFrames[i],position);
         p.radius[i]=p.sourceRadius[i]=wheel.radius;p.travel[i]=wheel.travel;
     }
     if(p.count!=(p.bike?2u:data.body==3?3u:4u))return false;
