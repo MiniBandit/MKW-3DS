@@ -3553,6 +3553,12 @@ void Renderer::captureStadiumScreenNow(){
     auto& t=stadiumTex_[stadiumRead_^1];
     if(!t.data||scale>(wideTarget_?2u:1u))return; // the texture holds 256 rows x the block's scale
     const uint8_t* from=source+size_t((rowOffset+stadium::CopyRow*scale)/8)*sourceTiles*Tile+stadium::CopyColumn/8*Tile;
+    // The scene's commands so far go to the GPU flushed from the CPU cache:
+    // C3D_SyncTextureCopy splits without a flush, and FrameEnd(GX_CMDLIST_FLUSH)
+    // flushes only the frame's last list. Unflushed, the console's GPU read
+    // stale command words and hung (DK Summit and Waluigi Stadium intros;
+    // Azahar has no cache, so never there).
+    C3D_FrameSplit(GX_CMDLIST_FLUSH);
     C3D_SyncTextureCopy(reinterpret_cast<u32*>(const_cast<uint8_t*>(from)),GX_BUFFER_DIM(line>>4,(sourceTiles*Tile-line)>>4),
         static_cast<u32*>(t.data),GX_BUFFER_DIM(line>>4,(stadium::TextureWidth/8*Tile-line)>>4),line*rows,8);
     t.height=u16(stadium::TextureHeight*scale);stadiumScale_[stadiumRead_^1]=uint8_t(scale);

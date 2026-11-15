@@ -387,6 +387,9 @@ void Renderer::issueUploads(FrameList& list){
     // In the frame: GX operations run in order after the previous frame
     // (a pipelined frame stages them) and before this frame's command lists.
     const unsigned half=list.frame&1;
+    // The commands before them go flushed (C3D_SyncTextureCopy's own split
+    // doesn't flush; see captureStadiumScreenNow).
+    if(!list.storage.uploads.empty())C3D_FrameSplit(GX_CMDLIST_FLUSH);
     for(const auto& u:list.storage.uploads)
         C3D_SyncTextureCopy(static_cast<u32*>(u.staging[half]),0,static_cast<u32*>(u.destination),0,u.bytes,8);
 }
