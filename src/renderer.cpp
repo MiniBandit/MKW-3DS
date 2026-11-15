@@ -1207,7 +1207,13 @@ void Renderer::shutdown(){
 void Renderer::beginNow(const C3D_Mtx& view,const C3D_Mtx& projection,bool sync,bool begun){
     if(!begun){
         const auto waitStart=svcGetSystemTick();
+#ifndef MKW_RELEASE
+        diag::renderTrace.step.store(3,std::memory_order_relaxed);
+#endif
         if(!C3D_FrameBegin((sync?C3D_FRAME_SYNCDRAW:0)|(execPipelined_?C3D_FRAME_PIPELINE:0)))std::abort();
+#ifndef MKW_RELEASE
+        diag::renderTrace.step.store(0,std::memory_order_relaxed);
+#endif
         stats_.beginWaitMs=float((svcGetSystemTick()-waitStart)*1000.0/SYSCLOCK_ARM11);
 #ifndef MKW_RELEASE
         cmdHashBegin();
@@ -3553,6 +3559,10 @@ void Renderer::captureStadiumScreenNow(){
     auto& t=stadiumTex_[stadiumRead_^1];
     if(!t.data||scale>(wideTarget_?2u:1u))return; // the texture holds 256 rows x the block's scale
     const uint8_t* from=source+size_t((rowOffset+stadium::CopyRow*scale)/8)*sourceTiles*Tile+stadium::CopyColumn/8*Tile;
+#ifndef MKW_RELEASE
+    diag::renderTrace.step.store(1,std::memory_order_relaxed);
+    ++stadiumCopies;
+#endif
     // The scene's commands so far go to the GPU flushed from the CPU cache:
     // C3D_SyncTextureCopy splits without a flush, and FrameEnd(GX_CMDLIST_FLUSH)
     // flushes only the frame's last list. Unflushed, the console's GPU read
@@ -3561,6 +3571,9 @@ void Renderer::captureStadiumScreenNow(){
     C3D_FrameSplit(GX_CMDLIST_FLUSH);
     C3D_SyncTextureCopy(reinterpret_cast<u32*>(const_cast<uint8_t*>(from)),GX_BUFFER_DIM(line>>4,(sourceTiles*Tile-line)>>4),
         static_cast<u32*>(t.data),GX_BUFFER_DIM(line>>4,(stadium::TextureWidth/8*Tile-line)>>4),line*rows,8);
+#ifndef MKW_RELEASE
+    diag::renderTrace.step.store(0,std::memory_order_relaxed);
+#endif
     t.height=u16(stadium::TextureHeight*scale);stadiumScale_[stadiumRead_^1]=uint8_t(scale);
     stadiumPending_=true; // both eyes still sample the previous complete image
 }
@@ -4053,7 +4066,13 @@ void Renderer::endNow(){
     if(!execPipelined_||previousFrameDone_)notePresented();
     if(execPipelined_){endingFrame_=true;frameEndTick_=svcGetSystemTick();}
     flushFacingNow();
+#ifndef MKW_RELEASE
+    diag::renderTrace.step.store(2,std::memory_order_relaxed);
+#endif
     stats_.commandUsage=C3D_GetCmdBufUsage();C3D_FrameEnd(GX_CMDLIST_FLUSH);
+#ifndef MKW_RELEASE
+    diag::renderTrace.step.store(0,std::memory_order_relaxed);
+#endif
     endingFrame_=false;
     if(execPipelined_){
         // The previous frame's commands ran from queueStartTick_ for previousGpuMs.
@@ -4127,3 +4146,28 @@ bool Renderer::presentedMatches(const uint8_t* rgb,unsigned eye){
     return true;
 }
 }
+
+#ifndef MKW_RELEASE
+namespace mkw {
+// DIAG render-hang.txt (main thread's watchdog): citro3d's GX queue and the
+// GPU's registers, written after the CPU-side trace so an IPC that never
+// returns loses nothing.
+void Renderer::diagHangState(FILE* f) const{
+    const auto& q=C3Di_GetContext()->gxQueue;
+    std::fprintf(f,"gxqueue entries=%u last=%u cur=%u max=%u\n",unsigned(q.numEntries),unsigned(q.lastEntry),unsigned(q.curEntry),unsigned(q.maxEntries));
+    std::fprintf(f,"stadium tex=%d requested=%d frame=%d pending=%d read=%u copies=%u scale=%u bloomFrame=%d dualIntro=%d bottomWorld=%d wide=%d topScale=%u\n",
+        stadiumTex_[0].data!=nullptr,int(stadiumRequested_),int(stadiumFrame_),int(stadiumPending_),unsigned(stadiumRead_),stadiumCopies,unsigned(stadiumScale_[stadiumRead_]),
+        int(bloomFrame_),int(execDualScreenIntro_),int(bottomWorldPass_),int(target_&&target_==wideTarget_),topScale);
+    std::fprintf(f,"cmdbuf usage=%.3f previousGpuMs=%.2f\n",double(stats_.commandUsage),double(stats_.previousGpuMs));
+}
+void diagHangRegisters(FILE* f){
+    static const struct{u32 at;u8 size;const char* name;}regs[]={
+        {0x400000,0x40,"gpu 1EF00000 (fills, status)"},{0x400C00,0x30,"ppf 1EF00C00 (transfer/copy)"},
+        {0x401000,0x80,"pica regs 0x000-0x01f"},{0x4018E0,0x20,"pica cmdbuf 0x238-0x23f"}};
+    for(const auto& r:regs){
+        u32 b[0x80/4]{};const Result rc=GSPGPU_ReadHWRegs(r.at,b,r.size);
+        std::fprintf(f,"%s rc=%08lx:",r.name,(unsigned long)rc);for(unsigned i=0;i<r.size/4u;++i)std::fprintf(f,"%s%08lx",i%8?" ":"\n  ",(unsigned long)b[i]);std::fprintf(f,"\n");std::fflush(f);
+    }
+}
+}
+#endif

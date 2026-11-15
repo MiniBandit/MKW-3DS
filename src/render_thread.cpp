@@ -226,6 +226,9 @@ void Renderer::threadLoop(){
             LightEvent_Wait(&wake_);
         }
         execute(*lists_[next%2]);
+#ifndef MKW_RELEASE
+        diag::renderTrace.executed.fetch_add(1,std::memory_order_release);
+#endif
         completed_.store(next+1,std::memory_order_release);
         LightEvent_Signal(&done_);
     }
@@ -487,6 +490,10 @@ void Renderer::execute(FrameList& list){
     const bool probe=list.diagProbe&&!execStereo_.active()&&!execDualScreenIntro_;
     uint32_t passDraws[diag::PassCount]{},passTriangles[diag::PassCount]{};
     bool courseDrawn=false;
+#ifndef MKW_RELEASE
+    auto& trace=diag::renderTrace;const unsigned traceSlot=list.frame%3;
+    trace.counts[traceSlot]=0;trace.frames[traceSlot]=list.frame;trace.listFrame.store(list.frame,std::memory_order_relaxed);trace.cmdIndex.store(0,std::memory_order_relaxed);
+#endif
     for(unsigned pass=0;pass<passes;++pass){
     bottomWorldPass_=pass==eyes;
     const unsigned eye=bottomWorldPass_?0:pass;
@@ -496,6 +503,9 @@ void Renderer::execute(FrameList& list){
     // The bottom screen (after CmdBottom) is drawn once, with the last eye.
     bool bottom=false;
     uint8_t diagRegion=diag::PassNone;bool diagBottom=false;
+#ifndef MKW_RELEASE
+    bool leaveBottom[diag::PassCount]{};
+#endif
     const uint8_t* p=list.commands.data();const uint8_t* end=p+list.commands.size();
 #ifndef MKW_RELEASE
     // DIAG course-draw timer: a course draw right after another starts at its
@@ -509,6 +519,11 @@ void Renderer::execute(FrameList& list){
 #endif
         if(h.type==CmdDiagPass){diagRegion=static_cast<const DiagPassCommand*>(body)->pass;continue;}
         if(list.diagSkip&&diagLeaveOut(list.diagSkip,diagRegion,h.type,diagBottom))continue;
+#ifndef MKW_RELEASE
+        if(diag::leaveMask){bool drop=false;for(uint8_t b=1;b<diag::PassCount&&!drop;++b)if(diag::leaveMask>>b&1)drop=diagLeaveOut(b,diagRegion,h.type,leaveBottom[b]);if(drop)continue;}
+        trace.cmd.store(h.type,std::memory_order_relaxed);trace.pass.store(uint8_t(pass),std::memory_order_relaxed);trace.region.store(diagRegion,std::memory_order_relaxed);
+        trace.cmdIndex.fetch_add(1,std::memory_order_relaxed);
+#endif
         if(bottomWorldPass_){
             // The world reuses its first pass's GPU data. Later 2D panes only
             // belong on top; full-screen fades span both LCDs.
@@ -545,6 +560,11 @@ void Renderer::execute(FrameList& list){
         case CmdBottom:bottom=true;if(!execDualScreenIntro_&&eye+1==eyes)beginBottom();break;
         case CmdDraw:{
             const auto& c=*static_cast<const DrawCommand*>(body);
+#ifndef MKW_RELEASE
+            trace.model.store(c.model,std::memory_order_relaxed);
+            if(trace.counts[traceSlot]<diag::RenderTrace::Max){trace.models[traceSlot][trace.counts[traceSlot]]=c.model;trace.regions[traceSlot][trace.counts[traceSlot]]=uint8_t(pass<<5|diagRegion);++trace.counts[traceSlot];}
+            if(const unsigned n=diag::skipModelCount.load(std::memory_order_acquire)){bool skip=false;for(unsigned i=0;i<n;++i)skip|=diag::skipModels[i]==c.model;if(skip)break;}
+#endif
             execFrame_=c.frame;execAdditive_=c.additive;execBehind_=c.behind;execGhostPass_=c.ghostPass;execGhostAlpha_=c.ghostAlpha;
 #ifndef MKW_RELEASE
             const bool courseTimed=pass==0&&diagRegion==diag::PassCourse;
@@ -953,6 +973,9 @@ void Renderer::endLocal(){
     command<EndCommand>();
     localRecording_=false;recording_=nullptr;localReplay_=true;
     execute(*localList_);
+#ifndef MKW_RELEASE
+    diag::renderTrace.executed.fetch_add(1,std::memory_order_release);
+#endif
     localReplay_=false;gpuIdle_=false;
     triangles=stats_.triangles;drawCalls=stats_.drawCalls;culledTriangles=stats_.culledTriangles;culledSubmeshes=stats_.culledSubmeshes;
     previousGpuMs=stats_.previousGpuMs;beginWaitMs=stats_.beginWaitMs;commandUsage=stats_.commandUsage;renderThreadMs=0;hookMs=gpuGapMs=0;takeDrawTimes(stats_);

@@ -782,6 +782,8 @@ public:
     bool cmdHash=false;
     // Reads this file's switches from the SD card (init()).
     void readSwitches();
+    // DIAG render-hang.txt: GX queue, stadium and frame state (main thread, racy reads).
+    void diagHangState(FILE* f) const;
     // moveToVram widens texture-unit-1 ETC1 textures to ETC1A4 (opaque
     // alpha) instead of leaving them in LINEAR. A/B: no-unit1-vram.txt.
     bool unitOneEtc1a4=false;
@@ -1160,6 +1162,7 @@ private:
     bool stadiumRequested_=false,stadiumFrame_=false,stadiumPending_=false;
     bool stadiumVisible_=true;
     unsigned stadiumRenderFrames_=0;
+    unsigned stadiumCopies=0; // DIAG: crop copies queued (render-hang.txt)
     bool stadiumCaptureFrame_=false;
     std::vector<Bounds> stadiumScreens_;
     C3D_Tex pausedTop_{};Vertex* pausedVertices_=nullptr;
@@ -1230,4 +1233,6 @@ private:
     bool deviceReady_=false;
     bool programReady_=false;
 };
+// DIAG render-hang.txt: GPU registers through GSP (may block if GSP does).
+void diagHangRegisters(FILE* f);
 }

@@ -377,6 +377,46 @@ static void report(const char* text) {
 }
 #define LOGF(...) do{char logLine_[256];snprintf(logLine_,sizeof logLine_,__VA_ARGS__);report(logLine_);}while(0)
 #endif
+// DIAG no-stadium-screen.txt: stadium courses keep the screens' own texture (no crop copies).
+static bool stadiumScreenOn=true;
+#ifndef MKW_RELEASE
+// DIAG render-hang.txt: when the render thread has finished no frame for 3 s
+// while the race loop runs, append what it was executing (diag::renderTrace),
+// the last three lists' draws, citro3d's GX queue and the GPU's registers.
+static void renderHangWatch(mkw::Renderer& renderer,unsigned steps,unsigned stage,bool intro,const char* course){
+    static uint32_t lastExecuted=~0u;static uint64_t lastTick=0;static unsigned dumps=0;static bool dumped=false;
+    auto& t=mkw::diag::renderTrace;
+    const uint32_t executed=t.executed.load(std::memory_order_acquire);const uint64_t now=svcGetSystemTick();
+    if(executed!=lastExecuted){lastExecuted=executed;lastTick=now;dumped=false;return;}
+    if(dumped||dumps>=4||now-lastTick<3ull*SYSCLOCK_ARM11)return;
+    dumped=true;++dumps;
+    auto modelName=[](const void* m)->std::string{
+        for(const auto& n:mkw::diag::modelNames)if(n.model==m)return n.name;
+        char b[16];snprintf(b,sizeof b,"%p",m);return b;};
+    auto passName=[](unsigned r){return r<mkw::diag::PassCount?mkw::diag::PassNames[r]:"?";};
+    FILE* f=fopen("sdmc:/3ds/MKWiiDS/render-hang.txt","a");if(!f)return;
+    fprintf(f,"== render hang %u: course=%s step=%u stage=%u intro=%d, no frame finished for %.1f s\n",dumps,course,steps,stage,int(intro),double(now-lastTick)/SYSCLOCK_ARM11);
+    fprintf(f,"switches: stadium=%d mipcap=%d leave_mask=%08lx skip_models=%u light_zones=%d\n",int(stadiumScreenOn),int(mkw::Texture::mipCapOn),(unsigned long)mkw::diag::leaveMask,mkw::diag::skipModelCount.load(),int(mkw::diag::lightZones));
+    fprintf(f,"render: executed=%lu list_frame=%lu cmd_index=%lu cmd=%u pass=%u region=%s step=%u model=%s\n",(unsigned long)executed,(unsigned long)t.listFrame.load(),(unsigned long)t.cmdIndex.load(),
+        unsigned(t.cmd.load()),unsigned(t.pass.load()),passName(t.region.load()),unsigned(t.step.load()),modelName(t.model.load()).c_str());
+    fflush(f);
+    unsigned order[3]={0,1,2};std::sort(order,order+3,[&](unsigned a,unsigned b){return t.frames[a]>t.frames[b];});
+    for(unsigned slot:order){
+        fprintf(f,"list %lu draws=%u:",(unsigned long)t.frames[slot],unsigned(t.counts[slot]));
+        unsigned last=~0u;
+        for(unsigned i=0;i<t.counts[slot]&&i<mkw::diag::RenderTrace::Max;++i){
+            const unsigned r=t.regions[slot][i];
+            if(r!=last){fprintf(f,"\n  [pass %u %s]",r>>5,passName(r&31));last=r;}
+            fprintf(f," %s",modelName(t.models[slot][i]).c_str());
+        }
+        fprintf(f,"\n");
+    }
+    renderer.diagHangState(f);fflush(f);
+    LOGF("render hang %u at step %u: see render-hang.txt",dumps,steps);
+    mkw::diagHangRegisters(f);
+    fclose(f);
+}
+#endif
 #ifndef MKW_RELEASE
 // DIAG: a failed operator new (bad_alloc -> abort) leaves no crash dump and,
 // in Azahar, a silent stall. The handler frees a block kept for it (fopen
@@ -821,6 +861,15 @@ int main() {
     mkw::shareObjectTextures=!exists("sdmc:/3ds/MKWiiDS/no-texture-share.txt");if(!mkw::shareObjectTextures)report("texture share off");
     mkw::diag::menuFast=!exists("sdmc:/3ds/MKWiiDS/no-menu-fast.txt");mkw::diag::menuCheck=exists("sdmc:/3ds/MKWiiDS/menu-check.txt");mkw::diag::unlitBanks=!exists("sdmc:/3ds/MKWiiDS/no-unlit-banks.txt");mkw::diag::pauseKeep=!exists("sdmc:/3ds/MKWiiDS/no-pause-keep.txt");
     mkw::diag::liveLight=!exists("sdmc:/3ds/MKWiiDS/no-live-light.txt");mkw::diag::rearBake=!exists("sdmc:/3ds/MKWiiDS/no-rear-bake.txt");mkw::diag::liveOpponents=kQa&&exists("sdmc:/3ds/MKWiiDS/live-opponents.txt");
+    stadiumScreenOn=!exists("sdmc:/3ds/MKWiiDS/no-stadium-screen.txt");report(stadiumScreenOn?"stadium screen on":"stadium screen off");
+#ifndef MKW_RELEASE
+    if(FILE* f=fopen("sdmc:/3ds/MKWiiDS/leave-out.txt","r")){char line[64];
+        while(fgets(line,sizeof line,f)){line[strcspn(line,"\r\n ")]=0;for(unsigned b=1;b<mkw::diag::PassCount;++b)if(!strcmp(line,mkw::diag::PassNames[b]))mkw::diag::leaveMask|=1u<<b;}
+        fclose(f);LOGF("leave-out mask %08lx",(unsigned long)mkw::diag::leaveMask);}
+    if(FILE* f=fopen("sdmc:/3ds/MKWiiDS/skip-models.txt","r")){char line[96];
+        while(fgets(line,sizeof line,f)){line[strcspn(line,"\r\n")]=0;if(line[0]){mkw::diag::skipModelNames.push_back(line);LOGF("skip models matching %s",line);}}
+        fclose(f);}
+#endif
     mkw::diag::lightZones=!exists("sdmc:/3ds/MKWiiDS/no-light-zones.txt");report(mkw::diag::lightZones?"light zones on":"light zones off");
     mkw::diag::wiiDriverLod=!exists("sdmc:/3ds/MKWiiDS/no-wii-driver-lod.txt");report(mkw::diag::wiiDriverLod?"wii driver lod on":"wii driver lod off");
     mkw::diag::stereoSixty=!exists("sdmc:/3ds/MKWiiDS/no-stereo-60.txt");
@@ -2366,7 +2415,7 @@ int main() {
         const auto* bloom=mkw::courseBloom(Courses[courseChoice].archive);
         if(!effectsTest&&bloom&&bloom->enabled()&&!renderer.reserveBloom()){report("FAIL required bloom targets");return false;}
         if(!effectsTest&&!renderer.configurePlayerShadow(menu.settings.dynamicShadows))report("WARN player shadow target unavailable; native volume retained");
-        if(!renderer.configureStadiumScreen(!effectsTest&&(int(Courses[courseChoice].id)==18||int(Courses[courseChoice].id)==6||int(Courses[courseChoice].id)==35))){report("FAIL stadium screen targets");return false;}
+        if(!renderer.configureStadiumScreen(stadiumScreenOn&&!effectsTest&&(int(Courses[courseChoice].id)==18||int(Courses[courseChoice].id)==6||int(Courses[courseChoice].id)==35))){report("FAIL stadium screen targets");return false;}
         if(!bottomScreen.load(renderer,courseChoice)){report("FAIL required bottom screen");return false;}
         if(driverChoice>=24&&!bottomScreen.setMiiPortrait(renderer,selectedRaceMii)){report("FAIL Mii map portrait");return false;}
         if(kQa){bottomScreen.describe(line,sizeof line);report(line);}
@@ -3766,6 +3815,9 @@ int main() {
                         mkw::diag::splitStats.midFrameDrains,(unsigned long)mkw::diag::splitStats.lastDrainCaller,mkw::diag::splitStats.effectRebuilds,mkw::diag::splitStats.effectRebuildsRecording);
                     if(kQa&&physicsSteps%300==0)raceLinearLow=std::min(raceLinearLow,size_t(linearSpaceFree()));
 #ifndef MKW_RELEASE
+                    if(physicsSteps%30==0)renderHangWatch(renderer,physicsSteps,stage,intro.active(),Courses[courseChoice].name);
+#endif
+#ifndef MKW_RELEASE
                     if(textureWatch&&physicsSteps%300==0&&!watchedTextures.empty()){char when[24];snprintf(when,sizeof when,"step %u",physicsSteps);checkWatchedTextures(when);}
 #endif
                     if(kQa&&physicsSteps%300==0){const auto& sr=mkw::diag::shadowRectStats;
@@ -4347,7 +4399,7 @@ int main() {
                 }
             }
             profiler->mark(Profile::UiPrepare);
-            if(fullRace&&!effectsTest&&(int(Courses[courseChoice].id)==18||int(Courses[courseChoice].id)==6||int(Courses[courseChoice].id)==35))courseObjects.requestStadiumScreen(renderer);
+            if(stadiumScreenOn&&fullRace&&!effectsTest&&(int(Courses[courseChoice].id)==18||int(Courses[courseChoice].id)==6||int(Courses[courseChoice].id)==35))courseObjects.requestStadiumScreen(renderer);
             if(fullRace&&!effectsTest)if(const auto* bloom=mkw::courseBloom(Courses[courseChoice].archive))renderer.requestBloom(*bloom);
             {
                 // Fog follows the camera through KMP fog areas, one retail step per simulation step.

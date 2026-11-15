@@ -196,6 +196,14 @@ loader, worker) about once a second and `ceremony watchdog ...` when the main
 thread stops coming round a loop for 3 s or more; `award-load-times.jsonl` gets
 `board` when the result board shows (a GP finished 4th or lower has no
 `podium` and waits there for A).
+Race hangs: when the render thread finishes no frame for 3 s while the race loop
+runs, `render-hang.txt` gets what it was executing (command, pass, model, frame
+begin/end or stadium copy), the last three lists' draws by model, citro3d's GX
+queue, the stadium state and the GPU registers (read last: the PICA registers
+block while the GPU is hung). Switches for bisecting: `no-stadium-screen.txt`
+(also read by release builds: no stadium crop copies), `leave-out.txt` (pass
+names, one per line, dropped from every frame), `skip-models.txt` (course-object
+resource substrings never drawn).
 `no-live-light.txt` goes back to light baked into the vertices at load for
 released items, other racers' items and course objects (crowds stay baked);
 by default their G3D light is computed in the vertex shader, from the camera's

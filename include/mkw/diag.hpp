@@ -183,6 +183,23 @@ inline SplitStats splitStats;
 // sums the bounded rectangles' pixels, to compare with whole-screen quads.
 struct ShadowRectStats {unsigned bounded=0,full=0,empty=0;uint64_t area=0;};
 inline ShadowRectStats shadowRectStats;
+// DIAG hang trace (render-hang.txt): what the render thread executes, written
+// by it, read by the main thread's watchdog when frames stop completing. The
+// last three lists' draws (by list frame % 3) name the models the GPU had.
+struct RenderTrace {
+    std::atomic<uint32_t> executed{0},listFrame{0},cmdIndex{0};
+    std::atomic<uint16_t> cmd{0};std::atomic<uint8_t> pass{0},region{0},step{0};
+    std::atomic<const void*> model{nullptr};
+    static constexpr unsigned Max=320;
+    const void* models[3][Max]{};uint8_t regions[3][Max]{};uint16_t counts[3]{};uint32_t frames[3]{};
+};
+inline RenderTrace renderTrace;
+// leave-out.txt: passes (PassNames, one per line) every frame drops.
+// skip-models.txt: course-object resources (substrings, one per line) never drawn.
+inline uint32_t leaveMask=0;
+inline std::vector<std::string> skipModelNames;
+inline const void* skipModels[64]{};inline std::atomic<unsigned> skipModelCount{0};
+
 
 // Draw calls per (pass, model) on profiled frames that leave nothing out
 // (render thread, left eye), to see which models make a pass's draws. Course
@@ -200,6 +217,9 @@ inline void nameModel([[maybe_unused]] const void* model,[[maybe_unused]] const 
 #ifdef MKW_RELEASE
     return;
 #endif
+    for(const auto& k:skipModelNames)if(name.find(k)!=std::string::npos){
+        const unsigned c=skipModelCount.load();bool known=false;for(unsigned i=0;i<c;++i)known|=skipModels[i]==model;
+        if(!known&&c<64){skipModels[c]=model;skipModelCount.store(c+1);}break;}
     for(auto& n:modelNames)if(n.model==model){if(n.name!=name)n.name=name;return;}
     modelNames.push_back({model,name});
 }
@@ -404,7 +424,7 @@ inline void passFrame(bool racing){
     if(s.frame%PassPeriod==PassPeriod/2)s.skip=uint8_t(PassSky+s.rotation++%(s.noBottom?PassBottom-PassSky:PassCount-1));
     else if(s.frame%PassPeriod==0)s.probe=ProbePasses[s.probeRotation++%std::size(ProbePasses)];
 }
-inline bool passMarkers(){return passState.active;}
+inline bool passMarkers(){return passState.active||leaveMask!=0;}
 // Render thread, at each frame's begin: gpu is the previous frame's GPU time,
 // tag/active what that frame was recorded with.
 inline void passSample(uint8_t tag,bool active,float gpu){
