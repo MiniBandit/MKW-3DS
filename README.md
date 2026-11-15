@@ -40,7 +40,7 @@ No game files are included. Everything is converted from your own disc.
 2. Double-click `Build.bat` and select your disc.
 
 Anything missing, including Python, Git and devkitPro, is downloaded for you.
-When it's done it deletes the converted data, leaving about 3 GB.
+It keeps the converted data (about 20 GB), so later updates only redo what changed.
 
 Or run the build script yourself. Install Python 3.12, Git, and devkitPro with
 `3ds-dev` and `gcc`. Then, from a clone:
