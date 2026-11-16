@@ -60,7 +60,6 @@ private:
     const bool m_isBigStatue; ///< Differentiates the first rBC turn statue from tiny statues
     const u32 m_startDelay;
     u32 m_cycleFrame;
-    bool m_fireActive = false;
 
     static constexpr u32 FIRE_DURATION = 300; ///< How long the statue shoots fire for in a cycle
     static constexpr u32 COOLDOWN_DURATION = 180; ///< How long fire is disabled for in a cycle

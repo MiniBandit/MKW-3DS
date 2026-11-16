@@ -280,19 +280,6 @@ public:
     void setBulletRouteFlight(bool flight,const EGG::Vector3f &up){m_bulletRouteFlight=flight;m_bulletRouteUp=up;}
     void setBulletGroundContact(bool contact,const EGG::Vector3f& normal=EGG::Vector3f::ey);
 
-    // Retail KartObjectProxy::isCpu (KartState +0x14 bit 0; a local player gets it at its
-    // goal, fn_1_7EC98 0x8058F04C) points two stick readers at the AI instead of the pad:
-    // KartModel 0x807CD32C reads Enemy::AI +0x14 (AI::getStick 0x80726204) and the bike
-    // lean 0x80587E58 reads KartMove +0x28C (AI fn_1_220A00). The port's AI sets them.
-    // isCpu also gates the drift turn (0x8057AAD4), the start boost (0x80595A00) and the
-    // moving-road push (0x80597C10).
-    void setCpuSteer(bool cpu, f32 stick, f32 lean) {
-        m_cpuSteer = cpu;
-        m_cpuStick = stick;
-        m_cpuLean = lean;
-    }
-    [[nodiscard]] bool cpuSteer() const { return m_cpuSteer; }
-    [[nodiscard]] f32 cpuStick() const { return m_cpuStick; }
 
     /// The AI stuck handler's recovery state sets status bit 58 and +0x254 bit 3 on entry
     /// (fn_1_234DB0 0x80745164) and clears both on exit (fn_1_2352A4 0x80745658).
