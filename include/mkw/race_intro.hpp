@@ -1,5 +1,6 @@
 #pragma once
 #include <mkw/math.hpp>
+#include <mkw/color_fader.hpp>
 #include <mkw/intro_clearance.hpp>
 #include <cstddef>
 #include <cstdint>
@@ -26,11 +27,12 @@ public:
  void start();
  // One 60 Hz tick, in step with the race simulation.
  void step();
- // Ends the preview early (A or START).
- void skip(){stop();}
  // Drops the rail before Kinoko's scene (and its RailManager) changes.
  void stop();
  bool active()const{return active_;}
+ // The last shot has run out (director +0xC8): the view holds its final
+ // frame until DemoSection's fade-out ends the preview.
+ bool finished()const{return finished_;}
  Vec3 eye()const{return eye_;}
  Vec3 target()const{return target_;}
  // FOV as last written to the camera (a switch's fovStart applies next tick).
@@ -49,9 +51,44 @@ private:
  std::vector<Camera> cameras_;
  int opening_=-1,current_=-1;unsigned shots_=0;
  unsigned frame_=0;
- bool active_=false;
+ bool active_=false,finished_=false;
  float elapsed_=0,fov_=60,appliedFov_=60,viewDistance_=0;
  Vec3 eye_,target_,viewOffset_;
  std::unique_ptr<Kinoko::Field::RailInterpolator> rail_;
+};
+
+// The Demo section around the preview (as TPO models it, compare/tpo
+// include/mkw/race_intro.hpp). The scene enters with a ColorFader fade-in
+// (0x8051A4DC). Once the fade is clear, the director's end or a skip starts
+// the fade to black (with RaceRSARPlayer::Stop); a skip is an OK press (A,
+// never START) from the Demo's 61st frame. On the fade-out's last frame the
+// race section starts, and it fades in the same way. A race without a
+// preview enters the race section directly, fading in.
+class DemoSection {
+public:
+ enum class Event {None,Leave,EnterRace};
+ void enter(bool demo){demo_=demo;leaving_=skip_=false;frame_=fade_=0;}
+ // One 60 Hz frame, before the preview's step: `done` is RaceIntro::finished(),
+ // `ok` a new OK press this frame.
+ Event step(bool done,bool ok){
+  if(leaving_){
+   if(++fade_<unsigned(ColorFadeOutLastFrame))return Event::None;
+   demo_=leaving_=false;fade_=0;return Event::EnterRace;
+  }
+  if(demo_){
+   ++frame_;
+   if(fade_>=unsigned(ColorFadeInLastFrame)){
+    if(done||skip_){leaving_=true;fade_=0;return Event::Leave;}
+    if(frame_>60&&ok)skip_=true;
+   }
+  }
+  if(fade_<unsigned(ColorFadeInLastFrame))++fade_;
+  return Event::None;
+ }
+ bool demo()const{return demo_;}
+ // The scene fader's opacity over the whole upper screen.
+ float black()const{return colorFaderOpacity(float(fade_),!leaving_);}
+private:
+ bool demo_=false,leaving_=false,skip_=false;unsigned frame_=0,fade_=0;
 };
 }

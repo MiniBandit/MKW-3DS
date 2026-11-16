@@ -8,3 +8,4 @@ zstandard==0.23.0; python_version < "3.14"
 -e ./vendor/gclib
 
 unicorn==2.1.4
+gltflib==1.0.13

@@ -16,8 +16,11 @@ ObjectFireSnakeV::ObjectFireSnakeV(const System::MapdataGeoObj &params)
 
     calcTransform();
 
-    // USA806e4df8/4e28: rest heading is column2; pipe launch is column0.
-    m_initRot = transform().base(2);
+    // USA806e35e8..3648 / 806e4de4..4e44: retail stores column 2 at +0x118 and
+    // column 0 at +0x124. The rest bounce (USA806e4008, m_initRot here) and the
+    // pipe launch both read +0x124, so both are column 0. Column 2 made the snake
+    // bounce across the road and desynced Grumble Volcano's staff ghost on lap 2.
+    m_initRot = transform().base(0);
     m_launchDir = transform().base(0);
     m_initialPos = m_sunPos + m_launchDir * m_distFromPipe;
 }

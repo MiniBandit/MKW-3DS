@@ -2,10 +2,14 @@
 #include <cstdint>
 
 namespace mkw {
-// Intro draws both screens from the authored 60 Hz camera; budget two ticks
-// per presentation without slowing animation or simulation.
-constexpr uint32_t racePresentationTicks(bool new3ds,bool stereo,bool intro){
-    return intro||!new3ds||stereo?2u:1u;
+// New 3DS presents every tick in races, their intros and the award ceremony,
+// as the Wii: it runs 60 FPS except 3-4 player and online races (USA 80516b10,
+// set only from the race scene at 8054e250, which the ceremony, game mode 11,
+// also goes through). introSixty false (no-intro-60.txt) brings back two ticks
+// per presentation for intros and the ceremony. stereoSixty: New 3DS stereo
+// presents every tick too (its lighter 3D: race_visuals' stereo cuts).
+constexpr uint32_t racePresentationTicks(bool new3ds,bool stereo,bool intro,bool stereoSixty=false,bool introSixty=true){
+    return (intro&&!introSixty)||!new3ds||(stereo&&!stereoSixty)?2u:1u;
 }
 // One presentation per slot of source ticks: 1 tick (60 FPS, New 3DS in 2D) or
 // 2 ticks (30 FPS: Old 3DS, which cannot present every tick and would otherwise

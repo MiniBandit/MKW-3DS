@@ -38,7 +38,6 @@ public:
         return m_hostControllers[index];
     }
 
-    // MKW-3DS: any racer may replay a ghost (Time Trials against a ghost).
     void setGhostPad(const u8 *inputs, bool driftIsAuto, size_t index = 0);
     void setHostPad(bool driftIsAuto, size_t index = 0);
     void setPlayerCount(size_t count) {
@@ -61,7 +60,7 @@ private:
 
     std::array<KPadPlayer, 12> m_playerInputs;
     size_t m_playerCount = 1;
-    std::array<KPadGhostController *, 12> m_ghostControllers{};
+    KPadGhostController *m_ghostController;
     std::array<KPadHostController *, 12> m_hostControllers;
 
     static KPadDirector *s_instance; ///< @addr{0x809BD70C}

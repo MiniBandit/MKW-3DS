@@ -166,14 +166,22 @@ void RaceGrid::configure(Kinoko::System::RaceConfig& config,unsigned localChoice
         const auto& choice=raceGarageChoice(choices_[i]);
         p.character=static_cast<Kinoko::Character>(choice.character);p.vehicle=static_cast<Kinoko::Vehicle>(choice.vehicle);
         p.type=i?Kinoko::System::RaceConfig::Player::Type::CPU:Kinoko::System::RaceConfig::Player::Type::Local;
-        p.driftIsAuto=i!=0;
+        // Retail CPUs drift manually (KPadAI: driftIsAuto 0, so AIControlBase::init picks
+        // the manual kart controller). The caller sets the human's transmission.
+        p.driftIsAuto=false;
     }
 }
 bool RaceGrid::reset(){
     using namespace Kinoko;
     drivers_={};finished_={};laps_={};route_.clear();bulletRoute_.clear();
     auto* config=System::RaceConfig::Instance();if(!config)return false;
-    count_=config->raceScenario().playerCount;
+    count_=config->raceScenario().playerCount;ghosts_=0;
+    for(unsigned i=0;i<count_;++i){const auto& p=config->raceScenario().players[i];
+        if(p.type!=System::RaceConfig::Player::Type::Ghost)continue;
+        ghosts_|=1u<<i;
+        // The ghost file chose its machine (RaceConfig::initGhost): match the garage entry.
+        for(unsigned c=0;c<GarageChoices.size();++c)if(raceGarageChoice(c).character==unsigned(p.character)&&raceGarageChoice(c).vehicle==unsigned(p.vehicle)){choices_[i]=c;break;}
+    }
     auto* kartObjects=Kart::KartObjectManager::Instance();
     for(unsigned i=0;i<count_;++i){
         auto* kart=kartObjects->object(i);
@@ -234,7 +242,6 @@ void RaceGrid::beforeStep(uint16_t bulletPlayers){
         auto* local=objects->object(0);
         const Vec3 target=native(local->pos());
         for(unsigned i=1;i<count_;++i){
-            if((remoteMask>>i)&1)continue;
             auto* kart=objects->object(i);
             auto* pad=System::KPadDirector::Instance()->hostController(i);
             const Vec3 pos=native(kart->pos());
@@ -251,7 +258,7 @@ void RaceGrid::beforeStep(uint16_t bulletPlayers){
     for(unsigned j=1;j<count_;++j)leaderCompletion=std::max(leaderCompletion,manager->player(j).raceCompletion());
     // Retail Enemy::AI drives every CPU outside a Bullet (and player zero for QA).
     uint32_t aiMask=0;
-    for(unsigned i=0;i<count_;++i)if(!(bulletPlayers&(1u<<i))&&(i||driveLocal)&&!((remoteMask>>i)&1))aiMask|=1u<<i;
+    for(unsigned i=0;i<count_;++i)if(!(bulletPlayers&(1u<<i))&&(i||driveLocal)&&!ghost(i))aiMask|=1u<<i;
     if(ai_.ready()){
         // CPUs run the retail stuck handler inside CpuAi; the QA autopilot keeps
         // the adapted recovery below.
@@ -259,7 +266,7 @@ void RaceGrid::beforeStep(uint16_t bulletPlayers){
         ai_.step(aiMask,ranks_,laps_,finished_,3);
     }
     for(unsigned i=0;i<count_;++i){
-        if((remoteMask>>i)&1)continue;
+        if(ghost(i))continue;
         const bool bullet=(bulletPlayers&(1u<<i))!=0;
         auto& d=drivers_[i];
         auto* kart=objects->object(i);
@@ -270,7 +277,7 @@ void RaceGrid::beforeStep(uint16_t bulletPlayers){
             d.bulletGravity.reset();kart->move()->setBulletRouteFlight(false,EGG::Vector3f::ey);kart->move()->setBulletGroundContact(false);
         };
         if(d.bullet&&!bullet)releaseBulletGravity();
-        if(i==0&&!bullet&&!driveLocal){if(d.bullet)kart->move()->setKartSpeedLimit();d.bullet=false;continue;}
+        if(i==0&&!bullet&&!driveLocal){if(d.bullet)kart->move()->setKartSpeedLimit();d.bullet=false;kart->move()->setCpuSteer(false,0,0);continue;}
         auto* pad=System::KPadDirector::Instance()->hostController(i);
         const auto& route=bullet?bulletRoute_:route_;
         if(!route.size()){releaseBulletGravity();pad->setInputsRawStick(0,7,7,System::Trick::None);continue;}
@@ -312,7 +319,10 @@ void RaceGrid::beforeStep(uint16_t bulletPlayers){
             // Trick input from the retail AITrickHandler (CPU) / AIEngine command.
             const auto trick=racing&&!d.reverse?System::Trick(std::min<uint8_t>(command.trick,4)):System::Trick::None;
             const int raw=std::clamp(7+int(std::lround(aiStick*7.f)),0,14);
-            pad->setInputsRawStick(buttons,unsigned(raw),7,trick);
+            // raw is clamped to 0..14 above.
+            if(fastPad)pad->setInputsRawStickUnchecked(buttons,uint8_t(raw),7,trick);
+            else pad->setInputsRawStick(buttons,unsigned(raw),7,trick);
+            kart->move()->setCpuSteer(true,command.animationStick,command.lean);
             continue;
         }
         if(i&&racing&&!bullet&&speedParamReady_){
@@ -457,14 +467,7 @@ void RaceGrid::afterStep(){
     std::array<unsigned,Capacity> order{};for(unsigned i=0;i<count_;++i)order[i]=i;
     std::sort(order.begin(),order.begin()+count_,[&](unsigned a,unsigned b){
         const auto& x=manager->player(a);const auto& y=manager->player(b);
-        if(netFinish_){
-            // Online: the order every console's own report gives.
-            if(bool(netKeys_[a])!=bool(netKeys_[b]))return netKeys_[a]!=0;
-            if(netKeys_[a]!=netKeys_[b])return netKeys_[a]<netKeys_[b];
-            if(netKeys_[a])return netSlots_[a]<netSlots_[b];
-            if(x.raceCompletion()!=y.raceCompletion())return x.raceCompletion()>y.raceCompletion();
-            return netSlots_[a]<netSlots_[b];
-        }
+        if(ghost(a)!=ghost(b))return ghost(b);
         if(x.finished()!=y.finished())return x.finished();
         if(x.finished())return x.finishOrder()<y.finishOrder();
         if(x.raceCompletion()!=y.raceCompletion())return x.raceCompletion()>y.raceCompletion();
@@ -472,9 +475,7 @@ void RaceGrid::afterStep(){
     });
     for(unsigned rank=0;rank<count_;++rank)ranks_[order[rank]]=rank+1;
     } // Battle receives the mode's prior-position/score ranks after scoring.
-    for(unsigned i=0;i<count_;++i){const auto& p=manager->player(i);finished_[i]=netFinish_?netKeys_[i]!=0:p.finished();laps_[i]=std::max(laps_[i],unsigned(std::clamp<int>(p.currentLap(),1,3)));}
-    // Raceinfo maxLap (PR #76), not currentLap: CtrlRaceLap, JugemSwitchLap and the AI
-    // read it, so backing over the line never lowers the lap shown.
+    for(unsigned i=0;i<count_;++i){const auto& p=manager->player(i);finished_[i]=p.finished();laps_[i]=unsigned(std::clamp<int>(p.currentLap(),1,3));}
 }
 void RaceGrid::forwardBumps(){
     using namespace Kinoko;

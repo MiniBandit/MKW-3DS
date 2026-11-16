@@ -89,6 +89,25 @@ public:
     };
     STATIC_ASSERT(sizeof(KCollisionPrism) == 0x10);
 
+    /// mkw-3ds: one prism with its vertex and normals stored beside it, built
+    /// at load. A test reads one or two sequential cache lines instead of the
+    /// prism, a vertex and four normals at six scattered addresses (the Old
+    /// 3DS has no L2: ~230 ns per miss). Same values, so results are
+    /// bit-identical. After Codiak540's o3ds-performance Kinoko patch.
+    /// The attribute (the type mask is the first exit) comes first, so a
+    /// rejected type reads only the first line.
+    struct PackedPrism {
+        u16 attribute;
+        u16 pad;
+        f32 height;
+        EGG::Vector3f vertex;
+        EGG::Vector3f enrm1;
+        EGG::Vector3f enrm2;
+        EGG::Vector3f enrm3;
+        EGG::Vector3f fnrm;
+    };
+    STATIC_ASSERT(sizeof(PackedPrism) == 0x44);
+
     KColData(const void *file);
     ~KColData();
 
@@ -107,10 +126,9 @@ public:
     void lookupSphereCached(const EGG::Vector3f &p1, const EGG::Vector3f &p2, u32 typeMask,
             f32 radius);
 
-    /// Port: the lookup cursor the lookup*() calls set and the check*() iterators advance (nothing
-    /// else in KColData changes during a query). The presentation race camera
-    /// (src/race_chase_camera.cpp) saves it before its own course query and restores it after, so
-    /// no simulation query ever sees the camera's.
+    /// Port: the lookup cursor that lookupSphere sets and the check iterators advance. The
+    /// presentation race camera (src/race_chase_camera.cpp) saves it before its own course
+    /// query and restores it after, so no simulation query sees the camera's.
     struct LookupState {
         EGG::Vector3f pos;
         EGG::Vector3f prevPos;
@@ -155,6 +173,44 @@ public:
     }
     /// @endGetters
 
+    /// mkw-3ds DIAG A/B (ab-alternate.txt): false reads the unpacked arrays.
+    static bool s_packed;
+
+    /// mkw-3ds (Old 3DS): batched sphere queries against the course KCL. A kart's
+    /// wheel or body spheres are predicted before its collision loop and tested in
+    /// one pass over each prism list (most share the kart's narrowed prism cache),
+    /// so a prism is read once for every sphere instead of once per sphere (the Old
+    /// 3DS has 16 KB of L1 data cache and no L2). The hits are kept per sphere in
+    /// prism order. The collision loop then runs unchanged: when a live query
+    /// (lookupSphereCached) equals a batched one bit for bit (position, previous
+    /// position, radius, type mask, prism list and prism cache generation),
+    /// checkSphereReplay returns the kept hits instead of testing the prisms again.
+    /// The hits are a function of exactly those inputs, so the result is
+    /// bit-identical; a sphere predicted wrongly just runs its own query. After
+    /// Codiak540's o3ds-performance Kinoko patch.
+    struct BatchSphere {
+        EGG::Vector3f pos;
+        EGG::Vector3f prevPos;
+        f32 radius;
+        KCLTypeMask typeMask;
+    };
+    static constexpr size_t BATCH_MAX = 16;
+    static constexpr size_t BATCH_HITS = 32;
+
+    /// Tests every sphere (at most BATCH_MAX) as lookupSphereCached + checkSphereCollision
+    /// would, and keeps the hits for replayBatched. Replaces any earlier batch.
+    void batchSpheresCached(const BatchSphere *spheres, size_t count);
+    /// Forgets the batch (a later query never matches it).
+    static void ClearBatch();
+    /// After lookupSphereCached: true when the batch holds this exact query; the
+    /// next checkSphereReplay calls then return its hits.
+    [[nodiscard]] bool replayBatched();
+    [[nodiscard]] bool checkSphereReplay(f32 *distOut, EGG::Vector3f *fnrmOut, u16 *flagsOut);
+    /// DIAG counts (the sim profile prints and resets them): spheres batched, and
+    /// live queries answered from a batch.
+    static u32 s_batchedSpheres;
+    static u32 s_batchReplays;
+
     [[nodiscard]] static EGG::Vector3f GetVertex(f32 height, const EGG::Vector3f &vertex1,
             const EGG::Vector3f &fnrm, const EGG::Vector3f &enrm3, const EGG::Vector3f &enrm);
 
@@ -162,12 +218,29 @@ private:
     void preloadPrisms();
     void preloadNormals();
     void preloadVertices();
+    void packPrisms();
+    [[nodiscard]] const PackedPrism *prismAt(u16 index, PackedPrism &scratch) const;
+
+    /// The query a prism test reads: the members for a live query, a batch entry's
+    /// copies for a batched one (same values, same expressions).
+    struct QueryRef {
+        const EGG::Vector3f &pos;
+        const EGG::Vector3f &movement;
+        f32 radius;
+        KCLTypeMask typeMask;
+    };
 
     template <CollisionCheckType Type>
-    [[nodiscard]] bool checkCollision(const KCollisionPrism &prism, f32 *distOut,
+    [[nodiscard]] bool checkCollision(const QueryRef &q, const PackedPrism &prism, f32 *distOut,
             EGG::Vector3f *fnrmOut, u16 *flagsOut);
+    template <CollisionCheckType Type>
+    [[nodiscard]] bool checkCollision(const PackedPrism &prism, f32 *distOut,
+            EGG::Vector3f *fnrmOut, u16 *flagsOut) {
+        return checkCollision<Type>(QueryRef{m_pos, m_movement, m_radius, m_typeMask}, prism,
+                distOut, fnrmOut, flagsOut);
+    }
 
-    [[nodiscard]] bool checkPointCollision(const KCollisionPrism &prism, f32 *distOut,
+    [[nodiscard]] bool checkPointCollision(const PackedPrism &prism, f32 *distOut,
             EGG::Vector3f *fnrmOut, u16 *flagsOut, bool movement);
     [[nodiscard]] bool checkSphereMovement(f32 *distOut, EGG::Vector3f *fnrmOut, u16 *attributeOut);
     [[nodiscard]] bool checkPointMovement(f32 *distOut, EGG::Vector3f *fnrmOut, u16 *attributeOut);
@@ -200,12 +273,14 @@ private:
     u16 *m_cachedPrismArray;
     EGG::Vector3f m_cachedPos;
     f32 m_cachedRadius = 0.0f;
+    u32 m_cacheGen = 0; ///< mkw-3ds: counts narrowScopeLocal calls (batch keys).
 
     /// @brief Optimizes for time by avoiding unnecessary byteswapping.
     /// The Wii doesn't have this problem because big endian is always assumed.
     owning_span<KCollisionPrism> m_prisms;
     owning_span<EGG::Vector3f> m_nrms;
     owning_span<EGG::Vector3f> m_vertices;
+    owning_span<PackedPrism> m_packed;
 };
 
 } // namespace Kinoko::Field

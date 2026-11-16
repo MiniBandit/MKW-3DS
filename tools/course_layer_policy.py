@@ -39,6 +39,11 @@ def triangle_layers(models, prefix):
                 # Native translucent road joins/tyre marks follow the road,
                 # including sloped pieces not found by a horizontal classifier.
                 selected[id(shape)] = set(range(len(shape['vertices'])//3))
+            elif prefix == 'course_17' and material in ('lambert185', 's_lambert180', 's_lambert184'):
+                # GCN Mario Circuit: blended decals (DrawOpa, no depth write)
+                # 2-7 units above the road, kerbs and grass. Not coplanar, so
+                # course_layers misses them; distant depth merges flicker.
+                selected[id(shape)] = set(range(len(shape['vertices'])//3))
             elif prefix == 'course_23' and material == 'b_tw_kanban2':
                 stream = shape['vertices']
                 faces = [face(stream[i:i+3]) for i in range(0, len(stream), 3)]

@@ -75,11 +75,11 @@ std::vector<IntroPathFrame> RaceIntro::previewFrames()const{
  RaceIntro probe;probe.cameras_=cameras_;probe.opening_=opening_;probe.start();
  std::vector<IntroPathFrame> result;if(!probe.active())return result;
  result.push_back({probe.eye(),probe.target(),probe.fov(),probe.shot()});
- while(probe.active()&&result.size()<4096){const int shot=probe.shot();probe.step();result.push_back({probe.eye(),probe.target(),probe.fov(),shot});}
+ while(probe.active()&&!probe.finished()&&result.size()<4096){const int shot=probe.shot();probe.step();result.push_back({probe.eye(),probe.target(),probe.fov(),shot});}
  return result;
 }
 
-void RaceIntro::stop(){rail_.reset();active_=false;current_=-1;}
+void RaceIntro::stop(){rail_.reset();active_=finished_=false;current_=-1;}
 
 // Director camera switch (PAL 0x805AD924) and the shot's state init.
 void RaceIntro::begin(int index){
@@ -102,7 +102,7 @@ void RaceIntro::begin(int index){
 }
 
 void RaceIntro::step(){
- if(!active_)return;
+ if(!active_||finished_)return;
  ++frame_;
  const auto& c=cameras_[current_];
  // Shot position. Type 5 (0x805ADCB0): velocity is the route points' first
@@ -138,11 +138,12 @@ void RaceIntro::step(){
   target_=c.viewStart+viewOffset_;
  }
  // Director (0x805AD5C8): each shot lasts `time` frames, then `next` starts;
- // the last shot ends the preview. A malformed loop still ends.
+ // after the last shot the view holds (DemoSection fades the section out).
+ // A malformed loop still ends.
  elapsed_+=1.f;
  if(c.time<=elapsed_){
   if(c.next<cameras_.size()&&++shots_<64)begin(c.next);
-  else stop();
+  else finished_=true;
  }
 }
 }

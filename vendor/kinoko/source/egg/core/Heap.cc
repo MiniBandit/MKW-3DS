@@ -131,13 +131,115 @@ Heap *Heap::findContainHeap(const void *block) {
     return handle ? findHeap(handle) : nullptr;
 }
 
+BlockArena *BlockArena::Open(size_t capacity) {
+    for (auto &arena : s_arenas) {
+        if (arena.m_start) {
+            continue;
+        }
+
+        void *block = Heap::alloc(capacity, 32, nullptr);
+        if (!block) {
+            return nullptr;
+        }
+
+        arena.m_start = static_cast<u8 *>(block);
+        arena.m_cur = arena.m_start;
+        arena.m_end = arena.m_start + capacity;
+        ++s_open;
+        return &arena;
+    }
+
+    return nullptr;
+}
+
+BlockArena *BlockArena::Containing(const void *p) {
+    const u8 *at = static_cast<const u8 *>(p);
+    for (auto &arena : s_arenas) {
+        if (arena.m_start && at >= arena.m_start && at < arena.m_end) {
+            return &arena;
+        }
+    }
+
+    return nullptr;
+}
+
+void BlockArena::ForgetAll() {
+    for (auto &arena : s_arenas) {
+        arena.m_start = arena.m_cur = arena.m_end = nullptr;
+    }
+
+    s_active = nullptr;
+    s_open = 0;
+}
+
+void BlockArena::trim(size_t reserve) {
+    const size_t keep = RoundUp(used() + reserve, 4);
+    if (!m_start || keep >= size()) {
+        return;
+    }
+
+    ExpHeap *heap = Heap::dynamicCastToExp(Heap::findContainHeap(m_start));
+    if (heap) {
+        m_end = m_start + heap->shrinkBlock(m_start, keep);
+    }
+}
+
+void BlockArena::release() {
+    void *block = m_start;
+    if (!block) {
+        return;
+    }
+
+    if (s_active == this) {
+        s_active = nullptr;
+    }
+
+    m_start = m_cur = m_end = nullptr;
+    --s_open;
+    Heap::free(block, nullptr);
+}
+
+void *BlockArena::Alloc(size_t size, s32 align) {
+    BlockArena *arena = s_active;
+
+    // As MEMiExpHeapHead::alloc: at least 1 byte, sizes in whole words, 4-byte alignment.
+    size = RoundUp(size == 0 ? 1 : size, 4);
+    const uintptr_t at = RoundUp(GetAddrNum(arena->m_cur), static_cast<uintptr_t>(align < 4 ? 4 : align));
+    if (at > GetAddrNum(arena->m_end) || size > GetAddrNum(arena->m_end) - at) {
+        ++s_fallbacks;
+        return nullptr;
+    }
+
+    arena->m_cur = static_cast<u8 *>(GetAddrPtr(at + size));
+    ++s_allocs;
+    return GetAddrPtr(at);
+}
+
 void *egg_alloc(size_t size, s32 align, Heap *pHeap) {
+    // mkw-3ds: an active BlockArena serves allocations of the current heap.
+    if (BlockArena::Active() && !pHeap && align > 0) {
+        if (void *block = BlockArena::Alloc(size, align)) {
+            return block;
+        }
+    }
+
     return Heap::alloc(size, align, pHeap);
 }
 
 void egg_free(void *block, Heap *pHeap) {
+    // mkw-3ds: a BlockArena's allocations go back to the heap with its block.
+    if (BlockArena::Owns(block)) {
+        return;
+    }
+
     Heap::free(block, pHeap);
 }
+
+BlockArena BlockArena::s_arenas[BlockArena::MAX_ARENAS];
+BlockArena *BlockArena::s_active = nullptr;
+u32 BlockArena::s_open = 0;
+u32 BlockArena::s_allocs = 0;
+u32 BlockArena::s_fallbacks = 0;
 
 } // namespace Kinoko::EGG
 

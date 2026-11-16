@@ -3,6 +3,9 @@
 #include "game/field/ObjectDirector.hh"
 
 #include "game/system/RaceManager.hh"
+#include "game/system/RaceConfig.hh"
+#include "game/kart/KartObjectManager.hh"
+#include "game/kart/KartObject.hh"
 
 namespace Kinoko::Field {
 
@@ -40,24 +43,26 @@ void ObjectKoopaFigure64::calc() {
         return;
     }
 
-    bool endOfCycle = CYCLE_DURATION == m_cycleFrame;
-    if (endOfCycle) {
+    // RMCU806ecd58..ed030: normal races restart only when the sampled
+    // kart is within setting0 in XZ; TT/Ghost cycles independently of proximity.
+    using Mode = System::RaceConfig::Scenario::GameMode;
+    const auto mode = System::RaceConfig::Instance()->raceScenario().gameMode;
+    const bool independent = mode == Mode::Time_Trial || mode == Mode::Ghost_Race;
+    auto *karts = Kart::KartObjectManager::Instance();
+    bool inRange = false;
+    if (karts && karts->count()) {
+        const auto delta = karts->object(timer % karts->count())->pos() - pos();
+        const f32 range = static_cast<f32>(m_mapObj->setting(0));
+        inRange = delta.x * delta.x + delta.z * delta.z < range * range;
+    }
+    m_fireActive = m_cycleFrame < FIRE_DURATION;
+    if (m_cycleFrame == CYCLE_DURATION && (independent || inRange)) {
         m_cycleFrame = 0;
-
-        if (m_isBigStatue) {
-            enableCollision();
-        }
+        if (m_isBigStatue) enableCollision();
     }
-
-    if (m_cycleFrame >= FIRE_DURATION && !endOfCycle && m_isBigStatue) {
-        disableCollision();
-    }
-
-    if (m_cycleFrame < FIRE_DURATION) {
-        cueSound(0x35d, SoundCall::Hold); // SE_CR_64K_FIGURE_FRAME
-    }
-
-    ++m_cycleFrame;
+    if (m_cycleFrame >= FIRE_DURATION && m_isBigStatue) disableCollision();
+    if (m_fireActive) cueSound(0x35d, SoundCall::Hold); // SE_CR_64K_FIGURE_FRAME
+    if (m_cycleFrame < CYCLE_DURATION) ++m_cycleFrame;
 }
 
 /// @addr{0x806DAFB8}

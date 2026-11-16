@@ -3,6 +3,7 @@
 #include <mkw/lakitu_goal.hpp>
 #include <mkw/renderer.hpp>
 #include <mkw/animation.hpp>
+#include <mkw/diag.hpp>
 #include <game/field/jugem/JugemMove.hh>
 #include <game/field/CollisionDirector.hh>
 #include <game/kart/KartObject.hh>
@@ -27,6 +28,16 @@ struct Joints {
     struct Clip{char name[32];unsigned duration=0,loop=0;size_t offset=0;};
     std::vector<float> data;std::vector<Clip> clips;unsigned joints=0;
     bool load(const char* path){
+        // Kept for the session (110 KB): these two loose files sit in the SD
+        // card's models/ folder, whose 6,000+ entries make every open slow on
+        // the console (0.5-0.8 s each, every race). A/B: no-load-cache.txt.
+        static Joints body,rod;Joints* cache=!std::strcmp(path,LakituBodyJoints)?&body:!std::strcmp(path,LakituRodJoints)?&rod:nullptr;
+        if(cache&&diag::loadCache&&!cache->data.empty()){*this=*cache;return true;}
+        if(!loadFile(path))return false;
+        if(cache&&diag::loadCache)*cache=*this;
+        return true;
+    }
+    bool loadFile(const char* path){
         data.clear();clips.clear();
         FILE* f=std::fopen(path,"rb");if(!f)return false;
         uint32_t h[4];bool ok=std::fread(h,4,4,f)==4&&!std::memcmp(h,"DJNT",4)&&h[1]==1&&h[2]&&h[2]<=8&&h[3]&&h[3]<=16;
@@ -156,7 +167,11 @@ bool Lakitu::load(){
         if(!bank)return true;
         p.bank=std::make_unique<DriverAnimation>();if(!p.bank->load(bank,*p.model)){p.bank.reset();p.model.reset();return false;}
         p.bank->skinNormals(!p.model->staticLightingBaked);
-        p.rigid=p.bank->makeRigid(*p.model);return true;
+        p.rigid=p.bank->makeRigid(*p.model);
+        // Other parts: GPU skinning (palette bound per draw) instead of a CPU
+        // pose each frame; without it (or on failure) the CPU path stays.
+        if(!p.rigid&&DriverAnimation::gpuPoses)p.bank->prepareLitSkinning(*p.model);
+        return true;
     };
     m.ready=part(m.body,LakituBody,LakituBodyBank)&&part(m.rod,LakituRod,LakituRodBank)&&part(m.flag,LakituFlag,LakituFlagBank)&&
             part(m.signal,LakituSignal,nullptr)&&part(m.lap,LakituLap,nullptr)&&part(m.lapFinal,LakituLapFinal,nullptr)&&
@@ -202,7 +217,7 @@ void Lakitu::step(const LakituInput& in){
         }
     }else if(respawning&&!m.wasRespawning){
         m.mode=Mode::Rescue;m.phase=Phase::Stay;m.phaseTimer=0;m.attachment=None;m.forward=forwardH*-1.f;m.clips("wait","pickup");
-    }else if(in.finished&&!m.wasFinished){
+    }else if(in.goal&&in.finished&&!m.wasFinished){
         m.mode=Mode::Goal;m.phase=Phase::Drop;m.interp.init(60);m.attachment=Flag;m.forward=forwardH*-1.f;m.clips("jg_wy","wait");
         m.goalFrom=m.cameraFrame(forwardH,{0,2000,700});m.goalTo=m.cameraFrame(forwardH,{0,120,700});m.pos=m.goalFrom;
     }else if(in.lap>m.lastLap&&in.lap>=2&&in.lap<=in.lapCount&&!in.finished&&m.mode!=Mode::Start&&m.mode!=Mode::Rescue){
@@ -349,8 +364,9 @@ void Lakitu::draw(Renderer& renderer){
         const unsigned f=m.clipFrame>=0?unsigned(m.clipFrame):elapsed;
         return std::pair<int,unsigned>{clip,bank.loop(clip)?f%duration:std::min(f,duration-1)};
     };
-    auto append=[&](const Model* model,const C3D_Mtx& transform,unsigned first=0,unsigned count=0){
+    auto append=[&](const Model* model,const C3D_Mtx& transform,unsigned first=0,unsigned count=0,const DriverAnimation* bank=nullptr){
         Renderer::ShadowCaster c;c.model=model;c.transform=transform;c.first=first;c.count=count;
+        if(bank&&bank->gpuSkinned()){c.palette=bank->palette();c.bones=bank->matrixCount();}
         m.shadowCasters.push_back(c);
     };
     auto drawPart=[&](Impl::Part& p,const char* name,const C3D_Mtx& transform){
@@ -363,7 +379,14 @@ void Lakitu::draw(Renderer& renderer){
                 C3D_Mtx bone,world;store(bone,pose.palette+part.matrix*pose.stride);Mtx_Multiply(&world,&transform,&bone);
                 append(p.model.get(),world,part.first,part.count);
             }
-        }else{p.bank->apply(*p.model,clip,float(frame),m.tick);renderer.draw(*p.model,transform);append(p.model.get(),transform);}
+        }else{
+            p.bank->apply(*p.model,clip,float(frame),m.tick);
+            const bool gpu=p.bank->gpuSkinned();
+            if(gpu)renderer.setSkinPalette(p.bank->palette(),p.bank->matrixCount(),21);
+            renderer.draw(*p.model,transform);
+            if(gpu)renderer.setSkinPalette(nullptr,0,12);
+            append(p.model.get(),transform,0,0,p.bank.get());
+        }
     };
     drawPart(m.body,m.bodyClip,m.world);
     auto [bodyClip,bodyFrame]=frameOf(*m.body.bank,m.bodyClip);
@@ -382,28 +405,37 @@ void Lakitu::draw(Renderer& renderer){
     renderer.draw(*board,hookWorld,false,bindLakitu,binding);append(board,hookWorld);
 }
 bool Lakitu::shadowVisible()const{return impl_->ready&&impl_->kart&&impl_->mode!=Mode::Away&&!impl_->shadowCasters.empty();}
-void Lakitu::drawShadow(Renderer& renderer,const Model* const* receivers,unsigned receiverCount,Vec3 light,bool dynamic,
-                        const Renderer::ShadowReceiver* objects,unsigned objectCount){
-    auto& m=*impl_;if(!m.ready||!m.kart||m.mode==Mode::Away||m.shadowCasters.empty())return;
+bool Lakitu::shadowPose(C3D_Mtx& pose)const{
+    auto& m=*impl_;if(!m.ready||!m.kart||m.mode==Mode::Away)return false;
     // RMCU 8071eb3c..8071ec70: identity rotation, kart Y + 100,
     // X/Z at the judge; horizontal scale 9 -> 0 over height 500 -> 1500,
     // vertical volume scale 30. No invented ground ray or blob placement.
     const Vec3 at=position();const float kartY=m.kart->pos().y;
     const float size=9.f*(1.f-std::clamp((at.y-kartY-500.f)/1000.f,0.f,1.f));
-    if(size<=0.f)return;
+    if(size<=0.f)return false;
     // The exporter has already applied jg_shadow's authored root bind.
     // Retail overwrites palette matrix 0 (8006daf0), rather than multiplying
     // that bind again. Undo it here before the original shadow scale/pose.
     constexpr float inverseBind=1.f/9.581673622131348f;
     constexpr float bindY=-3.1829841136932373f;
-    C3D_Mtx pose;Mtx_Identity(&pose);
+    Mtx_Identity(&pose);
     Mtx_Translate(&pose,at.x,kartY+100.f-30.f*bindY*inverseBind,at.z,false);
     Mtx_Scale(&pose,size*inverseBind,30.f*inverseBind,size*inverseBind);
+    return true;
+}
+// Resolved before Lakitu is drawn: the column reaches him, and resolving it
+// against his own depth stamps a dark band across his cloud as he moves.
+void Lakitu::drawGroundVolume(Renderer& renderer){
+    C3D_Mtx pose;if(!impl_->shadow||!shadowPose(pose))return;
+    const Renderer::ShadowVolume volume{impl_->shadow.get(),pose};
+    renderer.drawShadowVolumes(&volume,1,.5f);
+}
+void Lakitu::drawShadow(Renderer& renderer,const Model* const* receivers,unsigned receiverCount,Vec3 light,
+                        const Renderer::ShadowReceiver* objects,unsigned objectCount){
+    auto& m=*impl_;C3D_Mtx pose;if(m.shadowCasters.empty()||!shadowPose(pose))return;
     const Renderer::ShadowVolume fallback{m.shadow.get(),pose};
-    if(dynamic&&renderer.playerShadowReady())
-        renderer.drawPlayerShadow(m.shadowCasters.data(),unsigned(m.shadowCasters.size()),receivers,receiverCount,at,light,1.f,
-                                  m.shadow?&fallback:nullptr,objects,objectCount,true);
-    else if(m.shadow)renderer.drawShadowVolumes(&fallback,1,.5f);
+    renderer.drawPlayerShadow(m.shadowCasters.data(),unsigned(m.shadowCasters.size()),receivers,receiverCount,position(),light,1.f,
+                              m.shadow?&fallback:nullptr,objects,objectCount,true);
 }
 
 }

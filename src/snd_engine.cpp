@@ -53,6 +53,29 @@ f32 panRatio(f32 pan, int curve, bool centerZero, bool zeroClamp) {
  return zeroClamp ? clamp(ratio, 0.0f, 1.0f) : clamp(ratio, 0.0f, 2.0f);
 }
 namespace {
+// Util::CalcSurroundPanRatio (800ace40): span 0 front .. 2 rear, no 0 dB
+// centring, clamped to 0..2.
+f32 surroundRatio(f32 span, int curve) {
+ span = clamp(span, 0.0f, 2.0f) * 0.5f;
+ const f32* table = curve == 1 ? tables::PanSinCos : curve == 2 ? tables::PanLinear : tables::PanSqrt;
+ return clamp(table[int(span * 256 + 0.5f)], 0.0f, 2.0f);
+}
+// Voice::CalcMixParam's DPL2 pan/span adjustment (800ab520): s = span - 1
+// (front -1 .. rear 1); returns span back in 0..2.
+void dpl2PanSpan(f32 pan, f32 span, f32& outPan, f32& outSpan) {
+ const f32 a = std::fabs(pan), s = span - 1.0f;
+ if (a <= std::fabs(s)) {
+  if (s <= 0.0f) { outPan = pan; outSpan = -0.12f + 0.88f * s; }
+  else { outPan = 0.5f * pan; outSpan = -0.12f + 1.12f * s; }
+ } else if (pan >= 0.0f) {
+  if (s <= 0.0f) { outPan = (0.85f + 0.15f * (-s / pan)) * a; outSpan = -0.12f + (2.0f * s + 0.88f * pan); }
+  else { outPan = (0.85f + 0.35f * (-s / pan)) * a; outSpan = -0.12f + 1.12f * pan; }
+ } else {
+  if (s <= 0.0f) { outPan = (0.15f * (-s / pan) - 0.85f) * a; outSpan = -0.12f + (2.0f * s - 1.12f * pan); }
+  else { outPan = (0.35f * (-s / pan) - 0.85f) * a; outSpan = -0.12f + 1.12f * -pan; }
+ }
+ outSpan += 1.0f;
+}
 // Util::CalcLpfFreq: 32000 * 2^(10 * (scale - 1)); AxVoice bypasses >= 16000.
 f32 lpfFrequency(f32 scale) { scale = clamp(scale, 0.0f, 1.0f); return f32(32000 * std::pow(2.0, 10.0 * (scale - 1.0))); }
 
@@ -437,6 +460,7 @@ struct Engine::Impl {
  EngineStats stats;
  u32 warningNotes = 0, ledCues = 0;
  f32 masterVolume = 1;
+ OutputMode outputMode = OutputStereo;
  std::vector<LoadedFile*> files; // indexed by file id
  std::unique_ptr<StreamFeed> (*openStream)(void*, const char*, u32) = nullptr;
  void* openStreamCtx = nullptr;
@@ -531,31 +555,56 @@ struct Engine::Impl {
  }
  void voiceSetPriority(Voice& v, int priority) { v.priority = priority; v.order = ++voiceOrder; }
 
- // Voice::CalcMixParam (stereo output, single voice-out) -> hardware gains.
+ // Voice::CalcMixParam (800ab6c0, single voice-out) -> hardware gains for
+ // the output mode: stereo, mono (both = half of left + right), or DPL2
+ // (front and rear pairs; the 3DS surround mode's four main-bus channels).
  void voiceCommit(Voice& v) {
   if (!v.active || !v.starting) return;
   PanCurveInfo info = panInfo(v.panCurve);
   const f32 baseVolume = v.volume * masterVolume * v.veTarget;
   for (int c = 0; c < v.channels; ++c) {
    if (v.hw[c] < 0) continue;
-   f32 left, right;
+   f32 left, right, span = v.surroundPan;
    if (v.channels > 1 && v.panMode == PanBalance) {
     if (c == 0) { left = panRatio(v.pan, info.curve, info.centerZero, info.zeroClamp); right = 0; }
     else { left = 0; right = panRatio(-v.pan, info.curve, info.centerZero, info.zeroClamp); }
    } else {
     f32 voicePan = 0;
     if (v.channels == 2) voicePan = c == 0 ? -1.0f : 1.0f;
-    const f32 pan = v.pan + voicePan;
+    f32 pan = v.pan + voicePan;
+    if (outputMode == OutputDpl2) dpl2PanSpan(pan, span, pan, span);
     left = panRatio(pan, info.curve, info.centerZero, info.zeroClamp);
     right = panRatio(-pan, info.curve, info.centerZero, info.zeroClamp);
    }
    const f32 main = v.mainOutVolume * v.mainSend;
    // AX mix volume u16 (0x8000 == 1.0, clamped at 0xFFFF).
-   auto mix = [](f32 x) { return std::min(x, 65535.0f / 32768.0f); };
-   const f32 l = mix(main * left) * baseVolume, r = mix(main * right) * baseVolume;
+   auto mix = [&](f32 x) { return std::min(main * x, 65535.0f / 32768.0f) * baseVolume; };
+   Gains g;
+   switch (outputMode) {
+   case OutputMono: g.left = g.right = mix(0.5f * (left + right)); break;
+   case OutputSurround:
+   case OutputDpl2: {
+    // Not retail: a Pro Logic II receiver filled the Wii's rear speakers with
+    // the music's ambience; 3DS surround has only this mix. Spread the front
+    // pair into the rear (music more than effects), so music and front sounds
+    // fill the field; sounds behind keep their rear-only mix. The rear adds its
+    // own share and the spread by power, so every direction keeps the stereo
+    // loudness (front^2 + rear^2 per side is unchanged).
+    // The surround ratios only here; the spread's equal-power factors once.
+    const f32 front = surroundRatio(span, info.curve), rear = surroundRatio(2.0f - span, info.curve);
+    static const f32 nMusic = 1.0f / std::sqrt(1.0f + SurroundSpreadMusic * SurroundSpreadMusic),
+                     nEffects = 1.0f / std::sqrt(1.0f + SurroundSpreadEffects * SurroundSpreadEffects);
+    const f32 k = v.stream ? SurroundSpreadMusic : SurroundSpreadEffects, n = v.stream ? nMusic : nEffects;
+    const f32 fl = left * front, fr = right * front;
+    g.left = mix(fl * n); g.right = mix(fr * n);
+    const f32 spread = n * k * front, back = std::sqrt(rear * rear + spread * spread);
+    g.rearLeft = mix(left * back); g.rearRight = mix(right * back);
+    break;
+   }
+   default: g.left = mix(left); g.right = mix(right); break;
+   }
    const f32 freq = lpfFrequency(v.lpf);
-   const f32 rear = surroundOutput ? clamp(v.surroundPan * 0.5f, 0.0f, 1.0f) : 0.0f;
-   hw->setSurround(v.hw[c], f32(v.stream ? v.rate : v.wave.rate) * v.pitch, l, r, rear, freq >= 16000 ? 0.0f : freq);
+   hw->set(v.hw[c], f32(v.stream ? v.rate : v.wave.rate) * v.pitch, g, freq >= 16000 ? 0.0f : freq);
   }
  }
  struct PanCurveInfo { int curve = 0; bool centerZero = false, zeroClamp = false; };
@@ -1303,7 +1352,7 @@ struct Engine::Impl::Sounds {
   if (!st.prepared) {
    const int state = st.feed ? st.feed->state() : -1;
    if (state < 0) { ++e.stats.missingData; strmStop(s); }
-   else if (state > 0 && !strmSetup(s)) { ++e.stats.startsFailed; strmStop(s); }
+   else if (state > 0 && !strmSetup(s)) { ++e.stats.startsFailed; ++e.stats.failStream; e.stats.lastFailedSound = s.id; strmStop(s); }
    return;
   }
   if (!st.started) return;
@@ -1334,7 +1383,7 @@ struct Engine::Impl::Sounds {
   u16 n = 0;
   for (u32 i = 0; i < r.count; ++i) n += !e.residency->ready(r.file, r.waves[i]);
   s.wavesPending = n;
-  if (n && ++s.waitFrames > WaveWaitFrames) { ++e.stats.startsFailed; shutdown(s); return false; }
+  if (n && ++s.waitFrames > WaveWaitFrames) { ++e.stats.startsFailed; ++e.stats.failWaves; e.stats.lastFailedSound = s.id; shutdown(s); return false; }
   return true;
  }
  void basicUpdate(SoundBase& s, bool advanceHold) {
@@ -1393,12 +1442,12 @@ struct Engine::Impl::Sounds {
  // ================================================ start
  bool setup(Handle& h, u32 id, bool hold, const StartInfo* si, const Ambient* amb, SoundBase** out) {
   const SoundEntry* info = e.archive ? e.archive->sound(id) : nullptr;
-  if (!info || info->type == TypeInvalid) { ++e.stats.startsFailed; return false; }
+  if (!info || info->type == TypeInvalid) { ++e.stats.startsFailed; ++e.stats.failNoInfo; e.stats.lastFailedSound = id; return false; }
   u32 playerId = info->playerId; int playerPriority = info->playerPriority;
   if (si) { if (si->playerId >= 0) playerId = u32(si->playerId); if (si->playerPriority >= 0) playerPriority = si->playerPriority; }
   const int startPriority = amb && amb->distancePriority >= 0 ? amb->distancePriority : (hold ? playerPriority - 1 : playerPriority) + (amb ? amb->priority : 0);
   SoundBase* s = alloc(info->type, playerId, playerPriority, startPriority,id,amb && amb->distancePriority >= 0);
-  if (!s) { ++e.stats.startsFailed; return false; }
+  if (!s) { ++e.stats.startsFailed; ++e.stats.failNoSlot; e.stats.lastFailedSound = id; return false; }
   s->id = id;
   if (amb) { s->ambient = *amb; s->hasAmbient = true; }
   bool ok = false;
@@ -1442,7 +1491,7 @@ struct Engine::Impl::Sounds {
    s->strm.p.panMode = info->panMode; s->strm.p.panCurve = info->panCurve; s->strm.p.id = id;
    ok = strmPrepare(*s, *info, si);
   }
-  if (!ok) { ++e.stats.startsFailed; shutdown(*s); return false; }
+  if (!ok) { ++e.stats.startsFailed; ++e.stats.failSetup; e.stats.lastFailedSound = id; shutdown(*s); return false; }
   if (e.residency && (info->type == TypeSeq || info->type == TypeWave)) {
    const WaveReach r = e.archive->reach(id);
    for (u32 i = 0; i < r.count; ++i) if (!e.residency->acquire(r.file, r.waves[i])) ++s->wavesPending;
@@ -1643,6 +1692,8 @@ void Engine::stopPlayer(u32 player, int frames) { if (impl_->sounds) for (auto& 
 void Engine::pausePlayer(u32 player, bool p, int frames) { if (impl_->sounds) for (auto& s : impl_->sounds->sound) if (s.used && s.playerId == player) impl_->sounds->pause(s, p, frames); }
 int Engine::playingCount(u32 player) const { return impl_->sounds ? impl_->sounds->countPlayer(player) : 0; }
 void Engine::setMasterVolume(f32 v) { impl_->masterVolume = clamp(v, 0.0f, 1.0f); }
+void Engine::setOutputMode(OutputMode m) { impl_->outputMode = m; }
+OutputMode Engine::outputMode() const { return impl_->outputMode; }
 void Engine::updateGameFrame(bool advanceHold) { impl_->gameFrame(advanceHold); }
 void Engine::updateHoldFrame() {
  if (!impl_->sounds) return;

@@ -43,6 +43,8 @@ public:
 
     [[nodiscard]] void *alloc(size_t size, s32 align) override;
     void free(void *block) override;
+    /// mkw-3ds: shrinks a block in place (its tail returns to the heap); returns its new size.
+    u32 shrinkBlock(void *block, u32 size);
     [[nodiscard]] u32 getAllocatableSize(s32 align = 4) const override;
 
     static void addGroupSize(void *block, Abstract::Memory::MEMiHeapHead *heap, uintptr_t param);

@@ -52,9 +52,14 @@ public:
  // `actors` (karts, camera) goes to the audio thread's RaceAudioLayer; its
  // sound cues are cleared once the audio thread has the frame.
  void step(const Frame& frame, RaceAudioFrame* actors = nullptr);
+ // The race's first frame is on screen: the first state's music starts
+ // (its stream was prepared under the loading screen).
+ void sceneShown();
+ void previewLeave();          // the preview's fade-out starts (RaceRSARPlayer::Stop)
  void previewEnded();          // the course preview finished or was skipped
  void pause(bool paused);      // RaceRSARPlayer::Pause / Resume
- void carryResultMusic(); // Next/Next Race: retire racing actors, keep result stream
+ void fadeResultMusic(int frames); // The results music fades with the picture.
+ void leaveResults(bool carryMusic); // Retire the racing actors; the ceremony keeps the stream.
  void quit();                  // RaceRSARPlayer::Stop: the race is left
  bool active() const { return active_; }
  // QA: called with a line on every race state change and countdown/lap sound.
@@ -89,6 +94,7 @@ public:
  };
 private:
  void setRaceState(int state);
+ void startStateMusic(int state);
  void applyMusic(const MusicOp& op);
  void calcStems();
  void rankHud(unsigned rank);
@@ -101,6 +107,7 @@ private:
  Budget budget_{};
  Bgm bgm_;
  bool active_ = false, paused_ = false;
+ bool musicHeld_ = false;     // begin() .. sceneShown(): the first state's music waits
  int state_ = 0;               // RaceMgr+0x40
  int countdown_ = 0;           // RaceHUD countdown index (0..4)
  int maxLap_ = 1;              // Raceinfo maxLap of the local player

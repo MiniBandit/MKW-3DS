@@ -7,6 +7,7 @@ balloon.brctr balloon_1_0 variant. Output stays in build/vfx (overlaid by
 tools/resource_manifest.py); the generated header is include/mkw/race_balloon.hpp.
 """
 import struct, subprocess, sys
+import tex3ds_cache
 from pathlib import Path
 from PIL import Image
 ROOT = Path(__file__).resolve().parents[1]
@@ -34,7 +35,7 @@ def texture(image, name, output, fmt):
     png = output / 'textures' / (name + '.png')
     png.parent.mkdir(parents=True, exist_ok=True)
     padded.save(png)
-    subprocess.run([str(tool('tex3ds')), '-f', fmt, '-z', 'none', '-o', str(png.with_suffix('.t3x')), str(png)],
+    tex3ds_cache.run([str(tool('tex3ds')), '-f', fmt, '-z', 'none', '-o', str(png.with_suffix('.t3x')), str(png)],
                    check=True, stdout=subprocess.DEVNULL)
     return w, h, w / padded.size[0], h / padded.size[1]
 

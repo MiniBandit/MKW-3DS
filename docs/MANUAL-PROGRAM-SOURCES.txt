@@ -216,6 +216,7 @@ src/item_native.cpp
 src/item_world.cpp
 src/job_worker.cpp
 src/lakitu.cpp
+src/lens_flare.cpp
 src/license_identity.cpp
 src/license_mii_store.cpp
 src/license_records.cpp
@@ -228,12 +229,14 @@ src/main.cpp
 src/menu_focus.cpp
 src/menu_index.cpp
 src/menu_models.cpp
+src/settings_preview.cpp
 src/menu_movie.cpp
 src/menu_movie_audio.cpp
 src/menu_renderer.cpp
 src/menu_sound.cpp
 src/menu_state.cpp
 src/menu_text_motion.cpp
+src/menu_touch.cpp
 src/menu_transition.cpp
 src/menu_ui.cpp
 src/menu_vehicle_icons.cpp

@@ -130,7 +130,9 @@ void ObjectDossunTsuibiHolder::calcBackwards() {
         m_railInterpolator->init(0.0f, 0);
     }
 
-    updatePos(EGG::Vector3f(pos().x, pos().y, m_lastStompZ));
+    // RMCU 80756048: return X/Y follow the rail; retain only stomp Z.
+    const auto &railPos = m_railInterpolator->curPos();
+    updatePos(EGG::Vector3f(railPos.x, railPos.y, m_lastStompZ));
 }
 
 /// @addr{0x807625F0}
@@ -140,7 +142,8 @@ void ObjectDossunTsuibiHolder::calcRot() {
 
     if (m_facingBackwards) {
         if (++m_backwardsCounter == HOME_RESET_FRAMES) {
-            updateRot(rot().y + F_PI);
+            // RMCU 807556f4: finish at the initial heading plus half a turn.
+            updateRot(m_initRotY + F_PI);
 
             m_movingSideways = true;
             m_sidewaysPhase = 0;

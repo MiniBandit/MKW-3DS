@@ -195,7 +195,7 @@ def main():
     controller_paths += [UI / 'Present/common/ctrl/NextButton.brctr']
     controller_paths += sorted((UI / 'Present/control/ctrl').glob('*.brctr'))
     controller_paths += [ROOT / 'assets/race-ui/Race/button/ctrl' / (name + '.brctr')
-                         for name in ['PauseMenuVS', 'PauseMenuGrandPrix', 'PauseMenuTimeAttack', 'PauseMenuBT']]
+                         for name in ['PauseMenuVS', 'PauseMenuGrandPrix', 'PauseMenuTimeAttack', 'PauseMenuBT', 'PauseMenuGhostWatch']]
     for path in controller_paths:
         if path.name.startswith('._'):
             continue

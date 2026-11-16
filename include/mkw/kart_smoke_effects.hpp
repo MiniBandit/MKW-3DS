@@ -2,6 +2,9 @@
 #include "mkw/kart_start_effects.hpp"
 #include "mkw/race_effects.hpp"
 #include "mkw/kart_item_effects.hpp"
+#include "mkw/vehicle_exhaust.hpp"
+#include "mkw/exhaust_trig.hpp"
+#include <cmath>
 #include <array>
 #include <algorithm>
 
@@ -200,6 +203,50 @@ private:
     std::array<bool,MaxRacers> charged_{};
     std::array<uint16_t,MaxRacers> active_{};
     std::array<std::array<unsigned,2>,MaxRacers> airborne_{};
+};
+
+// KartEffect's idle exhaust smoke: one rk_gasSmoke per pipe (USA 0x8068cfb4), made for the
+// local racer (+0x129) and CPUs (+0x12a); ghosts have none. The update (0x8069765c ->
+// 0x8069f8ac) creates it on each pipe above water (+0x848, +0x96d), moves it to the pipe
+// matrix (+0x8ac) and sets emit ratio (+0x2c), particle life (+0x28) and alpha (+0x50)
+// from the speed (+0x6e8 over +0x6f0, clamped). One-screen parameters (0x806acd14):
+// local ratio 0.2..1.0, life 12..4, alpha 135..30; CPU 0.075..0.5, 12..3, 135..78.
+// The update kills the handles while its suppress test holds; of that test only
+// InAction (+0xb9, which retail pairs with an effect state at +0xbc) is mapped here.
+// Not mapped: +0xbb, +0x794, +0xad0 and the +0x3a/+0x3b skip.
+class KartGasSmoke {
+public:
+    static constexpr unsigned FirstSlot=1983,MaxRacers=12,Pipes=4;
+    static_assert(FirstSlot+MaxRacers*Pipes<=RaceEffects::SlotCount);
+    void step(RaceEffects& e,unsigned racer,const EffectFrame& pose,unsigned vehicle,bool local,bool ghost,
+              float speed,float baseSpeed,bool hasSea,float seaHeight,bool inAction,bool preview,bool hidden,bool lod){
+        if(racer>=MaxRacers)return;
+        if(generation_!=e.generation()){generation_=e.generation();spec_=e.findDecorative("rk_gasSmoke");}
+        const unsigned base=FirstSlot+racer*Pipes;
+        if(spec_<0||ghost||preview||hidden||lod||inAction){for(unsigned p=0;p<Pipes;++p)e.kill(base+p);return;}
+        const float top=std::max(baseSpeed,50.f),t=std::clamp(speed,0.f,top)/top;
+        const float ratio=local?.2f+.8f*t:.075f+.425f*t;
+        const auto life=uint16_t(local?12.f-8.f*t:12.f-9.f*t);
+        const uint8_t rgba[4]={255,255,255,uint8_t(local?135.f-105.f*t:135.f-57.f*t)};
+        const auto& exhaust=VehicleExhausts[std::min<unsigned>(vehicle,VehicleExhausts.size()-1)];
+        for(unsigned p=0;p<Pipes;++p){
+            const unsigned slot=base+p;
+            if(p>=exhaust.count){e.kill(slot);continue;}
+            const float* q=exhaust.pipes[p];
+            const auto& trig=exhaustTrig<0>(std::min<unsigned>(vehicle,VehicleExhausts.size()-1),p);
+            const float sp=trig.sp,cp=trig.cp,sy=trig.sy,cy=trig.cy;
+            // Pipe axes: Ry(yaw)*Rx(pitch) in kart space, as the boost flame.
+            auto axis=[&](float x,float y,float z){const float y1=y*cp-z*sp,z1=y*sp+z*cp;return pose.x*(x*cy+z1*sy)+pose.y*y1+pose.z*(-x*sy+z1*cy);};
+            EffectFrame frame=pose;
+            frame.origin=pose.toWorld({q[0],q[1],q[2]});frame.x=axis(1,0,0);frame.y=axis(0,1,0);frame.z=axis(0,0,1);
+            frame.scale=pose.scale*exhaust.flameScale;
+            if(hasSea&&frame.origin.y<seaHeight){e.followFade(slot);e.move(slot,frame);continue;}
+            e.create(slot,spec_,frame,uint8_t(2+racer));e.move(slot,frame);
+            e.setEmissionRatio(slot,ratio);e.setParticleLife(slot,life);e.setColor(slot,rgba);
+        }
+    }
+private:
+    unsigned generation_=~0u;int spec_=-1;
 };
 
 }

@@ -3,6 +3,7 @@
 No second camera or mesh rendering on 3DS; originals and existing maps untouched.
 """
 import io,json,hashlib,sys,subprocess,struct,argparse,re,os
+import tex3ds_cache
 from pathlib import Path
 import numpy as np
 from PIL import Image
@@ -130,7 +131,7 @@ def main():
    aw//=2;ah//=2;atlas=atlas.resize((aw,ah),Image.Resampling.LANCZOS)
    rows=[tuple(list(r[:3])+[v*.5 for v in r[3:7]]+list(r[7:])) for r in rows]
   atlas.save(OUT/'textures'/f'{file}.png')
-  subprocess.run([str(tool('tex3ds')),'-f','rgba4','-z','none','-o',str(OUT/'textures'/f'{file}.t3x'),str(OUT/'textures'/f'{file}.png')],check=True)
+  tex3ds_cache.run([str(tool('tex3ds')),'-f','rgba4','-z','none','-o',str(OUT/'textures'/f'{file}.t3x'),str(OUT/'textures'/f'{file}.png')],check=True)
   headers.append((course,file,rows,aw,ah))
   placements=[r for r in kmp['GOBJ']['records'] if any(r['id']==e[0] for e in entries)]
   (OUT/f'placements_{course:02d}.json').write_text(json.dumps(placements,indent=2))

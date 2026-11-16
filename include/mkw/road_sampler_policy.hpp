@@ -25,6 +25,7 @@ template<class Model> bool apply(Model& model,const char* path){
     decltype(model.submeshes) subs;
     decltype(model.samplers) samplers;
     decltype(model.uvTracks) tracks;
+    std::vector<uint32_t> origin; // source submesh of each piece
     subs.reserve(model.submeshes.size()+mesh->count*2);
     samplers.reserve(subs.capacity());if(!model.uvTracks.empty())tracks.reserve(subs.capacity());
     bool changed=false;
@@ -46,12 +47,22 @@ template<class Model> bool apply(Model& model,const char* path){
                     row[0].minFilter&=1;changed=true;break;
                 }
             }
-            subs.push_back(sub);samplers.push_back(row);
+            subs.push_back(sub);samplers.push_back(row);origin.push_back(i);
             if(!model.uvTracks.empty())tracks.push_back(model.uvTracks[i]);
         }
     }
     if(!changed)return false;
+    // MAN1 tracks follow their submesh into every piece (still sorted by
+    // submesh). Left on the old indices, they animated the wrong piece and
+    // drawNow read materialOverrides past its end: Coconut Mall's roads
+    // took heap bytes as tint and TEV constants (flat tan, white, black).
+    decltype(model.materialTracks) materialTracks;
+    for(unsigned n=0;n<origin.size();++n)for(const auto& t:model.materialTracks)
+        if(t.submesh==origin[n]){materialTracks.push_back(t);materialTracks.back().submesh=n;}
     model.submeshes=std::move(subs);model.samplers=std::move(samplers);model.uvTracks=std::move(tracks);
+    model.materialTracks=std::move(materialTracks);
+    if(!model.materialTracks.empty())model.materialOverrides.assign(model.submeshes.size(),{});
+    model.materialFrame=~0u;
     return true;
 }
 }

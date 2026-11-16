@@ -1,5 +1,6 @@
 #include <mkw/race_chase_warning.hpp>
 #include <mkw/render_quality.hpp>
+#include <mkw/diag.hpp>
 #include <mkw/hud_feedback.hpp>
 #include <mkw/race_hud.hpp>
 #include <mkw/battle_hud_assets.hpp>
@@ -34,22 +35,37 @@ namespace mkw {
 namespace {
 // Retail itembox / itemBoxNise materials (layout generated from the BRRES).
 struct BoxMaterial { Renderer* renderer; const Model* model; const ItemBoxLayout* layout;
-    const std::array<std::array<float,6>,300>* inner; C3D_Mtx transform; unsigned frame; bool sparkle; float environmentBlend; };
+    const std::array<std::array<float,6>,300>* inner; C3D_Mtx transform; unsigned frame; uint8_t outer; float environmentBlend,opacity=1.f;
+    // itemBoxNise: mat_boxin's lerp weight toward its rainbow layer (GX A0), and the pass that adds that layer.
+    uint8_t rainbow=0; bool rainbowLayer=false;
+    // The sparkle dot group drawn (layout.sparkleGroups: one pass per group).
+    uint8_t group=0;
+    // OuterShellGroup: the sparkle's weight relative to the shell (opacity is the shell's).
+    float sparkleWeight=1.f; };
+// mat_boxout passes: the shell, one sparkle group, or (boxSparklePair) the
+// shell with group 0, and groups `group` and `group`+1 together.
+enum : uint8_t {OuterShell,OuterGroup,OuterShellGroup,OuterGroupPair};
 constexpr float ShellWarningDistance=6000.f;
 float boxEnvironmentBlend(Vec3 position,Vec3 viewer){
     const Vec3 delta=position-viewer;
     // Full retail EnvCamera inside the warning radius, fixed baked UVs far
-    // away. Smoothstep keeps both endpoints continuous without extra passes.
+    // away. Smoothstep supplies the colour crossfade weight.
     const float t=std::clamp((7800.f*7800.f-dot(delta,delta))/(7800.f*7800.f-ShellWarningDistance*ShellWarningDistance),0.f,1.f);
     return t*t*(3.f-2.f*t);
 }
 bool fullBoxDetail(Vec3 position,Vec3 viewer){return boxEnvironmentBlend(position,viewer)>0.f;}
+float boxSparkleBlend(float ratio,float threshold,float environmentBlend){
+    if(threshold<=0.f)return 1.f;
+    const float t=std::clamp((ratio-threshold*.75f)/(threshold*.5f),0.f,1.f);
+    return std::max(environmentBlend,t*t*(3.f-2.f*t));
+}
 constexpr float IdentitySRT[6]={1,0,0,0,1,0};
 uint32_t abgr(const unsigned char (&c)[3]){return 0xff000000u|c[0]|uint32_t(c[1])<<8|uint32_t(c[2])<<16;}
 void bindBox(void* context,std::size_t submesh){
     auto& m=*static_cast<BoxMaterial*>(context);const auto& L=*m.layout;
     for(int stage=0;stage<6;++stage)C3D_TexEnvInit(C3D_GetTexEnv(stage));
     auto* e0=C3D_GetTexEnv(0);auto* e1=C3D_GetTexEnv(1);
+    C3D_TexEnvBufUpdate(C3D_Both,0);m.renderer->setEnvironmentPairNow(nullptr);
     auto environment=[&](const float (&srt)[6]){
         if(m.model->staticLightingBaked&&m.environmentBlend<=0.f){m.renderer->clearEnvironmentUv();m.renderer->setUv1Transform(srt);}
         else m.renderer->setEnvironmentUv(m.transform,srt,false,m.environmentBlend);
@@ -59,14 +75,22 @@ void bindBox(void* context,std::size_t submesh){
     C3D_TexEnvColor(e0,0xffffffff);C3D_TexEnvSrc(e0,C3D_Alpha,GPU_CONSTANT);C3D_TexEnvFunc(e0,C3D_Alpha,GPU_REPLACE);
     if(submesh==L.inner){
         // mat_boxin: weight*TEXC, environment mapped; GX cull front shows the far inner walls.
-        float srt[6];const auto& f=(*m.inner)[m.frame%m.inner->size()];for(unsigned i=0;i<6;++i)srt[i]=f[i];
+        // itemBoxNise lerps it toward its rainbow layer by A0 (m.rainbow): (1-A0)*TEXC here, then
+        // the rainbow pass adds A0*layer over the same depth.
+        float srt[6];const auto& f=(*m.inner)[m.frame%m.inner->size()];for(unsigned i=0;i<6;++i)srt[i]=m.rainbowLayer?L.rainbowSRT[i]:f[i];
         environment(srt);
-        C3D_TexBind(1,texture(L.innerTexture,GPU_REPEAT));
-        C3D_TexEnvColor(e0,0xff000000u|L.innerWeight*0x010101u);
+        C3D_TexBind(1,m.rainbowLayer?texture(L.rainbowTexture,GPU_CLAMP_TO_EDGE):texture(L.innerTexture,GPU_REPEAT));
+        const uint32_t weight=m.rainbowLayer?m.rainbow:L.innerWeight*(255u-m.rainbow)/255u;
+        C3D_TexEnvColor(e0,0xff000000u|weight*0x010101u);
         C3D_TexEnvSrc(e0,C3D_RGB,GPU_TEXTURE1,GPU_CONSTANT);C3D_TexEnvFunc(e0,C3D_RGB,GPU_MODULATE);
         m.renderer->setMaterialCullNow(GPU_CULL_BACK_CCW);
-        C3D_AlphaBlend(GPU_BLEND_ADD,GPU_BLEND_ADD,GPU_ONE,GPU_ZERO,GPU_ONE,GPU_ZERO);
-        C3D_DepthTest(true,GPU_GEQUAL,GPU_WRITE_ALL);
+        if(m.rainbowLayer){
+            C3D_AlphaBlend(GPU_BLEND_ADD,GPU_BLEND_ADD,GPU_ONE,GPU_ONE,GPU_ZERO,GPU_ONE);
+            C3D_DepthTest(true,GPU_GEQUAL,GPU_WRITE_COLOR);
+        }else{
+            C3D_AlphaBlend(GPU_BLEND_ADD,GPU_BLEND_ADD,GPU_ONE,GPU_ZERO,GPU_ONE,GPU_ZERO);
+            C3D_DepthTest(true,GPU_GEQUAL,GPU_WRITE_ALL);
+        }
     }else if(submesh==L.question){
         // mat_question: lerp(low, high, TEXC), alpha TEXA tested >= reference.
         C3D_TexBind(0,texture(L.questionTexture,GPU_CLAMP_TO_EDGE));
@@ -85,27 +109,79 @@ void bindBox(void* context,std::size_t submesh){
         m.renderer->setMaterialCullNow(GPU_CULL_FRONT_CCW);
         C3D_AlphaBlend(GPU_BLEND_ADD,GPU_BLEND_ADD,GPU_ONE,GPU_ONE,GPU_ZERO,GPU_ONE);
         C3D_DepthTest(true,GPU_GEQUAL,GPU_WRITE_COLOR);
-        if(!m.sparkle){
+        // Sparkle group g's noise SRT and its mask channel's inverse.
+        auto noiseSrt=[&](unsigned g,float (&srt)[6]){
+            for(unsigned i=0;i<6;++i)srt[i]=L.noiseSRT[i];
+            if(L.sparkleGroups&&(m.layout==&FakeBoxMaterials?fakeBoxSparkle:itemBoxSparkle)){srt[2]+=L.sparkleOffset[g][0];srt[5]+=L.sparkleOffset[g][1];}
+        };
+        auto inverseMask=[&](unsigned g){
+            constexpr GPU_TEVOP_RGB channel[]={GPU_TEVOP_RGB_ONE_MINUS_SRC_R,GPU_TEVOP_RGB_ONE_MINUS_SRC_G,GPU_TEVOP_RGB_ONE_MINUS_SRC_B};
+            return L.sparkleGroups?channel[g%3]:GPU_TEVOP_RGB_ONE_MINUS_SRC_COLOR;
+        };
+        // The single-group stages below, from `stage`: q = clamp(0.75*noise - (1-mask)),
+        // then (with finish) 2*(q - 1/2).
+        auto group=[&](int stage,GPU_TEVSRC noise,unsigned g,bool finish){
+            auto* a=C3D_GetTexEnv(stage);auto* b=C3D_GetTexEnv(stage+1);
+            C3D_TexEnvColor(a,0xffbfbfbf);C3D_TexEnvSrc(a,C3D_RGB,noise,GPU_CONSTANT);C3D_TexEnvFunc(a,C3D_RGB,GPU_MODULATE);
+            C3D_TexEnvSrc(b,C3D_RGB,GPU_PREVIOUS,GPU_TEXTURE0);C3D_TexEnvOpRgb(b,GPU_TEVOP_RGB_SRC_COLOR,inverseMask(g));
+            C3D_TexEnvFunc(b,C3D_RGB,GPU_SUBTRACT);
+            if(finish){auto* c=C3D_GetTexEnv(stage+2);C3D_TexEnvColor(c,0xff808080);C3D_TexEnvSrc(c,C3D_RGB,GPU_PREVIOUS,GPU_CONSTANT);
+                C3D_TexEnvFunc(c,C3D_RGB,GPU_SUBTRACT);C3D_TexEnvScale(c,C3D_RGB,GPU_TEVSCALE_2);}
+        };
+        if(m.outer==OuterShell){
             environment(IdentitySRT);
             C3D_TexBind(1,texture(L.shell,GPU_CLAMP_TO_EDGE));
             C3D_TexEnvSrc(e0,C3D_RGB,GPU_TEXTURE1);C3D_TexEnvFunc(e0,C3D_RGB,GPU_REPLACE);
+        }else if(m.outer==OuterShellGroup){
+            // The shell (unit 1) plus group 0 (noise on unit 2, texcoord2):
+            // shell + w*sparkle, as the two passes' sum. Group masks never
+            // overlap above 1/2, so the clamp of the sum is the passes' clamp.
+            float noise[6];noiseSrt(0,noise);
+            environment(IdentitySRT);m.renderer->setEnvironmentPairNow(noise);
+            C3D_TexBind(0,texture(L.mask,GPU_REPEAT));C3D_TexBind(1,texture(L.shell,GPU_CLAMP_TO_EDGE));C3D_TexBind(2,texture(L.noise,GPU_REPEAT));
+            group(0,GPU_TEXTURE2,0,true);
+            auto* e3=C3D_GetTexEnv(3);
+            if(m.sparkleWeight<1.f){
+                C3D_TexEnvColor(e3,0xff000000u|uint32_t(std::lround(255.f*std::clamp(m.sparkleWeight,0.f,1.f)))*0x010101u);
+                C3D_TexEnvSrc(e3,C3D_RGB,GPU_PREVIOUS,GPU_CONSTANT,GPU_TEXTURE1);C3D_TexEnvFunc(e3,C3D_RGB,GPU_MULTIPLY_ADD);
+            }else{C3D_TexEnvSrc(e3,C3D_RGB,GPU_PREVIOUS,GPU_TEXTURE1);C3D_TexEnvFunc(e3,C3D_RGB,GPU_ADD);}
+        }else if(m.outer==OuterGroupPair){
+            // Groups g (unit 1) and g+1 (unit 2): q_g + q_g+1, then 2*(sum - 1/2).
+            // Where one q exceeds 1/2 the other is 0 (disjoint masks), and two
+            // partial q's sum below 1/2 (masks sum <= 1), so this is the sum of
+            // the two single-group passes.
+            float first[6],second[6];noiseSrt(m.group,first);noiseSrt(m.group+1u,second);
+            environment(first);m.renderer->setEnvironmentPairNow(second);
+            C3D_TexBind(0,texture(L.mask,GPU_REPEAT));C3D_TexBind(1,texture(L.noise,GPU_REPEAT));C3D_TexBind(2,texture(L.noise,GPU_REPEAT));
+            group(0,GPU_TEXTURE1,m.group,false);
+            C3D_TexEnvBufUpdate(C3D_RGB,2);
+            group(2,GPU_TEXTURE2,m.group+1u,false);
+            auto* e4=C3D_GetTexEnv(4);C3D_TexEnvSrc(e4,C3D_RGB,GPU_PREVIOUS,GPU_PREVIOUS_BUFFER);C3D_TexEnvFunc(e4,C3D_RGB,GPU_ADD);
+            auto* e5=C3D_GetTexEnv(5);C3D_TexEnvColor(e5,0xff808080);C3D_TexEnvSrc(e5,C3D_RGB,GPU_PREVIOUS,GPU_CONSTANT);
+            C3D_TexEnvFunc(e5,C3D_RGB,GPU_SUBTRACT);C3D_TexEnvScale(e5,C3D_RGB,GPU_TEVSCALE_2);
         }else{
             // GX stage 1 has SUBHALF before SCALE_2. Omitting that bias
             // lights up most of the mask instead of only its narrow peaks.
             // Clamping the first subtraction is safe: negative values cannot
             // survive the following subtraction of 1/2.
-            environment(L.noiseSRT);
+            // With sparkle groups (Fake Item Box, after TPO), GX's indirect
+            // stage shifts each mask dot's noise lookup by that dot's
+            // intensity: each group is its own pass with its own noise offset,
+            // its dots in one channel of the RGB8 mask.
+            float noise[6];noiseSrt(m.group,noise);
+            environment(noise);
             C3D_TexBind(0,texture(L.mask,GPU_REPEAT));C3D_TexBind(1,texture(L.noise,GPU_REPEAT));
-            C3D_TexEnvColor(e0,0xffbfbfbf);
-            C3D_TexEnvSrc(e0,C3D_RGB,GPU_TEXTURE1,GPU_CONSTANT);C3D_TexEnvFunc(e0,C3D_RGB,GPU_MODULATE);
-            C3D_TexEnvSrc(e1,C3D_RGB,GPU_PREVIOUS,GPU_TEXTURE0);
-            C3D_TexEnvOpRgb(e1,GPU_TEVOP_RGB_SRC_COLOR,GPU_TEVOP_RGB_ONE_MINUS_SRC_COLOR);
-            C3D_TexEnvFunc(e1,C3D_RGB,GPU_SUBTRACT);
-            auto* e2=C3D_GetTexEnv(2);
-            C3D_TexEnvColor(e2,0xff808080);
-            C3D_TexEnvSrc(e2,C3D_RGB,GPU_PREVIOUS,GPU_CONSTANT);
-            C3D_TexEnvFunc(e2,C3D_RGB,GPU_SUBTRACT);C3D_TexEnvScale(e2,C3D_RGB,GPU_TEVSCALE_2);
+            group(0,GPU_TEXTURE1,m.group,true);
         }
+    }
+    if(m.opacity<1.f){
+        // Mix sampled colours, never slide UVs through unrelated texels.
+        // Alpha only: keep this stage's RGB constant (sparkle pair passes use it).
+        auto* coverage=C3D_GetTexEnv(3);
+        C3D_TexEnvColor(coverage,(coverage->color&0xffffffu)|uint32_t(std::lround(255.f*m.opacity))<<24);
+        C3D_TexEnvSrc(coverage,C3D_Alpha,GPU_CONSTANT);C3D_TexEnvFunc(coverage,C3D_Alpha,GPU_REPLACE);
+        C3D_AlphaBlend(GPU_BLEND_ADD,GPU_BLEND_ADD,GPU_SRC_ALPHA,
+            submesh==L.outer?GPU_ONE:GPU_ONE_MINUS_SRC_ALPHA,GPU_ZERO,GPU_ONE);
     }
 }
 bool outerOnly(void* context,std::size_t submesh){return submesh==static_cast<BoxMaterial*>(context)->layout->outer;}
@@ -133,7 +209,10 @@ C3D_Mtx questionBillboard(const Renderer& renderer,const C3D_Mtx& model){
     return result;
 }
 void bakeBoxEnvironment(Model& model,const ItemBoxLayout& layout){
-    if(!model.staticLightingBaked)return;
+    // bindBox samples these on texture units 1 and 2: Renderer::moveToVram keeps
+    // them out of VRAM if they are 4-bit (Texture::unitOne).
+    for(int index:{layout.rainbowTexture,layout.innerTexture,layout.shell,layout.noise})
+        if(index>=0&&std::size_t(index)<model.textures.size()&&model.textures[index])model.textures[index]->unitOne=true;
     for(unsigned shape:{unsigned(layout.inner),unsigned(layout.outer)}){
         const auto& sub=model.submeshes[shape];
         for(unsigned j=sub.first;j<sub.first+sub.count;++j){auto& v=model.vertices[model.indices[j]];const auto n=normalized(v.normal);
@@ -141,17 +220,46 @@ void bakeBoxEnvironment(Model& model,const ItemBoxLayout& layout){
         }
     }
     flushGpuData(model.vertices,model.vertexCount*sizeof(Vertex));
+    // Both shells cull half their triangles (inner: GX cull front, outer: cull back).
+    if(model.facing.empty()){model.buildFacingCull(layout.inner);model.buildFacingCull(layout.outer);}
 }
-void drawBox(Renderer& renderer,const Model& model,const ItemBoxLayout& layout,const std::array<std::array<float,6>,300>& inner,const C3D_Mtx& t,unsigned frame,bool sparkle=true,float environmentBlend=1.f){
-    BoxMaterial m{&renderer,&model,&layout,&inner,t,frame,false,environmentBlend};
-    renderer.draw(model,t,false,bindBox,m,innerOnly);
+void drawBox(Renderer& renderer,const Model& model,const ItemBoxLayout& layout,const std::array<std::array<float,6>,300>& inner,const C3D_Mtx& t,unsigned frame,float sparkle=1.f,float environmentBlend=1.f){
+    const float blend=std::clamp(environmentBlend,0.f,1.f);
+    BoxMaterial m{&renderer,&model,&layout,&inner,t,frame,OuterShell,0.f};
+    if(layout.rainbowTexture>=0&&fakeBoxRainbow){
+        // ItemObjFib (PAL 0x807A7D90): A0 = 255 * (camera distance - 3000) / (6000 - 3000),
+        // clamped and truncated; far fake boxes take the real boxes' rainbow.
+        const Vec3 d=Vec3{t.r[0].w,t.r[1].w,t.r[2].w}-renderer.cameraPosition();
+        m.rainbow=uint8_t(std::clamp(255.f*(std::sqrt(dot(d,d))-3000.f)/3000.f,0.f,255.f));
+    }
+    if(blend<1.f)renderer.draw(model,t,false,bindBox,m,innerOnly);
+    if(blend>0.f){m.environmentBlend=1.f;m.opacity=blend;renderer.draw(model,t,false,bindBox,m,innerOnly);}
+    m.opacity=1.f;
+    if(m.rainbow){m.rainbowLayer=true;m.environmentBlend=blend>0.f?1.f:0.f;renderer.draw(model,t,false,bindBox,m,innerOnly);m.rainbowLayer=false;}
     renderer.clearEnvironmentUv();
     const C3D_Mtx question=questionBillboard(renderer,t);
     renderer.draw(model,question,false,bindBox,m,questionOnly);
     renderer.setUvOffset(0,0);
-    renderer.draw(model,t,false,bindBox,m,outerOnly);
-    // Reduced detail drops the additive sparkle pass of distant boxes.
-    if(sparkle){m.sparkle=true;renderer.draw(model,t,false,bindBox,m,outerOnly);}
+    auto outer=[&](float environment,float weight){
+        if(weight<=0.f)return;
+        m.environmentBlend=environment;m.opacity=weight;m.outer=OuterShell;m.group=0;
+        const unsigned groups=std::max(1u,layout.sparkleGroups);
+        if(boxSparklePair&&sparkle>0.f){
+            // Half the passes: shell + group 0, then groups (1, 2).
+            m.outer=OuterShellGroup;m.sparkleWeight=sparkle;
+            renderer.draw(model,t,false,bindBox,m,outerOnly);
+            m.opacity=weight*sparkle;
+            for(unsigned g=1;g<groups;g+=2){m.group=uint8_t(g);m.outer=g+1<groups?OuterGroupPair:OuterGroup;renderer.draw(model,t,false,bindBox,m,outerOnly);}
+            m.group=0;m.outer=OuterShell;return;
+        }
+        renderer.draw(model,t,false,bindBox,m,outerOnly);
+        if(sparkle>0.f){
+            m.outer=OuterGroup;m.opacity=weight*sparkle;
+            for(m.group=0;m.group<groups;++m.group)renderer.draw(model,t,false,bindBox,m,outerOnly);
+            m.group=0;m.outer=OuterShell;
+        }
+    };
+    outer(0.f,1.f-blend);outer(1.f,blend);
     renderer.clearEnvironmentUv();renderer.setUvOffset(0,0);
 }
 // The fake box mask samples TEX0 through a static SRT; bake it into UV0.
@@ -174,6 +282,8 @@ struct RaceHud::Impl {
     std::array<std::unique_ptr<Model>,21> models,staticModels;
     std::array<std::unique_ptr<Model>,2> itemShadows;
     std::array<Vec3,12> bulletUp{};
+    // bulletBody's "body" joint at one pose tick, shared by every racer in a Bullet Bill.
+    const void* bulletPoseBank=nullptr;unsigned bulletPoseTick=~0u;bool bulletPoseOk=false;float bulletPose[12]{};
     std::array<bool,12> wasBullet{};
     std::array<ThunderCloudVisual,12> clouds{};
     ObjectBank cloudMaterials;int cloudColor=-1;std::vector<SubmeshOverride> cloudOverrides;
@@ -184,6 +294,9 @@ struct RaceHud::Impl {
     bool blastMaterials=false; // raw-UV models/bomb_blast.gmdl with the retail binder
     Vertex* bombFrames=nullptr;
     unsigned bombFrameCount=0;
+    // Set reuse: each source vertex's welded index in bombFrames (compactPoses).
+    std::vector<uint16_t> bombRemap;
+    unsigned key=0; // what load() loaded for (hudKey)
     ~Impl(){if(bombFrames)linearFree(bombFrames);}
     struct BoxUV { uint16_t index;float u,v; };
     std::vector<BoxUV> boxUV;
@@ -229,13 +342,70 @@ struct RaceHud::Impl {
 };
 RaceHud::RaceHud():impl_(std::make_unique<Impl>()){}
 RaceHud::~RaceHud()=default;
-void RaceHud::reset(){speedometer=false;impl_=std::make_unique<Impl>();}
+void RaceHud::reset(){speedometer=false;impl_=std::make_unique<Impl>();parked_.reset();}
+namespace {
+// What the item and HUD assets depend on besides the course's light.
+unsigned hudKey(){
+    const auto& scenario=Kinoko::System::RaceConfig::Instance()->raceScenario();
+    const auto& q=renderQuality();
+    return 1u|unsigned(scenario.gameMode==Kinoko::System::RaceConfig::Scenario::GameMode::Battle)<<1|unsigned(scenario.battleType)<<2|
+        unsigned(q.halfLargeTextures)<<8|unsigned(q.reduced)<<9|unsigned(shrinkHudTextures)<<10|unsigned(DriverAnimation::gpuPoses)<<11;
+}
+}
+void RaceHud::park(){
+    // The next race is configured by now: assets it can't take go at once.
+    if(!setReuse||impl_->key!=hudKey()){reset();return;}
+    parkedKey_=impl_->key;parked_=std::move(impl_);impl_=std::make_unique<Impl>();speedometer=false;
+}
+bool RaceHud::takeParked(unsigned key){
+    auto kept=std::move(parked_);
+    if(!kept||parkedKey_!=key)return false;
+    auto& k=*kept;const auto* course=Model::lightingCourseNow();
+    // Colours baked for the last course, baked again for this one.
+    bool baked=true;
+    auto rebake=[&](std::unique_ptr<Model>& m){if(m&&m->staticLightingBaked)baked&=m->rebakeStaticLighting(course);};
+    rebake(k.box);for(auto& m:k.itemShadows)rebake(m);for(auto& m:k.models)rebake(m);for(auto& m:k.staticModels)rebake(m);rebake(k.coinStack);
+    if(k.bombCore){
+        // The explosion's pre-posed frames copied the model's colours: each welded
+        // vertex takes its sources' new colour (they must agree, or load afresh).
+        const bool changed=k.bombCore->bakedCourse!=course;rebake(k.bombCore);
+        if(baked&&changed){
+            const auto* source=k.bombCore->bakeSource.get();const unsigned unique=k.bombCore->vertexCount;
+            if(!source||!k.bombFrames||k.bombRemap.size()!=source->colors.size())return false;
+            std::vector<int8_t> set(unique,0);
+            for(size_t i=0;i<k.bombRemap.size();++i){const unsigned w=k.bombRemap[i];const uint8_t* c=k.bombCore->vertices[i].color;
+                if(w>=unique)return false;
+                if(set[w]){if(std::memcmp(k.bombFrames[w].color,c,4))return false;continue;}
+                set[w]=1;for(unsigned f=0;f<k.bombFrameCount;++f)std::memcpy(k.bombFrames[f*unique+w].color,c,4);
+            }
+            flushGpuData(k.bombFrames,size_t(unique)*sizeof(Vertex)*k.bombFrameCount);
+        }
+    }
+    if(!baked)return false;
+    // Every state the race changes back to what a load leaves (a fresh Impl's
+    // values); the assets, and what load() derived from them, stay. A member
+    // added to Impl that a race changes belongs here.
+    {const auto f=std::make_unique<Impl>();
+     k.bulletUp=f->bulletUp;k.wasBullet=f->wasBullet;k.clouds=f->clouds;k.previousCloud=f->previousCloud;
+     std::fill(k.cloudOverrides.begin(),k.cloudOverrides.end(),SubmeshOverride{});
+     k.boxUV.clear();k.boxUVTick=f->boxUVTick;k.blooperEndOffset=f->blooperEndOffset;k.blooperEndAge=f->blooperEndAge;
+     const bool battle=k.battle.enabled;k.battle=f->battle;k.battle.enabled=battle;k.battleMotion=f->battleMotion;
+     k.window=f->window;k.base=f->base;k.rankSpin=f->rankSpin;k.balloons=f->balloons;k.balloonTick=f->balloonTick;
+     k.warning=f->warning;k.warningAge=f->warningAge;k.warningAlpha=f->warningAlpha;k.warningPosition=f->warningPosition;
+     k.warningMotion=f->warningMotion;k.warningAudible=f->warningAudible;k.warningPan=f->warningPan;k.warningRate=f->warningRate;}
+    for(auto& bank:k.animations)if(bank)bank->restartRace();
+    impl_=std::move(kept);
+    return true;
+}
 void RaceHud::resetBattleView(){impl_->battleMotion.reset();impl_->battle.points=impl_->battle.red=impl_->battle.blue=0;}
 void RaceHud::setBattleView(BattleHudView view,unsigned tick){impl_->battle=view;
     if(view.enabled)impl_->battleMotion.step(view.points,view.red,view.blue,tick);}
 uint8_t RaceHud::takeBattleCues(){return impl_->battleMotion.takeCues();}
 bool RaceHud::load(){
-    reset();bool valid=true;
+    reused_=false;
+    struct KeepSource {KeepSource(){Model::keepBakeSource(setReuse);}~KeepSource(){Model::keepBakeSource(false);}} keepSourceScope;
+    if(parked_&&takeParked(hudKey())){reused_=true;return true;}
+    reset();bool valid=true;impl_->key=hudKey();
     const auto& scenario=Kinoko::System::RaceConfig::Instance()->raceScenario();
     const bool battle=scenario.gameMode==Kinoko::System::RaceConfig::Scenario::GameMode::Battle;
     auto model=[](const char* path,bool dynamic=false){auto m=std::make_unique<Model>();if(!path||!m->load(path,dynamic))m.reset();return m;};
@@ -265,6 +435,7 @@ bool RaceHud::load(){
                 // own immutable pose; no animation age or triangle is removed.
                 auto& model=*impl_->bombCore;
                 const auto remap=compactPoses(impl_->bombFrames,model.vertexCount,impl_->bombFrameCount);
+                if(setReuse)impl_->bombRemap=remap;
                 const unsigned unique=*std::max_element(remap.begin(),remap.end())+1;
                 const size_t compactBytes=size_t(unique)*sizeof(Vertex)*impl_->bombFrameCount;
                 if(auto* compact=static_cast<Vertex*>(linearAlloc(compactBytes))){
@@ -290,15 +461,20 @@ bool RaceHud::load(){
         if(HudItems[i].path)valid&=impl_->icons[i].load(HudItems[i].path);
         if((i==6||i==7||i==12||i==13||i==14||i==15)&&impl_->models[i]){
             char path[96];std::snprintf(path,sizeof path,"models/item_%u.dskm",i);
-            // Unlit and never environment-mapped, these meshes do not read
-            // normals: skin positions only (the same position arithmetic).
+            // GPU skinning poses the lit and the baked copy from one palette
+            // (drawWorld binds it per draw); otherwise both are CPU-skinned
+            // each frame. The Thunder Cloud (14) is set up below.
             auto animation=std::make_unique<DriverAnimation>();
-            if(animation->load(path,*impl_->models[i])){animation->skinNormals(true);impl_->animations[i]=std::move(animation);}
+            if(animation->load(path,*impl_->models[i])){
+                if(i==14||!DriverAnimation::gpuPoses||!animation->gpuSkinModels(*impl_->models[i],impl_->staticModels[i].get()))animation->skinNormals(true);
+                impl_->animations[i]=std::move(animation);
+            }
             else valid=false;
         }
     }
     if(impl_->models[14]&&impl_->animations[14]){
         valid&=impl_->cloudMaterials.load("models/item_14.dobj");
+        impl_->cloudMaterials.markUnitOneTextures(*impl_->models[14]);
         impl_->cloudColor=impl_->cloudMaterials.color("kumo");valid&=impl_->cloudColor>=0;
         impl_->cloudOverrides.resize(impl_->models[14]->submeshes.size());
         auto& bank=*impl_->animations[14];auto& cloud=*impl_->models[14];
@@ -311,11 +487,20 @@ bool RaceHud::load(){
         // Unlit GPU indices are kept in normal.x; the shared CHR0 pose has identical slots.
         if(bank.gpuSkinned())bank.shareDrawVertices(cloud);
     }
-    if(impl_->models[3])bakeMaskUv(*impl_->models[3],FakeBoxMaterials);
+    if(impl_->models[3]){bakeMaskUv(*impl_->models[3],FakeBoxMaterials);bakeBoxEnvironment(*impl_->models[3],FakeBoxMaterials);}
     if(impl_->staticModels[3]){bakeMaskUv(*impl_->staticModels[3],FakeBoxMaterials);bakeBoxEnvironment(*impl_->staticModels[3],FakeBoxMaterials);}
     if(!battle)for(unsigned i=1;i<=12;++i)valid&=impl_->ranks[i].load(HudRanks[i].path);
     for(unsigned i=0;i<10;++i)valid&=impl_->digits[i].load(HudDigits[i].path);
     for(unsigned i=0;i<HudExtraCount;++i)valid&=impl_->extras[i].load(HudExtras[i].path);
+    // Uncompressed art always drawn 2-5x under its texel size (position
+    // 180x128 at 76x54, item frame 128x103 at 55x55, LAP 240x40 at 91x15,
+    // lap digits 64 at 27 and 13): bilinear skips texels, so each pixel is a
+    // cold texture-cache fetch. One halving brings them near 1:1.
+    if(shrinkHudTextures){
+        if(!battle)for(unsigned i=1;i<=12;++i)impl_->ranks[i].shrinkRgba8(1);
+        for(auto& digit:impl_->digits)digit.shrinkRgba8(1);
+        for(unsigned i:{HudFrame,HudLap,HudSlash})impl_->extras[i].shrinkRgba8(1);
+    }
     for(unsigned i=0;i<BalloonNames.size();++i)valid&=impl_->names[i].load(BalloonNames[i].path);
     valid&=impl_->balloonLine.load(BalloonLinePath);
     if(battle){
@@ -329,6 +514,7 @@ bool RaceHud::load(){
         if(scenario.battleType==1){
             impl_->coinStack=model("models/battle_hud_coin_stack.gmdl");
             valid&=bool(impl_->coinStack)&&impl_->coinStackBank.load("models/battle_hud_coin_stack.dobj");
+            if(impl_->coinStack)impl_->coinStackBank.markUnitOneTextures(*impl_->coinStack);
             const int srt=impl_->coinStackBank.scroll("pile_coin");
             valid&=srt>=0;
             if(impl_->coinStack&&srt>=0){
@@ -345,12 +531,14 @@ void RaceHud::stepWorld(const RaceItems& items,Vec3 cameraBackward,bool started)
     {
         auto& m=*impl_;int kind=-1;float nearest=ShellWarningDistance;Vec3 position{};
         const auto& p=Kinoko::Kart::KartObjectManager::Instance()->object(0)->pos();
-        if(started)for(const auto& a:items.actors()){
+        if(started)items.forEachActorSlotRead([&](unsigned slot){
+            const auto& a=items.actors()[slot];
             if(!a.active||a.target!=0||a.explosion||a.scattered||
-               (a.kind!=ItemKind::RedShell&&a.kind!=ItemKind::BlueShell))continue;
+               (a.kind!=ItemKind::RedShell&&a.kind!=ItemKind::BlueShell))return true;
             const float distance=length(a.visualPosition()-Vec3{p.x,p.y,p.z});
             if(distance<=nearest){nearest=distance;kind=int(a.kind);position=a.visualPosition();}
-        }
+            return true;
+        });
         // CtrlRaceChase 807e7260..7324 and807e8f18..9048 also warn of
         // powered racers behind us: Star, Bullet, Mega, then Thunder Cloud.
         // Keep targeted shells above this fallback, and omit team-mates.
@@ -443,10 +631,23 @@ void RaceHud::stepWorld(const RaceItems& items,Vec3 cameraBackward,bool started)
     advance(b.state,b.slide);
 }
 void RaceHud::drawWorld(Renderer& renderer,const RaceItems& items,Vec3 viewer,unsigned tick){
+    // A GPU-skinned item model (gpuSkinModels) draws with its kind's palette;
+    // drawPosed binds it around the draw.
+    auto posed=[&](unsigned kind,const Model& model){
+        if(kind>=impl_->animations.size()||kind==14||!impl_->animations[kind]||!impl_->animations[kind]->gpuSkinned())return false;
+        if(&model!=impl_->models[kind].get()&&&model!=impl_->staticModels[kind].get())return false;
+        const auto& a=*impl_->animations[kind];renderer.setSkinPalette(a.palette(),a.matrixCount(),21);return true;
+    };
+    auto drawPosed=[&](unsigned kind,const Model& model,const C3D_Mtx& t){
+        const bool palette=posed(kind,model);renderer.draw(model,t);if(palette)renderer.setSkinPalette(nullptr,0,12);
+    };
     std::array<bool,21> needed{};
-    for(const auto& actor:items.actors())if(actor.active&&unsigned(actor.kind)<needed.size()&&
+    // Live slots only (forEachActorSlotRead): every loop here needs actor.active.
+    const auto& actors=items.actors();
+    items.forEachActorSlotRead([&](unsigned n){const auto& actor=actors[n];
+        if(actor.active&&unsigned(actor.kind)<needed.size()&&
         !(actor.kind==ItemKind::Bobomb&&actor.explosion)&&dot(actor.position-viewer,actor.position-viewer)<22000.f*22000.f)
-        needed[unsigned(actor.kind)]=true;
+        needed[unsigned(actor.kind)]=true;return true;});
     for(unsigned player=0;player<Kinoko::System::RaceConfig::Instance()->raceScenario().playerCount;++player){
         const auto& effect=items.hud(player);needed[15]|=bool(effect.bullet);needed[14]|=bool(effect.cloud);
         if(effect.deployed&&unsigned(effect.heldKind)<needed.size())needed[unsigned(effect.heldKind)]=true;
@@ -506,19 +707,14 @@ void RaceHud::drawWorld(Renderer& renderer,const RaceItems& items,Vec3 viewer,un
         t.r[2].x=x.z;t.r[2].y=y.z;t.r[2].z=z.z;t.r[2].w=position.z;
         if(renderer.visible(*model,t))shadows[shadowCount++]={model.get(),t};
     };
-    for(const auto& actor:items.actors())if(actor.active&&!actor.explosion&&
+    items.forEachActorSlotRead([&](unsigned n){const auto& actor=actors[n];
+        if(actor.active&&!actor.explosion&&
         dot(actor.position-viewer,actor.position-viewer)<22000.f*22000.f)
-        shadow(actor.kind,actor.visualPosition(),releasedItemVisual(actor));
+        shadow(actor.kind,actor.visualPosition(),releasedItemVisual(actor));return true;});
     for(unsigned player=0;player<Kinoko::System::RaceConfig::Instance()->raceScenario().playerCount;++player){
         const auto& effect=items.hud(player);if(!effect.deployed)continue;
         for(unsigned slot=0;slot<3;++slot)if(effect.heldMask&(1u<<slot)){
-            auto pose=items.heldItemVisual(player,slot);
-            if(spinningShell(effect.heldKind)){
-                const float spin=shellVisualSpin(items.frame());
-                pose.forward=pose.forward*std::cos(spin)+pose.right*std::sin(spin);
-                pose.right=cross(pose.up,pose.forward);
-            }
-            shadow(effect.heldKind,items.heldItemPosition(player,slot),pose);
+            shadow(effect.heldKind,items.heldItemPosition(player,slot),items.heldItemVisual(player,slot));
         }
     }
     renderer.drawShadowVolumes(shadows.data(),shadowCount,.5f);
@@ -536,16 +732,21 @@ void RaceHud::drawWorld(Renderer& renderer,const RaceItems& items,Vec3 viewer,un
         if(!renderer.visible(*impl_->box,t))continue;
         const bool full=fullBoxDetail(pose.position,viewer);
         const auto& model=*impl_->box;
-        const float ratio=quality.reduced&&!full?RenderQuality::screenRatio({model.minimum,model.maximum},t,camera):1.f;
-        if(ratio<quality.minScreenRatio)continue;
-        drawBox(renderer,model,ItemBoxMaterials,ItemBoxInnerSRT,t,tick,full||ratio>=quality.boxSparkleRatio,boxEnvironmentBlend(pose.position,viewer));
+        const float ratio=quality.reduced?RenderQuality::screenRatio({model.minimum,model.maximum},t,camera):1.f;
+        if(!full&&ratio<quality.minScreenRatio)continue;
+        const float environment=boxEnvironmentBlend(pose.position,viewer);
+        drawBox(renderer,model,ItemBoxMaterials,ItemBoxInnerSRT,t,tick,boxSparkleBlend(ratio,quality.boxSparkleRatio,environment),environment);
     }
     // Leave the uniforms as the last drawBox would, whether or not any was drawn.
     if(boxesInRange){renderer.clearEnvironmentUv();renderer.setUvOffset(0,0);}
-    for(const auto& actor:items.actors())if(actor.active&&unsigned(actor.kind)<21&&dot(actor.position-viewer,actor.position-viewer)<22000.f*22000.f){
+    items.forEachActorSlotRead([&](unsigned n){const auto& actor=actors[n];
+        if(!(actor.active&&unsigned(actor.kind)<21&&dot(actor.position-viewer,actor.position-viewer)<22000.f*22000.f))return true;
         const bool blast=(actor.kind==ItemKind::Bobomb||actor.kind==ItemKind::BlueShell)&&actor.explosion;
         const bool fullFake=actor.kind==ItemKind::FakeBox&&fullBoxDetail(actor.visualPosition(),viewer);
-        auto& model=blast?impl_->bombCore:impl_->staticModels[unsigned(actor.kind)];if(!model)continue;
+        // The Wii lights items from the camera's side (view-space G3D lights):
+        // released items use the live-lit copy the local racer's held ones do.
+        const bool live=diag::liveLight&&actor.kind!=ItemKind::FakeBox&&impl_->models[unsigned(actor.kind)];
+        auto& model=blast?impl_->bombCore:live?impl_->models[unsigned(actor.kind)]:impl_->staticModels[unsigned(actor.kind)];if(!model)return true;
         Vertex* originalVertices=model->vertices;
         if(blast&&impl_->bombFrames)model->vertices=impl_->bombFrames+std::min(unsigned(actor.age),impl_->bombFrameCount-1)*model->vertexCount;
         const Vec3 position=actor.visualPosition();
@@ -553,7 +754,7 @@ void RaceHud::drawWorld(Renderer& renderer,const RaceItems& items,Vec3 viewer,un
         if(actor.kind==ItemKind::FakeBox){
             fakeBoxTransform(t,position,{actor.scale,actor.scale,actor.scale},actor.age);
             if(fullFake||!quality.tooSmall({model->minimum,model->maximum},t,camera))drawBox(renderer,*model,FakeBoxMaterials,FakeBoxInnerSRT,t,tick,true,boxEnvironmentBlend(position,viewer));
-            model->vertices=originalVertices;continue;
+            model->vertices=originalVertices;return true;
         }
         const auto visual=releasedItemVisual(actor);
         const auto x=visual.right*visual.scale.x,y=visual.up*visual.scale.y,z=visual.forward*visual.scale.z;
@@ -563,10 +764,10 @@ void RaceHud::drawWorld(Renderer& renderer,const RaceItems& items,Vec3 viewer,un
         t.r[2].x=x.z;t.r[2].y=y.z;t.r[2].z=z.z;t.r[2].w=position.z;
         if(!quality.tooSmall({model->minimum,model->maximum},t,camera)){
             if(blast&&impl_->blastMaterials)blast::drawBlast(renderer,*model,t,actor.age,actor.kind==ItemKind::BlueShell);
-            else renderer.draw(*model,t);
+            else drawPosed(unsigned(actor.kind),*model,t);
         }
         model->vertices=originalVertices;
-    }
+        return true;});
     if(blooper.clip&&impl_->models[12]&&impl_->animations[12]){
         // GessoScreen::UpdateModel anchors the model to the racer position:
         // start (0,150,-100), attack (0,180,-weightDistance), weight scale.
@@ -591,13 +792,15 @@ void RaceHud::drawWorld(Renderer& renderer,const RaceItems& items,Vec3 viewer,un
         transform.r[0].x=x.x;transform.r[0].y=y.x;transform.r[0].z=scaledZ.x;transform.r[0].w=position.x;
         transform.r[1].x=x.y;transform.r[1].y=y.y;transform.r[1].z=scaledZ.y;transform.r[1].w=position.y;
         transform.r[2].x=x.z;transform.r[2].y=y.z;transform.r[2].z=scaledZ.z;transform.r[2].w=position.z;
-        renderer.draw(*impl_->staticModels[12],transform);
+        drawPosed(12,*impl_->staticModels[12],transform);
     }
     if(items.hud(0).pow&&items.hud(0).pow<=158&&impl_->models[13]){
         const auto& pose=Kinoko::Kart::KartObjectManager::Instance()->object(0)->pose();
         // Retail PowObj uses inverse-view up250, back-30 (=look forward30),
         // uniform1.3 scale. Its authored CHR0 performs the three block stomps.
+        const bool palette=posed(13,*impl_->staticModels[13]);
         renderer.drawCameraFacing(*impl_->staticModels[13],{pose[0,3],pose[1,3],pose[2,3]},250.f,30.f,1.3f);
+        if(palette)renderer.setSkinPalette(nullptr,0,12);
     }
     for(unsigned i=0;i<Kinoko::System::RaceConfig::Instance()->raceScenario().playerCount;++i){
         const auto& effect=items.hud(i);
@@ -609,7 +812,7 @@ void RaceHud::drawWorld(Renderer& renderer,const RaceItems& items,Vec3 viewer,un
             const auto& p=kart->pos();
             const Vec3 position=bulletVisualPosition({p.x,p.y,p.z},impl_->bulletUp[i],kart->bsp().initialYPos);
             auto t=body;t.r[0].w=position.x;t.r[1].w=position.y;t.r[2].w=position.z;
-            renderer.draw(*(i==0?impl_->models[15]:impl_->staticModels[15]),t);
+            drawPosed(15,*(i==0||diag::liveLight?impl_->models[15]:impl_->staticModels[15]),t);
         }
         if(effect.cloud&&impl_->models[14]&&impl_->animations[14]){
             const auto& cloud=impl_->clouds[i];
@@ -628,20 +831,15 @@ void RaceHud::drawWorld(Renderer& renderer,const RaceItems& items,Vec3 viewer,un
             // The original eyes and bolt have separate local bones. Bind this
             // cloud's CHR0 palette, then clear it before the next world item.
             if(animation.gpuSkinned())renderer.setSkinPalette(animation.palette(),animation.matrixCount(),21);
-            renderer.draw(*(i==0?impl_->models[14]:impl_->staticModels[14]),t);
+            renderer.draw(*(i==0||diag::liveLight?impl_->models[14]:impl_->staticModels[14]),t);
             renderer.setSkinPalette(nullptr,0,12);renderer.setOverrides(nullptr,0);
         }
         unsigned orbitModel=effect.heldKind==ItemKind::TripleGreenShell?0:effect.heldKind==ItemKind::TripleRedShell?1:effect.heldKind==ItemKind::TripleBanana?2:unsigned(effect.heldKind);
-        auto& heldModel=i==0?impl_->models[orbitModel]:impl_->staticModels[orbitModel];
+        auto& heldModel=i==0||(diag::liveLight&&orbitModel!=unsigned(ItemKind::FakeBox))?impl_->models[orbitModel]:impl_->staticModels[orbitModel];
         if(orbit&&heldModel)for(unsigned n=0;n<3;++n)if(effect.heldMask&(1u<<n)){
             const Vec3 position=items.heldItemPosition(i,n);
-            auto visual=items.heldItemVisual(i,n);
-            if(spinningShell(effect.heldKind)){
-                // Triples already carry their own source spin in heldItemVisual.
-                const float spin=shellVisualSpin(items.frame());
-                visual.forward=visual.forward*std::cos(spin)+visual.right*std::sin(spin);
-                visual.right=cross(visual.up,visual.forward);
-            }
+            // A trailing shell holds still; triples carry their orbit spin in heldItemVisual.
+            const auto visual=items.heldItemVisual(i,n);
             if(orbitModel==unsigned(ItemKind::FakeBox)){
                 C3D_Mtx t;fakeBoxTransform(t,position,visual.scale,tick);
                 const auto& boxModel=i==0?impl_->models[3]:impl_->staticModels[3];
@@ -652,9 +850,35 @@ void RaceHud::drawWorld(Renderer& renderer,const RaceItems& items,Vec3 viewer,un
             t.r[0].x=x.x;t.r[0].y=y.x;t.r[0].z=z.x;t.r[0].w=position.x;
             t.r[1].x=x.y;t.r[1].y=y.y;t.r[1].z=z.y;t.r[1].w=position.y;
             t.r[2].x=x.z;t.r[2].y=y.z;t.r[2].z=z.z;t.r[2].w=position.z;
-            renderer.draw(*heldModel,t);
+            drawPosed(orbitModel,*heldModel,t);
         }
     }
+}
+// KartKiller hands KartEffect its model's "body" joint matrix for rk_killer
+// (USA 0x805b05d4 -> 0x8055b6fc "body" -> 0x806a4a90). The joint rolls and bobs
+// with the wait clip; palette 0 of item_15.dskm is that joint in model space.
+bool RaceHud::bulletBody(unsigned racer,unsigned tick,Vec3& origin,Vec3& x,Vec3& y,Vec3& z){
+    if(racer>=impl_->bulletUp.size()||!impl_->models[15]||!impl_->animations[15])return false;
+    auto& animation=*impl_->animations[15];
+    const unsigned step=renderQuality().animationStep,poseTick=step?tick/step*step:tick;
+    // One pose per tick for every racer (the same clip and frame), not one each.
+    auto& k=*impl_;
+    if(k.bulletPoseBank!=&animation||k.bulletPoseTick!=poseTick){
+        const int clip=animation.find("wait");
+        const float* pose=animation.pose(clip<0?0:clip,float(poseTick),poseTick);
+        k.bulletPoseOk=pose!=nullptr;if(pose)std::copy(pose,pose+12,k.bulletPose);
+        k.bulletPoseBank=&animation;k.bulletPoseTick=poseTick;
+    }
+    if(!k.bulletPoseOk)return false;
+    const float* body=k.bulletPose;
+    auto* kart=Kinoko::Kart::KartObjectManager::Instance()->object(racer);
+    const auto& m=kart->pose();const auto& p=kart->pos();
+    const Vec3 right{m[0,0],m[1,0],m[2,0]},up{m[0,1],m[1,1],m[2,1]},forward{m[0,2],m[1,2],m[2,2]};
+    const Vec3 smoothed=dot(impl_->bulletUp[racer],impl_->bulletUp[racer])>.25f?impl_->bulletUp[racer]:up;
+    const auto toWorld=[&](unsigned c){return right*body[c]+up*body[4+c]+forward*body[8+c];};
+    origin=bulletVisualPosition({p.x,p.y,p.z},smoothed,kart->bsp().initialYPos)+toWorld(3);
+    x=toWorld(0);y=toWorld(1);z=toWorld(2);
+    return true;
 }
 bool RaceHud::notificationWarning(bool& lit)const{
     lit=impl_->warningMotion.lightFrame<10.f;
@@ -670,7 +894,7 @@ void RaceHud::drawOverlay(Renderer& renderer,const RaceItems& items,unsigned sta
     // Their position belongs to the fixed HUD camera, never the race camera.
     if(impl_->coinStack&&stage>=2&&!finished){
         CoinHudStack stack;stack.update(impl_->battle.points);
-        renderer.setScreenDepth(renderer.stereoLayer(stereo::HudLayer));
+        renderer.setScreenDepth(renderer.stereoLayer(stereo::RaceHudLayer));
         renderer.setSkinPalette(nullptr,0,12);renderer.setRigidPose(nullptr);
         for(unsigned i=0;i<stack.size();++i){const auto& c=stack.column(i);
             const auto transform=coinHudColumnTransform(c);
@@ -717,9 +941,9 @@ void RaceHud::drawOverlay(Renderer& renderer,const RaceItems& items,unsigned sta
         renderer.drawScreenSprite(texture,rect.x,rect.y,rect.w,rect.h,art.u,art.v,alpha,tint);
     };
     // Stereo (Mario Kart 7's layers): the ink and the name balloons sit at
-    // the depth they are anchored to; the HUD panes 4 px behind the screen;
-    // the countdown, GO, FINISH and the position come out of it.
-    const float hudDepth=renderer.stereoLayer(stereo::HudLayer);
+    // the depth they are anchored to; the HUD panes, the countdown, GO,
+    // FINISH and the position come out of the screen (RaceHudLayer).
+    const float hudDepth=renderer.stereoLayer(stereo::RaceHudLayer);
     // Original single-player BRCTR corner anchors and BRLYT pane sizes. 3DS is
     // 5:3: retain uniform glyph scaling and each corner's source safe margin.
     // Name balloons. Retail anchors kart pos + (0,120,0) (static init 0x807ea268),

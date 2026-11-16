@@ -44,17 +44,20 @@ u8 *Load(const char *path, size_t &size) {
         std::snprintf(filepath, sizeof(filepath), "%s", path);
     }
 
-    std::ifstream file(filepath, std::ios::binary);
+    // C stdio rather than ifstream: on the 3DS port, fopen also serves the
+    // course archives from the game's packs (src/asset_pack.cpp).
+    FILE *file = std::fopen(filepath, "rb");
     if (!file) {
         PANIC("Failed to load file %s! (KINOKO_FILESYSTEM_ROOT=%s)", path, root ? root : "(unset)");
     }
 
-    file.seekg(0, std::ios::end);
-    size = file.tellg();
-    file.seekg(0, std::ios::beg);
+    std::fseek(file, 0, SEEK_END);
+    size = std::ftell(file);
+    std::fseek(file, 0, SEEK_SET);
 
     u8 *buffer = static_cast<u8 *>(EGG::egg_alloc(size, 4));
-    file.read(reinterpret_cast<char *>(buffer), size);
+    std::fread(buffer, 1, size, file);
+    std::fclose(file);
 
     return buffer;
 }

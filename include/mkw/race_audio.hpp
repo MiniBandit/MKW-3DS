@@ -46,11 +46,13 @@ struct RaceAudioKart {
  std::uint16_t bumpedBy = 0;
  std::uint8_t powerObjectContact = 0; // normal1/wall2 native object callback, even with zero damage.
  bool coinArrival = false; // CoinUnit state6 frame45, retained until push succeeds.
+ bool rainbowFall = false; // a variant 5 fall boundary on a course with "entry" (GOBJ 0x12); retained until push.
  float bump = 0;                // cue::Bump: the bump's signed magnitude
  std::uint8_t fallVoice = 0;    // cue::Fall: the voice type (0x16-0x19)
  std::uint8_t soundZone = 0;    // cue::SoundTrigger: the course sound zone (0-7)
  std::uint16_t airtime = 0;     // KartState airtime: frames off the ground
  bool slipCharging = false, slipBoost = false;   // drafting, slipstream boost (retail status 64, 65)
+ bool canWheelie = false;       // KartMove vt+0x3c (fn_1_81118; bikes 0x80588FE0)
  std::uint32_t actionCount = 0; // KartAction starts so far, and the last one started
  std::int8_t action = -1;
  bool finished = false; std::uint8_t rank = 0;   // RaceManager: finished, finishing position

@@ -1,6 +1,7 @@
 #pragma once
 #include <mkw/race_effects.hpp>
 #include <mkw/vehicle_exhaust.hpp>
+#include <mkw/exhaust_trig.hpp>
 #include <array>
 #include <cmath>
 
@@ -66,9 +67,8 @@ public:
             EffectFrame frame=in.pose;
             if(pipe<exhaust.count){
                 const float* p=exhaust.pipes[pipe];
-                constexpr float ToRadians=0.01745329251994329577f;
-                const float pitch=p[3]*ToRadians,yaw=p[4]*ToRadians;
-                const float sp=std::sin(pitch),cp=std::cos(pitch),sy=std::sin(yaw),cy=std::cos(yaw);
+                const auto& trig=exhaustTrig<0>(std::min<unsigned>(in.vehicle,VehicleExhausts.size()-1),pipe);
+                const float sp=trig.sp,cp=trig.cp,sy=trig.sy,cy=trig.cy;
                 auto axis=[&](float x,float y,float z){
                     const float y1=y*cp-z*sp,z1=y*sp+z*cp;
                     return in.pose.x*(x*cy+z1*sy)+in.pose.y*y1+in.pose.z*(-x*sy+z1*cy);

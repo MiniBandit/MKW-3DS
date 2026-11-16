@@ -16,7 +16,11 @@ class VehicleAnimation {
 public:
     VehicleAnimation(){reset();}
     void reset();
-    void step(Kinoko::Kart::KartObject& kart);
+    // snapshot false (Old 3DS, a tick no frame is drawn after): steps only the
+    // per-tick motion (wheel roll, wheel motion, Luma) and keeps the last pose,
+    // wheel and suspension snapshot; the next snapshot step catches up exactly.
+    // frames > 1: the wheels roll that many ticks at this tick's speed.
+    void step(Kinoko::Kart::KartObject& kart,bool snapshot=true,unsigned frames=1);
     // Complete visual input, without retaining a KartObject or race heap.
     // Positions and wheel frames are world-space; display is the original
     // kartPartsDispParam/bikePartsDispParam row, decoded to host floats.
@@ -36,22 +40,22 @@ public:
     static float initialHeight(unsigned vehicle);
     // Call after the preceding GPU frame has retired, before posing/drawing.
     bool setSnapshot(const Snapshot& pose);
-    const C3D_Mtx& body() const {evaluate();return body_;}
+    const C3D_Mtx& body() const {evaluateBody();return body_;}
     // The kart's position and largest scale this tick, without building any matrix.
     Vec3 position() const {return {base_.r[0].w,base_.r[1].w,base_.r[2].w};}
     float maxScale() const {return std::max({kartScale_.x,kartScale_.y,kartScale_.z});}
     const LumaMotion& lumaMotion() const {return luma_;}
     Vec3 visualScale() const {return kartScale_;}
     unsigned lumaFrame() const {return lumaFrame_;}
-    const C3D_Mtx& handle() const {evaluate();return handle_;}
-    const C3D_Mtx& handleBase() const {evaluate();return handleBase_;}
+    const C3D_Mtx& handle() const {evaluateBody();return handle_;}
+    const C3D_Mtx& handleBase() const {evaluateBody();return handleBase_;}
     const C3D_Mtx& wheel(unsigned i) const {evaluate();return wheels_[i<4?i:0];}
     unsigned wheelCount() const {return count_;}
     unsigned modelIndex(unsigned i) const {return bike_?i%2:count_==3?i+1:i;}
     float roll(unsigned i) const {return roll_[i<4?i:0];}
     float suspensionTravel(unsigned i) const {return travel_[i<4?i:0];}
     float effectiveRadius(unsigned i) const {return radii_[i<4?i:0];}
-    float driveFrame() const {evaluate();return driveFrame_;}
+    float driveFrame() const {evaluateBody();return driveFrame_;}
     bool accessorySupported(const char* name) const;
     unsigned accessoryCount(const char* name) const;
     // sourceAnimated must be true when applying handle_drive CHR0: that clip
@@ -59,9 +63,17 @@ public:
     C3D_Mtx accessory(const char* name,bool sourceAnimated=false,unsigned instance=0) const;
     bool finite() const;
     static float advanceRoll(float phase,float signedDistance,float radius);
+    // The wheel and accessory matrices are built on their first read, not with
+    // the chassis (the same values). A/B: no-lazy-parts.txt builds them together.
+    static inline bool lazyParts=true;
 private:
     void readParameters(unsigned vehicle);
+    // evaluate(): every matrix; evaluateBody(): the chassis, handle and drive
+    // frame only (all a far racer reads), the wheels and accessories when
+    // first asked for. Each value is the same either way.
     void evaluate() const;
+    void evaluateBody() const;
+    void buildBody() const;
     void updateAccessories() const;
     // Per-tick snapshot of the kart (step) and the derived matrices (evaluate).
     C3D_Mtx base_{},handleSource_{};
@@ -73,7 +85,7 @@ private:
     WheelMotion wheelMotion_{};
     LumaMotion luma_{};
     unsigned lumaFrame_=0;
-    mutable bool dirty_=false;
+    mutable bool dirty_=false,partsDirty_=false;
     mutable C3D_Mtx body_{},handle_{},handleBase_{};
     mutable std::array<C3D_Mtx,4> wheels_{},wheelFrames_{};
     mutable std::array<C3D_Mtx,9*4> accessories_{};

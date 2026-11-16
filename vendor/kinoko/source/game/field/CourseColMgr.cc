@@ -352,11 +352,15 @@ bool CourseColMgr::checkSphereCachedFullPush(f32 scale, f32 radius, KColData *da
     f32 invScale = 1.0f / scale;
     data->lookupSphereCached(pos * invScale, prevPos * invScale, mask, radius * invScale);
 
+    // mkw-3ds: a query batched earlier replays its kept hits (KColData::batchSpheresCached).
+    const CollisionCheckFunc check =
+            data->replayBatched() ? &KColData::checkSphereReplay : &KColData::checkSphereCollision;
+
     if (colInfo) {
-        return doCheckWithFullInfoPush(data, &KColData::checkSphereCollision, colInfo, maskOut);
+        return doCheckWithFullInfoPush(data, check, colInfo, maskOut);
     }
 
-    return doCheckMaskOnlyPush(data, &KColData::checkSphereCollision, maskOut);
+    return doCheckMaskOnlyPush(data, check, maskOut);
 }
 
 /// @brief Loads a particular section of a .szs file

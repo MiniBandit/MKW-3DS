@@ -18,4 +18,9 @@ struct RacerLod {
   return stage;
  }
 };
+// The Wii's single-screen driver LOD (StaticR 80556c3c, 80558f60): an opponent's
+// driver draws its model_lod when its camera distance is beyond 4,000 units. Plain
+// distance squared, no FOV, scale or hysteresis terms; bodies, wheels and
+// accessories keep full detail. model_lod is one rigid node that no CHR0 animates.
+inline bool wiiLowDriver(float cameraDistanceSquared){return cameraDistanceSquared>4000.f*4000.f;}
 }

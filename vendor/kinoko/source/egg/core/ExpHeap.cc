@@ -86,6 +86,10 @@ void ExpHeap::free(void *block) {
     dynamicCastHandleToExp()->free(block);
 }
 
+u32 ExpHeap::shrinkBlock(void *block, u32 size) {
+    return dynamicCastHandleToExp()->shrinkBlock(block, size);
+}
+
 /// @addr{0x80226C90}
 u32 ExpHeap::getAllocatableSize(s32 align) const {
     return dynamicCastHandleToExp()->getAllocatableSize(align);

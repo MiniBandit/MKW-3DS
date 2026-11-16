@@ -1,6 +1,6 @@
 #pragma once
 // MKW's 3D sound model (Audio::Engine3D::UpdateAmbientParam, USA 806f296c,
-// over NW4R's Sound3DCalc), for one listener and stereo output. Platform
+// over NW4R's Sound3DCalc), for one listener; stereo, surround or mono. Platform
 // free; the race audio layer runs it on the audio thread for every sound an
 // actor (kart, item, object) plays. docs/AUDIO_SOURCE.md "3D".
 #include <mkw/snd_engine.hpp>
@@ -33,6 +33,9 @@ struct Engine3D {
  int maxPriorityReduction = 32;
  f32 unitDistance = 2000.0f, panRange = 0.9f, sonicVelocity = 566.6667f;
  bool swapPan = false;
+ // The engine's output mode (Engine3D +4): surround/DPL2 use CalcPanSurround,
+ // stereo CalcPanStereo, mono leaves pan and span centred.
+ OutputMode speakerMode = OutputStereo;
  static constexpr f32 Distance[16] = {0, 500, 1000, 1500, 2000, 2500, 3000, 3500, 4000, 4500, 5000, 5500, 6000, 6500, 7000, 30000};
  // The ambient parameters for one sound (Sound3DEngine flags from the sound's
  // 3D parameters: bits set there are not 3D controlled; Doppler needs a factor).
@@ -40,6 +43,7 @@ struct Engine3D {
  // Sound3DCalc pieces (exposed for tests).
  static void angleAndDistance(Vec3f rel, f32 distance, f32 interior, f32& angle, f32& distanceNrm);
  f32 panStereo(f32 angle, f32 distanceNrm) const;
+ void panSurround(f32 angle, f32 distanceNrm, f32& pan, f32& span) const;
  f32 doppler(f32 factor, Vec3f rel, Vec3f actorVelocity, Vec3f listenerVelocity) const;
 };
 }

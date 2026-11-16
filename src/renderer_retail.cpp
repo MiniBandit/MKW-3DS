@@ -43,6 +43,7 @@ bool fogVisible(const float* fog){
 }
 }
 
+uint32_t Renderer::retailFogKey() const{return retailFogKey_;}
 bool Renderer::retailUniformLocations(){
     auto location=[&](const char* name){return int(shaderInstanceGetUniformLocation(program_.vertexShader,name));};
     lightDiffLoc_=location("lightDiff");lightDirLoc_=location("lightDir");lightFnLoc_=location("lightFn");
@@ -58,10 +59,13 @@ void Renderer::setRetailLighting(const CourseLighting* course,bool fixedLightTex
     // Light textures and the fog ramp belong to the drawing side.
     drain();
     retail_=course;fixedLightTextures_=fixedLightTextures;retailTexturesValid_=false;lightTextureAppliedTick_=~0u;
+    for(unsigned which=0;which<2;++which)retailTextureCurrent_[which]=retailTextureAltCurrent_[which]=false;
     retailFog_[7]=-1.f;
     if(!course)return;
     for(unsigned which=0;which<2;++which)retailTextureDynamic_[which]=retailLightTextureDynamic(*course,which);
-    for(auto* pair:{retailTexture_,fixedRetailTexture_})for(unsigned index=0;index<2;++index){auto& t=pair[index];
+    // Pipelined frames alternate two copies of the sampled light textures.
+    C3D_Tex* none=nullptr;
+    for(auto* pair:{retailTexture_,fixedRetailTexture_,pipelineFrames?retailTextureAlt_:none})if(pair)for(unsigned index=0;index<2;++index){auto& t=pair[index];
         if(t.data)continue;
         if(!C3D_TexInit(&t,LightTextureSize,LightTextureSize,GPU_RGBA8)){retail_=nullptr;return;}
         // CapTexture: bilinear, clamped (LightTexture::configure).
@@ -79,10 +83,15 @@ void Renderer::retailFogNow(const RetailFog& fog){
     retailFog_[0]=float(fog.type);retailFog_[1]=fog.enabled?1.f:0.f;retailFog_[2]=fog.start;retailFog_[3]=fog.end;
     for(unsigned i=0;i<3;++i)retailFog_[4+i]=unit(fog.color,i);
     retailFog_[7]=ramp;
+    // retailCombiners' fog colour (alpha set, so never 0) and the state blocks'
+    // fog key (0 while fog is off), once per fog change instead of per draw.
+    retailFogColor_=uint32_t(std::lround(retailFog_[4]*255.f))|uint32_t(std::lround(retailFog_[5]*255.f))<<8|
+                    uint32_t(std::lround(retailFog_[6]*255.f))<<16|0xff000000u;
+    retailFogKey_=fogVisible(retailFog_)?retailFogColor_:0;
 }
 
 void Renderer::retailShutdown(){
-    for(auto* pair:{retailTexture_,fixedRetailTexture_})for(unsigned i=0;i<2;++i){auto& t=pair[i];if(t.data)C3D_TexDelete(&t);t={};}
+    for(auto* pair:{retailTexture_,fixedRetailTexture_,retailTextureAlt_})for(unsigned i=0;i<2;++i){auto& t=pair[i];if(t.data)C3D_TexDelete(&t);t={};}
     if(retailFogRamp_.data)C3D_TexDelete(&retailFogRamp_);
     retailFogRamp_={};retail_=nullptr;retailTexturesValid_=false;
 }
@@ -97,7 +106,7 @@ void Renderer::retailBeginFrame(){
     C3D_FVUnifSet(GPU_VERTEX_SHADER,lightDirLoc_,0,0,1,LegacyCeiling);
     C3D_FVUnifSet(GPU_VERTEX_SHADER,lightFnLoc_,1,0,0,0);
     C3D_BoolUnifSet(GPU_VERTEX_SHADER,retailBoolLoc_,false);
-    retailLightDirty_=retailFogBound_=retailTextureDirty_=false;
+    retailLightDirty_=retailFogBound_=retailTextureDirty_=false;racerLightViewReady_=false;
     if(!retail_){C3D_FVUnifSet(GPU_VERTEX_SHADER,fogParamLoc_,0,0,0,0);return;}
     // EGG::LightObject::CalcView for this frame's camera.
     std::fill(std::begin(retailLightViewReady_),std::end(retailLightViewReady_),false);
@@ -121,6 +130,8 @@ void Renderer::retailBeginFrame(){
         directions=textureDirections;
     }
     if(!retailTexturesValid_){
+        // One copy of the fixed maps: the previous frame finishes first.
+        C3D_FrameWaitPrevious();
         Vec3 fixed[16];const float identity[3][3]={{1,0,0},{0,1,0},{0,0,1}};
         for(unsigned i=0;i<16;++i)fixed[i]=retailLightViewDirection(retail_->lights[i],identity);
         for(unsigned which=0;which<2;++which){uint8_t rgba[32*32*4];retailLightTexture(*retail_,which,fixed,rgba);
@@ -152,16 +163,33 @@ void Renderer::retailBeginFrame(){
         // stable pair needs neither conversion nor another cache flush.
         if(retailTexturesValid_&&!sample&&!lightTextureTransition_[which])continue;
         auto* out=static_cast<uint8_t*>(retailTexture_[which].data);
-        blendLightTexture32(out,lightTextureFrom_[which],lightTextureTo_[which],blendTick);
-        C3D_TexFlush(&retailTexture_[which]);
+        if(lightTextureSkip){
+            // The table blend (byte-identical to the reference); a texture that
+            // already holds these bytes is neither rewritten nor flushed.
+            alignas(4) uint8_t staged[LightTextureSize*LightTextureSize*4];
+            blendLightTexture32(staged,lightTextureFrom_[which],lightTextureTo_[which],blendTick);
+            if(std::memcmp(out,staged,sizeof staged)){std::memcpy(out,staged,sizeof staged);C3D_TexFlush(&retailTexture_[which]);}
+        }else{
+            blendLightTexture32Reference(out,lightTextureFrom_[which],lightTextureTo_[which],blendTick);
+            C3D_TexFlush(&retailTexture_[which]);
+        }
+        retailTextureCurrent_[which]=true;retailTextureAltCurrent_[which]=false;
     }
     lightTextureAppliedTick_=execFrame_;
+    }
+    // Pipelined frames: this frame's copy takes the latest contents when the
+    // last write went to the other copy.
+    for(unsigned which=0;which<2;++which)if(!retailTextureCurrent_[which]&&retailTextureAltCurrent_[which]){
+        std::memcpy(retailTexture_[which].data,retailTextureAlt_[which].data,retailTexture_[which].size);
+        C3D_TexFlush(&retailTexture_[which]);retailTextureCurrent_[which]=true;
     }
     retailTexturesValid_=true;
     // GX fog: ramp of the fog function over eye depth normalized to
     // [start,end] (texel x holds f(x/127); u = (127*ze + 0.5)/128).
     const unsigned type=unsigned(retailFog_[0])&7;
     if(retailFog_[7]!=float(type)){
+        // One fog ramp: the previous frame finishes first.
+        C3D_FrameWaitPrevious();
         auto* out=static_cast<uint8_t*>(retailFogRamp_.data);
         for(unsigned y=0;y<FogRampHeight;++y)for(unsigned x=0;x<FogRampWidth;++x)
             out[tiled(x,y,FogRampWidth)]=uint8_t(std::lround(std::clamp(retailFogFactor(type,float(x)/float(FogRampWidth-1)),0.f,1.f)*255.f));
@@ -171,8 +199,15 @@ void Renderer::retailBeginFrame(){
     const float range=std::max(retailFog_[3]-retailFog_[2],1e-3f);
     // View space looks down -z: GX eye depth is -z.
     const float scale=-1.f/range,bias=-retailFog_[2]/range;
-    C3D_FVUnifSet(GPU_VERTEX_SHADER,fogParamLoc_,scale*float(FogRampWidth-1)/float(FogRampWidth),
-                  (bias*float(FogRampWidth-1)+0.5f)/float(FogRampWidth),scale,bias);
+    // (0, 0, scale, bias): the shader computes view z * scale + bias.
+    C3D_FVUnifSet(GPU_VERTEX_SHADER,fogParamLoc_,0,0,scale*float(FogRampWidth-1)/float(FogRampWidth),
+                  (bias*float(FogRampWidth-1)+0.5f)/float(FogRampWidth));
+}
+
+void Renderer::racerLightNow(bool on,const float direction[3],uint32_t color,uint8_t space,uint32_t ambient){
+    racerLightOn_=on;racerLightViewReady_=false;
+    for(unsigned i=0;i<3;++i)racerLightDirection_[i]=direction[i];
+    racerLightColor_=color;racerLightSpace_=space;racerAmbient_=ambient;
 }
 
 bool Renderer::retailLight(const Submesh& s){
@@ -185,24 +220,33 @@ bool Renderer::retailLight(const Submesh& s){
     }
     const unsigned set=(s.lighting&retail::LightSetMask)>>retail::LightSetShift;
     const bool alphaLit=s.lighting&retail::AlphaLit;
+    // A racer's kart and driver use its own light set (RacerLightZone).
+    RetailLight zone;
+    if(racerLightOn_){
+        zone=retail_->lights[0];zone.flags=0x641;zone.space=racerLightSpace_;zone.color=racerLightColor_;
+        for(unsigned i=0;i<3;++i)zone.direction[i]=racerLightDirection_[i];
+    }
+    const uint32_t ambient0=racerLightOn_?racerAmbient_:retail_->ambient[0];
     // G3DState::LoadResMatChan: ambient = 0.5 + ambient0*material/255 (u8).
     float ambient[4];
     for(unsigned i=0;i<4;++i)
-        ambient[i]=float(unsigned(0.5f+float((retail_->ambient[0]>>(24-8*i))&255)*float((s.ambient>>(24-8*i))&255)*(1.f/255.f)))/255.f;
+        ambient[i]=float(unsigned(0.5f+float((ambient0>>(24-8*i))&255)*float((s.ambient>>(24-8*i))&255)*(1.f/255.f)))/255.f;
     if(!alphaLit)ambient[3]=1.f;
-    if(!retailLightViewReady_[set]){
+    bool& viewReady=racerLightOn_?racerLightViewReady_:retailLightViewReady_[set];
+    Vec3& view=racerLightOn_?racerLightView_:retailLightView_[set];
+    if(!viewReady){
         float rows[3][3];
         for(unsigned r=0;r<3;++r)for(unsigned c=0;c<3;++c)rows[r][c]=view_.r[r].c[3-c];
-        retailLightView_[set]=retailLightViewDirection(retail_->lights[set],rows);
-        retailLightViewReady_[set]=true;
+        view=retailLightViewDirection(racerLightOn_?zone:retail_->lights[set],rows);
+        viewReady=true;
     }
-    const RetailLight& light=retail_->lights[set];
+    const RetailLight& light=racerLightOn_?zone:retail_->lights[set];
     // G3D light: enabled with the GX flag; colour/alpha only when flagged.
     const bool on=(light.flags&0x41)==0x41;
     const float diffuse[4]={on&&(light.flags&0x200)?unit(light.color,0):0.f,on&&(light.flags&0x200)?unit(light.color,1):0.f,
                             on&&(light.flags&0x200)?unit(light.color,2):0.f,alphaLit&&on&&(light.flags&0x400)?unit(light.color,3):0.f};
     // Directional light at -1e10*direction: L points back toward the light.
-    const Vec3 toward=-retailLightView_[set];
+    const Vec3 toward=-view;
     const unsigned fn=(s.lighting&retail::DiffuseMask)>>retail::DiffuseShift;
     const float function[3][3]={{0,1,0},{1,0,-2},{1,0,0}}; // none, sign, clamp
     const float* f=function[fn<3?fn:2];
@@ -232,19 +276,19 @@ void Renderer::normalMatrixNow(const C3D_Mtx& modelView,bool environment){
     }
 }
 
-bool Renderer::retailCombiners(const Submesh& s,const C3D_Mtx& modelView,bool backdrop,bool additive,uint32_t additiveRgb,uint32_t constant){
-    // The sky pass (backdrop) is outside the course fog object in retail.
-    const bool fog=!backdrop&&(s.lighting&retail::Fog)&&fogVisible(retailFog_);
+bool Renderer::retailCombiners(const Submesh& s,const C3D_Mtx& modelView,[[maybe_unused]] bool backdrop,bool additive,uint32_t additiveRgb,uint32_t constant){
+    // Race skies share the course's fog 0 (0x805A36B8) where their material's
+    // fog index is 0; the cook sets retail::Fog only there (MKW_SKY_FOG).
+    const bool fog=(s.lighting&retail::Fog)&&fogVisible(retailFog_);
     const unsigned channel=(s.lighting&retail::ChannelMask)>>retail::ChannelShift;
-    const uint32_t fogColor=uint32_t(std::lround(retailFog_[4]*255.f))|uint32_t(std::lround(retailFog_[5]*255.f))<<8|
-                            uint32_t(std::lround(retailFog_[6]*255.f))<<16|0xff000000u;
+    const uint32_t fogColor=retailFogColor_;
     if(s.menuReflection==8||s.menuReflection==10){
         // All three texture units hold the source statue layers. As with
         // existing light-texture objects, apply fog at the object's eye depth.
         if(fog){
             const float depth=-modelView.r[2].w;
             const float f=retailFogFactor(unsigned(retailFog_[0]),(depth-retailFog_[2])/std::max(retailFog_[3]-retailFog_[2],1e-3f));
-            auto* e=C3D_GetTexEnv(5);
+            auto* e=tev(5);
             C3D_TexEnvColor(e,(fogColor&0xffffffu)|uint32_t(std::lround((1.f-f)*255.f))<<24);
             C3D_TexEnvSrc(e,C3D_RGB,GPU_PREVIOUS,GPU_CONSTANT,GPU_CONSTANT);
             C3D_TexEnvOpRgb(e,GPU_TEVOP_RGB_SRC_COLOR,GPU_TEVOP_RGB_SRC_COLOR,GPU_TEVOP_RGB_SRC_ALPHA);
@@ -263,9 +307,9 @@ bool Renderer::retailCombiners(const Submesh& s,const C3D_Mtx& modelView,bool ba
         const unsigned primaryScale=(s.lighting&retail::PrimaryScaleMask)>>retail::PrimaryScaleShift;
         const unsigned secondary=(s.lighting&retail::SecondaryMask)>>retail::SecondaryShift;
         const unsigned albedoScale=(s.lighting&retail::AlbedoScaleMask)>>retail::AlbedoScaleShift;
-        for(int i=0;i<6;++i)C3D_TexEnvInit(C3D_GetTexEnv(i));
+        for(int i=0;i<6;++i)C3D_TexEnvInit(tev(i));
         int n=0;
-        auto next=[&](){return C3D_GetTexEnv(n++);};
+        auto next=[&](){return tev(n++);};
         C3D_TexEnv* e=nullptr;
         if(primary&&primaryScale==3){
             // (rasC + lm_0*rasA) * 0.5 without saturating the sum first.
@@ -350,11 +394,11 @@ bool Renderer::retailCombiners(const Submesh& s,const C3D_Mtx& modelView,bool ba
     if(!fog)return false;
     if(additive){
         // The additive (CLR0/Star) stage moves before fog: GX fog follows the TEV.
-        auto* add=C3D_GetTexEnv(4);C3D_TexEnvColor(add,additiveRgb);
+        auto* add=tev(4);C3D_TexEnvColor(add,additiveRgb);
         C3D_TexEnvSrc(add,C3D_RGB,GPU_PREVIOUS,GPU_CONSTANT);C3D_TexEnvOpRgb(add,GPU_TEVOP_RGB_SRC_COLOR,GPU_TEVOP_RGB_SRC_COLOR);
         C3D_TexEnvFunc(add,C3D_RGB,GPU_ADD);
     }
-    auto* e=C3D_GetTexEnv(5);C3D_TexEnvInit(e);C3D_TexEnvColor(e,fogColor);
+    auto* e=tev(5);C3D_TexEnvInit(e);C3D_TexEnvColor(e,fogColor);
     C3D_TexEnvSrc(e,C3D_RGB,GPU_CONSTANT,GPU_PREVIOUS,GPU_TEXTURE2);
     C3D_TexEnvOpRgb(e,GPU_TEVOP_RGB_SRC_COLOR,GPU_TEVOP_RGB_SRC_COLOR,GPU_TEVOP_RGB_SRC_ALPHA);C3D_TexEnvFunc(e,C3D_RGB,GPU_INTERPOLATE);
     C3D_TexBind(2,&retailFogRamp_);retailFogBound_=true;

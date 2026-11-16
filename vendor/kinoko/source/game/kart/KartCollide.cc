@@ -16,6 +16,8 @@
 #include "game/field/ObjectDirector.hh"
 #include "game/system/RaceConfig.hh"
 
+#include "game/system/RaceConfig.hh"
+
 #include <egg/math/BoundBox.hh>
 #include <egg/math/Math.hh>
 
@@ -39,7 +41,9 @@ void KartCollide::init() {
     m_respawnTimer = 0;
     m_oobWaterHeightSlot = -1;
     m_oobLavaHeightSlot = -1;
+    m_lightIndex = 0;
     m_sinkholeFall = false;
+    m_rainbowFall = false;
     m_solidOobTimer = 0;
     m_shrinkTimer = 0;
     m_smoothedBack = 0.0f;
@@ -59,13 +63,21 @@ namespace {
 /// Retail PlayerSub18_checkPlayerCollision state gate: respawn, cannon, crushed
 /// (with state bit 81) and ghost racers never touch another racer.
 bool KartCollisionExempt(const KartObject *kart) {
+    const auto &scenario = System::RaceConfig::Instance()->raceScenario();
+    if (scenario.players[kart->param()->playerIdx()].type == System::RaceConfig::Player::Type::Ghost) {
+        return true;
+    }
+    return KartCollide::KartCollisionStatusExempt(kart);
+}
+} // namespace
+
+bool KartCollide::KartCollisionStatusExempt(const KartObject *kart) {
     const auto &status = kart->status();
     // PR #76: a ghost's vanish (Vanishing/Vanished) is also out of kart contact.
     return status.onBit(eStatus::TriggerRespawn, eStatus::InRespawn, eStatus::AfterRespawn,
             eStatus::CannonStart, eStatus::InCannon, eStatus::AfterCannon, eStatus::BattleHidden,
             eStatus::Vanishing, eStatus::Vanished);
 }
-} // namespace
 
 KartCollide::ItemCollisionHook KartCollide::s_itemCollisionHook = nullptr;
 void *KartCollide::s_itemCollisionContext = nullptr;
@@ -341,7 +353,7 @@ void KartCollide::applyKartBump(f32 sign, KartObject *attacker, KartObject *vict
     EGG::Vector3f impulse = lateral * magnitude;
     impulse = impulse - victimUp * impulse.dot(victimUp);
 
-    victimMove->cueBump(magnitude); // USA 0x8056c388
+    victimMove->cueBump(magnitude, attacker->param()->playerIdx(), impulse); // USA 0x8056c388
 
     KartDynamics *victimDynamics = victim->dynamics();
     victimDynamics->addForce(impulse);
@@ -553,13 +565,36 @@ void KartCollide::calcBodyCollision(f32 totalScale, f32 sinkDepth, const EGG::Qu
     minMax.setZero();
     bool bVar1 = false;
 
-    for (u16 hitboxIdx = 0; hitboxIdx < hitboxGroup->hitboxCount(); ++hitboxIdx) {
+    auto bodyTypeMask = [&](const Hitbox &hitbox) {
         Field::KCLTypeMask flags = KCL_TYPE_DRIVER_SOLID_SURFACE;
         if(m_sinkholeFall&&status().onBit(eStatus::BeforeRespawn))flags&=~KCL_TYPE_FLOOR;
-        Hitbox &hitbox = hitboxGroup->hitbox(hitboxIdx);
-
         if (hitbox.bspHitbox()->wallsOnly != 0) {
             flags = 0x4A109000;
+        }
+        return flags;
+    };
+
+    // mkw-3ds (Old 3DS): every hitbox's course query is predicted and tested in one
+    // pass over the prism list; the loop below replays a query's hits only when it
+    // asks exactly that query (KColData::batchSpheresCached).
+    const size_t hitboxCount = hitboxGroup->hitboxCount();
+    const bool batched = s_batchBody && hitboxCount >= 2;
+    if (batched) {
+        Field::KColData::BatchSphere spheres[Field::KColData::BATCH_MAX];
+        const size_t count = std::min(hitboxCount, Field::KColData::BATCH_MAX);
+        for (size_t i = 0; i < count; ++i) {
+            const Hitbox &hitbox = hitboxGroup->hitbox(i);
+            spheres[i] = {hitbox.calcRelPos(totalScale, sinkDepth, scale, rot) + pos(),
+                    hitbox.lastPos(), hitbox.radius(), bodyTypeMask(hitbox)};
+        }
+        Field::CourseColMgr::Instance()->batchSpheresCached(spheres, count);
+    }
+
+    for (u16 hitboxIdx = 0; hitboxIdx < hitboxGroup->hitboxCount(); ++hitboxIdx) {
+        Hitbox &hitbox = hitboxGroup->hitbox(hitboxIdx);
+        const Field::KCLTypeMask flags = bodyTypeMask(hitbox);
+
+        if (hitbox.bspHitbox()->wallsOnly != 0) {
             Field::CourseColMgr::Instance()->setNoBounceWallInfo(&noBounceWallInfo);
         }
 
@@ -583,6 +618,9 @@ void KartCollide::calcBodyCollision(f32 totalScale, f32 sinkDepth, const EGG::Qu
                 processBody(collisionData, hitbox, &colInfo, &maskOut);
             }
         }
+    }
+    if (batched) {
+        Field::KColData::ClearBatch();
     }
 
     if (bVar1) {
@@ -666,8 +704,13 @@ void KartCollide::calcTriggers(Field::KCLTypeMask *mask, const EGG::Vector3f &po
     if (twoPoint) {
         handleTriggers(mask);
     } else {
+        // Retail USA 0x8056a8d8 and 0x8056cc94: the closest floor's attribute bits 8-10
+        // select the racer's BLIGHT light (0x8058b144).
         if (*mask & KCL_TYPE_FLOOR) {
-            Field::CollisionDirector::Instance()->findClosestCollisionEntry(mask, KCL_TYPE_FLOOR);
+            auto *colDir = Field::CollisionDirector::Instance();
+            if (colDir->findClosestCollisionEntry(mask, KCL_TYPE_FLOOR)) {
+                m_lightIndex = (static_cast<u16>(colDir->closestCollisionEntry()->attribute) >> 8) & 7;
+            }
         }
 
         if (*mask & KCL_TYPE_WALL) {
@@ -698,6 +741,10 @@ void KartCollide::handleTriggers(Field::KCLTypeMask *mask) {
     if (*mask & KCL_TYPE_BIT(COL_TYPE_EFFECT_TRIGGER)) {
         auto *colDir = Field::CollisionDirector::Instance();
         if (colDir->findClosestCollisionEntry(mask, KCL_TYPE_BIT(COL_TYPE_EFFECT_TRIGGER))) {
+            // Retail USA 0x8056a804..0x8056a844: variants 0 and 1 also set the light index.
+            if (colDir->closestCollisionEntry()->variant() <= 1) {
+                m_lightIndex = (static_cast<u16>(colDir->closestCollisionEntry()->attribute) >> 8) & 7;
+            }
             if (colDir->closestCollisionEntry()->variant() == 4) {
                 halfPipe()->end(true);
                 status().setBit(eStatus::EndHalfPipe);
@@ -784,6 +831,7 @@ void KartCollide::activateOob(bool detachCamera, Field::KCLTypeMask *mask,
     m_oobWaterHeightSlot = -1;
     m_oobLavaHeightSlot = -1;
     m_sinkholeFall = false;
+    m_rainbowFall = false;
     if (mask && !detachCamera && !somethingBullet) {
         const auto *entry = Field::CollisionDirector::Instance()->closestCollisionEntry();
         if (entry && (entry->variant() == 1 || entry->variant() == 3))
@@ -792,6 +840,8 @@ void KartCollide::activateOob(bool detachCamera, Field::KCLTypeMask *mask,
         // Keep its non-solid state until rescue; a new wave must not catch
         // an already sinking kart and push it back above the sand.
         m_sinkholeFall = entry && entry->variant() == 6;
+        // Effects::Player 0x806AB6B0: variant 5 starts the Rainbow fall timer.
+        m_rainbowFall = entry && entry->variant() == 5;
         if (entry && entry->variant() == 2)
             m_oobLavaHeightSlot = (static_cast<u16>(entry->attribute) >> 8) & 7;
     }
@@ -841,6 +891,12 @@ void KartCollide::activateOob(bool detachCamera, Field::KCLTypeMask *mask,
 /// 0 \\ -13 \\ 0 \end{bmatrix}\f$
 /// @param center The wheel's position
 /// @param radius The wheel's size
+Field::KCLTypeMask KartCollide::wheelTypeMask() const {
+    return m_sinkholeFall && status().onBit(eStatus::BeforeRespawn) ?
+            KCL_TYPE_VEHICLE_COLLIDEABLE & ~KCL_TYPE_FLOOR :
+            KCL_TYPE_VEHICLE_COLLIDEABLE;
+}
+
 void KartCollide::calcWheelCollision(u16 /*wheelIdx*/, CollisionGroup *hitboxGroup,
         const EGG::Vector3f &colVel, const EGG::Vector3f &center, f32 radius) {
     Hitbox &firstHitbox = hitboxGroup->hitbox(0);
@@ -856,9 +912,7 @@ void KartCollide::calcWheelCollision(u16 /*wheelIdx*/, CollisionGroup *hitboxGro
     Field::CourseColMgr::Instance()->setNoBounceWallInfo(&noBounceWallInfo);
 
     bool collided = Field::CollisionDirector::Instance()->checkSphereCachedFullPush(
-            firstHitbox.radius(), firstHitbox.worldPos(), firstHitbox.lastPos(),
-            m_sinkholeFall&&status().onBit(eStatus::BeforeRespawn)?
-                    KCL_TYPE_VEHICLE_COLLIDEABLE&~KCL_TYPE_FLOOR:KCL_TYPE_VEHICLE_COLLIDEABLE,
+            firstHitbox.radius(), firstHitbox.worldPos(), firstHitbox.lastPos(), wheelTypeMask(),
             &colInfo, &kclOut, 0);
 
     CollisionData &collisionData = hitboxGroup->collisionData();
@@ -1607,6 +1661,8 @@ Action KartCollide::handleReactCrushRespawn(size_t /*idx*/) {
 Action KartCollide::handleReactExplosionLoseItem(size_t /*idx*/) {
     return Action::UNK_7;
 }
+
+bool KartCollide::s_batchBody = false;
 
 std::array<KartCollide::ObjectCollisionHandler, 33> KartCollide::s_objectCollisionHandlers = {{
         &KartCollide::handleReactNone,

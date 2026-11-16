@@ -24,7 +24,16 @@ public:
     void createModel();
 
     void calcSub();
+    void calcSubA();
+    void calcSubB();
+    void calcSubA1();
+    void calcSubA2();
+    void calcSubB1();
+    void calcSubB2();
     void calc();
+    // mkw-3ds: calc in two parts (KartObjectManager::s_pass1Grouped).
+    void calcSerial();
+    void calcLocal();
 
     [[nodiscard]] const KartAccessor *accessor() const;
 

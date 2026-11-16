@@ -46,11 +46,12 @@ enum class KartFx : uint8_t {
     WaterFall,     // course pocha archive: large drowning splash, fixed world origin
     Catapult,      // 0x1f8 rk_uchiage, Poihana's first throw contact
     RainbowEntry,  // 0x228 rk_entry, original course-only reentry flame
+    PowReduce,     // 0x23c rk_powReduce, POW dodged (own slots, KartFxSlots::PowReduceFirstSlot)
     Count
 };
 inline constexpr unsigned KartFxCount=unsigned(KartFx::Count);
 // Each effect's index in KartEffect's handle table at +0x1f0: (offset above - 0x1f0) / 4.
-inline constexpr uint8_t KartFxTableIndex[KartFxCount]={5,6,7,8,9,10,11,15,16,17,18,3,4,43,28,29,30,31,1,39,33,34,22,21,35,20,0,32,23,80,81,255,2,14};
+inline constexpr uint8_t KartFxTableIndex[KartFxCount]={5,6,7,8,9,10,11,15,16,17,18,3,4,43,28,29,30,31,1,39,33,34,22,21,35,20,0,32,23,80,81,255,2,14,19};
 // 0x8069146c with argument 0, the kart effect LOD's kill, spares indices 5..12, 14..19, 27
 // and 35: every power-up here and the item box hit; it kills the slipstream (3, 4).
 constexpr bool keptByLodKill(unsigned tableIndex){
@@ -63,6 +64,8 @@ struct KartFxInput {
     float scale=1;        // +0x72c getScale
     float initialY=0;     // +0x74 bsp().initialYPos
     float bulletOffset=0; // the Bullet model's centre along up (KartKiller matrix)
+    // The matrix KartKiller passes for rk_killer: its model's animated "body" joint.
+    bool hasBulletBody=false;Vec3 bulletBody[4]{}; // origin, x, y, z
     // Status 63 Star, 79 Mega, 91 Bullet, 71 Shocked, 4 BeforeRespawn.
     bool star=false,mega=false,bullet=false,shocked=false,beforeRespawn=false;
     bool hasRainbowEntry=false; // Original course entry dependency.
@@ -279,6 +282,8 @@ public:
         // KartMove::calcPow (0x8057a844): the hit at action 11 frame 8 restarts +0x54 unless
         // dodged (0x806a6044); a pending POW keeps rk_powUp alive (0x806a5d40).
         if(in.action==PowAction&&in.actionFrame==PowHitFrame&&!in.powDodged&&!in.beforeRespawn)powHit_=0;
+        // A dodge (0x8057aad8) creates rk_powReduce at once (0x806a64ec, not under the LOD).
+        if(in.action==PowAction&&in.actionFrame==PowHitFrame&&in.powDodged&&!lod)sink.create(KartFx::PowReduce,bottom(in));
         if(in.powPending){
             powUp_=true;
             if(!in.beforeRespawn)sink.create(KartFx::PowUp,scaled(pose(in),in));
@@ -469,10 +474,11 @@ private:
             // The Bullet object creates rk_killer and sets its matrix (0x805b05e8 ->
             // 0x806a4aa4), which records the height over the kart.
             const Vec3 centre=in.position+in.up*in.bulletOffset;
-            bulletHeight_=centre.y-in.position.y;
-            const EffectFrame f=frame(centre,in.forward,in.up,-in.right);
+            const EffectFrame f=in.hasBulletBody?frame(in.bulletBody[0],in.bulletBody[1],in.bulletBody[2],in.bulletBody[3]):
+                frame(centre,in.forward,in.up,-in.right);
+            bulletHeight_=f.origin.y-in.position.y;
             sink.create(KartFx::Killer,f);sink.setFrame(KartFx::Killer,f);
-            bolts(in,sink);powHit(in,sink);powWave(in,sink);powUp(in,sink);
+            bolts(in,sink);powHit(in,sink);powWave(in,sink);powReduce(in,sink);powUp(in,sink);
         }
         if(!in.bullet&&wasBullet_)sink.create(KartFx::Killer1T,scaled(bulletFrame(in),in));
         if(!in.bullet)stop(KartFx::Killer,bulletFrame(in),sink);
@@ -484,7 +490,7 @@ private:
     void normalStep(const KartFxInput& in,KartFxSink& sink){
         if(in.star){sink.create(KartFx::Star,body(in));sink.setFrame(KartFx::Star,body(in));keepAlive_=true;}
         else stop(KartFx::Star,body(in),sink);
-        bolts(in,sink);powHit(in,sink);powWave(in,sink);powUp(in,sink);
+        bolts(in,sink);powHit(in,sink);powWave(in,sink);powReduce(in,sink);powUp(in,sink);
         // Normal update (0x8069bfa0) uses the kart pose and keeps a finite
         // spin effect following until its particles finish. Lightning and
         // POW-up replace these particles immediately.
@@ -531,6 +537,10 @@ private:
         powWave_=std::min(powWave_+1,PowEnd);
         if(start)sink.create(KartFx::Pow1,bottom(in));
         if(sink.alive(KartFx::Pow1)){sink.setFrame(KartFx::Pow1,bottom(in));keepAlive_=true;}
+    }
+    // rk_powReduce follows the kart's bottom while it lives (0x80690990, 0x806a6590).
+    void powReduce(const KartFxInput& in,KartFxSink& sink){
+        if(sink.alive(KartFx::PowReduce)){sink.setFrame(KartFx::PowReduce,bottom(in));keepAlive_=true;}
     }
     // rk_powUp follows while the POW is pending, then fades or is killed (0x80690884); +9
     // while it was alive this update.
@@ -601,8 +611,11 @@ private:
 class KartFxSlots final : public KartFxSink {
 public:
     static constexpr unsigned FirstSlot=32,MaxRacers=12,FirstGroup=2;
-    static constexpr unsigned FirstFreeSlot=FirstSlot+MaxRacers*KartFxCount;
-    static_assert(FirstSlot+MaxRacers*KartFxCount<=RaceEffects::SlotCount,"KartEffect slots");
+    // PowReduce came later: its slots sit past the others so no range moves.
+    static constexpr unsigned Stride=unsigned(KartFx::PowReduce),PowReduceFirstSlot=2031;
+    static constexpr unsigned FirstFreeSlot=FirstSlot+MaxRacers*Stride;
+    static_assert(FirstSlot+MaxRacers*Stride<=RaceEffects::SlotCount,"KartEffect slots");
+    static_assert(Stride+1==KartFxCount&&PowReduceFirstSlot+MaxRacers<=RaceEffects::SlotCount,"rk_powReduce slots");
     static_assert(FirstFreeSlot+2<=RaceEffects::SlotCount,"off-road dust slots");
     static_assert(FirstGroup+MaxRacers<=32,"one mask bit per group");
     static constexpr uint32_t groupBit(unsigned racer){return 1u<<(FirstGroup+racer);}
@@ -624,7 +637,8 @@ public:
             {"rk_itemBox","rk_itemBoxS"},{"rk_niseBoxBiri","rk_niseBoxBiri"},
             {"rk_crash","rk_crashS"},{"rk_crashWater","rk_crashWaterS"},
             {"rk_pochaWaterMini","rk_pochaWaterMini"},{"rk_water","rk_water"},{"rk_water","rk_water"},
-            {"rk_pochaWater","rk_pochaWaterS"},{"rk_uchiage","rk_uchiageS"},{"rk_entry","rk_entry"}};
+            {"rk_pochaWater","rk_pochaWaterS"},{"rk_uchiage","rk_uchiageS"},{"rk_entry","rk_entry"},
+            {"rk_powReduce","rk_powReduceS"}};
         effects_=&effects;
         for(unsigned i=0;i<KartFxCount;++i)for(unsigned j=0;j<2;++j)specs_[i][j]=effects.find(names[i][j]);
         for(unsigned i=0;i<KartFxCount;++i){
@@ -649,7 +663,7 @@ public:
     void setEmissionRatio(KartFx fx,float ratio) override { if(effects_)effects_->setEmissionRatio(slot(fx),ratio); }
     void setSpecificVelocity(KartFx fx,float speed) override { if(effects_)effects_->setSpecificVelocity(slot(fx),speed); }
 private:
-    unsigned slot(KartFx fx) const { return FirstSlot+racer_*KartFxCount+unsigned(fx); }
+    unsigned slot(KartFx fx) const { return fx==KartFx::PowReduce?PowReduceFirstSlot+racer_:FirstSlot+racer_*Stride+unsigned(fx); }
     RaceEffects* effects_=nullptr;
     int specs_[KartFxCount][2]{};
     unsigned racer_=0;

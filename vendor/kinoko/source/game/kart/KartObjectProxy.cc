@@ -471,7 +471,7 @@ void KartObjectProxy::ApplyAll(const KartAccessor *pointers) {
     }
 }
 
-std::list<KartObjectProxy *, EGG::Allocator<KartObjectProxy *>>
+std::list<KartObjectProxy *, EGG::HeapAllocator<KartObjectProxy *>>
         KartObjectProxy::s_proxyList; ///< @addr{0x809C1900}
 
 } // namespace Kinoko::Kart

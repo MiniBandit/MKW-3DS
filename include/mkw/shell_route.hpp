@@ -65,11 +65,45 @@ public:
         if(link>=n)return {};return {c.forward?p.next[link]:p.prev[link],c.forward};
     }
     unsigned edges(Cursor c)const{return valid(c)?(c.forward?point(c).nextCount:point(c).prevCount):0;}
-    // Native adapter for the retail kart's maintained item-point cursor. Keep
-    // height in acquisition so crossing bridges do not select the lower route.
+    // Seeds a kart's cursor after a respawn (retail maps the respawn checkpoint).
+    // Keep height so crossing bridges do not select the lower route.
     Cursor nearest(Vec3 pos)const{
         Cursor best{};float score=std::numeric_limits<float>::infinity();
         for(unsigned i=0;i<size();++i){Vec3 d=points_[i].position-pos;float s=dot(d,d);if(s<score){score=s;best={uint16_t(i),true};}}
+        return best;
+    }
+    // The kart's maintained item point (ItemHolderPlayer +0x44, updated every frame by
+    // USA 0x8078f144). 0x807aa028 moves it to the closest point within two links
+    // (next, next-next, next-prev, prev, prev-prev, prev-next; squared 3D distance,
+    // first strictly closer wins). When the kart is still 12000 or more away,
+    // 0x807aa4bc walks forward along the closest next link until a point is closer
+    // than the current one. A local walk never jumps to another stretch of road the
+    // way a whole-course nearest search does at hairpins and crossings.
+    uint16_t track(uint16_t current,Vec3 pos)const{
+        if(current>=size())return current;
+        auto distance=[&](uint16_t p){Vec3 d=points_[p].position-pos;return dot(d,d);};
+        uint16_t best=current;float bestDistance=distance(current);
+        auto consider=[&](uint16_t p,uint16_t skip){
+            if(p>=size()||p==best||p==skip)return;float d=distance(p);if(d<bestDistance){bestDistance=d;best=p;}
+        };
+        const Point& c=points_[current];
+        for(unsigned i=0;i<c.nextCount;++i){uint16_t n=c.next[i];consider(n,Invalid);if(n>=size())continue;const Point& q=points_[n];
+            for(unsigned j=0;j<q.nextCount;++j)consider(q.next[j],Invalid);
+            for(unsigned j=0;j<q.prevCount;++j)consider(q.prev[j],current);
+        }
+        for(unsigned i=0;i<c.prevCount;++i){uint16_t p=c.prev[i];consider(p,Invalid);if(p>=size())continue;const Point& q=points_[p];
+            for(unsigned j=0;j<q.prevCount;++j)consider(q.prev[j],Invalid);
+            for(unsigned j=0;j<q.nextCount;++j)consider(q.next[j],current);
+        }
+        if(bestDistance<12000.f*12000.f)return best;
+        uint16_t probe=best;
+        for(size_t left=size();left>1;--left){
+            uint16_t step=Invalid;float stepDistance=std::numeric_limits<float>::max();const Point& q=points_[probe];
+            for(unsigned j=0;j<q.nextCount;++j){uint16_t n=q.next[j];if(n>=size()||n==step)continue;float d=distance(n);if(d<stepDistance){stepDistance=d;step=n;}}
+            if(step==Invalid)break;
+            if(stepDistance<bestDistance)return step;
+            probe=step;if(probe==best)break;
+        }
         return best;
     }
     Cursor select(Cursor current,const Vec3* target,Cursor targetPoint,bool blue)const{
@@ -83,7 +117,13 @@ public:
             for(unsigned step=0;step<unsigned(.333f*size());++step){
                 for(unsigned i=0;i<outgoing+incoming;++i){Cursor q=i<outgoing?edge(current,i):edge(reverse,i-outgoing);
                     if(q.point!=probe.point)continue;
-                    if(q.point==current.point){if(incoming<=1)continue;q=edge(reverse,(i-outgoing+1)%incoming);q.forward=current.forward;}
+                    // A match on an incoming arm (another arm merging into the next
+                    // point, or our own point) means the target's route runs through
+                    // the next point too: keep heading there. Taking the arm backward
+                    // sent shells hundreds of ticks against the track (Coconut Mall
+                    // 17+ -> 20-: the leader's default route enters point 24 from
+                    // group 5 while the shell is on group 4).
+                    if(i>=outgoing)return first;
                     return q;
                 }
                 probe=edge(probe);if(!valid(probe))break;
@@ -140,6 +180,9 @@ struct ShellGuidance {
     float stretch=1; // Blue dive: model Y scale (retail +0x60); the sides are 2*scale-stretch.
     uint32_t orbitAngle=0;uint16_t orbitStep=1000,bobAngle=0,leaderMask=0;
     uint8_t slopeTicks=0;bool splineReady=false,targetLive=true,hasRoute=false,ownerLed=false,dodge=false;
+    // QA trace (RaceItems::qaBlueTrace): route ticks, ticks on a backward
+    // cursor, ticks moving against the track, longest such run, own point.
+    uint16_t qaTicks=0,qaCursorBack=0,qaMovingBack=0,qaRun=0,qaMaxRun=0,qaPoint=0xffff;bool qaLogged=false;
 };
 inline float shellMoveToward(float x,float target,float step){return x<target?std::min(x+step,target):std::max(x-step,target);}
 inline float shellXZ2(Vec3 d){return d.x*d.x+d.z*d.z;}

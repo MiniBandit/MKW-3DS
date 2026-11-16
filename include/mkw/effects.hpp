@@ -1,10 +1,12 @@
 #pragma once
+#include "mkw/asset_pack.hpp"
 #include "mkw/math.hpp"
 #include <algorithm>
 #include <array>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <vector>
 namespace mkw {
 struct EmitterShape {
     float volume[5],direction[3],rotation[3],speed,diffusion,radiation,randomSpeed,velocityRandom;
@@ -37,10 +39,20 @@ public:
     bool ready=false;
     bool load(const char* path){
         ready=false;
-        FILE* f=std::fopen(path,"rb");if(!f)return false;uint32_t h[3]{};
-        bool ok=std::fread(h,1,sizeof h,f)==sizeof h&&!std::memcmp(h,"DEFX",4)&&h[1]==3&&h[2]==specs.size();
-        ok=ok&&std::fread(specs.data(),sizeof(SparkSpec),specs.size(),f)==specs.size();
-        ok=ok&&std::fgetc(f)==EOF;std::fclose(f);
+        // race.pak holds these (pack_race_assets.py packs textures/*.bin), and
+        // tools/build.py leaves packed files off the SD card: read the pack
+        // first, as RaceEffects does. A loose file is still accepted.
+        constexpr size_t bytes=12+sizeof(SparkSpec)*std::tuple_size_v<decltype(specs)>;
+        std::vector<uint8_t> file;
+        if(!pack::read(path,file)){
+            FILE* f=std::fopen(path,"rb");if(!f)return false;
+            file.resize(bytes+1);file.resize(std::fread(file.data(),1,file.size(),f));std::fclose(f);
+        }
+        uint32_t h[3]{};
+        bool ok=file.size()==bytes;
+        if(ok)std::memcpy(h,file.data(),sizeof h);
+        ok=ok&&!std::memcmp(h,"DEFX",4)&&h[1]==3&&h[2]==specs.size();
+        if(ok)std::memcpy(specs.data(),file.data()+12,bytes-12);
         for(const auto& s:specs){
             ok&=s.life>0&&s.life<=32&&s.texture<3&&s.layer<4;
             ok&=std::isfinite(s.sizeX)&&std::isfinite(s.sizeY)&&s.sizeX>0&&s.sizeY>0;

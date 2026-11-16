@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Stage original Battle HUD art and the ten authored arena minimaps."""
 import argparse,hashlib,json,struct,subprocess
+import tex3ds_cache
 from pathlib import Path
 from PIL import Image,ImageDraw
 from cook_roster import ROOT
@@ -79,7 +80,7 @@ def main():
         for suffix,size in [('',512),('_overview',256)]:
             target=out/f'textures/battle_map_{index}{suffix}.png';target.parent.mkdir(parents=True,exist_ok=True)
             image.resize((size,size),Image.Resampling.LANCZOS).save(target)
-            subprocess.run([str(tool('tex3ds')),'-f','rgba4','-z','none','-o',str(target.with_suffix('.t3x')),str(target)],check=True,stdout=subprocess.DEVNULL)
+            tex3ds_cache.run([str(tool('tex3ds')),'-f','rgba4','-z','none','-o',str(target.with_suffix('.t3x')),str(target)],check=True,stdout=subprocess.DEVNULL)
             record(target.with_suffix('.t3x'))
         maps.append({'index':index,'course':course['name'],'bounds':[x0,z0,x1,z1],'nodes':nodes})
     lines=['#pragma once','#include <mkw/race_map_assets.hpp>','namespace mkw {',

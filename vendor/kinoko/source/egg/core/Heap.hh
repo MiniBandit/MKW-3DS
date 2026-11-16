@@ -136,6 +136,71 @@ protected:
     static Heap *s_allocatableHeap;
 };
 
+/// @brief mkw-3ds (Old 3DS locality): one block from the current heap whose allocations are
+/// handed out back to back, without the heap's block headers between them.
+/// @details While an arena is active (enter() until Leave()), egg_alloc serves from it in
+/// order; an allocation that does not fit (or names a heap, or a tail alignment) goes to the
+/// heap as before. egg_free ignores pointers inside any open arena, and the block goes back
+/// to the heap at release(). The block is filled by the heap when it is taken (zeroed, with
+/// ZeroFillAlloc) and its bytes are handed out once, so every allocation starts as the heap
+/// would give it. EGG::Allocator (std::list nodes, such as the kart proxy list, which is freed
+/// before the arena's owner) never uses arenas.
+class BlockArena {
+public:
+    static constexpr size_t MAX_ARENAS = 16;
+
+    /// @brief Takes a block of capacity bytes (32-byte aligned) from the current heap, or
+    /// returns nullptr (heap full, or MAX_ARENAS open).
+    [[nodiscard]] static BlockArena *Open(size_t capacity);
+    /// @brief The open arena whose block holds p, or nullptr.
+    [[nodiscard]] static BlockArena *Containing(const void *p);
+    /// @brief Forgets every arena without freeing it (their heap is gone).
+    static void ForgetAll();
+
+    void enter() {
+        s_active = this;
+    }
+
+    static void Leave() {
+        s_active = nullptr;
+    }
+
+    /// @brief Gives the block's unused tail back to the heap, keeping reserve bytes free.
+    void trim(size_t reserve);
+    /// @brief Frees the block (everything allocated from it must be destroyed already).
+    void release();
+
+    [[nodiscard]] size_t used() const {
+        return static_cast<size_t>(m_cur - m_start);
+    }
+
+    [[nodiscard]] size_t size() const {
+        return static_cast<size_t>(m_end - m_start);
+    }
+
+    [[nodiscard]] static bool Active() {
+        return s_active != nullptr;
+    }
+
+    [[nodiscard]] static void *Alloc(size_t size, s32 align);
+
+    [[nodiscard]] static bool Owns(const void *p) {
+        return s_open != 0 && Containing(p);
+    }
+
+    static u32 s_allocs;    ///< Allocations served from arenas (statistics).
+    static u32 s_fallbacks; ///< Allocations that did not fit and went to the heap.
+
+private:
+    u8 *m_start = nullptr;
+    u8 *m_cur = nullptr;
+    u8 *m_end = nullptr;
+
+    static BlockArena s_arenas[MAX_ARENAS];
+    static BlockArena *s_active;
+    static u32 s_open;
+};
+
 [[nodiscard]] void *egg_alloc(size_t size, s32 align = 4, Heap *pHeap = nullptr);
 void egg_free(void *block, Heap *pHeap = nullptr);
 

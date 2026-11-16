@@ -62,7 +62,6 @@ public:
         GroundBoostPanelOrRamp = 7,
         Trickable = 11,
         NotTrickable = 12,
-        MovingRoad = 15, ///< Retail +0x2c 0x8000: a moving road floor (KCL 0x15), 0x8056EDF4.
         StopHalfPipeState = 16,
     };
     typedef EGG::TBitFlag<u32, eSurfaceFlags> SurfaceFlags;
@@ -80,6 +79,10 @@ public:
     void FUN_805B72B8(f32 param_1, f32 param_2, bool lockXZ, bool addExtVelY);
     void calcBodyCollision(f32 totalScale, f32 sinkDepth, const EGG::Quatf &rot,
             const EGG::Vector3f &scale);
+    /// mkw-3ds (Old 3DS): calcBodyCollision batches its hitboxes' course prism
+    /// tests (KColData::batchSpheresCached). Off by default (more instructions
+    /// than it saves); on: batch-body.txt; DIAG ab-alternate.txt bit 5.
+    static bool s_batchBody;
     void calcFloorEffect();
     void calcTriggers(Field::KCLTypeMask *mask, const EGG::Vector3f &pos, bool twoPoint);
     void handleTriggers(Field::KCLTypeMask *mask);
@@ -100,6 +103,12 @@ public:
     /// The collision director's closest entry changes when another kart runs.
     [[nodiscard]] s8 oobWaterHeightSlot() const { return m_oobWaterHeightSlot; }
     [[nodiscard]] s8 oobLavaHeightSlot() const { return m_oobLavaHeightSlot; }
+    [[nodiscard]] bool rainbowFall() const { return m_rainbowFall; }
+    /// Presentation: KCL attribute bits 8-10 (BLIGHT light index) of the last floor or
+    /// effect trigger that set the racer's light (retail USA 0x8058b144 writes it to the
+    /// kart's two light controllers; reset to 0 at respawn, 0x8057e340).
+    [[nodiscard]] u8 lightIndex() const { return m_lightIndex; }
+    void resetLightIndex() { m_lightIndex = 0; }
     /// Presentation uses the same post-decrement countdown as retail OOB wipe.
     [[nodiscard]] s16 respawnTimer() const { return m_respawnTimer; }
     /// QA and AI recovery callers state the camera request of an activation.
@@ -108,6 +117,8 @@ public:
     }
     void calcWheelCollision(u16 wheelIdx, CollisionGroup *hitboxGroup, const EGG::Vector3f &colVel,
             const EGG::Vector3f &center, f32 radius);
+    /// The KCL types a wheel sphere collides with (calcWheelCollision).
+    [[nodiscard]] Field::KCLTypeMask wheelTypeMask() const;
     void calcSideCollision(CollisionData &collisionData, Hitbox &hitbox,
             Field::CollisionInfo *colInfo);
     void calcBoundingRadius();
@@ -141,6 +152,9 @@ public:
     /// PlayerSub18_checkItemCollision right after the object collision; a race item controller
     /// registers this hook to resolve its contacts for the racer at that point.
     using ItemCollisionHook = void (*)(void *context, size_t playerIdx);
+    /// The status part of the racer-pair exemption (respawn, cannon, battle hidden);
+    /// ghosts are exempt as well, by type.
+    [[nodiscard]] static bool KartCollisionStatusExempt(const KartObject *kart);
     static void SetItemCollisionHook(ItemCollisionHook hook, void *context) {
         s_itemCollisionHook = hook;
         s_itemCollisionContext = context;
@@ -154,30 +168,6 @@ public:
     static void SetKartBumpHook(KartBumpHook hook, void *context) {
         s_kartBumpHook = hook;
         s_kartBumpContext = context;
-    }
-
-    /// Port: the balloon battle RaceMode calls that retail kart code makes. Kinoko keeps no
-    /// balloons; the host applies them.
-    /// - Lose (vtable +0x34, fn_1_2880C): activateOob (not its CPU form, 0x80573B00) and an
-    ///   object hit that starts an action (0x80571F10). attacker is NO_BALLOON_ATTACKER.
-    /// - Crush (+0x2c, fn_1_283BC): a Mega flattens the victim; the victim loses a balloon.
-    /// - Steal (+0x30, fn_1_285E0): Star contact or a mushroom bump (0x8056F7F0).
-    enum class BalloonEvent : u8 {
-        Lose,
-        Crush,
-        Steal,
-    };
-    static constexpr size_t NO_BALLOON_ATTACKER = 0xff;
-    using BalloonHook = void (*)(void *context, BalloonEvent event, size_t victim,
-            size_t attacker);
-    static void SetBalloonHook(BalloonHook hook, void *context) {
-        s_balloonHook = hook;
-        s_balloonContext = context;
-    }
-    static void CallBalloonHook(BalloonEvent event, size_t victim, size_t attacker) {
-        if (s_balloonHook) {
-            s_balloonHook(s_balloonContext, event, victim, attacker);
-        }
     }
 
     /// Racer-to-racer collision (absent from Kinoko's time-trial scope).
@@ -289,14 +279,7 @@ public:
     [[nodiscard]] u8 kartBumpAttacker() const {
         return m_kartBumpAttacker;
     }
-    /// Port, camera only: retail ObjectCarTGE::onCollision's Kart::Link calls (0x80590F58 ->
-    /// RaceCamera 0x805A6DCC, flag 0x200 for 60 frames). Never read by the simulation.
-    [[nodiscard]] u32 carCameraHits() const {
-        return m_carCameraHits;
-    }
     /// @endGetters
-
-    void cueCarCamera();
 
 private:
     typedef Action (KartCollide::*ObjectCollisionHandler)(size_t idx);
@@ -328,9 +311,10 @@ private:
     u16 m_oobCameraRequest = 0; ///< Port hook: request of the current out-of-bounds.
     // The non-solid sink boundary stays non-solid throughout its rescue wait.
     bool m_sinkholeFall = false;
+    bool m_rainbowFall = false; ///< This fall hit a variant 5 (Rainbow) fall boundary.
     s8 m_oobWaterHeightSlot = -1;
     s8 m_oobLavaHeightSlot = -1;
-    u32 m_carCameraHits = 0;    ///< Port hook: car-hit camera calls (camera only).
+    u8 m_lightIndex = 0; ///< Presentation only: never read by the simulation.
     /// mkw-3ds: applySomeFloorMoment's world-space inverse inertia tensor for the
     /// last (mainRot, invInertiaTensor) bit pattern; every wheel of one suspension
     /// pass shares those inputs, so the same product is reused bit for bit.
@@ -347,8 +331,6 @@ private:
     static ItemCollisionHook s_itemCollisionHook;
     static KartBumpHook s_kartBumpHook;
     static void *s_kartBumpContext;
-    static BalloonHook s_balloonHook;
-    static void *s_balloonContext;
     static void *s_itemCollisionContext;
 };
 

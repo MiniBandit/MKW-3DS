@@ -47,6 +47,7 @@ bool AwardModel::load(const AwardModelAsset& asset,bool menuLighting){
   materials=std::make_unique<ObjectBank>();
   if(!materials->load(asset.materials))return false;
   materials->markRegisterAlpha(*parts.front());
+  materials->markUnitOneTextures(*parts.front());
  }
  const bool staffCrowd=std::strstr(asset.archive,"unpacked/ending_demo/MiiObj")!=nullptr;
  if(asset.animation){

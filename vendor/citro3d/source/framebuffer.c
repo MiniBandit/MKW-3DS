@@ -79,15 +79,15 @@ void C3D_FrameBufClear(C3D_FrameBuf* frameBuf, C3D_ClearBits clearBits, u32 clea
 	if (clearBits & C3D_CLEAR_COLOR)
 	{
 		if (clearBits & C3D_CLEAR_DEPTH)
-			GX_MemoryFill(
+			C3Di_MemoryFill(
 				(u32*)frameBuf->colorBuf, clearColor, (u32*)colorBufEnd, BIT(0) | (cfs << 8),
 				(u32*)frameBuf->depthBuf, clearDepth, (u32*)depthBufEnd, BIT(0) | (dfs << 8));
 		else
-			GX_MemoryFill(
+			C3Di_MemoryFill(
 				(u32*)frameBuf->colorBuf, clearColor, (u32*)colorBufEnd, BIT(0) | (cfs << 8),
 				NULL, 0, NULL, 0);
 	} else
-		GX_MemoryFill(
+		C3Di_MemoryFill(
 			(u32*)frameBuf->depthBuf, clearDepth, (u32*)depthBufEnd, BIT(0) | (dfs << 8),
 			NULL, 0, NULL, 0);
 }

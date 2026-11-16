@@ -69,9 +69,63 @@ PICA_SOURCE = {0:0, 1:1, 2:4, 3:5, 4:6, 5:7, 6:8, 7:9}
 PICA_DESTINATION = {0:0, 1:1, 2:2, 3:3, 4:6, 5:7, 6:8, 7:9}
 
 
+def alpha_accepted(test):
+    """The 256 alpha values the original two-comparison GX test passes."""
+    compare = lambda op,a,b: (False,a<b,a==b,a<=b,a>b,a!=b,a>=b,True)[op]
+    accepted=[]
+    for value in range(256):
+        a=compare(test['compareA'],value,round(test['referenceA']*255))
+        b=compare(test['compareB'],value,round(test['referenceB']*255))
+        accepted.append((a and b,a or b,a!=b,a==b)[test['op']])
+    return accepted
+
+
+def alpha_band(accepted, rop):
+    """(lo, hi) when the test passes exactly A <= lo or A >= hi and the blend
+    never reads source alpha in its destination factor (opaque, or
+    SRCALPHA/ONE and ONE/ONE): the renderer premultiplies and keeps the
+    alpha for the test. None otherwise."""
+    lo = next((v for v in range(256) if not accepted[v]), 256) - 1
+    hi = next((v for v in range(255, -1, -1) if not accepted[v]), -1) + 1
+    if lo < 0 or hi > 255 or hi - lo < 2 or lo > 254:
+        return None
+    if accepted != [v <= lo or v >= hi for v in range(256)]:
+        return None
+    blended = rop['blendMode'] == 1
+    if rop['blendMode'] not in (0, 1) or blended and (rop['blendSrcFactor'] not in (1, 4) or rop['blendDstFactor'] != 1):
+        return None
+    return lo, hi
+
+
+def approximate_alpha_test(accepted, flags, extended):
+    """The single comparison that misclassifies the least alpha, weighting
+    each value by itself."""
+    compare = lambda op,a,b: (False,a<b,a==b,a<=b,a>b,a!=b,a>=b,True)[op]
+    cost,op,reference=min((sum(value for value in range(256) if accepted[value]!=compare(op,value,reference)),op,reference)
+                          for op in range(1,7) for reference in range(1,255))
+    return flags | 1 | (op<<26), extended | reference<<16, 'Approximated original GX alpha test'
+
+
+def alpha_band_encoded(flags, extended):
+    return bool(flags & 1) and bool(flags >> 31 & 1) and not (flags >> 26) & 7 and bool((extended >> 16) & 255)
+
+
 def material_state(shape):
     """Return flags, alpha multiplier, preserve vertex alpha, any limitation,
     the alpha mix and the extended animationFrames bits."""
+    flags, weight, vertex, limitation, mix, extended = _material_state(shape)
+    if alpha_band_encoded(flags, extended) and ((flags >> 20) & 7 not in (3, 6) or vertex):
+        # The exact band needs the material's whole alpha by PICA stage 3
+        # (alpha modes 3/6 without vertex alpha): approximate it otherwise.
+        accepted = alpha_accepted(shape['sourceMaterial']['gxMaterial']['alphaTest'])
+        flags &= ~(1 | (31 << 26))
+        extended &= ~(0xffff << 16)
+        flags, extended, approximated = approximate_alpha_test(accepted, flags, extended)
+        limitation = limitation or approximated
+    return flags, weight, vertex, limitation, mix, extended
+
+
+def _material_state(shape):
     flags = shape['flags']
     material = shape.get('sourceMaterial')
     if material is None:
@@ -98,13 +152,16 @@ def material_state(shape):
             op,index=legacy[0];flags |= 1 | (op<<26) | (index<<29)
         elif exact:
             op,reference=exact[0];flags |= 1 | (op<<26);extended |= reference<<16
+        elif alpha_band(accepted, material['gxMaterial']['ropInfo']):
+            # Two-sided A <= lo OR A >= hi (the sea sparkles): compare NEVER
+            # with reference lo+1 and hi in bits 24..31 (no blend factors:
+            # alpha_band admits only blends the flags hold). The renderer
+            # evaluates it exactly when the alpha is final by stage 3;
+            # material_state approximates it otherwise.
+            lo,hi=alpha_band(accepted, material['gxMaterial']['ropInfo'])
+            flags |= 1;extended |= (lo+1)<<16 | hi<<24
         else:
-            # Two-sided tests (sparkle thresholds): the single comparison that
-            # misclassifies the least alpha, weighting each value by itself.
-            cost,op,reference=min((sum(value for value in range(256) if accepted[value]!=compare(op,value,reference)),op,reference)
-                                  for op in range(1,7) for reference in range(1,255))
-            flags |= 1 | (op<<26);extended |= reference<<16
-            limitation='Approximated original GX alpha test'
+            flags,extended,limitation=approximate_alpha_test(accepted,flags,extended)
     rop = material['gxMaterial']['ropInfo']
     blend = rop['blendMode']
     if blend not in (0,1):
@@ -186,6 +243,19 @@ def material_state(shape):
     if factors not in modes or sum(f=='v' for f in next(iter(expression),()))>1:
         return flags, 1., True, 'Unsupported original GX alpha equation', None, extended
     flags |= modes[factors]<<20
+    # A cutout that keeps only fully opaque texels: texture alpha times a
+    # constant w < 1, tested against w (Moonview Highway's Nuki_Ryoumen:
+    # K3.a = 128/255, alpha >= 128). On the Wii its CMPR mip levels stay one-bit,
+    # so the test is a half-coverage cutout at every distance. Our mip levels
+    # carry partial alpha, which that test throws away: rails and the bridge
+    # lattice broke up and vanished with distance. Test half coverage instead.
+    if factors == ('p',) and 0 < weight < 1 and flags & 1:
+        op, index = (flags >> 26) & 7, (flags >> 29) & 3
+        reference = (extended >> 16) & 255 or (0, 128, 165, 255)[index]
+        if op in (4, 6) and reference >= round(weight * 255) - (op == 4):
+            flags &= ~(31 << 26)
+            flags |= 1 | (6 << 26)
+            extended = (extended & ~(255 << 16)) | (max(1, round(weight * 255 / 2)) << 16)
     return flags, weight, vertex, limitation, None, extended
 
 

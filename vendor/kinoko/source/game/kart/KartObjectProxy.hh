@@ -169,7 +169,7 @@ public:
     [[nodiscard]] s32 hopStickX() const;
     [[nodiscard]] KartParam::Stats::DriftType vehicleType() const;
 
-    [[nodiscard]] static std::list<KartObjectProxy *, EGG::Allocator<KartObjectProxy *>> &
+    [[nodiscard]] static std::list<KartObjectProxy *, EGG::HeapAllocator<KartObjectProxy *>> &
     proxyList() {
         return s_proxyList;
     }
@@ -183,7 +183,9 @@ private:
 
     const KartAccessor *m_accessor;
 
-    static std::list<KartObjectProxy *, EGG::Allocator<KartObjectProxy *>>
+    /// mkw-3ds: nodes from the heap, never a kart's BlockArena: the list is cleared after the
+    /// karts (and their arenas) are freed.
+    static std::list<KartObjectProxy *, EGG::HeapAllocator<KartObjectProxy *>>
             s_proxyList; ///< List of all KartObjectProxy children.
 };
 

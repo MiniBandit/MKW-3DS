@@ -338,15 +338,21 @@ void KartMove::calcSlipstream() {
     }
     const u8 self = param()->playerIdx();
     const bool turn = System::RaceManager::Instance()->timer() % count == self;
+    // A Time Trials ghost neither drafts nor gives a draft: it replays the run
+    // it recorded alone, and racing it leaves the player's run unchanged.
+    const auto &players = System::RaceConfig::Instance()->raceScenario().players;
+    auto ghost = [&](size_t i) {
+        return players[i].type == System::RaceConfig::Player::Type::Ghost;
+    };
 
     if (turn && !m_slipstreamBoost && !m_bulletActive) {
         bool found = false;
-        if (status.offBit(eStatus::InAction) && speedRatioCapped() >= MIN_SPEED_RATIO) {
+        if (!ghost(self) && status.offBit(eStatus::InAction) && speedRatioCapped() >= MIN_SPEED_RATIO) {
             const EGG::Vector3f &me = pos();
             // Retail KartCollide +0x14: bounding radius * hitbox scale.
             const f32 reach = collide()->boundingRadius() + DISTANCE;
             for (size_t i = 0; i < count; ++i) {
-                if (i == self) {
+                if (i == self || ghost(i)) {
                     continue;
                 }
                 const KartObject *other = objects->object(i);
@@ -397,11 +403,25 @@ void KartMove::calcSlipstream() {
 }
 
 void KartMove::calc() {
+    if (calcPart1()) {
+        calcPart2();
+    }
+}
+
+bool KartMove::calcPart1() {
+    if (!calcPart1A()) {
+        return false;
+    }
+    calcPart1B();
+    return true;
+}
+
+bool KartMove::calcPart1A() {
     auto &status = KartObjectProxy::status();
 
     if (status.onBit(eStatus::InRespawn)) {
         calcInRespawn();
-        return;
+        return false;
     }
 
     dynamics()->resetInternalVelocity();
@@ -419,6 +439,12 @@ void KartMove::calc() {
 
     calcAutoDrift();
     calcDirs();
+    return true;
+}
+
+void KartMove::calcPart1B() {
+    auto &status = KartObjectProxy::status();
+
     calcStickyRoad();
     calcOffroad();
     calcTurn();
@@ -433,6 +459,11 @@ void KartMove::calc() {
     calcMushroomBoost();
     calcZipperBoost();
     calcSlipstream();
+}
+
+void KartMove::calcPart2() {
+    auto &status = KartObjectProxy::status();
+
     // RMCU PlayerSub10 update order: POW (0x8057a844), Mega, Star, shock, crush.
     calcPow();
     calcMega();
@@ -545,6 +576,7 @@ void KartMove::calcRespawnStart() {
     Item::ItemDirector::Instance()->kartItem(param()->playerIdx()).clear();
 
     status().resetBit(eStatus::TriggerRespawn).setBit(eStatus::InRespawn);
+    collide()->resetLightIndex(); // retail USA 0x8057e340 (light index 0)
 
     // RMCU 8057322c..80573324: offline Balloon Battle, empty count and
     // the first respawn tick. The callback also checks the race stage.

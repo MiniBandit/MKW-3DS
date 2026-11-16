@@ -82,6 +82,9 @@ struct ItemRacer {
     /// Retail fn_1_2AD3B4 (0x807aed08): status 47 (ZipperTrick) or 54 (TrickRot), which
     /// slows a pursuing Red's turn onto the racer's back axis.
     bool trickRotating=false;
+    /// Status 41 (HalfPipeRamp) or 42 (OverZipper): a shell thrown now starts its 30-frame
+    /// slide timer (USA 0x807a6880).
+    bool halfPipe=false;
     uint16_t itemPoint=0xffff;
     int8_t damageAction=-1; ///< Current kart action, -1 for none.
     /// Retail start() gates other than Star, Mega and Bullet: respawn and cannon family.

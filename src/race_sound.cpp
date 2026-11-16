@@ -180,7 +180,9 @@ void RaceSound::begin(const Setup& s) {
  for (int p = 0; p < 11; ++p) { players_[p].value = p < 2 ? 1.0f : 0.0f; players_[p].set(1.0f, p < 2 ? 0 : 0x78); postedPlayer_[p] = -1; }
  race_ = Track{};
  // RaceMgr::Init (80708f5c): the intro section's state (2), or the race
- // section's (3) when there is no course preview.
+ // section's (3) when there is no course preview. Its music starts with the
+ // first frame on screen (sceneShown), not under the loading screen.
+ musicHeld_ = true;
  setRaceState(s.preview ? 2 : 3);
  postVolumes(true);
  sys.setLayer(&layer_);
@@ -330,18 +332,15 @@ void RaceSound::setRaceState(int n) {
  switch (n) {
  case 2:
   rampPlayers();
-  bgm_.play(introFanfare(course), 0);
-  bgm_.prepare(startFanfare(setup_.mode));
+  if (musicHeld_) bgm_.prepare(introFanfare(course));
+  else startStateMusic(n);
   break;
  case 3:
   // The race section's groups are in (fn_1_1EF700): SoundTriggerMgr::Init.
   triggers_.init();
   rampPlayers();
-  bgm_.play(startFanfare(setup_.mode), 0);
-  if (stream != None) {
-   // Toad's Factory starts its course stream at sample 0x37955 (fn_1_1E8B24).
-   bgm_.prepare(stream, course == 4 ? 0x37955 : 0);
-  }
+  if (musicHeld_) bgm_.prepare(startFanfare(setup_.mode));
+  else startStateMusic(n);
   break;
  case 4:
   bgm_.playPrepared(0x24);
@@ -427,9 +426,46 @@ void RaceSound::rankHud(unsigned rank) {
  else if (rankAnim_ == 1 && rankFrame_ >= 11) { rankAnim_ = 2; rankFrame_ = 0; }
 }
 
+void RaceSound::startStateMusic(int n) {
+ const unsigned course = setup_.course;
+ const std::uint32_t stream = course < 0x2a ? CourseStream[course] : None;
+ if (n == 2) {
+  bgm_.play(introFanfare(course), 0);
+  bgm_.prepare(startFanfare(setup_.mode));
+ } else if (n == 3) {
+  bgm_.play(startFanfare(setup_.mode), 0);
+  if (stream != None) {
+   // Toad's Factory starts its course stream at sample 0x37955 (fn_1_1E8B24).
+   bgm_.prepare(stream, course == 4 ? 0x37955 : 0);
+  }
+ }
+}
+
+void RaceSound::sceneShown() {
+ if (!active_ || !musicHeld_) return;
+ musicHeld_ = false;
+ startStateMusic(state_);
+}
+
+void RaceSound::previewLeave() {
+ if (!active_ || state_ != 2) return;
+ // The Demo section's fade-out starts with RaceRSARPlayer::Stop (PAL 0x80715E64,
+ // as TPO has it): the intro fanfare over 20 frames, players 2-10 stopped and
+ // silenced over 20 (PlayersVolumeMgr::Stop) and the intro ambience over 20.
+ auto& sys = SoundSystem::instance();
+ bgm_.stop(0x14);
+ if (bgm_.prepared >= 0) { sys.stopSlot(bgm_.slot[bgm_.prepared], 0); bgm_.prepared = -1; }
+ race_ = Track{};
+ for (std::uint32_t p = 2; p < 11; ++p) { players_[p].set(0.0f, 0x14); post(SoundCommand::StopPlayer, 0, p, 0, 0x14); }
+ triggers_.ambience.push_back({AmbienceOp::GlobalStop, 0, 0x14, 0, -1});
+}
+
 void RaceSound::previewEnded() {
  if (!active_ || state_ != 2) return;
- // The race section starts: RaceRSARPlayer::Prepare -> RaceMgr::Init -> state 3.
+ // The race section starts: RaceRSARPlayer::Prepare -> RaceMgr::Init -> state 3,
+ // then OnLoad's PlayersVolumeMgr::Reset brings players 2-10 (silenced by
+ // previewLeave) from 0 to 1 over 120 frames.
+ for (std::uint32_t p = 2; p < 11; ++p) { players_[p].value = 0.0f; players_[p].set(1.0f, 0x78); }
  setRaceState(3);
 }
 
@@ -492,11 +528,12 @@ void RaceSound::step(const Frame& f, RaceAudioFrame* actors) {
  // Bounded release diagnostics for silent race actors; no per-frame file I/O.
  if (tick_ == 300 || tick_ == 900 || tick_ == 1800) {
   const auto st = sys.stats();
-  if (FILE* log = std::fopen("sdmc:/3ds/mkw-3ds/audio-race-status.txt", "a")) {
-   std::fprintf(log, "tick=%u course=%u ready=%d actor_frames=%lu actor_sounds=%lu voices=%lu missing=%lu failed=%lu last=%lu/%lu/%lu cache=%lu/%lu waves=%lu linear=%lu\n",
+  if (FILE* log = std::fopen("sdmc:/3ds/MKWiiDS/audio-race-status.txt", "a")) {
+   std::fprintf(log, "tick=%u course=%u ready=%d actor_frames=%lu actor_sounds=%lu voices=%lu missing=%lu failed=%lu (id %lu slot %lu setup %lu waves %lu stream %lu last %lu) last=%lu/%lu/%lu cache=%lu/%lu waves=%lu linear=%lu\n",
     tick_, setup_.course, int(sys.sceneReady()), (unsigned long)layer_.framesUsed.load(),
     (unsigned long)layer_.actorSounds.load(), (unsigned long)st.voices, (unsigned long)st.missing,
-    (unsigned long)st.failed, (unsigned long)st.lastMissingSound, (unsigned long)st.lastMissingFile,
+    (unsigned long)st.failed, (unsigned long)st.failNoInfo, (unsigned long)st.failNoSlot, (unsigned long)st.failSetup,
+    (unsigned long)st.failWaves, (unsigned long)st.failStream, (unsigned long)st.lastFailedSound, (unsigned long)st.lastMissingSound, (unsigned long)st.lastMissingFile,
     (unsigned long)st.lastMissingWave, (unsigned long)st.cacheUsed, (unsigned long)st.cacheBytes,
     (unsigned long)sys.residentWaveBytes(), (unsigned long)linearSpaceFree());
    std::fclose(log);
@@ -595,7 +632,7 @@ void RaceSound::step(const Frame& f, RaceAudioFrame* actors) {
   if (!introLoaded_) a.objectSounds = 0;
   a.raceState = std::uint8_t(state_); a.alteration = std::uint8_t(alteration_); a.engineClass = std::uint8_t(std::min(setup_.engineClass, 2u));
   // A frame dropped by a full ring keeps its cues for the next one.
-  if (layer_.push(a)) { for (auto& k : a.kart) { k.cues = 0; k.bumpedBy = 0; k.powerObjectContact = 0; k.coinArrival = false; } a.itemSounds = 0; a.ambienceOps = 0; a.objectSounds = 0; a.balloonSounds = 0; }
+  if (layer_.push(a)) { for (auto& k : a.kart) { k.cues = 0; k.bumpedBy = 0; k.powerObjectContact = 0; k.coinArrival = false; k.rainbowFall = false; } a.itemSounds = 0; a.ambienceOps = 0; a.objectSounds = 0; a.balloonSounds = 0; }
  }
  SoundCommand c; c.type = SoundCommand::Layer; sys.post(c);
 }
@@ -612,13 +649,19 @@ void RaceSound::pause(bool paused) {
  for (std::uint32_t p = 2; p < 11; ++p) post(SoundCommand::PausePlayer, 0, p, paused ? 1.0f : 0.0f, 10);
 }
 
-void RaceSound::carryResultMusic(){
- if(!active_||!finished_||bgm_.active<0)return;
+void RaceSound::fadeResultMusic(int frames){
+ if(active_&&finished_)bgm_.stop(frames);
+}
+
+void RaceSound::leaveResults(bool carryMusic){
+ if(!active_||!finished_)return;
  auto& sys=SoundSystem::instance();
- const int i=bgm_.active;
- if(bgm_.delay>=0)post(SoundCommand::StartPrepared,bgm_.slot[i],0,0);
- sys.carryMusic(bgm_.sound[i],bgm_.slot[i]);
- bgm_.active=-1;bgm_.delay=-1;
+ if(carryMusic&&bgm_.active>=0){
+  const int i=bgm_.active;
+  if(bgm_.delay>=0)post(SoundCommand::StartPrepared,bgm_.slot[i],0,0);
+  sys.carryMusic(bgm_.sound[i],bgm_.slot[i]);
+  bgm_.active=-1;bgm_.delay=-1;
+ }
  // Removing the layer resets every actor-owned loop on the audio thread.
  // quit leaves the transferred music handle alone and stops race players.
  quit();

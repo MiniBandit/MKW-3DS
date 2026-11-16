@@ -61,6 +61,9 @@ public:
 
     void calc(f32 totalScale, f32 sinkDepth, const EGG::Vector3f &scale, const EGG::Quatf &rot,
             const EGG::Vector3f &pos);
+    /// mkw-3ds: the relative position calc sets (same expressions, nothing changed).
+    [[nodiscard]] EGG::Vector3f calcRelPos(f32 totalScale, f32 sinkDepth,
+            const EGG::Vector3f &scale, const EGG::Quatf &rot) const;
 
     /// @beginSetters
     void reset();

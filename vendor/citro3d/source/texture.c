@@ -240,6 +240,7 @@ void C3D_TexBind(int unitId, C3D_Tex* tex)
 
 void C3D_TexFlush(C3D_Tex* tex)
 {
+	C3Di_TexCacheDirty = true;
 	if (!addrIsVRAM(tex->data))
 		GSPGPU_FlushDataCache(tex->data, C3D_TexCalcTotalSize(tex->size, tex->maxLevel));
 }
@@ -268,17 +269,24 @@ void C3D_TexShadowParams(bool perspective, float bias)
 }
 
 // Last 2D texture unit registers written (border, dim, param, lod, address,
-// type). Cube maps are always written. The texture cache clear that follows
-// every bind (C3Di_UpdateContext) is unaffected.
+// type). Cube maps are always written.
 static u32 C3Di_TexShadow[3][6];
 static bool C3Di_TexShadowValid[3];
+
+// mkw-3ds: the texture cache may hold stale texels. Set at every frame,
+// target and command-list boundary (GX copies, fills and transfers run
+// between lists), after C3D_TexFlush and when the shadows are dropped.
+// C3Di_UpdateContext clears the cache on the next texture update while set,
+// or when a unit's registers or the enabled units change.
+bool C3Di_TexCacheDirty = true;
 
 void C3Di_InvalidateTexShadows(void)
 {
 	C3Di_TexShadowValid[0] = C3Di_TexShadowValid[1] = C3Di_TexShadowValid[2] = false;
+	C3Di_TexCacheDirty = true;
 }
 
-void C3Di_SetTex(int unit, C3D_Tex* tex)
+bool C3Di_SetTex(int unit, C3D_Tex* tex)
 {
 	u32 reg[10];
 	u32 regcount = 5;
@@ -303,8 +311,8 @@ void C3Di_SetTex(int unit, C3D_Tex* tex)
 		if (regcount == 5)
 		{
 			u32* shadow = C3Di_TexShadow[unit];
-			if (C3Di_TexShadowValid[unit] && memcmp(shadow, reg, 5*sizeof(u32)) == 0 && shadow[5] == (u32)tex->fmt)
-				return;
+			if (C3Di_TexShadowValid[unit] && C3Di_SameWords(shadow, reg, 5*sizeof(u32)) && shadow[5] == (u32)tex->fmt)
+				return false;
 			memcpy(shadow, reg, 5*sizeof(u32));
 			shadow[5] = tex->fmt;
 			C3Di_TexShadowValid[unit] = true;
@@ -327,4 +335,5 @@ void C3Di_SetTex(int unit, C3D_Tex* tex)
 			GPUCMD_AddWrite(GPUREG_TEXUNIT2_TYPE, tex->fmt);
 			break;
 	}
+	return true;
 }

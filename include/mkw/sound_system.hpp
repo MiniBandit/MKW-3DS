@@ -6,6 +6,7 @@
 // stays silent and every call is a no-op.
 #include <mkw/snd_engine.hpp>
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 
 namespace mkw {
@@ -38,7 +39,7 @@ class SoundSystem {
 public:
  static SoundSystem& instance();
  // Loads audio/sound.arc and opens audio/revo_kart.brsar under the asset
- // root (romfs:/ or sdmc:/3ds/mkw-3ds). Requires MenuMovieAudio::initialize.
+ // root (romfs:/ or sdmc:/3ds/MKWiiDS). Requires MenuMovieAudio::initialize.
  bool start();
  void stop();
  // Preserve only the already-playing results music across a loading handoff.
@@ -104,8 +105,17 @@ public:
 
  struct Stats { std::uint32_t voices = 0, sounds = 0, dropped = 0, underruns = 0, missing = 0, failed = 0; float audioMs = 0, audioPeakMs = 0; std::uint32_t frames = 0;
   std::uint32_t cacheBytes = 0, cacheUsed = 0, cacheLoads = 0, cacheEvictions = 0;
-  std::uint32_t lastMissingSound = 0xFFFFFFFFu, lastMissingFile = 0xFFFFFFFFu, lastMissingWave = 0xFFFFFFFFu; };
+  std::uint32_t lastMissingSound = 0xFFFFFFFFu, lastMissingFile = 0xFFFFFFFFu, lastMissingWave = 0xFFFFFFFFu;
+  std::uint32_t failNoInfo = 0, failNoSlot = 0, failSetup = 0, failWaves = 0, failStream = 0, lastFailedSound = 0xFFFFFFFFu; };
  Stats stats() const;
+ // Race wave RAM cache (New 3DS; sound_system.cpp WaveRamCache): BRSAR ranges
+ // read by scene loads stay on the heap, up to `limit` bytes, across engine
+ // restarts. 0 turns it off and frees it (Old 3DS, no-sound-cache.txt): reads
+ // then go exactly as before. Takes effect at the next start().
+ static void setRamCache(std::size_t limit);
+ static void dropRamCache();
+ struct RamCacheStats { std::uint32_t hits = 0, misses = 0, evicted = 0, heapLow = 0; std::uint64_t hitBytes = 0, missBytes = 0; std::size_t bytes = 0; };
+ static RamCacheStats ramCacheStats();
  struct Impl;
 private:
  SoundSystem() = default;

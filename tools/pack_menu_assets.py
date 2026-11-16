@@ -17,6 +17,7 @@ then 32-byte aligned file data.
 """
 import argparse, hashlib, json, struct
 from gx_material import GMDL_SUBMESH_BYTES
+from menu_asset_inputs import supplemental_menu_textures
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -45,10 +46,13 @@ def main():
     measured = ROOT / 'build/host-tools/sprite-scales.json'
     used = json.loads((measured if measured.is_file() else ROOT / 'tools/menu_sprite_scales.json').read_text())
     atlases = {s['key'] for s in manifest['borderSlices']}
-    files = set()
+    supplemental = supplemental_menu_textures(ROOT)
+    files = set(supplemental)
     names_manifest = ASSETS / 'models/menu-name-glyphs.json'
     if names_manifest.exists():
         files.update(r['path'] for r in json.loads(names_manifest.read_text())['glyphs'])
+    # The pause controls diagram, when its photos were cooked (cook_pause_controls.py).
+    files.update('textures/' + t.name for t in ASSETS.glob('textures/pause_controls_*.t3x'))
     for key, record in manifest['sprites'].items():
         if key in used or key in atlases:
             files.add(record['path'])
@@ -61,7 +65,7 @@ def main():
             for texture in model_textures(path):
                 files.add('textures/' + texture + '.t3x')
     names = sorted(files)
-    missing = [n for n in names if not (ASSETS / n).is_file()]
+    missing = [n for n in names if not supplemental.get(n, ASSETS / n).is_file()]
     if missing:
         raise SystemExit('Missing packed assets: ' + ', '.join(missing[:8]))
     blob = b''.join(n.encode() + b'\0' for n in names)
@@ -69,7 +73,7 @@ def main():
     offset = (header + 31) & ~31
     entries, payloads, name_offset = [], [], 0
     for n in names:
-        data = (ASSETS / n).read_bytes()
+        data = supplemental.get(n, ASSETS / n).read_bytes()
         entries.append((name_offset, offset, len(data)))
         name_offset += len(n.encode()) + 1
         padded = data + b'\0' * (((len(data) + 31) & ~31) - len(data))

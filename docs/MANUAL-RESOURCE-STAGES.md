@@ -1,11 +1,10 @@
 # Manual resource stage reference
 
-Each row describes one former stage. Execute individual operations yourself;
-there is no scheduler, resume mechanism or build-all command. Prerequisites and
-output locations must be supplied manually. This is an operation reference,
-not a newly validated from-disc recipe. `{py}`, `{disc}`, `{jobs}` are placeholders.
-Rows referencing removed batch entrypoints must be split as described in
-MANUAL-BUILD.md; those entrypoints are unavailable.
+Each row describes one stage, for running it by hand. `tools/build.py` runs
+all of them in dependency order (its `--list-stages` prints that order); use
+this page when you want to redo or inspect a single stage. `{py}`, `{disc}`,
+`{jobs}` are placeholders. Rows that say a batch entrypoint was removed are
+done by `tools/build.py` or split up as described in MANUAL-BUILD.md.
 
 | Stage | Explicit operation / former inputs | Expected outputs |
 | --- | --- | --- |
@@ -47,6 +46,7 @@ MANUAL-BUILD.md; those entrypoints are unavailable.
 | ceremony cameras | Run `tools/cook_award_cameras.py` after preparing scene bindings | `include/mkw/award_camera_data.hpp` |
 | GP reference times | Run `tools/cook_gp_rank.py` after unpacking `ranktimeGP.krt` to `assets/common/` | `include/mkw/gp_rank_times.hpp` |
 | ceremony models and animation | `{py} tools/cook_award_models.py --jobs {jobs}` | `build/award-models/award-models.json`, `include/mkw/award_model_assets.hpp`, `include/mkw/award_environment_data.hpp` |
+| ceremony driving effects | `{py} tools/cook_race_effects.py --award-source build/award-source --output build/vfx/textures` (after the race effects and ceremony source stages) | `build/vfx/textures/award-driving-effects.bin` (byte-identical to Luigi Circuit's bank, which the game uses when this one is missing) |
 | menu archives | `{py} tools/unpack_szs.py data/extracted/Scene/UI/MenuSingle.szs assets/menu-ui/MenuSingle<br>{py} tools/unpack_szs.py data/extracted/Scene/UI/MenuSingle_U.szs assets/menu-ui/MenuSingle_U<br>{py} tools/unpack_szs.py data/extracted/Scene/UI/MenuOther.szs assets/menu-ui/MenuOther<br>{py} tools/unpack_szs.py data/extracted/Scene/UI/MenuOther_U.szs assets/menu-ui/MenuOther_U<br>{py} tools/unpack_szs.py data/extracted/Scene/UI/Title.szs assets/menu-ui/Title<br>{py} tools/unpack_szs.py data/extracted/Scene/UI/Title_U.szs assets/menu-ui/Title_U<br>{py} tools/unpack_szs.py data/extracted/Scene/UI/Award.szs assets/menu-ui/Award<br>{py} tools/unpack_szs.py data/extracted/Scene/UI/Award_U.szs assets/menu-ui/Award_U<br>{py} tools/unpack_szs.py data/extracted/Scene/UI/Globe.szs assets/menu-ui/Globe<br>{py} tools/unpack_szs.py data/extracted/Scene/UI/Channel.szs assets/menu-ui/Channel<br>{py} tools/unpack_szs.py data/extracted/Scene/UI/Channel_U.szs assets/menu-ui/Channel_U<br>{py} tools/unpack_szs.py data/extracted/Scene/UI/Present.szs assets/menu-ui/Present<br>{py} tools/unpack_szs.py data/extracted/Scene/UI/Present_U.szs assets/menu-ui/Present_U` | `assets/menu-ui/Title/title/timg/tt_title_screen_mario2.tpl`, `assets/menu-ui/Present_U/message/Common.bmg` |
 | race flow results and awards | `{py} tools/cook_race_flow.py` | `build/race-flow/textures/flow_wipe.t3x`, `build/race-flow/textures/flow_award_font.t3x`, `build/race-flow/race-flow.json` |
 | audio | `{py} tools/cook_audio.py` | `build/audio/audio/manifest.json` |
@@ -58,7 +58,7 @@ MANUAL-BUILD.md; those entrypoints are unavailable.
 | menu interface | `{py} tools/cook_menu_ui.py` | `sd-card/3ds/mkw-3ds/models/menu-ui.json` |
 | menu lighting | `{py} tools/cook_menu_lighting.py` | `include/mkw/menu_lighting.hpp`, `build/menu-lighting.json` |
 | menu models | `{py} tools/cook_menu_models.py --machines --jobs {jobs}` | `sd-card/3ds/mkw-3ds/models/menu-models.json` |
-| menu movies | `{py} tools/cook_menu_movies.py --jobs {jobs}` | `sd-card/3ds/mkw-3ds/models/menu-movies.json`, `sd-card/3ds/mkw-3ds/movies/title.wav` |
+| menu movies | `{py} tools/cook_menu_movies.py --jobs {jobs}` | `sd-card/3ds/mkw-3ds/models/menu-movies.json`, `sd-card/3ds/mkw-3ds/movies/title.adp` |
 | menu texture fitting | `{py} tools/optimize_menu_textures.py` | `sd-card/3ds/mkw-3ds/models/menu-texture-fit.json` |
 | menu audio | `{py} tools/cook_menu_audio.py` | `sd-card/3ds/mkw-3ds/models/menu-audio.json` |
 | race bottom screen | `{py} tools/cook_race_map.py --jobs {jobs}` | `build/race-map/textures/race_bottom_ui.t3x` |

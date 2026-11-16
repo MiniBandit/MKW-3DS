@@ -76,11 +76,7 @@ void WheelPhysics::updateCollision(const EGG::Vector3f &bottom, const EGG::Vecto
 
     if (status.offBit(eStatus::SkipWheelCalc)) {
         f32 nextRadius = m_bspWheel->sphereRadius;
-        f32 scalar = m_effectiveRadius * scale().y - nextRadius * move()->totalScale();
-
-        EGG::Vector3f center = m_pos + scalar * bottom;
-        scalar = 0.3f * (nextRadius * move()->leanRot()) * move()->totalScale();
-        center += scalar * bodyForward();
+        EGG::Vector3f center = collisionCenter(m_pos, bottom);
 
         if (status.onBit(eStatus::HalfpipeMidair, eStatus::InCannon)) {
             m_hitboxGroup->collisionData().reset();
@@ -117,6 +113,37 @@ void WheelPhysics::updateCollision(const EGG::Vector3f &bottom, const EGG::Vecto
     } else {
         m_74 = 0.0f;
     }
+}
+
+/// mkw-3ds: the centre of the wheel's collision sphere (updateCollision's
+/// expressions, shared with predictCollision).
+EGG::Vector3f WheelPhysics::collisionCenter(const EGG::Vector3f &pos,
+        const EGG::Vector3f &bottom) const {
+    f32 nextRadius = m_bspWheel->sphereRadius;
+    f32 scalar = m_effectiveRadius * scale().y - nextRadius * move()->totalScale();
+
+    EGG::Vector3f center = pos + scalar * bottom;
+    scalar = 0.3f * (nextRadius * move()->leanRot()) * move()->totalScale();
+    center += scalar * bodyForward();
+    return center;
+}
+
+/// mkw-3ds: the course query updateCollision would make (with the wheel at pos):
+/// the sphere calcWheelCollision checks, after setHitboxScale and the soft-wall
+/// last position.
+bool WheelPhysics::predictCollision(const EGG::Vector3f &pos, const EGG::Vector3f &bottom,
+        Field::KColData::BatchSphere &out) const {
+    const auto &status = KartObjectProxy::status();
+    if (status.onBit(eStatus::SkipWheelCalc) ||
+            status.onBit(eStatus::HalfpipeMidair, eStatus::InCannon)) {
+        return false;
+    }
+    const Hitbox &hitbox = m_hitboxGroup->hitbox(0);
+    out.pos = collisionCenter(pos, bottom);
+    out.radius = hitbox.bspHitbox()->radius * move()->totalScale();
+    out.prevPos = status.onBit(eStatus::SoftWallSuspension) ? dynamics()->pos() : hitbox.lastPos();
+    out.typeMask = collide()->wheelTypeMask();
+    return true;
 }
 
 /// @addr{0x80599DC0}
@@ -173,17 +200,8 @@ void KartSuspensionPhysics::calcCollision(f32 dt, const EGG::Vector3f &gravity,
         const EGG::Matrix34f &mat) {
     m_maxTravelScaled = m_bspWheel->maxTravel * sub()->someScale();
 
-    EGG::Vector3f scaledRelPos = m_bspWheel->relPosition * scale();
-    if (m_tireType == TireType::KartReflected) {
-        scaledRelPos.x = -scaledRelPos.x;
-    }
-
-    const EGG::Vector3f topmostPos = mat.ps_multVector(scaledRelPos);
-    EGG::Matrix34f mStack_60;
-    EGG::Vector3f euler_angles(m_bspWheel->xRot * DEG2RAD, 0.0f, 0.0f);
-    mStack_60.makeR(euler_angles);
-    EGG::Vector3f local_ac = mStack_60.multVector33(EGG::Vector3f(0.0f, -1.0f, 0.0f));
-    m_bottomDir = mat.multVector33(local_ac);
+    EGG::Vector3f topmostPos;
+    wheelFrame(mat, topmostPos, m_bottomDir);
 
     f32 y_down = m_tirePhysics->suspTravel() + 5.0f * sub()->someScale();
     m_tirePhysics->setSuspTravel(std::max(0.0f, std::min(m_maxTravelScaled, y_down)));
@@ -195,6 +213,42 @@ void KartSuspensionPhysics::calcCollision(f32 dt, const EGG::Vector3f &gravity,
         m_topmostPos = topmostPos;
     }
 }
+
+/// mkw-3ds: the wheel's topmost position and down direction for this wheel matrix
+/// (calcCollision's expressions). The local down vector depends only on the BSP's
+/// xRot, so with s_keepWheelDown it is built once and kept.
+void KartSuspensionPhysics::wheelFrame(const EGG::Matrix34f &mat, EGG::Vector3f &topmostPos,
+        EGG::Vector3f &bottomDir) {
+    EGG::Vector3f scaledRelPos = m_bspWheel->relPosition * scale();
+    if (m_tireType == TireType::KartReflected) {
+        scaledRelPos.x = -scaledRelPos.x;
+    }
+
+    topmostPos = mat.ps_multVector(scaledRelPos);
+    if (!s_keepWheelDown || !m_localBottomReady) {
+        EGG::Matrix34f mStack_60;
+        EGG::Vector3f euler_angles(m_bspWheel->xRot * DEG2RAD, 0.0f, 0.0f);
+        mStack_60.makeR(euler_angles);
+        m_localBottom = mStack_60.multVector33(EGG::Vector3f(0.0f, -1.0f, 0.0f));
+        m_localBottomReady = true;
+    }
+    bottomDir = mat.multVector33(m_localBottom);
+}
+
+/// mkw-3ds: calcCollision's course query, predicted (KartSub's batched wheels).
+bool KartSuspensionPhysics::predictCollision(const EGG::Matrix34f &mat,
+        Field::KColData::BatchSphere &out) {
+    f32 maxTravelScaled = m_bspWheel->maxTravel * sub()->someScale();
+    EGG::Vector3f topmostPos;
+    EGG::Vector3f bottomDir;
+    wheelFrame(mat, topmostPos, bottomDir);
+    f32 y_down = m_tirePhysics->suspTravel() + 5.0f * sub()->someScale();
+    f32 suspTravel = std::max(0.0f, std::min(maxTravelScaled, y_down));
+    return m_tirePhysics->predictCollision(topmostPos + suspTravel * bottomDir, bottomDir, out);
+}
+
+bool KartSuspensionPhysics::s_batchWheels = false;
+bool KartSuspensionPhysics::s_keepWheelDown = true;
 
 /// @stage All
 /// @brief Calculates linear force and rotation from the kart's suspension.

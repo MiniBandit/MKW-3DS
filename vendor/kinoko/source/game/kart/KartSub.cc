@@ -1,4 +1,6 @@
 #include "KartSub.hh"
+#include <mkw/sim_profile.hpp>
+#include <optional>
 
 #include "game/kart/KartAction.hh"
 #include "game/kart/KartBody.hh"
@@ -101,6 +103,21 @@ void KartSub::resetPhysics() {
 /// @details Handles the first-half of physics calculations. This includes input processing,
 /// subsequent position/speed updates, as well as responding to last frame's collisions.
 void KartSub::calcPass0() {
+    calcPass0A();
+    calcPass0B();
+}
+
+void KartSub::calcPass0A() {
+    calcPass0A1();
+    calcPass0A2();
+}
+
+void KartSub::calcPass0B() {
+    calcPass0B1();
+    calcPass0B2();
+}
+
+void KartSub::calcPass0A1() {
     auto &status = KartObjectProxy::status();
 
     if (status.onBit(eStatus::CannonStart)) {
@@ -111,7 +128,7 @@ void KartSub::calcPass0() {
         move()->enterCannon();
     }
 
-    state()->calc();
+    {MKW_SIM_SCOPE(K0State);state()->calc();}
 
     if (status.onBit(eStatus::TriggerRespawn)) {
         setInertiaScale(EGG::Vector3f(1.0f, 1.0f, 1.0f));
@@ -126,10 +143,21 @@ void KartSub::calcPass0() {
     dynamics()->setGravity(-1.3f);
     dynamics()->setAngVel0YFactor(0.9f);
 
-    state()->calcInput();
-    move()->calc();
-    action()->calc();
-    collide()->pullPath().calc();
+    {MKW_SIM_SCOPE(K0State);state()->calcInput();}
+    {MKW_SIM_SCOPE(K0Move);m_pass0MoveDone=!move()->calcPart1A();}
+}
+
+void KartSub::calcPass0A2() {
+    {MKW_SIM_SCOPE(K0Move);if(!m_pass0MoveDone)move()->calcPart1B();}
+}
+
+void KartSub::calcPass0B1() {
+    {MKW_SIM_SCOPE(K0Move);if(!m_pass0MoveDone)move()->calcPart2();}
+    {MKW_SIM_SCOPE(K0Action);action()->calc();collide()->pullPath().calc();}
+}
+
+void KartSub::calcPass0B2() {
+    auto &status = KartObjectProxy::status();
 
     // 0x80596994: a vanished kart is not simulated any more.
     if (status.onBit(eStatus::Vanished)) {
@@ -166,8 +194,9 @@ void KartSub::calcPass0() {
     }
 
     f32 maxSpeed = move()->hardSpeedLimit();
-    physics()->calc(DT, maxSpeed, scale(), status.offBit(eStatus::TouchingGround));
+    {MKW_SIM_SCOPE(K0Physics);physics()->calc(DT, maxSpeed, scale(), status.offBit(eStatus::TouchingGround));}
 
+    MKW_SIM_SCOPE(K0Hitboxes);
     move()->calcRejectRoad();
 
     if (status.offBit(eStatus::InCannon)) {
@@ -182,8 +211,24 @@ void KartSub::calcPass0() {
 /// Handles the second-half of physics calculations. This mainly includes
 /// collision detection, as well as suspension physics.
 void KartSub::calcPass1() {
-    constexpr s16 SIDE_COLLISION_TIME = 5;
+    MKW_SIM_SCOPE(K1Total);
+    pass1Serial();
+    pass1Local();
+}
 
+void KartSub::calcPass1Serial() {
+    MKW_SIM_SCOPE(K1Total);
+    pass1Serial();
+}
+
+void KartSub::calcPass1Local() {
+    MKW_SIM_SCOPE(K1Total);
+    pass1Local();
+}
+
+/// mkw-3ds: pass 1 up to the item collision: the part that reads other racers
+/// (racer pairs, objects, items). See KartObjectManager::s_pass1Grouped.
+void KartSub::pass1Serial() {
     // 0x80596D44: nothing collides with a vanished kart.
     if (KartObjectProxy::status().onBit(eStatus::Vanished)) {
         return;
@@ -201,15 +246,28 @@ void KartSub::calcPass1() {
     // The flag is really 0x1f, but we only care about objects.
     Field::BoxColFlag flags;
     flags.setBit(Field::eBoxColFlag::Drivable, Field::eBoxColFlag::Object);
-    boxColUnit()->search(flags);
+    {MKW_SIM_SCOPE(K1Search);boxColUnit()->search(flags);}
 
     // Retail searches with 0x1f and resolves each racer it finds first.
-    collide()->calcKartCollision();
+    {MKW_SIM_SCOPE(K1KartCol);collide()->calcKartCollision();}
     // 0x80596DE8: a vanishing kart skips its object and item contacts and the pushes below.
+    if (KartObjectProxy::status().offBit(eStatus::Vanishing, eStatus::Vanished)) {
+        {MKW_SIM_SCOPE(K1ObjCol);collide()->calcObjectCollision();}
+        {MKW_SIM_SCOPE(K1ItemCol);collide()->calcItemCollision();}
+    }
+}
+
+/// mkw-3ds: the rest of pass 1 (body and wheel collision, suspension, pose): this
+/// racer's own state, the course and drivable objects.
+void KartSub::pass1Local() {
+    constexpr s16 SIDE_COLLISION_TIME = 5;
+    // 0x80596D44: nothing collides with a vanished kart.
+    if (KartObjectProxy::status().onBit(eStatus::Vanished)) {
+        return;
+    }
+    // 0x80596DE8: a vanishing kart skips its contacts and the pushes below.
     const bool contacts = KartObjectProxy::status().offBit(eStatus::Vanishing, eStatus::Vanished);
     if (contacts) {
-        collide()->calcObjectCollision();
-        collide()->calcItemCollision();
         dynamics()->setPos(pos() + collide()->tangentOff());
     }
 
@@ -257,6 +315,7 @@ void KartSub::calcPass1() {
         m_sideCollisionTimer = std::max(m_sideCollisionTimer - 1, 0);
     }
 
+    std::optional<::mkw::simprof::Scope> bodyScope(std::in_place,::mkw::simprof::K1Body);
     body()->calcSinkDepth();
 
     Field::CollisionDirector::Instance()->checkCourseColNarrScLocal(250.0f, pos(),
@@ -291,6 +350,26 @@ void KartSub::calcPass1() {
     const EGG::Vector3f gravity(0.0f, -1.3f, 0.0f);
     f32 speedFactor = 1.0f;
     f32 handlingFactor = 0.0f;
+    bodyScope.reset();
+    std::optional<::mkw::simprof::Scope> wheelScope(std::in_place,::mkw::simprof::K1Wheels);
+    // mkw-3ds (Old 3DS): every wheel's course query is predicted and tested in one
+    // pass over the prism list; the loop below replays a query's hits only when it
+    // asks exactly that query (KColData::batchSpheresCached).
+    const bool batchWheels = KartSuspensionPhysics::s_batchWheels &&
+            status.offBit(eStatus::SkipWheelCalc) && suspCount() >= 2 &&
+            suspCount() <= Field::KColData::BATCH_MAX;
+    if (batchWheels) {
+        Field::KColData::BatchSphere spheres[Field::KColData::BATCH_MAX];
+        size_t count = 0;
+        for (u16 i = 0; i < suspCount(); ++i) {
+            if (suspensionPhysics(i)->predictCollision(body()->wheelMatrix(i), spheres[count])) {
+                ++count;
+            }
+        }
+        if (count >= 2) {
+            Field::CourseColMgr::Instance()->batchSpheresCached(spheres, count);
+        }
+    }
     for (u16 i = 0; i < suspCount(); ++i) {
         const EGG::Matrix34f wheelMatrix = body()->wheelMatrix(i);
         suspensionPhysics(i)->calcCollision(DT, gravity, wheelMatrix);
@@ -303,6 +382,9 @@ void KartSub::calcPass1() {
             handlingFactor += colData.rotFactor;
             addFloor(colData, false);
         }
+    }
+    if (batchWheels) {
+        Field::KColData::ClearBatch();
     }
 
     // 0x8059742C: as in calcPass0, the vanish start pins the wheels unless still shrinking.

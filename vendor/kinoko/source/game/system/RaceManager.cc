@@ -1,4 +1,5 @@
-#include "RaceManager.hh"
+// Diagnostic overlay: the patched header lives in overlay/game/system.
+#include "game/system/RaceManager.hh"
 #include <mkw/battle_spawn.hpp>
 
 #include "game/system/CourseMap.hh"
@@ -61,6 +62,9 @@ void RaceManager::findKartStartPoint(EGG::Vector3f &pos, EGG::Vector3f &angles, 
                 if (map->getStartPoint(i)->playerIndex() == static_cast<s16>(slot)) { startPointIdx = i; break; }
             }
         }
+    } else if (scenario.gameMode == RaceConfig::Scenario::GameMode::Time_Trial) {
+        // Time Trials: a staff ghost starts in the player's own grid slot.
+        placement = playerCount = 1;
     } else if (scenario.gameMode == RaceConfig::Scenario::GameMode::Awards) {
         // Ending has twelve individually authored delayed KTPT entries.
         const u32 slots = scenario.course == Course::Ending_Demo ? 12 : scenario.cameraMode == 12 ? 6 : 3;
@@ -98,6 +102,12 @@ bool RaceManager::endBattle(const std::array<u8,12>& order) {
     const Timer finishTime=m_timerManager.currentTimer();
     for(size_t i=0;i<m_playerCount;++i)m_players[order[i]].endRace(finishTime);
     m_timerManager.setStarted(false);
+    return true;
+}
+
+bool RaceManager::qaForceFinish(u32 idx) {
+    if (idx >= m_playerCount || m_players[idx].finished() || !isStageReached(Stage::Race)) return false;
+    m_players[idx].endRace(m_timerManager.currentTimer());
     return true;
 }
 

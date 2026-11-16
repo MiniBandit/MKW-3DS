@@ -9,6 +9,8 @@ namespace {
 using namespace snd;
 constexpr std::uint16_t BgmSlots[2] = {1, 2};
 constexpr std::uint16_t VoiceSlot = 3;
+// Selection sounds whose sequence transposes by local variable 0 (_v transpose).
+constexpr std::uint16_t SelectSlot = 4;
 // Retail page ids (Section::CreatePageById jump table, 805f24dc).
 int retailPage(UiPage page) {
  switch (page) {
@@ -42,7 +44,20 @@ void post(SoundCommand::Type type, std::uint16_t slot, std::uint32_t id, float v
  SoundCommand c; c.type = type; c.slot = slot; c.id = id; c.value = value; c.frames = frames;
  SoundSystem::instance().post(c);
 }
-void ui(std::uint32_t id) { SoundSystem::instance().play(id, 0); }
+void ui(std::uint32_t id) {
+ // SE_UI_BTN_OK and SE_UI_CTRL_ON transpose by local sequence variable 0.
+ // PushButton::HandleClick (805b6748) plays the select sound with the pressing
+ // player (8060c318 -> 8070cbf0), which writes that variable; NW4R's default of
+ // -1 would play a semitone flat. One local player: 0. The variable is written
+ // between Prepare and StartPrepared, so the first tick always reads it.
+ if (id == id::SE_UI_BTN_OK || id == id::SE_UI_CTRL_ON) {
+  post(SoundCommand::Prepare, SelectSlot, id, 0);
+  post(SoundCommand::SeqVariable, SelectSlot, 0, 0.f);
+  post(SoundCommand::StartPrepared, SelectSlot, 0, 0);
+  return;
+ }
+ SoundSystem::instance().play(id, 0);
+}
 // Include BNK_VO_MENU_MII in the same on-demand voice cache as other drivers.
 void loadSections(std::uint32_t a, std::uint32_t b, int keepMs) {
  std::uint32_t groups[3]; int n = 0;

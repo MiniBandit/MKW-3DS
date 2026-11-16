@@ -19,6 +19,11 @@ public:
  void drawEffects(Renderer&,const float* camera);
  AwardCameraSample camera()const;
  bool finished()const{return done_;}
+ // DIAG ceremony heartbeat (award_scene.cpp).
+ unsigned tick()const{return tick_;}
+ unsigned shotIndex()const{return shot_;}
+ unsigned shotFrame()const{return shotFrame_;}
+ bool physicsBound()const{return physics_!=nullptr;}
  const char* detail()const{return failure_.c_str();}
 private:
  struct Actor {

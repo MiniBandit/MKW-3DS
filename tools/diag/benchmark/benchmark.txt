@@ -1,0 +1,1 @@
+VS benchmark: 32 courses in order (see tools/diag/README.md)

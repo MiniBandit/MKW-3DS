@@ -287,6 +287,18 @@ void ObjectBank::markRegisterAlpha(const Model& model){
         registerAlpha_[i]=zero;
     }
 }
+void ObjectBank::markUnitOneTextures(const Model& model) const {
+    if(model.submeshes.size()!=shapes_)return;
+    auto mark=[&](int32_t index){if(index>=0&&size_t(index)<model.textures.size()&&model.textures[index])model.textures[index]->unitOne=true;};
+    for(const auto& c:pat_)for(size_t f=0;f<c.frames;++f){
+        const int32_t* row=c.data+f*shapes_*2;
+        for(unsigned i=0;i<shapes_;++i){
+            mark(row[i*2+1]);
+            const auto reflection=model.submeshes[i].menuReflection;
+            if(reflection==11||reflection==22)mark(row[i*2]);
+        }
+    }
+}
 bool ObjectBank::makeRigid(Model& model){
     if(morphing())return false;
     if(!ready()||rigid()||!vertices_||vertices_!=model.vertexCount)return false;
@@ -322,12 +334,20 @@ bool ObjectBank::makeRigid(Model& model){
     rigidParts_=std::move(parts);
     return true;
 }
-bool ObjectBank::gpuSkin(Model& model) const {
+bool ObjectBank::gpuSkin(Model& model,bool lit) const {
     if(morphing()||!vertices_||vertices_!=model.vertexCount||matrices_>Renderer::MaxSkinBones)return false;
+    // Lit: bone-local normals stay and the palette index gets its own attribute (as the racers').
+    if(lit&&!model.skinBoneIndices){
+        model.skinBoneIndices=static_cast<float*>(linearAlloc(vertices_*sizeof(float)));
+        if(!model.skinBoneIndices)return false;
+    }
     for(unsigned i=0;i<vertices_;++i){
         const auto& v=source_[i];
-        model.vertices[i].position={v.p[0],v.p[1],v.p[2]};model.vertices[i].normal={float(v.matrix*3),0,0};
+        model.vertices[i].position={v.p[0],v.p[1],v.p[2]};
+        if(lit){model.vertices[i].normal={v.n[0],v.n[1],v.n[2]};model.skinBoneIndices[i]=float(v.matrix*3);}
+        else model.vertices[i].normal={float(v.matrix*3),0,0};
     }
+    if(lit)flushGpuData(model.skinBoneIndices,vertices_*sizeof(float));
     flushGpuData(model.vertices,vertices_*sizeof(Vertex));
     return true;
 }
@@ -335,8 +355,63 @@ bool ObjectBank::shareSkinnedVertices(){
     if(!sharedVertices_)sharedVertices_=buildSkinRepresentatives(source_,vertices_);
     return bool(sharedVertices_);
 }
-void ObjectBank::skin(const float* palette,Model& model,bool normals,int clip,float frame) const {
+unsigned ObjectBank::skinnedCount(const Model& model,bool normals,int clip) const {
+    (void)model;
+    bool morph=false;for(const auto& m:morph_)if(int(m.clip)==clip){morph=true;break;}
+    if(!morph&&!normals&&shared_.ready())return unsigned(shared_.first.size());
+    return normals?vertices_*2:vertices_;
+}
+void ObjectBank::skinCompute(const float* palette,const Model& model,bool normals,int clip,float frame,Vec3* out) const {
     if(!vertices_||model.vertexCount!=vertices_)return;
+    const Morph* morph=nullptr;float weight=0;
+    for(const auto& m:morph_)if(int(m.clip)==clip){
+        morph=&m;const auto s=sampleClip(m.frames,1,chr_[m.clip].loop,frame);
+        weight=m.weights[s.a]+(m.weights[s.b]-m.weights[s.a])*s.t;break;
+    }
+    if(!morph&&!normals&&shared_.ready()){
+        for(unsigned u=0;u<shared_.first.size();++u){
+            const auto& v=source_[shared_.first[u]];const float* m=palette+v.matrix*12;
+            out[u]={m[0]*v.p[0]+m[1]*v.p[1]+m[2]*v.p[2]+m[3],m[4]*v.p[0]+m[5]*v.p[1]+m[6]*v.p[2]+m[7],m[8]*v.p[0]+m[9]*v.p[1]+m[10]*v.p[2]+m[11]};
+        }
+        return;
+    }
+    const uint16_t* representative=normals&&!morph?sharedVertices_.get():nullptr;
+    std::array<std::array<Vec3,3>,128> normalRows;
+    if(normals)for(unsigned matrix=0;matrix<matrices_;++matrix){
+        const float* m=palette+matrix*12;
+        const Vec3 rows[3]={{m[0],m[1],m[2]},{m[4],m[5],m[6]},{m[8],m[9],m[10]}};
+        Vec3 inverse[3];normalMatrix(rows,inverse);
+        std::copy(std::begin(inverse),std::end(inverse),normalRows[matrix].begin());
+    }
+    unsigned morphVertex=0;
+    for(unsigned i=0;i<vertices_;++i){
+        if(representative&&representative[i]!=i){
+            out[2*i]=out[2*representative[i]];out[2*i+1]=out[2*representative[i]+1];
+            continue;
+        }
+        auto v=source_[i];
+        if(morph&&morphVertex<morph->count&&morph->vertices[morphVertex]==i){
+            const auto* delta=morph->deltas+morphVertex++*6;
+            for(unsigned k=0;k<3;++k){v.p[k]+=delta[k]*weight;v.n[k]+=delta[k+3]*weight;}
+        }
+        const float* m=palette+v.matrix*12;
+        const Vec3 p{m[0]*v.p[0]+m[1]*v.p[1]+m[2]*v.p[2]+m[3],m[4]*v.p[0]+m[5]*v.p[1]+m[6]*v.p[2]+m[7],m[8]*v.p[0]+m[9]*v.p[1]+m[10]*v.p[2]+m[11]};
+        if(normals){
+            const auto& rows=normalRows[v.matrix];const Vec3 n{v.n[0],v.n[1],v.n[2]};
+            out[2*i]=p;out[2*i+1]=normalized(Vec3{dot(rows[0],n),dot(rows[1],n),dot(rows[2],n)});
+        }else out[i]=p;
+    }
+}
+void ObjectBank::skin(const float* palette,Model& model,bool normals,int clip,float frame,const Vec3* skinned) const {
+    if(!vertices_||model.vertexCount!=vertices_)return;
+    if(skinned){
+        bool morphed=false;for(const auto& m:morph_)if(int(m.clip)==clip){morphed=true;break;}
+        if(!morphed&&!normals&&shared_.ready())for(unsigned i=0;i<vertices_;++i)model.vertices[i].position=skinned[shared_.of[i]];
+        else if(normals)for(unsigned i=0;i<vertices_;++i){model.vertices[i].position=skinned[2*i];model.vertices[i].normal=skinned[2*i+1];}
+        else for(unsigned i=0;i<vertices_;++i)model.vertices[i].position=skinned[i];
+        flushGpuData(model.vertices,vertices_*sizeof(Vertex));
+        return;
+    }
     const Morph* morph=nullptr;float weight=0;
     for(const auto& m:morph_)if(int(m.clip)==clip){
         morph=&m;const auto s=sampleClip(m.frames,1,chr_[m.clip].loop,frame);

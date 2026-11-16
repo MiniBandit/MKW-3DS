@@ -16,7 +16,15 @@ namespace Kinoko::Field {class ObjectBase;class RailInterpolator;}
 namespace mkw {
 struct ObjModel {
     std::unique_ptr<FirePhaseStream> firePhases;
+    bool firePending=false; // Old 3DS: phases opened after the opponents (CourseObjects::loadFirePhases)
     int fireTexture=-1,firePhase=-1;
+    // Two LINEAR staging halves of frameBytes for DeferredWrites::upload of the
+    // phases (null: each phase is a CPU write on the frame hook).
+    struct Staging {
+        void* half[2]{};
+        Staging()=default;Staging(const Staging&)=delete;Staging& operator=(const Staging&)=delete;
+        ~Staging(){if(half[0])linearFree(half[0]);}
+    } fireStaging;
     int budgetClip=-2;float budgetFrame=-1;std::vector<float> budgetPalette;
 
     std::string resource,name;
@@ -36,7 +44,10 @@ struct ObjModel {
     // frame (crowds) share one; skinKeys[i] is copy i's clip and frame. Copies
     // past skinUsed still hold the pose last written to them (writes run in
     // frame order), so a pose that repeats on a later frame needs no skinning.
-    struct SkinKey {int clip;float frame;};
+    // drawn: the frame serial that last drew the copy (0: none). With
+    // DeferredWrites::directWrites a new pose goes to a copy drawn at most
+    // by frame serial-2, which has finished when the pose is written.
+    struct SkinKey {int clip;float frame;unsigned drawn=0;};
     std::vector<std::unique_ptr<Model>> skins;
     std::vector<SkinKey> skinKeys;
     unsigned skinUsed=0;
@@ -66,6 +77,8 @@ struct ObjectAssets {
     std::unique_ptr<DriverAnimation> explosionBank;
     std::vector<std::unique_ptr<Model>> explosionPoses;
     unsigned explosionUsed=0;
+    // The serial of the frame being recorded (Renderer::frameSerial).
+    unsigned serial=0;
 };
 struct Anim {
     int clip=-1;float frame=0;
@@ -159,6 +172,18 @@ struct ObjectDraw {
     // Sky pass: no depth test, write or culling (Renderer::draw backdrop).
     bool backdrop=false;
     std::size_t allocationReserve=2u*1024u*1024u;
+    // The object is past retail's draw distance: its presenter still runs
+    // (movers, state timing), but submit/shadow/explosion/plain draw nothing.
+    bool hidden=false;
+    // Retail's squared draw distance and FOV factor for presenters that clip
+    // each spawned part at its own position (partsClipped); 0 draws at any distance.
+    float partLimit=0,partScale=0;
+    // Lighter 3D: shadow volumes whose bounds span a screenRatio below this are
+    // skipped (RenderQuality::stereoShadowRatio); 0 in 2D.
+    float shadowRatio=0;
+    bool partBeyond(Vec3 p)const{return partScale>0&&partLimit>0&&dot(p-camera,p-camera)*partScale>partLimit;}
+    // This frame draws in stereo (CourseObjects::begin): RenderQuality::objectLow/tinyRatio.
+    bool stereo=false;
     void submit(ObjModel* model,const C3D_Mtx& transform,const Anim& anim);
     // -shadow meshes are stencil shadow volumes, resolved after all objects.
     void shadow(ObjModel* model,const C3D_Mtx& transform,const Anim& anim={});
@@ -170,6 +195,14 @@ bool classifyObject(Visual& visual,const ObjectAssets& assets,int course);
 // Route followers for objects Kinoko leaves static; true when v is one.
 bool classifyMover(Visual& visual,const ObjectAssets& assets);
 void drawObject(ObjectDraw& draw,Visual& visual);
+// The presenter clips each part itself (minecarts travel far from the manager's placement).
+bool partsClipped(const Visual& visual);
+// Static precull (CourseObjects): true when the presenter draws and shadows
+// at one matrix only and does nothing else while every model it may use is
+// outside the view there; out receives those models' bounds (model space).
+bool singleMatrixBounds(const Visual& visual,Bounds& out);
+// That matrix this frame; false when it may not hold (an Obake block falling).
+bool singleMatrix(const Visual& visual,C3D_Mtx& m);
 // Drawn in the sky pass rather than with the course objects.
 bool skyObject(const Visual& visual);
 bool waterObject(const Visual& visual);

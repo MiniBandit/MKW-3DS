@@ -2,8 +2,8 @@
 #include "mkw/race_items.hpp"
 #include <cmath>
 namespace mkw {
-// The held shell controller's 2000/65536 turn per source tick. Use a separate
-// presentation phase so spinning never changes guidance, collisions or aim.
+// A thrown shell's 2000/65536 turn per source tick (a trailing shell holds still).
+// Use a separate presentation phase so spinning never changes guidance, collisions or aim.
 inline float shellVisualSpin(unsigned tick){return float(uint16_t(tick*2000u))*(6.283185307179586f/65536.f);}
 inline bool spinningShell(ItemKind kind){return kind==ItemKind::GreenShell||kind==ItemKind::RedShell||kind==ItemKind::BlueShell;}
 // ItemObjProperties +0x6c, copied by USA 80787af0. Retail object IDs differ

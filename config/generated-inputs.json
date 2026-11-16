@@ -158,6 +158,10 @@
       "sha256": "95932248bfa2be406b86c67b17f0a5f44901f5184e8897a0b531eb3a2086704d",
       "bytes": 1095
     },
+    "mkw/menu_name_glyph_atlas.hpp": {
+      "sha256": "7046bcac8a5cf66595d44a94868de85c741a80170e0e706bb83a10236e57d5c9",
+      "bytes": 10038
+    },
     "mkw/menu_name_glyphs.hpp": {
       "sha256": "3df15417fbe076730b192027b6b6ca36df38daceda443c04f2d3679a419a2fcb",
       "bytes": 104659
@@ -211,8 +215,8 @@
       "bytes": 6170
     },
     "mkw/race_map_assets.hpp": {
-      "sha256": "e8c5a99579835bd3ef08e902489d2f3d4c1dcc515168eb8ce4d81d6de0d0b898",
-      "bytes": 11081
+      "sha256": "36cc8eda542a8dc4ee2f66a150bc9a9c6369708b773a7bd839b00f77a0a8bb56",
+      "bytes": 11403
     },
     "mkw/race_voice_tables.hpp": {
       "sha256": "93c9b34b467e355c0fc64ebb8a97d3424d3d9093e68f3c04379a7d38e4933bda",

@@ -21,6 +21,14 @@ struct LicenseSave {
  std::array<std::uint16_t,10> name{};
  std::array<std::uint8_t,8> miiId{};
  LicenseUnlockFlags unlockFlags{}; // Retail RKPD +0x30; bit n uses 1u << (n % 32).
+ // Retail RKPD +0x0c/+0x10: staff/expert staff ghost beaten, one bit per save
+ // course (licenseSaveCourse). Beating the staff ghost unlocks the expert one.
+ std::uint32_t staffGhosts=0,expertGhosts=0;
+ bool staffGhostBeaten(unsigned course)const;
+ bool expertGhostBeaten(unsigned course)const;
+ // A Time Trials finish against the staff/expert times of `course` (ms, 0 = none).
+ // True when a flag changed.
+ bool timeTrialFinish(unsigned course,unsigned ms,unsigned staffMs,unsigned expertMs);
  NativeMii nativeMii{}; // Optional companion; zero for an imported Wii license.
  UiSelection settings{};
  CourseBestTimes times{};
@@ -41,6 +49,9 @@ inline bool licenseSelectionNeedsSave(const MenuState& menu,const LicenseSave& s
  }
  return !menu.rulePage()&&save.occupied&&!damaged&&save.settings!=menu.selection;
 }
+// Course (menu order) -> retail save order: RKPD records and the disc's
+// Race/TimeAttack/ghost1/ghost1_comp_NN.rkg (ghost2 for expert) numbering.
+unsigned licenseSaveCourse(unsigned course);
 enum class LicenseLoad {Missing,Loaded,Damaged};
 // Retail RKSD0006 rksys.dat, shared by four licenses; unknown data is preserved.
 // Startup reads and validates the shared core once before decoding all slots.

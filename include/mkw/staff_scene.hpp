@@ -4,6 +4,6 @@
 namespace mkw {
 // Original 6300-tick driving credits, complete retail movie + PCM, final photo.
 // Must enter after retiring the race/award child and all of its GPU jobs.
-AwardSceneResult runStaff(Renderer&,const AwardResults&,const NativeMii&,bool trueEnding,
+AwardSceneResult runStaff(Renderer&,const AwardResults&,const NativeMii&,bool trueEnding,bool endingSeen,
  void(*report)(const char*),Kinoko::EGG::SceneManager&);
 }

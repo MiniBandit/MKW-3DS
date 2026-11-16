@@ -5,6 +5,9 @@
 namespace mkw {
 class Renderer;
 class MenuVehicleIcons;
+// QA (menu-still.txt): the stripes' ambient scroll at this many seconds instead
+// of the wall clock, so captures of different runs can match pixel for pixel.
+inline double menuStripeSeconds=-1;
 // Texture residency for the authored menu sprites and movie streams.
 // Asynchronous use (menus): request() queues loads on the AssetLoader,
 // ready() reports whether a set is resident, update() publishes finished loads
@@ -40,6 +43,24 @@ public:
  // Retires every texture and stream (GPU-safe) and cancels pending loads.
  void release(Renderer&);
  void release();
+ // Old 3DS race load (pause preload): moves the loaded sprite textures of 8 or
+ // more bits a texel, largest first, from LINEAR to VRAM while `reserve` bytes
+ // of VRAM stay free (Renderer::moveToVram). Returns the bytes moved.
+ std::size_t moveToVram(Renderer&,std::size_t reserve);
+ // New 3DS menus, inside a frame before its sprites are drawn: the resident
+ // sprites this frame draws move to VRAM (Renderer::copyTextureInFrame), most
+ // screen area per byte first, while `reserve` bytes of VRAM stay free and up
+ // to `budget` bytes (and at most 4 textures: citro3d's GX queue) are copied
+ // in the frame. Sprites under 32 KB stay in LINEAR.
+ // With no room, sprites in VRAM that no page shown or loading needs and this
+ // frame doesn't draw go back to LINEAR first. 4-bit textures stay in LINEAR.
+ // Returns the bytes copied. release() frees their VRAM with the rest.
+ std::size_t placeInVram(Renderer&,const std::vector<UiQuad>& drawn,std::size_t reserve,std::size_t budget);
+ std::uint32_t vramBytes() const;
+ std::uint64_t vramCopied(bool toVram) const;
+ // quads[0] (the page backdrop) is resident, opaque in every texel, drawn at
+ // full alpha and covers the whole upper LCD: nothing drawn under it shows.
+ bool coversScreen(const std::vector<UiQuad>& quads) const;
  std::uint32_t residentBytes() const;
  unsigned loadsPending() const;
  void logPending(const std::vector<UiQuad>& resident,const char* path)const;

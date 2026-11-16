@@ -72,6 +72,15 @@ bool RaceFlowUi::loadIntro(const RaceIntroInfo& info){
  m.introIcon=icon;m.introLoaded=true;return true;
 }
 void RaceFlowUi::unloadIntro(){for(auto& t:impl_->intro)t.reset();impl_->introLoaded=false;impl_->introIcon=~0u;}
+void RaceFlowUi::retireIntro(Renderer& renderer){
+ // Ownership moves field by field: Texture has no move, and reset() frees.
+ auto held=std::make_unique<std::array<Texture,2>>();
+ for(unsigned i=0;i<2;++i){auto& from=impl_->intro[i];auto& to=(*held)[i];
+  to.gpu=from.gpu;to.ready=from.ready;to.noMipSampler=from.noMipSampler;to.materialSamplers=from.materialSamplers;
+  from.gpu={};from.noMipSampler={};from.materialSamplers={};from.ready=false;}
+ renderer.retire(std::move(held));
+ impl_->introLoaded=false;impl_->introIcon=~0u;
+}
 void RaceFlowUi::drawIntro(Renderer& renderer,const RaceIntroInfo& info,unsigned frame){
  auto& m=*impl_;if(!m.introLoaded)return;
  m.renderer=&renderer;m.drawer.drawIntro(info,frame,&Impl::submitIntro,&m);

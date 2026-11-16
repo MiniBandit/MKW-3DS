@@ -10,11 +10,7 @@ void KPadDirector::calc() {
 
 /// @addr{0x805237E8}
 void KPadDirector::calcPads() {
-    for (auto *ghost : m_ghostControllers) {
-        if (ghost) {
-            ghost->calc();
-        }
-    }
+    m_ghostController->calc();
     for (size_t i = 0; i < m_playerCount; ++i) m_hostControllers[i]->calc();
 }
 
@@ -35,11 +31,8 @@ void KPadDirector::endGhostProxies() {
 
 /// @addr{0x8052453C}
 void KPadDirector::setGhostPad(const u8 *inputs, bool driftIsAuto, size_t index) {
-    ASSERT(index < m_playerInputs.size());
-    if (!m_ghostControllers[index]) {
-        m_ghostControllers[index] = EGG::egg_new<KPadGhostController>();
-    }
-    m_playerInputs[index].setGhostController(m_ghostControllers[index], inputs, driftIsAuto);
+    ASSERT(index < m_playerCount);
+    m_playerInputs[index].setGhostController(m_ghostController, inputs, driftIsAuto);
 }
 
 void KPadDirector::setHostPad(bool driftIsAuto, size_t index) {
@@ -64,17 +57,13 @@ void KPadDirector::DestroyInstance() {
 
 /// @addr{0x805232F0}
 KPadDirector::KPadDirector() {
-    m_ghostControllers[0] = EGG::egg_new<KPadGhostController>();
+    m_ghostController = EGG::egg_new<KPadGhostController>();
     for (auto &controller : m_hostControllers) controller = EGG::egg_new<KPadHostController>();
 }
 
 /// @addr{0x805231DC}
 KPadDirector::~KPadDirector() {
-    for (auto *ghost : m_ghostControllers) {
-        if (ghost) {
-            EGG::egg_delete(ghost);
-        }
-    }
+    EGG::egg_delete(m_ghostController);
     for (auto *controller : m_hostControllers) EGG::egg_delete(controller);
     if (s_instance) {
         s_instance = nullptr;

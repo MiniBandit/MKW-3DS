@@ -222,7 +222,7 @@ void C3Di_UpdateContext(void)
 	if (ctx->flags & C3DiF_AttrInfo)
 	{
 		ctx->flags &= ~C3DiF_AttrInfo;
-		if (!C3Di_AttrShadowValid || memcmp(&C3Di_AttrShadow, &ctx->attrInfo, sizeof(ctx->attrInfo)) != 0)
+		if (!C3Di_AttrShadowValid || !C3Di_SameWords(&C3Di_AttrShadow, &ctx->attrInfo, sizeof(ctx->attrInfo)))
 		{
 			C3Di_AttrInfoBind(&ctx->attrInfo);
 			C3Di_AttrShadow = ctx->attrInfo;
@@ -233,7 +233,7 @@ void C3Di_UpdateContext(void)
 	if (ctx->flags & C3DiF_BufInfo)
 	{
 		ctx->flags &= ~C3DiF_BufInfo;
-		if (!C3Di_BufShadowValid || memcmp(&C3Di_BufShadow, &ctx->bufInfo, sizeof(ctx->bufInfo)) != 0)
+		if (!C3Di_BufShadowValid || !C3Di_SameWords(&C3Di_BufShadow, &ctx->bufInfo, sizeof(ctx->bufInfo)))
 		{
 			C3Di_BufInfoBind(&ctx->bufInfo);
 			C3Di_BufShadow = ctx->bufInfo;
@@ -244,7 +244,7 @@ void C3Di_UpdateContext(void)
 	if (ctx->flags & C3DiF_Effect)
 	{
 		ctx->flags &= ~C3DiF_Effect;
-		if (!C3Di_EffectShadowValid || memcmp(&C3Di_EffectShadow, &ctx->effect, sizeof(C3D_Effect)) != 0)
+		if (!C3Di_EffectShadowValid || !C3Di_SameWords(&C3Di_EffectShadow, &ctx->effect, sizeof(C3D_Effect)))
 		{
 			C3Di_EffectBind(&ctx->effect);
 			C3Di_EffectShadow = ctx->effect;
@@ -255,19 +255,29 @@ void C3Di_UpdateContext(void)
 	if (ctx->flags & C3DiF_TexAll)
 	{
 		u32 units = 0;
+		bool changed = false;
 		for (i = 0; i < 3; i ++)
 		{
 			if (ctx->tex[i])
 			{
 				units |= BIT(i);
 				if (ctx->flags & C3DiF_Tex(i))
-					C3Di_SetTex(i, ctx->tex[i]);
+					changed |= C3Di_SetTex(i, ctx->tex[i]);
 			}
 		}
+		changed |= units != (ctx->texConfig & 7);
 
-		// Enable texture units and clear texture cache
+		// Enable texture units and clear texture cache. mkw-3ds: a bind that
+		// changed no unit register keeps the cache unless it may be stale.
 		ctx->texConfig &= ~7;
-		ctx->texConfig |= units | BIT(16);
+		ctx->texConfig |= units;
+		if (changed || C3Di_TexCacheDirty || !C3D_FastState || !C3D_TexCacheKeep)
+		{
+			ctx->texConfig |= BIT(16);
+			C3Di_TexCacheDirty = false;
+			C3D_TexCacheClears ++;
+		} else
+			C3D_TexCacheKept ++;
 		ctx->flags &= ~C3DiF_TexAll;
 		ctx->flags |= C3DiF_TexStatus;
 	}
@@ -322,7 +332,7 @@ void C3Di_UpdateContext(void)
 		for (i = 0; i < 6; i ++)
 		{
 			if (!(ctx->flags & C3DiF_TexEnv(i))) continue;
-			if ((C3Di_TexEnvShadowValid & BIT(i)) && memcmp(&C3Di_TexEnvShadow[i], &ctx->texEnv[i], sizeof(C3D_TexEnv)) == 0)
+			if ((C3Di_TexEnvShadowValid & BIT(i)) && C3Di_SameWords(&C3Di_TexEnvShadow[i], &ctx->texEnv[i], sizeof(C3D_TexEnv)))
 				continue;
 			C3Di_TexEnvBind(i, &ctx->texEnv[i]);
 			C3Di_TexEnvShadow[i] = ctx->texEnv[i];
@@ -357,6 +367,8 @@ void C3Di_UpdateContext(void)
 		ctx->fixedAttribDirty = 0;
 	}
 
+	if (C3D_UniformHook)
+		C3D_UniformHook(ctx->program);
 	C3D_UpdateUniforms(GPU_VERTEX_SHADER);
 	C3D_UpdateUniforms(GPU_GEOMETRY_SHADER);
 }

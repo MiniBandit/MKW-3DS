@@ -23,7 +23,8 @@ def menu_pak_names(path):
 
 
 def race_packable(name):
-    """Model payloads use pack::read; fopen-scanned .list files stay loose."""
+    """Model and texture payloads. tools/build.py adds the remaining files (lists,
+    course archives, collision) when it rewrites the pack as MPK2."""
     return ((name.startswith('models/') and name.endswith(('.gmdl', '.dskm', '.dobj')))
             or (name.startswith('textures/') and name.endswith(('.t3x', '.bin'))))
 

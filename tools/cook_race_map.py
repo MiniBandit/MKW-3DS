@@ -6,17 +6,25 @@ cooked GMDL parts and textures (build/course-materials first), removing roofs
 over the road with the course KCL, then tex3ds encodes it as ETC1 (at most
 1024x1024, 512 KB). One map is resident at a time, in VRAM.
 
-UI atlas (RGBA8): retail Wii art for the map icons (st_*_32x32 faces, the
-local player's searchlight), the leaderboard (result-board rows, 1st..12th in
-the result font, faces, item icons) and the timer (CtrlRaceTime's digits,
-separators and TIME label), plus Mario Kart 7's bottom-screen map markers
-for items on the course, read from the user's own MK7 dump (tools/mk7_assets.py).
+UI atlas (RGBA8, 256x256): retail Wii art for the map icons (st_*_32x32 faces,
+the local player's searchlight), the standings rows (the menus' selected-button
+frame from tools/cook_menu_ui.py: gold border, a dark see-through inside for
+the other racers and the frame's gold fill for the local player; 1st..12th and
+battle scores in the result font, faces and item icons at the row's size) and
+the timer (CtrlRaceTime's digits and separators), plus Mario Kart 7's
+bottom-screen map markers for items on the course, read from the user's own
+MK7 dump (tools/mk7_assets.py). The local player's outline is drawn from its
+face (white, the face's alpha).
+
+Two passes: the maps stage renders the course maps (--metadata-only); after
+the menu-ui stage (its button frame), --atlas-only cooks the atlas and the header.
 
 Outputs: build/race-map/textures/*.t3x (a packaging overlay), build/race-map/
 race-map.json (sources, hashes, per-course statistics) and the generated
 include/mkw/race_map_assets.hpp. The shared sd-card is never written.
 """
 import argparse
+import tex3ds_cache
 import concurrent.futures
 import hashlib
 import json
@@ -108,9 +116,9 @@ def cook_course(index, course, out, reuse_rendered=False):
     else:
         image, stats = rb.bake(course['key'], course['models'], course['archive'], frame, size)
         image.save(png)
-        subprocess.run([TEX3DS, '-f', 'etc1', '-q', 'high', '-z', 'none', '-o', str(png.with_suffix('.t3x')), str(png)],check=True,stdout=subprocess.DEVNULL)
+        tex3ds_cache.run([TEX3DS, '-f', 'etc1', '-q', 'high', '-z', 'none', '-o', str(png.with_suffix('.t3x')), str(png)],check=True,stdout=subprocess.DEVNULL)
         image.resize(small, Image.Resampling.LANCZOS).save(overview)
-        subprocess.run([TEX3DS, '-f', 'etc1', '-q', 'high', '-z', 'none', '-o', str(overview.with_suffix('.t3x')), str(overview)],check=True,stdout=subprocess.DEVNULL)
+        tex3ds_cache.run([TEX3DS, '-f', 'etc1', '-q', 'high', '-z', 'none', '-o', str(overview.with_suffix('.t3x')), str(overview)],check=True,stdout=subprocess.DEVNULL)
     texel = (frame[2] - frame[0]) / size[0]
     view = min(max(UNITS_PER_PIXEL, 0.85 * texel), MAX_UNITS_PER_PIXEL)
     width = rb.road_width(kcl, route_length(kmp))
@@ -213,6 +221,59 @@ def ordinal_images(height):
     return texts, out
 
 
+# Standings rows (src/race_bottom_screen.cpp rowY): twelve 19 px boxes, 1 px of
+# map above and below and 0-1 px between them.
+ROW_H = 19
+ROW_ORDINAL_H = 12
+ROW_ICON = 13
+ROW_ORDINAL_X = 5
+ROW_INSIDE = (10, 12, 14, 160)
+# The timer's 32-unit digit panes as drawn (src/race_bottom_screen.cpp TimerScale = TIMER_PX/32).
+TIMER_PX = 21  # the other racers' dark see-through inside (RGBA)
+MENU_BUTTON = ROOT / 'sd-card/3ds/mkw-3ds/textures/ui_button_select.png'
+
+
+def nine_slice(src, width, height, corner=8, drawn=4):
+    out = Image.new('RGBA', (width, height))
+    sw, sh = src.size
+    xs = [(0, corner, 0, drawn), (corner, sw - corner, drawn, width - drawn), (sw - corner, sw, width - drawn, width)]
+    ys = [(0, corner, 0, drawn), (corner, sh - corner, drawn, height - drawn), (sh - corner, sh, height - drawn, height)]
+    for a0, a1, b0, b1 in xs:
+        for e0, e1, f0, f1 in ys:
+            if b1 > b0 and f1 > f0:
+                out.paste(src.crop((a0, e0, a1, e1)).resize((b1 - b0, f1 - f0), Image.Resampling.LANCZOS), (b0, f0))
+    return out
+
+
+def row_frames(width):
+    """The menus' selected-button frame at the row's size: its own gold fill
+    (local player) and a dark see-through inside (everyone else)."""
+    if not MENU_BUTTON.is_file():
+        raise SystemExit(f'{MENU_BUTTON} missing: run tools/cook_menu_ui.py first')
+    frame = Image.open(MENU_BUTTON).convert('RGBA')
+    frame = frame.crop(frame.getbbox())
+    gold = np.asarray(frame).copy()
+    dark = gold.copy()
+    inside = dark[..., 3] < 160  # the see-through fill; the border is (nearly) opaque
+    dark[inside] = ROW_INSIDE
+    return (nine_slice(Image.fromarray(gold, 'RGBA'), width, ROW_H),
+            nine_slice(Image.fromarray(dark, 'RGBA'), width, ROW_H))
+
+
+def digit_images(height):
+    """0..9 in the result board's font, as ordinal_images draws 1st..12th."""
+    from cook_race_flow import font_glyphs
+    info, glyphs = font_glyphs(UI / 'Font/kart_kanji_font.brfnt', '0123456789')
+    out = []
+    for d in '0123456789':
+        a = np.asarray(glyphs[d]['image'].convert('RGBA'), dtype=np.float32)
+        rgba = np.zeros_like(a)
+        rgba[..., :3] = a[..., :1]
+        rgba[..., 3] = a[..., 3]
+        out.append(resize(trim(Image.fromarray(rgba.astype(np.uint8), 'RGBA')), height / info['cellH']))
+    return out
+
+
 def pack(images, width, padding=1):
     """Shelf packing; returns (atlas, {key: (x, y, w, h)}) or None when it does not fit."""
     order = sorted(images, key=lambda k: (-images[k].height, -images[k].width, str(k)))
@@ -248,49 +309,55 @@ def cook_atlas(out, cci, manifest):
         return decode_tpl(path)
     images = {}
     for i, name in enumerate(FACES):
-        images[('face', i)] = resize(tpl(GAME / f'timg/st_{name}_32x32.tpl'), (28, 28))
-        silhouette = Image.new('RGBA', (28,28), (255,255,255,255))
-        silhouette.putalpha(images[('face', i)].getchannel('A'))
-        images[('face_shadow', i)] = silhouette
-    # Item icons appear only in the standings rows (17 px).
+        face = tpl(GAME / f'timg/st_{name}_32x32.tpl')
+        images[('face', i)] = resize(face, (28, 28))
+        images[('rowface', i)] = resize(face, (ROW_ICON, ROW_ICON))
+    # Item icons appear only in the standings rows.
     for kind, name in ICONS.items():
-        images[('item', kind)] = resize(tpl(GAME / f'timg/{name}.tpl'), (20, 20))
+        images[('item', kind)] = resize(tpl(GAME / f'timg/{name}.tpl'), (ROW_ICON, ROW_ICON))
     # Slot 19 (no ItemKind): two Triple Mushrooms left, as the item window shows them.
-    images[('item', 19)] = resize(tpl(GAME / 'timg/tt_item_kinoko_2.tpl'), (20, 20))
+    images[('item', 19)] = resize(tpl(GAME / 'timg/tt_item_kinoko_2.tpl'), (ROW_ICON, ROW_ICON))
     images[('fake', 0)] = resize(tpl(GAME / 'timg/tt_item_dummybox.tpl'), (16, 16))
     for d in range(10):
-        images[('digit', d)] = resize(tpl(GAME_U / f'timg/tt_d_number_3d_{d:02d}.tpl'), (24, 24))
+        images[('digit', d)] = resize(tpl(GAME_U / f'timg/tt_d_number_3d_{d:02d}.tpl'), (TIMER_PX, TIMER_PX))
     for key, name in (('dot', 'tt_d_number_3d_coron'), ('colon', 'tt_d_number_3d_coron_00')):
-        images[('sep', key)] = resize(tpl(GAME_U / f'timg/{name}.tpl'), (24, 24))
-    images[('label', 'time')] = resize(tpl(GAME_U / 'timg/tt_time_E.tpl'), (120, 20))
+        images[('sep', key)] = resize(tpl(GAME_U / f'timg/{name}.tpl'), (TIMER_PX, TIMER_PX))
+    # CtrlRaceTime's TIME label (Timer: Full): 120x20 at the earlier 24 px digits.
+    images[('label', 'time')] = resize(tpl(GAME_U / 'timg/tt_time_E.tpl'), (round(120 * TIMER_PX / 24), round(20 * TIMER_PX / 24)))
     images[('light', 0)] = resize(tpl(GAME / 'timg/tt_map_chara_searchlight.tpl'), (30, 32))
     for name, array in mk7_markers(cci).items():
         images[('mk7', marker_key(name))] = Image.fromarray(array, 'RGBA')
-    # Twelve standings rows fill the lower screen's 240 px: 19 px bars, 1 px apart.
-    rows = {key: compact_bar(bar, 78) for key, bar in result_rows(19).items()}
-    images[('row', 'player')] = rows['player']
-    images[('row', 'other')] = plated(rows['other'], rows['player'])
-    sources += [RESULT / 'blyt/position_12players.brlyt', RESULT / 'anim/position_12players_1p_color.brlan',
-                RESULT / 'anim/position_12players_c_off.brlan', RESULT / 'anim/position_12players_icon_wait_position.brlan',
-                RESULT / 'timg/tt_pattern_chek_bokashi_32x32.tpl', RESULT / 'timg/tt_pattern_chek_32x32_alpha.tpl']
-    texts, ordinals = ordinal_images(16)
+    texts, ordinals = ordinal_images(ROW_ORDINAL_H)
     for i, im in enumerate(ordinals):
         images[('ordinal', i)] = im
-    sources += [UI / 'Race_U/message/Race.bmg', UI / 'Font/kart_kanji_font.brfnt']
+    for d, im in enumerate(digit_images(ROW_ORDINAL_H)):
+        images[('score', d)] = im
+    sources += [UI / 'Race_U/message/Race.bmg', UI / 'Font/kart_kanji_font.brfnt', MENU_BUTTON]
+    # A row: ordinal, face, item, 2 px apart, inside the frame's edge.
+    ordinal_w = max(im.width for im in ordinals)
+    face_x = ROW_ORDINAL_X + ordinal_w + 2
+    item_x = face_x + ROW_ICON + 2
+    row_w = item_x + ROW_ICON + 4
+    images[('row', 'player')], images[('row', 'other')] = row_frames(row_w)
     images[('white', 0)] = Image.new('RGBA', (4, 4), (255, 255, 255, 255))
-    for width in (256, 512):
-        packed = pack(images, width)
-        if packed:
-            break
+    row_layout = (row_w, ROW_H, ROW_ORDINAL_X, face_x, item_x, ROW_ICON)
+    packed = pack(images, 256)
+    if not packed or packed[0].width * packed[0].height > 256 * 256:
+        raise SystemExit('race_bottom_ui_256: the UI art no longer fits its atlas')
     atlas, rects = packed
-    png = out / 'textures/race_bottom_ui.png'
+    png = out / 'textures/race_bottom_ui_256.png'
     atlas.save(png)
-    subprocess.run([TEX3DS, '-f', 'rgba8', '-z', 'none', '-o', str(png.with_suffix('.t3x')), str(png)], check=True, stdout=subprocess.DEVNULL)
-    manifest['atlas'] = {'texture': 'textures/race_bottom_ui.t3x', 'size': list(atlas.size),
-                         't3xBytes': png.with_suffix('.t3x').stat().st_size, 'ordinals': texts,
+    tex3ds_cache.run([TEX3DS, '-f', 'rgba8', '-z', 'none', '-o', str(png.with_suffix('.t3x')), str(png)], check=True, stdout=subprocess.DEVNULL)
+    # Earlier layouts' files: packaging takes every race_*.t3x here.
+    for stale in ('race_bottom_ui.t3x', 'race_bottom_ui.png', 'race_bottom_rows.t3x', 'race_bottom_rows.png'):
+        (out / 'textures' / stale).unlink(missing_ok=True)
+    layouts = {'race_bottom_ui_256': ('textures/race_bottom_ui_256.t3x', atlas.size, rects, png.with_suffix('.t3x').stat().st_size, row_layout)}
+    texture, size, rects, size_bytes, _ = layouts['race_bottom_ui_256']
+    manifest['atlas'] = {'texture': texture, 'size': list(size),
+                         't3xBytes': size_bytes, 'ordinals': texts,
                          'mk7Source': {'cci' if cci and Path(cci).is_file() else 'shipped': str(cci) if cci and Path(cci).is_file() else str(MK7_SHIPPED), 'archive': '/UI/race.szs', 'markers': MK7_MARKERS},
                          'sources': {Path(p).relative_to(ROOT).as_posix(): digest(p) for p in sorted(set(sources))}}
-    return atlas.size, rects
+    return layouts
 
 
 def timer_layout():
@@ -308,10 +375,28 @@ def timer_layout():
     return out, path
 
 
-def write_header(manifest, atlas_size, rects, timer, timer_source):
+def atlas_layout(variable, texture, size, rects, row):
+    """The RaceMapAtlas initializer: every rectangle the bottom screen draws from it."""
     def rect(key):
+        if key not in rects:
+            return '{0,0,0,0}'
         x, y, w, h = rects[key]
         return f'{{{x},{y},{w},{h}}}'
+
+    def array(keys):
+        return '{{' + ','.join(rect(k) for k in keys) + '}}'
+    fields = [f'"{texture}"', f'{{{size[0]},{size[1]}}}',
+              array([('face', i) for i in range(24)]), array([('rowface', i) for i in range(24)]),
+              array([('item', k) for k in range(21)]), array([('digit', d) for d in range(10)]),
+              rect(('sep', 'colon')), rect(('sep', 'dot')), rect(('label', 'time')), rect(('light', 0)),
+              rect(('fake', 0)), rect(('white', 0)), rect(('row', 'player')), rect(('row', 'other')),
+              array([('ordinal', i) for i in range(12)]), array([('score', d) for d in range(10)]),
+              array([('mk7', n.split('.')[0].replace('_r90', '')) for n in MK7_MARKERS]),
+              *[str(v) for v in row]]
+    return f'inline constexpr RaceMapAtlas {variable}{{' + ','.join(fields) + '};'
+
+
+def write_header(manifest, layouts, timer, timer_source):
     lines = ['// Generated by tools/cook_race_map.py; see docs/BOTTOM_SCREEN.md.', '#pragma once', '#include <array>',
              '#include <cstdint>', 'namespace mkw {',
              '// One course map: an ETC1 texture covering the world rectangle [x0,x1] x [z0,z1]',
@@ -326,29 +411,25 @@ def write_header(manifest, atlas_size, rects, timer, timer_source):
                      f'{c["unitsPerPixel"]:.4f}f,{{{c["startLeft"][0]:.3f}f,{c["startLeft"][1]:.3f}f}},'
                      f'{{{c["startRight"][0]:.3f}f,{c["startRight"][1]:.3f}f}}}}, // {c["name"]}')
     lines += ['}};',
-              '// The bottom-screen UI atlas (RGBA8, VRAM): pixel rectangles x,y,w,h.',
+              '// The bottom-screen UI atlases (RGBA8, VRAM): pixel rectangles x,y,w,h.',
               'struct RaceMapRect {uint16_t x,y,w,h;};',
-              f'inline constexpr const char* RaceMapAtlasTexture="{manifest["atlas"]["texture"]}";',
-              f'inline constexpr uint16_t RaceMapAtlasSize[2]={{{atlas_size[0]},{atlas_size[1]}}};',
-              '// st_*_32x32 by retail character id (Kinoko Character 0..23).',
-              'inline constexpr std::array<RaceMapRect,24> RaceMapFaces{{' + ','.join(rect(('face', i)) for i in range(24)) + '}};',
-              'inline constexpr std::array<RaceMapRect,24> RaceMapFaceShadows{{' + ','.join(rect(('face_shadow', i)) for i in range(24)) + '}};',
-              '// Item window icons (tools/cook_race_items.py ICONS) by ItemKind; 19 = two Triple Mushrooms left (kinoko_2).',
-              'inline constexpr std::array<RaceMapRect,21> RaceMapItems{{' +
-              ','.join(rect(('item', k)) if ('item', k) in rects else '{0,0,0,0}' for k in range(21)) + '}};',
-              'inline constexpr std::array<RaceMapRect,10> RaceMapDigits{{' + ','.join(rect(('digit', d)) for d in range(10)) + '}};',
-              f'inline constexpr RaceMapRect RaceMapColon{rect(("sep", "colon"))},RaceMapDot{rect(("sep", "dot"))};',
-              f'inline constexpr RaceMapRect RaceMapTimeLabel{rect(("label", "time"))};',
-              f'inline constexpr RaceMapRect RaceMapSearchlight{rect(("light", 0))};',
-              f'inline constexpr RaceMapRect RaceMapFakeBox{rect(("fake", 0))};',
-              f'inline constexpr RaceMapRect RaceMapWhite{rect(("white", 0))};',
-              f'inline constexpr RaceMapRect RaceMapRowPlayer{rect(("row", "player"))},RaceMapRowOther{rect(("row", "other"))};',
-              '// 1st..12th (Race.bmg 0x515..0x520), result board font.',
-              'inline constexpr std::array<RaceMapRect,12> RaceMapOrdinals{{' + ','.join(rect(('ordinal', i)) for i in range(12)) + '}};',
               '// Mario Kart 7 bottom-screen map markers (/UI/race.szs).',
               'enum class Mk7Marker : uint8_t {Banana,Bobomb,GreenShell,RedShell,SpinyShell,BlastRed,BlastBlue,StartLine,Count};',
-              'inline constexpr std::array<RaceMapRect,8> RaceMapMk7{{' +
-              ','.join(rect(('mk7', n.split('.')[0].replace('_r90', ''))) for n in MK7_MARKERS) + '}};',
+              'struct RaceMapAtlas {',
+              '    const char* texture;uint16_t size[2];',
+              '    std::array<RaceMapRect,24> faces;       // st_*_32x32 by retail character id (Kinoko Character 0..23), map icons',
+              '    std::array<RaceMapRect,24> rowFaces;    // the same faces at the standings rows\' size',
+              '    std::array<RaceMapRect,21> items;       // item window icons by ItemKind, row size; 19 = two Triple Mushrooms left',
+              '    std::array<RaceMapRect,10> digits;      // CtrlRaceTime',
+              '    RaceMapRect colon,dot,timeLabel,searchlight,fakeBox,white,rowPlayer,rowOther;',
+              '    std::array<RaceMapRect,12> ordinals;    // 1st..12th (Race.bmg 0x515..0x520), result board font, row size',
+              '    std::array<RaceMapRect,10> scoreDigits; // battle scores in the ordinals\' font and size',
+              '    std::array<RaceMapRect,8> mk7;          // by Mk7Marker',
+              '    // Standings row: box size and the ordinal, face and item x within it (icons are icon px square).',
+              '    uint8_t rowW,rowH,ordinalX,faceX,itemX,icon;',
+              '};',
+              '// 256x256: the local outline on the map is drawn from the face itself.',
+              atlas_layout('RaceMapUi', *layouts['race_bottom_ui_256'][:3], layouts['race_bottom_ui_256'][4]),
               '// CtrlRaceTime (Race_U game_image_number.brlyt): pane centre (layout units,',
               '// y up) relative to race_null, and drawn size. Digits: race_null and time_01 the',
               '// minutes, time_02..03 the seconds, time_04..06 the milliseconds (CtrlRaceTime_refresh',
@@ -406,12 +487,12 @@ def main():
     if len(manifest['courses']) != len(catalog):
         raise SystemExit('Cook every course before writing the header (missing maps)')
     if a.metadata_only:return
-    atlas_size, rects = cook_atlas(a.output, a.mk7_cci, manifest)
+    layouts = cook_atlas(a.output, a.mk7_cci, manifest)
     timer, timer_source = timer_layout()
     manifest['timer'] = {'source': timer_source.relative_to(ROOT).as_posix(), 'sha256': digest(timer_source), 'panes': timer}
     manifest_path.write_text(json.dumps(manifest, indent=1) + '\n')
-    write_header(manifest, atlas_size, rects, timer, timer_source)
-    print(json.dumps({'maps': len(manifest['courses']), 'atlas': atlas_size,
+    write_header(manifest, layouts, timer, timer_source)
+    print(json.dumps({'maps': len(manifest['courses']), 'atlas': layouts['race_bottom_ui_256'][1],
                       'mapBytes': sum(c['t3xBytes'] for c in manifest['courses'])}))
 
 

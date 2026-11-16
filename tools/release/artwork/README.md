@@ -2,10 +2,10 @@
 
 - `icon.png`: the supplied Mario icon, copied without modification.
 - `logo.png`: the supplied Mario Kart Wii logo, copied without modification.
-- `banneraudio.wav`: current banner audio supplied by the maintainer, copied unchanged.
+- `banneraudio.wav`: the earlier banner sound, kept for manual builds. `tools/build.py` uses the start of the Disc Channel banner sound from your disc instead.
 - `manifest.json`: SHA-256 fingerprints and audio source/format details.
 
-These two PNGs and the approved banner sound are explicit publication
+These two PNGs and the banner sound are explicit publication
 exceptions alongside the eight inherited MK7 map markers. Inclusion does not
 extend the code license to these media assets.
 Do not add a CGFX model, banner binary, game texture dump, native Mii resource

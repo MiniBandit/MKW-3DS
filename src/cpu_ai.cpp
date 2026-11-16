@@ -11,9 +11,12 @@
 #include <game/kart/KartState.hh>
 #include <game/kart/KartDynamics.hh>
 #include <game/system/RaceManager.hh>
+#include <game/system/CourseMap.hh>
+#include <game/system/map/MapdataJugemPoint.hh>
 #include <game/field/ObjectDirector.hh>
 #include <game/field/BoxColManager.hh>
 #include <game/field/obj/ObjectBase.hh>
+#include <egg/math/Quat.hh>
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -30,6 +33,11 @@ constexpr float OffsetJitter=100.f;             // 808c7370
 constexpr float CurveThreshold=.3f;             // 808c7374, 808c7378
 constexpr float GoNextDistance=1000.f;          // 808c57b8
 constexpr float InsideFactor[3]={-.3f,0.f,.7f}; // 808c57bc, 805113d0, 808c57c0
+// fn_1_8148 (PAL 0x805184FC): the respawn point's ENPT link cone, 15 degrees (FIdx 0x8088FA7C),
+// and the initial nearest distance (0x8088FA80).
+constexpr float RespawnLinkCone=32.f/3.f,RespawnLinkFar=9999999.f;
+// AIPathHandler +0x28: the pass mode the handler is initialised with (fn_1_22B228).
+constexpr int InitialPassMode=2;
 constexpr int SlotSearch[20]={2,-2,3,-3,1,-1,4,-4,5,-5,6,-6,7,-7,8,-8,9,-9,10,-10}; // 8089df58
 // AIControlBase::setBasicDriveInfo_ and the kart controller.
 constexpr float DriveGain=.04f,DriftGain=.05f;  // 808c526c, 808c5270
@@ -87,7 +95,7 @@ const CpuActionParam& CpuAi::action(const Racer& r) const{
 Vec3 CpuAi::pointPos(unsigned index) const{return route_->point(std::min(index,route_->size()-1)).position;}
 float CpuAi::widthOffset(unsigned index) const{return OffsetPerWidth*route_->point(std::min(index,route_->size()-1)).width;}
 
-unsigned CpuAi::chooseBranch(unsigned racer,unsigned from){
+unsigned CpuAi::chooseBranch(unsigned racer,unsigned from,bool allowMushroom){
     // AIPathPoint::chooseNext (fn_1_22D000): mushroom-only routes (successor
     // setting1 1) when holding a mushroom, otherwise a uniform ordinary route.
     const auto& p=route_->point(from);
@@ -118,7 +126,7 @@ unsigned CpuAi::chooseBranch(unsigned racer,unsigned from){
     }
     std::array<int,12> kinds{};unsigned mushrooms=0,normal=0;
     for(unsigned k=0;k<p.nextCount;++k){if(route_->point(p.next[k]).setting1==1){kinds[k]=1;++mushrooms;}else ++normal;}
-    const bool mushroom=mushrooms&&racers_[racer].mushroomRoute;
+    const bool mushroom=allowMushroom&&mushrooms&&racers_[racer].mushroomRoute;
     const uint32_t pick=rand(mushroom?mushrooms:normal);const int want=mushroom?1:0;
     for(unsigned k=0,n=0;k<p.nextCount;++k)if(kinds[k]==want){if(n==pick)return k;++n;}
     return 0;
@@ -211,6 +219,35 @@ void CpuAi::updatePath(unsigned racer,Vec3 kartPos){
     p.distance=length(p.target-kartPos);
     if(shouldGoNext(p,kartPos))goNext(racer,kartPos);
 }
+unsigned CpuAi::respawnLink(unsigned racer) const{
+    // The JGPT KartMove::calcRespawnStart placed the racer at (RaceManager player jugemId),
+    // and its ENPT link; an invalid point when there is none.
+    const int jugem=System::RaceManager::Instance()->player(racer).jugemId();
+    return jugem>=0&&unsigned(jugem)<respawnLinks_.size()?respawnLinks_[unsigned(jugem)]:route_->size();
+}
+void CpuAi::onOutOfBounds(unsigned racer,unsigned point){
+    // fn_1_22B79C (PAL 0x8073BB50): a valid ENPT link restarts the path there through goNext
+    // (fn_1_22BD5C 0x8073C110) in its out-of-bounds form: the default switch distance, offset
+    // (AIPathPoint +0x28) 0, the initial pass mode (+0x24 = +0x2c = +0x28) and no reached-point
+    // parameters (+0xc cleared).
+    if(point>=route_->size())return;
+    Path& p=racers_[racer].path;
+    p.goNext=p.goNextDefault;p.offset=0;p.passMode=p.passModeReset=InitialPassMode;p.currParam.clear();
+    // fn_1_22C988's out-of-bounds branch: the point and its log restart at the link, the branch
+    // is drawn from a zeroed chooser (no mushroom route), the offset is re-rolled with the slot
+    // spacing, and prev == cur gives curvature 0; the target uses inside factor 0.0 (0x808A27B4).
+    const auto& from=route_->point(point);
+    const unsigned choice=from.nextCount>1?chooseBranch(racer,point,false):0;
+    p.cur=p.prev=p.log2=p.log3=uint16_t(point);
+    p.next=uint16_t(from.next[std::min(choice,from.nextCount-1)]);p.branch=int(choice);
+    jitterOffset(racer,true);
+    p.curvature=0;
+    recalcTarget(p,0.f);
+    p.nextParam={int(from.setting1),int(from.driftSetting),from.flags,p.curvature};
+    // The switch distance is measured from the link point itself; the frame's update follows.
+    p.distance=length(p.target-from.position);
+    p.switching=true;
+}
 bool CpuAi::driftHere(const Path& p) const{
     // fn_1_22B530.
     if(p.nextParam.endDrift()||p.nextParam.forbidDrift())return false;
@@ -230,7 +267,29 @@ void CpuAi::reset(const Setup& setup){
     racers_={};groups_={};rng_=setup.seed?setup.seed:1;battleRng_=rng_;raceStarted_=false;
     rmState=0;rmFrame=0;rmDuration=0;rmPhase=0;rmInterval=-1;advantageEnabled=false;advantageState=0;advantageValue=0;
     topType=2;cpuCount=humanCount=0;
+    respawnLinks_.clear();
     if(!route_)return;
+    // CourseMap_init (PAL 0x80512AF4) runs fn_1_8148 (0x805184FC) on every JGPT: +0x28 is the
+    // ENPT nearest ahead along the point's rotation (rot * ez) inside a 15 degree cone around it
+    // (lateral in rot * ex / rot * ey), ENPT 0 when none is.
+    if(auto* map=System::CourseMap::Instance();map&&!setup.battle){
+        const float tan=EGG::Mathf::SinFIdx(RespawnLinkCone)/EGG::Mathf::CosFIdx(RespawnLinkCone);
+        for(u16 k=0;k<map->getJugemPointCount();++k){
+            const auto* jugem=map->getJugemPoint(k);
+            EGG::Quatf rpy;rpy.setRPY(DEG2RAD*jugem->rot().x,DEG2RAD*jugem->rot().y,DEG2RAD*jugem->rot().z);
+            const EGG::Vector3f ez=rpy.rotateVector(EGG::Vector3f::ez),ex=rpy.rotateVector(EGG::Vector3f::ex),ey=rpy.rotateVector(EGG::Vector3f::ey);
+            unsigned link=0xff;float nearest=RespawnLinkFar;
+            for(unsigned n=0;n<route_->size()&&n<0xff;++n){
+                const Vec3 a=route_->point(n).position;
+                const float dx=a.x-jugem->pos().x,dy=a.y-jugem->pos().y,dz=a.z-jugem->pos().z;
+                const float ahead=ez.z*dz+ez.x*dx+ez.y*dy; // retail operand order
+                if(ahead<0.f)continue;
+                const float cone=ahead*tan,side=ex.z*dz+ex.x*dx+ex.y*dy,up=ey.z*dz+ey.x*dx+ey.y*dy;
+                if(side*side+up*up<cone*cone&&(link==0xff||ahead<nearest)){nearest=ahead;link=n;}
+            }
+            respawnLinks_.push_back(uint8_t(link==0xff?0:link));
+        }
+    }
     auto* objects=Kart::KartObjectManager::Instance();
     const unsigned engine=std::min(setup.engineClass,2u),mode=std::min(setup.cpuMode,2u);
     // Start order: grid slots along the start direction (front-most first).
@@ -606,23 +665,27 @@ void CpuAi::drive(unsigned racer,bool demo){
     // actor, including the local player in PostRaceDriving (80728d00..10).
     stuckUpdate(racer);
     const Avoid& av=r.avoid;
-    uint16_t buttons=0;float stick=0;bool drifting=true;
+    uint16_t buttons=0;float stick=0,animationStick=0;bool drifting=true;
     if(d.state==0){
         drifting=false;buttons|=1;
-        // fn_1_220A00: curvature feed-forward, or full lock while avoiding.
-        stick=std::clamp(d.feedForward,-1.f,1.f);
-        if(av.active)stick=av.steer<0?1.f:-1.f;
-        if(startDrift){d.driftDir=driftDir;d.ramp=0;d.failFrames=0;d.timer=0;d.state=1;}
+        // fn_1_220A00: the curvature feed-forward, or full lock away from the avoid steer, goes
+        // only to the models and the bike lean. The pad stick stays neutral: the body rotation
+        // below already steers, and steering with both turned CPUs into the walls on bends.
+        float feed=std::clamp(d.feedForward,-1.f,1.f);
+        if(av.active)feed=av.steer<0?1.f:-1.f;
+        animationStick=d.lean=feed;
+        // The drift timer (+0x14) is not reset here; ENPT switches reset it.
+        if(startDrift){d.driftDir=driftDir;d.ramp=0;d.failFrames=0;d.state=1;}
     }else{
         d.switched=switched;
         // fn_1_220AE8: hop and hold the turn direction.
         const bool hop=status.onBit(Kart::eStatus::Hop);
         stick=(!status.onBit(Kart::eStatus::TouchingGround)||hop)?-d.driftDir:d.driftDir*d.ramp;
         if(d.switched)d.timer=0;
-        // Kart controller 80741930..98: its 8/30/10-tick steering windows
-        // are separate from the continuously increasing ramp. The old port
-        // advanced timer but never used it, applying countersteer immediately.
-        if(d.timer<8.f||(d.timer>=38.f&&d.timer<48.f))stick=0;
+        // The driver animation sees the stick from 8 to 38 frames after an ENPT switch and
+        // from 48 on (0x808CA644/48/4C: 8, 30, 10). The pad stick keeps the drift direction:
+        // zeroing it hopped with a centred stick, so the drift never got a direction.
+        animationStick=d.timer<8.f||(d.timer>=38.f&&d.timer<48.f)?0.f:stick;
         d.ramp=std::min(1.f,d.ramp+RampStep);d.timer=std::min(9999.9f,d.timer+1.f);
         buttons|=1|8;
         if(!status.onBit(Kart::eStatus::DriftManual)&&!hop){
@@ -668,7 +731,7 @@ void CpuAi::drive(unsigned racer,bool demo){
         }
         }
     }
-    r.command={buttons,stick,trick};
+    r.command={buttons,stick,trick,animationStick,d.lean};
 }
 
 CpuAi::DemoEvents CpuAi::stepDemoRun(unsigned racer,uint32_t frame){
@@ -698,15 +761,27 @@ void CpuAi::step(uint32_t driveMask,const std::array<unsigned,Capacity>& ranks,c
         auto& r=racers_[i];if(!r.active)continue;
         auto* kart=Kart::KartObjectManager::Instance()->object(i);
         const auto& status=kart->status();
-        // Respawned racers resume from the route point under their drop position.
         const bool dropping=status.onBit(Kart::eStatus::BeforeRespawn,Kart::eStatus::InRespawn);
+        // PlayerSub10_doRespawn (PAL 0x80584334) places the racer at its respawn point and calls
+        // Enemy::AI::onOutOfBounds (0x807263B0 -> AIControlRace fn_1_2203A4 0x80730758): the path
+        // restarts at that point's ENPT link. Here: the first tick that sees InRespawn.
+        // onOutOfBoundsInner (0x8072A2A8) re-inits the stuck handler (fn_1_234870) and the
+        // avoider (fn_1_216834); fn_1_2203A4 returns block line to Search (fn_1_21936C).
+        const bool linked=!respawnLinks_.empty(),respawning=status.onBit(Kart::eStatus::InRespawn);
+        if(linked&&respawning&&!r.respawning){
+            onOutOfBounds(i,respawnLink(i));
+            r.drive={};kart->move()->setCpuRecovery(false);
+            r.stuck={};r.avoid={};r.block.next=1;
+        }
+        r.respawning=respawning;
+        // Battle (no links) resumes from the route point under the drop position.
         // The adapted human path can lag behind a line/shortcut it never
         // followed. Reacquire once when handing the finished human to AI;
         // otherwise only rescue would clear that stale target. Do not reset
         // ordinary CPUs or reselect branches every post-race tick.
         const bool goalHandover=r.human&&finished[i]&&((driveMask>>i)&1)&&!r.postRaceDriving;
         if(goalHandover)r.postRaceDriving=true;
-        if((r.dropping&&!dropping)||goalHandover){
+        if((!linked&&r.dropping&&!dropping)||goalHandover){
             r.path.start=uint16_t(route_->nearest(native(kart->pos()),native(kart->bodyFront()),i));
             if(r.path.start>=route_->size())r.path.start=0;
             setPoint(i,0);r.drive={};

@@ -39,6 +39,7 @@ class IntroMeshClearance {
  }
 public:
  void add(Vec3 a,Vec3 b,Vec3 c){if(dot(cross(b-a,c-a),cross(b-a,c-a))<1e-8f)return;triangles_.push_back({a,b,c,minimum(a,minimum(b,c)),maximum(a,maximum(b,c))});}
+ void reserve(size_t triangles){triangles_.reserve(triangles);}
  void build(){nodes_.clear();if(!triangles_.empty()){nodes_.reserve(triangles_.size()/4);split(0,unsigned(triangles_.size()));}}
  bool correction(float radius,Vec3 p,Vec3& push)const{push={};float deepest=0;if(!nodes_.empty())query(0,radius,p,push,deepest);return deepest>0;}
 };

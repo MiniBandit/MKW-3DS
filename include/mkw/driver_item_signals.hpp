@@ -27,9 +27,14 @@ inline bool driverItemLookTarget(const ItemActor& actor,unsigned player,Vec3& ta
 inline void driverItemSignals(DriverSignals& signals,const RaceItems& items,unsigned player) {
     signals.hasLookTarget=false;
     // Retail updates Red actors before Blue actors; the last request wins.
+    // Live slots only (a look target needs an active actor): called for all 12 racers
+    // every tick, a full scan read the 96-actor pool (36 KB) 24 times a tick.
+    const auto& actors=items.actors();
     for(auto kind:{ItemKind::RedShell,ItemKind::BlueShell})
-        for(const auto& actor:items.actors())if(actor.kind==kind)
-            if(driverItemLookTarget(actor,player,signals.lookTarget))signals.hasLookTarget=true;
+        items.forEachActorSlot([&](unsigned n){
+            const auto& actor=actors[n];
+            if(actor.kind==kind&&driverItemLookTarget(actor,player,signals.lookTarget))signals.hasLookTarget=true;
+            return true;});
     for(const auto& event:items.sounds()) {
         if(event.player!=player)continue;
         if(event.cue==ItemSoundCue::HitSuccess)signals.celebrate=true;

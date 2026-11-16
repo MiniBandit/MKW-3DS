@@ -32,6 +32,9 @@ private:
 class RaceGrid {
 public:
     static constexpr unsigned Capacity=12;
+    // Old 3DS: CPU pad inputs skip Kinoko's validity check (raw sticks 0..14, result unused);
+    // off: no-fast-cpu-pad.txt.
+    static inline bool fastPad=true;
     // Call within the RaceConfig init callback. Count=1 keeps a solo race.
     void configure(Kinoko::System::RaceConfig& config,unsigned localGarageChoice,unsigned count=Capacity,const std::array<unsigned,Capacity>* roster=nullptr);
     // Call after every scene creation/restart. Owns copies, never scene pointers.
@@ -43,6 +46,10 @@ public:
     void afterStep();
     void setBattleRanks(const std::array<unsigned,Capacity>& ranks){if(battleArena_)ranks_=ranks;}
     unsigned count() const{return count_;}
+    // Replayed ghosts (a Time Trials staff ghost) follow their recorded inputs:
+    // no AI, no item racer, ranked after every other racer. They come last.
+    bool ghost(unsigned player) const{return player<count_&&(ghosts_>>player&1);}
+    unsigned itemCount() const{unsigned n=count_;while(n>1&&ghost(n-1))--n;return n;}
     bool routeReady() const{return route_.size()!=0;}
     // Fixed sun reference from drivable paths, never decorative ocean/sky bounds.
     bool routeCenter(Vec3& center) const {
@@ -63,13 +70,6 @@ public:
     static float steeringTo(Vec3 forward,Vec3 offset);
     // QA autopilot: player zero follows the CPU route like the other racers.
     bool driveLocal=false;
-    // Racers driven by another console (LAN play): their controllers are set
-    // from the network, never by the CPU driver.
-    uint32_t remoteMask=0;
-    // Online: every console reports its own finish as a key (lower is ahead, 0 not
-    // yet; net_session.hpp FinishKey). Ranks then follow the keys, the lobby slot
-    // breaking ties, so all consoles agree; racers without one rank by progress.
-    void setNetFinish(bool online,const std::array<uint32_t,Capacity>& keys,const std::array<uint8_t,Capacity>& slots){netFinish_=online;netKeys_=keys;netSlots_=slots;}
     CpuAi& ai(){return ai_;}
 private:
     void forwardBumps();
@@ -80,7 +80,6 @@ private:
     std::array<unsigned,Capacity> choices_{},ranks_{},laps_{};
     std::array<bool,Capacity> finished_{};
     CpuSpeedParam speedParam_{};bool speedParamReady_=false;float lapDistance_=0;
-    unsigned count_=1,engineClass_=2,difficulty_=1;bool battleArena_=false;
-    bool netFinish_=false;std::array<uint32_t,Capacity> netKeys_{};std::array<uint8_t,Capacity> netSlots_{};
+    unsigned count_=1,engineClass_=2,difficulty_=1;bool battleArena_=false;uint32_t ghosts_=0;
 };
 }

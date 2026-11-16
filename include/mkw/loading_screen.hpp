@@ -8,6 +8,8 @@ void initializeLoadingScreen(Renderer&);
 void shutdownLoadingScreen();
 // GPU wait screens pass their own start time; normal scene frames never call this.
 void drawLoadingWheel(Renderer&,std::uint64_t waitStarted);
+// LoadingScopes opened so far: each may have drawn on the lower LCD.
+unsigned loadingScopes();
 class LoadingScope {
 public:
  LoadingScope();~LoadingScope();

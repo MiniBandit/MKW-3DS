@@ -46,6 +46,7 @@ enum : uint32_t {
     CoplanarLayer=1u<<23, // source translucent course decal sharing an earlier surface
     RaisedRoadLayer=1u<<25, // authored raised road detail; PICA slope/depth precision guard
     AuthoredOpaqueBlend=1u<<26, // source DrawOpa blend layer; order only, no depth bias
+    AuthoredOpaqueOrder=1u<<30, // source DrawOpa blend with depth write: opaque pass, authored order
     Fog=1u<<1,             // material fog index 0 (G3D fog 0)
     ChannelShift=2,        // 0 unlit (raster = vertex/register colour), 1 GX lit, 2 GX lit + light textures
     ChannelMask=3u<<2,
@@ -93,6 +94,8 @@ bool retailLightTextureDynamic(const CourseLighting& course,unsigned which);
 // Same GX ambient/diffuse equation evaluated at a fixed, model-space reference.
 std::array<float,4> viewLightFactor(const CourseLighting* course,uint32_t lighting,uint32_t ambient,Vec3 normal,const float view[3][3]);
 std::array<float,4> staticLightFactor(const CourseLighting* course,uint32_t lighting,uint32_t ambient,Vec3 normal);
+// True when the submesh's G3D light adds a diffuse term (enabled, coloured, a diffuse function).
+bool diffuseLit(const CourseLighting* course,uint32_t lighting);
 bool normalEnvironment(uint32_t lighting,uint32_t mode,uint32_t constant);
 // GX fog factor for a fog type at normalized eye depth ze ((z-start)/(end-start)).
 float retailFogFactor(unsigned type,float ze);
@@ -107,4 +110,34 @@ struct RetailFogState {
     // targetState: KMP AREA type 2 parameter (or -1 outside); timed: course 6.
     void step(const CourseLighting& course,int targetState,bool timed,uint32_t raceFrame);
 };
+// Light zones. Each racer owns G3D light set 8+n = {light 16+n, ambient 16+n}
+// (StaticR 0x8055CE78; controller 0x8055C014), which its kart and driver are
+// drawn with; it starts as a copy of BLIGHT light 0 and ambient 0 (0x8055C768).
+// KCL attribute bits 8-10 under the racer select BLIGHT light and ambient k
+// (0x8058B144). Every frame (0x8055D1D8) a new k restarts the blend at 0; then
+// progress += 0.1 (max 1) and the light's position, aim and colour and the
+// ambient move by progress of their remaining difference (0x8055C98C; colours
+// byte-truncated, 0x805A3DD8). The light keeps light 0's space, type and
+// intensity (only position, aim and colour are copied); its flags are 0x641.
+struct RacerLightZone {
+    uint8_t current=0,target=0;
+    float progress=1.f;
+    // Unit aim direction; retail blends position and aim separately, which
+    // differs only while a blend runs (10 frames).
+    Vec3 direction{};
+    uint8_t color[4]{},ambient[4]{};
+    void reset(const CourseLighting& course);
+    void step(const CourseLighting& course,unsigned index);
+    RetailLight light(const CourseLighting& course) const;
+    uint32_t ambientColor() const;
+};
+// Light zone state of every racer in the current race (player index 0-11).
+namespace racerLightZones {
+void reset();
+// One simulation tick: indices[i] is racer i's KCL light index.
+void step(const CourseLighting* course,const uint8_t* indices,unsigned count);
+// Null without course lighting or for an unknown racer.
+const RacerLightZone* zone(unsigned player);
+const CourseLighting* course();
+}
 }

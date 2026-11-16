@@ -27,11 +27,11 @@
     mov r2, consts.xxxy
     mov r2.xy, inuv0.xy
     mov outtc, r2
-    mov outtcw, inuv0.zzzz
+    mov outtcw, inuv0.zzzz ; outputs-ok: input source since d28f093 (console)
     mov r2.xy, inuv.xy
     mov outtc1, r2
     mov r2.xy, inuv.zw
     mov outtc2, r2
-    mul outcolor, consts.z, incolor
+    mul outcolor, consts.z, incolor ; outputs-ok: mul with an input since d28f093 (console)
     end
 .end

@@ -26,7 +26,7 @@ float fadeOpacity(float frame,bool entering){return colorFaderOpacity(frame,ente
 
 const char* uiPauseMenuControl(const MenuState& state){
  switch(state.selection.mode){
- case UiMode::TimeTrials:return "PauseMenuTimeAttack";
+ case UiMode::TimeTrials:return state.watchGhost?"PauseMenuGhostWatch":"PauseMenuTimeAttack";
  case UiMode::GrandPrix:return "PauseMenuGrandPrix";
  case UiMode::Battle:return "PauseMenuBT";
  default:return "PauseMenuVS";
@@ -131,6 +131,7 @@ bool uiMenuChangesSection(UiPage from,UiPage to,UiAction action){
     to!=UiPage::Pause&&to!=UiPage::QuitConfirm&&to!=UiPage::Race)return true;
  return (from==UiPage::MainMenu&&to==UiPage::Mode)||(from==UiPage::Mode&&to==UiPage::MainMenu)
      ||(from==UiPage::MainMenu&&to==UiPage::LicenseSettings)||(from==UiPage::LicenseSettings&&to==UiPage::MainMenu)
+     ||(from==UiPage::License&&to==UiPage::Settings)||(from==UiPage::Settings&&to==UiPage::License)
      ||from==UiPage::Intro||to==UiPage::Intro||from==UiPage::Race||to==UiPage::Race;
 }
 

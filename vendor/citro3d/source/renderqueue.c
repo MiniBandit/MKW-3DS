@@ -1,6 +1,7 @@
 #include "internal.h"
 #include <c3d/base.h>
 #include <c3d/renderqueue.h>
+#include <c3d/pipeline.h>
 #include <stdlib.h>
 
 static C3D_RenderTarget *firstTarget, *lastTarget;
@@ -9,6 +10,22 @@ static C3D_RenderTarget *linkedTarget[3];
 static TickCounter gpuTime, cpuTime;
 
 static bool inFrame, inSafeTransfer, measureGpuTime;
+
+// Pipelined frames (c3d/pipeline.h). The frame's command buffer: the whole
+// buffer, or one half in a pipelined frame. lastHalf is the half the last
+// submitted frame used (-1: the whole buffer).
+static u32* frameCmdBuf;
+static u32 frameCmdBufSize;
+static int lastHalf = -1, frameHalf = -1;
+static bool pipelined, pipelineHookDone;
+static void (* pipelineHook)(void*);
+static void* pipelineHookData;
+// GX operations a pipelined frame holds back until the previous frame has
+// finished. The GX queue itself holds 32 entries per frame.
+enum { StageList, StageFill, StageDisplay, StageCopy };
+typedef struct { u8 type; u16 c0, c1; u32 a[6]; } StagedOp;
+static StagedOp staged[32];
+static unsigned stagedCount;
 // libctru marks a queue idle before invoking its callback. The renderer may
 // run on a different core: fence the callback's final swap/state writes too.
 // Only the submitting thread accesses queueCallbackPending; the callback
@@ -189,6 +206,90 @@ float C3D_FrameRate(float fps)
 	return old;
 }
 
+static void C3Di_Replay(const StagedOp* op)
+{
+	const u32* a = op->a;
+	switch (op->type)
+	{
+		case StageList:
+			GX_ProcessCommandList((u32*)a[0], a[1], (u8)op->c0);
+			break;
+		case StageFill:
+			GX_MemoryFill((u32*)a[0], a[1], (u32*)a[2], op->c0, (u32*)a[3], a[4], (u32*)a[5], op->c1);
+			break;
+		case StageDisplay:
+			GX_DisplayTransfer((u32*)a[0], a[1], (u32*)a[2], a[3], a[4]);
+			break;
+		case StageCopy:
+			GX_TextureCopy((u32*)a[0], a[1], (u32*)a[2], a[3], a[4], a[5]);
+			break;
+	}
+}
+
+// Wait for the previous frame, run the hook once, then queue the held-back
+// operations (stopped: they run at the next C3Di_RunQueue).
+static void C3Di_PipelineSubmit(void)
+{
+	unsigned i;
+	C3Di_WaitAndClearQueue(-1);
+	if (!pipelineHookDone)
+	{
+		pipelineHookDone = true;
+		if (pipelineHook)
+			pipelineHook(pipelineHookData);
+	}
+	for (i = 0; i < stagedCount; i ++)
+		C3Di_Replay(&staged[i]);
+	stagedCount = 0;
+}
+
+static void C3Di_PipelineFlush(void)
+{
+	// Submit what this frame holds so far and continue in the same buffer.
+	C3D_Context* ctx = C3Di_GetContext();
+	C3Di_PipelineSubmit();
+	C3Di_RunQueue(&ctx->gxQueue);
+	C3Di_WaitAndClearQueue(-1);
+}
+
+static void C3Di_Stage(const StagedOp* op)
+{
+	if (stagedCount == sizeof(staged)/sizeof(staged[0]))
+	{
+		// A full queue's worth: what is held so far runs now.
+		C3Di_PipelineFlush();
+	}
+	staged[stagedCount++] = *op;
+}
+
+void C3D_FramePipelineHook(void (* hook)(void*), void* param)
+{
+	pipelineHook = hook;
+	pipelineHookData = param;
+}
+
+void C3D_FrameWaitPrevious(void)
+{
+	// The queue holds only the previous frame: this frame's operations are held back.
+	if (inFrame && pipelined)
+		C3Di_WaitAndClearQueue(-1);
+}
+
+bool C3D_FramePipelined(void)
+{
+	return inFrame && pipelined;
+}
+
+void C3Di_MemoryFill(u32* buf0a, u32 buf0v, u32* buf0e, u16 control0, u32* buf1a, u32 buf1v, u32* buf1e, u16 control1)
+{
+	if (inFrame && pipelined)
+	{
+		StagedOp op = { StageFill, control0, control1, { (u32)buf0a, buf0v, (u32)buf0e, (u32)buf1a, buf1v, (u32)buf1e } };
+		C3Di_Stage(&op);
+	} else
+		GX_MemoryFill(buf0a, buf0v, buf0e, control0, buf1a, buf1v, buf1e, control1);
+}
+
 bool C3D_FrameBegin(u8 flags)
 {
 	C3D_Context* ctx = C3Di_GetContext();
@@ -196,12 +297,32 @@ bool C3D_FrameBegin(u8 flags)
 
 	if (flags & C3D_FRAME_SYNCDRAW)
 		C3D_FrameSync();
-	if (!C3Di_WaitAndClearQueue((flags & C3D_FRAME_NONBLOCK) ? 0 : -1))
-		return false;
+	if (flags & C3D_FRAME_PIPELINE)
+	{
+		// The GPU may still run the previous frame from its half: build into
+		// the other one. A frame that used the whole buffer finishes first.
+		if (lastHalf < 0 && !C3Di_WaitAndClearQueue((flags & C3D_FRAME_NONBLOCK) ? 0 : -1))
+			return false;
+		frameHalf = lastHalf == 0 ? 1 : 0;
+		frameCmdBufSize = ctx->cmdBufSize / 2;
+		frameCmdBuf = ctx->cmdBuf + frameHalf * frameCmdBufSize;
+		pipelined = true;
+		pipelineHookDone = false;
+		stagedCount = 0;
+	} else
+	{
+		if (!C3Di_WaitAndClearQueue((flags & C3D_FRAME_NONBLOCK) ? 0 : -1))
+			return false;
+		frameHalf = -1;
+		frameCmdBuf = ctx->cmdBuf;
+		frameCmdBufSize = ctx->cmdBufSize;
+		pipelined = false;
+	}
 
 	inFrame = true;
+	C3Di_TexCacheDirty = true;
 	osTickCounterStart(&cpuTime);
-	GPUCMD_SetBuffer(ctx->cmdBuf, ctx->cmdBufSize, 0);
+	GPUCMD_SetBuffer(frameCmdBuf, frameCmdBufSize, 0);
 	return true;
 }
 
@@ -210,6 +331,7 @@ bool C3D_FrameDrawOn(C3D_RenderTarget* target)
 	if (!inFrame) return false;
 
 	target->used = true;
+	C3Di_TexCacheDirty = true;
 	C3D_SetFrameBuf(&target->frameBuf);
 	C3D_SetViewport(0, 0, target->frameBuf.width, target->frameBuf.height);
 	return true;
@@ -219,7 +341,16 @@ void C3D_FrameSplit(u8 flags)
 {
 	u32 *cmdBuf, cmdBufSize;
 	if (!inFrame) return;
-	if (C3Di_SplitFrame(&cmdBuf, &cmdBufSize))
+	C3Di_TexCacheDirty = true;
+	if (!C3Di_SplitFrame(&cmdBuf, &cmdBufSize))
+		return;
+	if (pipelined)
+	{
+		// Usage of this frame's half, not of the whole buffer.
+		C3Di_GetContext()->cmdBufUsage = (float)(cmdBuf + cmdBufSize - frameCmdBuf) / frameCmdBufSize;
+		StagedOp op = { StageList, flags, 0, { (u32)cmdBuf, cmdBufSize*4 } };
+		C3Di_Stage(&op);
+	} else
 		GX_ProcessCommandList(cmdBuf, cmdBufSize*4, flags);
 }
 
@@ -236,10 +367,15 @@ void C3Di_EnsureCommandSpace(void)
 	extern u32 __ctru_linear_heap_size;
 	GSPGPU_FlushDataCache((void*)__ctru_linear_heap, __ctru_linear_heap_size);
 	C3D_FrameSplit(GX_CMDLIST_FLUSH);
-	C3Di_RunQueue(&ctx->gxQueue);
-	C3Di_WaitAndClearQueue(-1);
+	if (pipelined)
+		C3Di_PipelineFlush();
+	else
+	{
+		C3Di_RunQueue(&ctx->gxQueue);
+		C3Di_WaitAndClearQueue(-1);
+	}
 	// PICA state survives a command-list boundary. Dirty state stays pending.
-	GPUCMD_SetBuffer(ctx->cmdBuf, ctx->cmdBufSize, 0);
+	GPUCMD_SetBuffer(frameCmdBuf, frameCmdBufSize, 0);
 }
 
 void C3D_FrameEnd(u8 flags)
@@ -262,6 +398,15 @@ void C3D_FrameEnd(u8 flags)
 		extern u32 __ctru_linear_heap_size;
 		GSPGPU_FlushDataCache((void*)__ctru_linear_heap, __ctru_linear_heap_size);
 	}
+
+	// A pipelined frame reaches the queue once the previous one has finished
+	// and been swapped: its transfers below then target the free framebuffers.
+	if (pipelined)
+	{
+		C3Di_PipelineSubmit();
+		pipelined = false;
+	}
+	lastHalf = frameHalf;
 
 	int i;
 	C3D_RenderTarget* target;
@@ -467,7 +612,12 @@ void C3D_SyncDisplayTransfer(u32* inadr, u32 indim, u32* outadr, u32 outdim, u32
 	if (inFrame)
 	{
 		C3D_FrameSplit(0);
-		GX_DisplayTransfer(inadr, indim, outadr, outdim, flags);
+		if (pipelined)
+		{
+			StagedOp op = { StageDisplay, 0, 0, { (u32)inadr, indim, (u32)outadr, outdim, flags } };
+			C3Di_Stage(&op);
+		} else
+			GX_DisplayTransfer(inadr, indim, outadr, outdim, flags);
 	} else
 	{
 		C3Di_SafeDisplayTransfer(inadr, indim, outadr, outdim, flags);
@@ -480,7 +630,12 @@ void C3D_SyncTextureCopy(u32* inadr, u32 indim, u32* outadr, u32 outdim, u32 siz
 	if (inFrame)
 	{
 		C3D_FrameSplit(0);
-		GX_TextureCopy(inadr, indim, outadr, outdim, size, flags);
+		if (pipelined)
+		{
+			StagedOp op = { StageCopy, 0, 0, { (u32)inadr, indim, (u32)outadr, outdim, size, flags } };
+			C3Di_Stage(&op);
+		} else
+			GX_TextureCopy(inadr, indim, outadr, outdim, size, flags);
 	} else
 	{
 		C3Di_SafeTextureCopy(inadr, indim, outadr, outdim, size, flags);
@@ -493,7 +648,7 @@ void C3D_SyncMemoryFill(u32* buf0a, u32 buf0v, u32* buf0e, u16 control0, u32* bu
 	if (inFrame)
 	{
 		C3D_FrameSplit(0);
-		GX_MemoryFill(buf0a, buf0v, buf0e, control0, buf1a, buf1v, buf1e, control1);
+		C3Di_MemoryFill(buf0a, buf0v, buf0e, control0, buf1a, buf1v, buf1e, control1);
 	} else
 	{
 		C3Di_SafeMemoryFill(buf0a, buf0v, buf0e, control0, buf1a, buf1v, buf1e, control1);

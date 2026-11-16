@@ -164,6 +164,29 @@ void MEMiExpHeapHead::free(void *block) {
     recycleRegion(region);
 }
 
+/// mkw-3ds: shrinks a used block in place, as MEMResizeForMBlockExpHeap does when the new size
+/// is smaller: the tail past the new size goes back to the free list (merged with a free block
+/// right after it). A tail too small for a free block header stays in the block.
+/// @return The block's size afterwards.
+u32 MEMiExpHeapHead::shrinkBlock(void *block, u32 size) {
+    MEMiExpBlockHead *head =
+            reinterpret_cast<MEMiExpBlockHead *>(SubOffset(block, sizeof(MEMiExpBlockHead)));
+
+    size = RoundUp(size, 4);
+    if (size >= head->m_size) {
+        return head->m_size;
+    }
+
+    Region tail = Region(AddOffset(block, size), head->getMemoryEnd());
+    if (tail.getRange() < sizeof(MEMiExpBlockHead) + 4) {
+        return head->m_size;
+    }
+
+    head->m_size = size;
+    recycleRegion(tail);
+    return size;
+}
+
 /// @addr{0x80199180}
 u32 MEMiExpHeapHead::getAllocatableSize(s32 align) const {
     // Doesn't matter which direction it can be allocated from, take absolute value

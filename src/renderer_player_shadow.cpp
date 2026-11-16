@@ -284,13 +284,14 @@ void Renderer::playerShadowNow(const ShadowCaster* casters,unsigned count,const 
   for(unsigned i=0;i<count;++i){
    const auto& c=casters[i];if(!c.model)continue;const auto& model=*c.model;
    C3D_Mtx mv;Mtx_Multiply(&mv,&lightView,&c.transform);C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER,modelViewLoc_,&mv);
-   auto* attr=C3D_GetAttrInfo();AttrInfo_Init(attr);
-   AttrInfo_AddLoader(attr,0,GPU_FLOAT,3);AttrInfo_AddLoader(attr,1,GPU_FLOAT,3);AttrInfo_AddLoader(attr,2,GPU_FLOAT,4);AttrInfo_AddLoader(attr,3,GPU_UNSIGNED_BYTE,4);
-   auto* buf=C3D_GetBufInfo();BufInfo_Init(buf);BufInfo_Add(buf,model.vertices,sizeof(Vertex),4,0x3210);
    const bool skin=c.palette&&c.bones<=MaxSkinBones;
    const bool lit=skin&&model.skinBoneIndices&&!model.fixedLighting&&!model.staticLightingBaked;
+   // Unlit skins: the normal field (palette index in x) loads into inbone.
+   auto* attr=C3D_GetAttrInfo();AttrInfo_Init(attr);
+   AttrInfo_AddLoader(attr,0,GPU_FLOAT,3);AttrInfo_AddLoader(attr,skin&&!lit?4:1,GPU_FLOAT,3);AttrInfo_AddLoader(attr,2,GPU_FLOAT,4);AttrInfo_AddLoader(attr,3,GPU_UNSIGNED_BYTE,4);
+   auto* buf=C3D_GetBufInfo();BufInfo_Init(buf);BufInfo_Add(buf,model.vertices,sizeof(Vertex),4,0x3210);
    if(lit){AttrInfo_AddLoader(attr,4,GPU_FLOAT,1);BufInfo_Add(buf,model.skinBoneIndices,sizeof(float),1,4);}
-   C3D_BoolUnifSet(GPU_VERTEX_SHADER,skinnedLoc_,skin);C3D_BoolUnifSet(GPU_VERTEX_SHADER,skinnedNormalsLoc_,lit);
+   C3D_BoolUnifSet(GPU_VERTEX_SHADER,skinnedLoc_,skin);
    if(skin)for(unsigned b=0;b<c.bones;++b)for(unsigned r=0;r<3;++r){const auto* m=c.palette+b*c.stride+r*4;C3D_FVUnifSet(GPU_VERTEX_SHADER,bonesLoc_+int(b*3+r),m[0],m[1],m[2],m[3]);}
    for(const auto& s:model.submeshes){
     const unsigned first=c.count?std::max<unsigned>(s.first,c.first):s.first;
@@ -315,13 +316,14 @@ void Renderer::playerShadowNow(const ShadowCaster* casters,unsigned count,const 
  }
  C3D_BoolUnifSet(GPU_VERTEX_SHADER,shadowCaptureLoc_,false);
  // The original scene's depth/stencil stays intact across the auxiliary pass.
- auto* target=bottomWorldPass_?bottomTarget_:(bloomFrame_||stadiumFrame_)?sceneTarget_:topTarget();
+ auto* target=bottomWorldPass_?bottomTarget_:bloomFrame_?sceneTarget_:topTarget();
  C3D_FrameDrawOn(target);
- C3D_SetViewport(0,0,240,bottomWorldPass_?320:400);
- C3D_SetScissor(GPU_SCISSOR_DISABLE,0,0,240,bottomWorldPass_?320:400);
+ if(bottomWorldPass_)bottomWorldDepthNow(false);
+ C3D_SetViewport(0,0,240,bottomWorldPass_?320:400*topScale);
+ C3D_SetScissor(GPU_SCISSOR_DISABLE,0,0,240,bottomWorldPass_?320:400*topScale);
  C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER,projectionLoc_,&projection_);
  C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER,modelViewLoc_,&view_);
- C3D_BoolUnifSet(GPU_VERTEX_SHADER,skinnedLoc_,false);C3D_BoolUnifSet(GPU_VERTEX_SHADER,skinnedNormalsLoc_,false);
+ C3D_BoolUnifSet(GPU_VERTEX_SHADER,skinnedLoc_,false);
  auto* attr=C3D_GetAttrInfo();AttrInfo_Init(attr);
  AttrInfo_AddLoader(attr,0,GPU_FLOAT,3);AttrInfo_AddLoader(attr,1,GPU_FLOAT,3);AttrInfo_AddLoader(attr,2,GPU_FLOAT,4);AttrInfo_AddLoader(attr,3,GPU_UNSIGNED_BYTE,4);
  C3D_Mtx inverse=view_,worldToLight,viewToLight;
@@ -453,11 +455,11 @@ void Renderer::playerShadowNow(const ShadowCaster* casters,unsigned count,const 
   const bool skin=r.palette&&r.bones<=MaxSkinBones;
   const bool indexed=skin&&model.skinBoneIndices&&!model.fixedLighting&&!model.staticLightingBaked;
   auto* a=C3D_GetAttrInfo();AttrInfo_Init(a);
-  AttrInfo_AddLoader(a,0,GPU_FLOAT,3);AttrInfo_AddLoader(a,1,GPU_FLOAT,3);
+  AttrInfo_AddLoader(a,0,GPU_FLOAT,3);AttrInfo_AddLoader(a,skin&&!indexed?4:1,GPU_FLOAT,3);
   AttrInfo_AddLoader(a,2,GPU_FLOAT,4);AttrInfo_AddLoader(a,3,GPU_UNSIGNED_BYTE,4);
   auto* buf=C3D_GetBufInfo();BufInfo_Init(buf);BufInfo_Add(buf,model.vertices,sizeof(Vertex),4,0x3210);
   if(indexed){AttrInfo_AddLoader(a,4,GPU_FLOAT,1);BufInfo_Add(buf,model.skinBoneIndices,sizeof(float),1,4);}
-  C3D_BoolUnifSet(GPU_VERTEX_SHADER,skinnedLoc_,skin);C3D_BoolUnifSet(GPU_VERTEX_SHADER,skinnedNormalsLoc_,indexed);
+  C3D_BoolUnifSet(GPU_VERTEX_SHADER,skinnedLoc_,skin);
   if(skin)for(unsigned b=0;b<r.bones;++b)for(unsigned row=0;row<3;++row){
    const auto* m=r.palette+b*12+row*4;C3D_FVUnifSet(GPU_VERTEX_SHADER,bonesLoc_+int(b*3+row),m[0],m[1],m[2],m[3]);
   }
@@ -465,7 +467,9 @@ void Renderer::playerShadowNow(const ShadowCaster* casters,unsigned count,const 
   C3D_DrawElements(GPU_TRIANGLES,r.count,C3D_UNSIGNED_SHORT,model.indices+r.first);
   stats_.triangles+=r.count/3;++stats_.drawCalls;
  }
- C3D_BoolUnifSet(GPU_VERTEX_SHADER,skinnedLoc_,false);C3D_BoolUnifSet(GPU_VERTEX_SHADER,skinnedNormalsLoc_,false);
+ C3D_BoolUnifSet(GPU_VERTEX_SHADER,skinnedLoc_,false);
+ // Later draws load the normal into v1 again.
+ {auto* a=C3D_GetAttrInfo();AttrInfo_Init(a);AttrInfo_AddLoader(a,0,GPU_FLOAT,3);AttrInfo_AddLoader(a,1,GPU_FLOAT,3);AttrInfo_AddLoader(a,2,GPU_FLOAT,4);AttrInfo_AddLoader(a,3,GPU_UNSIGNED_BYTE,4);}
  };
  // Both projections shade actual surfaces with one shared stencil.
  C3D_BoolUnifSet(GPU_VERTEX_SHADER,environmentMappedLoc_,false);
@@ -511,7 +515,7 @@ void Renderer::playerShadowNow(const ShadowCaster* casters,unsigned count,const 
   // margin. Tilted PICA viewport is 240 by screenWidth. Near-plane crossings
   // fall back to an unrestricted scissor rather than clipping visible pixels.
   float x0=240.f,y0=bottomWorldPass_?320.f:400.f,x1=0,y1=0;
-  const float viewportY=bottomWorldPass_?320.f:400.f;bool safe=true;
+  const float viewportY=bottomWorldPass_?320.f:400.f*float(topScale);bool safe=true;
   for(unsigned corner=0;corner<8;++corner){
    const Vec3 v=point+tangent*((corner&1?1.f:-1.f)*width*1.125f)
        +forward*((corner&2?1.f:-1.f)*height*1.125f)+n*(corner&4?40.f:-40.f);
@@ -579,7 +583,7 @@ void Renderer::playerShadowNow(const ShadowCaster* casters,unsigned count,const 
  renderMetrics.contactDraws+=stats_.drawCalls-beforeContactDraws;
  renderMetrics.contactTriangles+=stats_.triangles-beforeContactTriangles;
 #endif
- C3D_SetScissor(GPU_SCISSOR_DISABLE,0,0,240,bottomWorldPass_?320:400);
+ C3D_SetScissor(GPU_SCISSOR_DISABLE,0,0,240,bottomWorldPass_?320:400*topScale);
  receiversPrepared=false;contactPass=false;
  // Shade the remaining body projection after the contact union.
  shadowFrustum=ClipFrustum(clipRows);

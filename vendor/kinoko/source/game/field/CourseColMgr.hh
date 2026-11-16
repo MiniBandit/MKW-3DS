@@ -111,6 +111,14 @@ public:
         return m_data;
     }
 
+    /// mkw-3ds: batches spheres for later checkSphereCachedFullPush calls on the
+    /// course KCL (KColData::batchSpheresCached); nothing when they would not query.
+    void batchSpheresCached(const KColData::BatchSphere *spheres, size_t count) {
+        if (m_data && m_data->prismCache(0) != 0) {
+            m_data->batchSpheresCached(spheres, count);
+        }
+    }
+
     [[nodiscard]] NoBounceWallColInfo *noBounceWallInfo() const {
         return m_noBounceWallInfo;
     }

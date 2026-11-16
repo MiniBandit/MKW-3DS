@@ -1,6 +1,9 @@
 #pragma once
 #include "mkw/renderer.hpp"
 #include <array>
+#include <cstring>
+#include <string>
+#include <vector>
 #include <mkw/visibility.hpp>
 #include <mkw/skin_positions.hpp>
 #include <mkw/toadette_braids.hpp>
@@ -12,27 +15,44 @@ namespace mkw {
 std::size_t heapSpaceFree(); // ordinary heap still available (src/animation.cpp)
 // Cooked original driver animation: local vertices, matrix palettes, visibility
 // and facial texture tracks. Only the selected character is resident.
+extern const char* driverBankFailure;
 class DriverAnimation {
 public:
     ~DriverAnimation(){reset();}
     bool load(const char* path,const Model& model);
     void reset();
+    // Race loads: while keepReleased(true) (a race's graphics being released
+    // for the next race), a released bank keeps its bytes by path and the next
+    // load of that path reuses them (no read, no decode). A Grand Prix reloads
+    // the same racers every race: this saves their reads and the heap churn
+    // that fragmented the Old 3DS heap. keepOnly frees the kept banks a lineup
+    // doesn't use; dropKept frees the rest (end of the load).
+    static void keepReleased(bool on);
+    static void dropKept();
+    static void keepOnly(const std::vector<std::string>& paths);
+    static unsigned keptCount(),reusedCount();
     // Menu PlayAnmNoBlend replaces the active palette without a gameplay blend.
     void clearPoseTransition(){lastClip_=-1;hasPreviousPose_=false;cachedSettled_=false;}
+    // A bank kept for the next race of a set (set reuse, main.cpp no-set-reuse.txt):
+    // look, transition, braid and pose-cache state back to what load() and the
+    // skinning setup leave; the bank's data and its model stay.
+    void restartRace();
     void setLookAngles(float yaw,float pitch){
         if(lookYaw_!=yaw||lookPitch_!=pitch){lookYaw_=yaw;lookPitch_=pitch;cachedSettled_=false;}
     }
     // Physics-tick update; independent of visibility and stereo render count.
     void stepLook(int clip,float frame,unsigned tick,bool active,Vec3 target,
         const C3D_Mtx& seated,bool body,const DriverLookParameters& parameters,
-        const DriverPose& motion,bool handleRelativeBike,float xAxisY,float zAxisY);
-    void resetLook(){motionBlendValid_=false;vehicleResponse_.reset();lookMotion_.reset();lookTickValid_=false;cachedSettled_=false;setLookAngles(0,0);}
+        const DriverPose& motion,bool handleRelativeBike,float xAxisY,float zAxisY,float lookResponse=.7f);
+    void resetLook(){motionBlendValid_=false;vehicleResponse_.reset();lookMotion_.reset();lookTickValid_=false;lookPoseValid_=false;cachedSettled_=false;setLookAngles(0,0);}
     DriverLookMotion::Angles lookAngles() const {return lookMotion_.angles();}
     int find(const char* name) const;
     // Vehicle-part clips chosen every tick, resolved at load (-1 if absent).
     int handleDriveClip() const {return handleDrive_;}
     int dashClip() const {return dash_;}
     int shakeClip() const {return shake_;}
+    // The kart body's item throw clip (the Booster Seat's hatch), played with the driver's throw.
+    int throwClip(const char* driverClip) const {return throw_>=0&&!std::strncmp(driverClip,"throw_",6)?throw_:-1;}
     int face(const char* name) const;
     unsigned faceDuration(int expression) const {return expression>=0&&unsigned(expression)<faceCount_?faces_[expression].duration:0;}
     const char* name(unsigned clip) const {return clip<count_?clips_[clip].name:"none";}
@@ -59,6 +79,17 @@ public:
     bool makeRigid(Model& model);
     bool rigid() const {return !rigidParts_.empty();}
     const std::vector<std::vector<RigidPart>>& rigidParts() const {return rigidParts_;}
+    // DIAG look-verify.txt: stepLook also evaluates the full pose and counts
+    // queries whose head/pivot slots differ from the subset (expected 0).
+    static bool verifyLook;static unsigned lookChecks,lookMismatches;
+    // DIAG A/B (ab-alternate.txt): false evaluates the full pose as before.
+    static bool subsetLook;
+    // Old 3DS (no-look-stagger.txt turns it off): an opponent's head query poses
+    // its skeleton on every 2nd tick only (staggered by lookPhase); the tick between
+    // reuses the last posed head on the current seat. The look filters still step
+    // every tick, so head speed is unchanged. The player always poses.
+    static bool staggerLook;
+    unsigned lookPhase=0;
     // Evaluates the palette for clip/frame, including transition blends.
     const float* pose(int clip,float frame,unsigned tick=0,bool simulateBraids=true);
     // GPU skinning rewrites positions to bone-local space. Lit models keep
@@ -66,6 +97,11 @@ public:
     // the index in normal.x. apply() only writes visibility, UVs and textures;
     // draw with palette(). The GPU needs just the first 12 affine floats.
     bool gpuSkin(Model& model);
+    // GPU skinning for a model and a second copy of it (race items' lit and
+    // baked models), each in the layout its draw uses (lit: normals and a
+    // bone-index attribute; otherwise the index in normal.x). One palette
+    // poses both. False changes nothing: the CPU path stays.
+    bool gpuSkinModels(Model& first,Model* second);
     bool gpuSkinned() const {return gpu_;}
     unsigned shareDrawVertices(Model& model);
     const float* palette() const {return palette_.data();}
@@ -87,7 +123,19 @@ public:
     bool ready=false;
     // Local player must never hold a pose for adaptive presentation budgeting.
     bool fullRate=false;
+    // A second model applied with the inputs of the last evaluation reuses its
+    // pose instead of evaluating again (the same pose). A/B: no-pose-share.txt.
+    static inline bool sharePose=true;
+    // Race items' and Lakitu's poses skinned on the GPU (palette per draw)
+    // instead of on the CPU each frame. A/B: no-gpu-pose.txt.
+    static inline bool gpuPoses=true;
 private:
+    // stepLook's head query: only the slots it reads (see animation.cpp).
+    const float* lookPose(int clip,float frame,unsigned tick);
+    bool lookPoseValid_=false;
+    void releaseData();
+    bool takeKept(const char* path,size_t& size);
+    std::string path_;size_t size_=0;
     struct Clip { char name[32];unsigned duration,loop,count;const uint8_t* data; };
     struct SourceVertex {float p[3],n[3];uint32_t matrix;};
     struct Range {uint32_t first,count;};
@@ -130,7 +178,13 @@ private:
     // drawing frame may still read, so a deferred frame runs them on the
     // render thread (deferredWrites). `palette` is the CPU path's pose. Only
     // write() touches the shape/UV state below and the model's buffer.
-    void write(Model& model,const uint32_t* shown,const int32_t* textures,const float* uv,const float* palette);
+    // skinned: the CPU path's positions (and normals) from skinCpu, computed off
+    // the frame hook (DeferredWrites::prepare); null computes them here.
+    void write(Model& model,const uint32_t* shown,const int32_t* textures,const float* uv,const float* palette,const Vec3* skinned=nullptr);
+    // CPU path: skinnedCount(model) values, the same arithmetic write() runs:
+    // shared unique positions, else per vertex its position (and normal) interleaved.
+    unsigned skinnedCount(const Model& model) const;
+    void skinCpu(const Model& model,const float* palette,Vec3* out) const;
     // Shared by apply() and pose(): interpolated (and blended) palette.
     void evaluate(const Clip& c,unsigned a,unsigned b,float t,unsigned tick,float blend,bool simulateBraids=true);
     std::vector<std::vector<RigidPart>> rigidParts_;
@@ -139,19 +193,29 @@ private:
     uint8_t* data_=nullptr;const SourceVertex* source_=nullptr;const Range* ranges_=nullptr;
     unsigned vertices_=0,matrices_=0,shapes_=0,count_=0,faceCount_=0,transitionTick_=0;
     int lastClip_=-1;
-    int handleDrive_=-1,dash_=-1,shake_=-1;
+    int handleDrive_=-1,dash_=-1,shake_=-1,throw_=-1;
     bool gpu_=false;
-    std::array<bool,64> shapeHidden_{};
     bool skinNormals_=true;
     SharedPositions shared_;
     // Vertex buffer whose UV0 currently holds the neutral (untransformed) UVs.
     const Vertex* neutralUv_=nullptr;
-    // GPU path: uvBuffer_'s UV0 holds baseUV_ under appliedUv_ (or neutral).
-    const Vertex* uvBuffer_=nullptr;bool uvNeutral_=true,uvDisjoint_=true;
-    std::array<float,64*6> appliedUv_{};
+    // GPU path, per vertex buffer (one bank may pose two copies of a model,
+    // gpuSkinModels): its collapsed shapes, and whether its UV0 holds
+    // baseUV_ under appliedUv (or neutral); uvKnown false: unknown.
+    struct GpuBuffer {const Vertex* vertices=nullptr;std::array<bool,64> hidden{};bool hiddenKnown=true,uvKnown=false,uvNeutral=true;std::array<float,64*6> appliedUv{};};
+    std::array<GpuBuffer,2> gpuBuffers_{};
+    GpuBuffer& gpuBuffer(const Vertex* vertices);
+    bool uvDisjoint_=true;
+    // Rest positions (and normals with a separate bone-index attribute when
+    // lit) for GPU skinning of one model.
+    void gpuLayout(Model& model,bool lit);
+    void gpuReady();
     // Cache only an identical completed pose on the same destination buffer.
     // Secondary hair keeps its independent tick; clip transitions never skip.
     const Vertex* cachedVertices_=nullptr;
+    // The other buffer written from the cached pose; palette_ holds apply()'s
+    // last evaluation (pose() and lookPose() overwrite it).
+    const Vertex* cachedVertices2_=nullptr;bool paletteApplied_=false;
     int cachedClip_=-1,cachedExpression_=-2;
     float cachedFrame_=-1,cachedExpressionFrame_=-1;
     unsigned cachedTick_=0;

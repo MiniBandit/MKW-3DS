@@ -122,6 +122,9 @@ public:
     // Battle ends all racers together, with the score ordering supplied by
     // its race-mode controller; reuse the native finish-time/finish hook.
     bool endBattle(const std::array<u8,12>& order);
+    // Diagnostic overlay: the QA benchmark ends a stuck autopilot race by
+    // finishing player idx now, through the native finish path.
+    bool qaForceFinish(u32 idx);
 
     /// @addr{0x805342E8}
     /// @brief Port hook: fn_1_23F34 with its forced flag. The race mode's end

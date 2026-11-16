@@ -2028,6 +2028,8 @@ bool CFL_InitCharModelWithHairMode(CFLCharModel* cm, const MiiData* miiIn, CFLRe
 				cm->maskPartIndex = addTexturedPart(cm, &canvasModel, NULL, 1.0f, false, &cm->maskTexForExpr[startExpr], false);
 				if (cm->maskPartIndex < 0)
 					dbglogErr("CFL_InitCharModel: too many parts already, MASK not attached (still pre-baked, unused)\n");
+				else
+					cm->parts[cm->maskPartIndex].noSpecular = true; // Specular would wash out black eyes and brows.
 			} else {
 				dbglogErr("CFL_InitCharModel: starting expression %s failed to bake, MASK will be missing\n", CFL_GetExpressionName(startExpr));
 			}

@@ -296,6 +296,16 @@ public:
         return setInputs(buttons, RawStickToState(stickXRaw), RawStickToState(stickYRaw), trick);
     }
 
+    /// @brief setInputsRawStick without the validity check, for callers that pass raw sticks
+    /// 0..14 and ignore the result (the port's CPU driver). The check only reads the state:
+    /// RaceInputState::isStickValid compares each axis with all 15 raw values (Old 3DS).
+    void setInputsRawStickUnchecked(u16 buttons, u8 stickXRaw, u8 stickYRaw, Trick trick) {
+        m_raceInputState.buttons = buttons;
+        m_raceInputState.stick.x = RawStickToState(stickXRaw);
+        m_raceInputState.stick.y = RawStickToState(stickYRaw);
+        m_raceInputState.trick = trick;
+    }
+
     /// @brief Sets the inputs of the controller.
     /// @details A different name is specified to avoid any ambiguity with the parameters.
     /// @param buttons The button inputs.

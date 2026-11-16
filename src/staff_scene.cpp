@@ -179,7 +179,7 @@ struct CreditDraw {
  }
 };
 }
-AwardSceneResult runStaff(Renderer& renderer,const AwardResults& source,const NativeMii& identity,bool variant,
+AwardSceneResult runStaff(Renderer& renderer,const AwardResults& source,const NativeMii& identity,bool variant,bool endingSeen,
  void(*report)(const char*),Kinoko::EGG::SceneManager& scenes){
  renderer.setDeferred(false);renderer.frameSync=true;renderer.waitForGpu();renderer.setRetailLighting(nullptr);
  if(!renderer.enableBottom())return AwardSceneResult::Failed;
@@ -231,10 +231,10 @@ AwardSceneResult runStaff(Renderer& renderer,const AwardResults& source,const Na
    }
   }
   tick=lastTick;
-  if(phase==0&&(tick>=6300||((down&(KEY_A|KEY_START))&&tick>=70))){
+  if(phase==0&&(tick>=6300||(endingSeen&&(down&KEY_START)&&tick>=70))){ // StaffRoll (806258d8, 8062593c) registers only START, once that ending's unlock bit is set.
    LoadingScope loading;renderer.waitForGpu();session.cast.reset();session.physics.reset();renderer.setRetailLighting(nullptr);sound.stop();
    const auto video=variant?"movies/staff_true.gmv":"movies/staff_normal.gmv";
-   const auto audio=variant?"movies/staff_true.wav":"movies/staff_normal.wav";
+   const auto audio=variant?"movies/staff_true.adp":"movies/staff_normal.adp";
    if(!session.movie.open(video,false)){report("FAIL staff movie open");return AwardSceneResult::Failed;}
    const bool audioEnabled=session.audio.open(audio,false);
    session.movie.request(0);const auto movieWait=svcGetSystemTick();
@@ -244,9 +244,9 @@ AwardSceneResult runStaff(Renderer& renderer,const AwardResults& source,const Na
     session.audio.update();black(renderer);session.movie.upload();
    }
    phase=1;start=svcGetSystemTick();lastTick=tick=0;cadence.reset();
-  }else if(phase==1&&(tick>=9060||((down&(KEY_A|KEY_START))&&tick>=70))){
+  }else if(phase==1&&(tick>=9060||((down&KEY_A)&&tick>=70))){ // EndingMovie registers only the Front input (80626adc).
    session.audio.close();session.movie.close();renderer.waitForGpu();phase=2;start=svcGetSystemTick();lastTick=tick=0;cadence.reset();
-  }else if(phase==2&&tick>=70&&(down&(KEY_A|KEY_B|KEY_START)))return AwardSceneResult::Complete;
+  }else if(phase==2&&tick>=70&&(down&KEY_A))return AwardSceneResult::Complete;
   if(phase==1){session.movie.request(tick);session.audio.update();if(session.movie.failed())return AwardSceneResult::Failed;}
   if(!cadence.due(tick))continue;
   renderer.animationFrame=tick; // Ambient course SRT0/UV tracks, same scene tick as the crowd.

@@ -11,7 +11,7 @@ Original archives are only read; nothing in them is modified.
 import argparse, concurrent.futures, hashlib, json, os, struct, subprocess, sys
 from pathlib import Path
 from course_catalog import ROOT, courses
-from cook_model import cook
+from cook_model import cook, COURSE_TEXELS
 from cook_shape_morph import append_parasol_morph, append_wanwan_morph
 from course_mii_textures import load_course_mii_textures
 from cook_course_mii_heads import inputs as mii_head_inputs, cook as cook_mii_heads
@@ -95,7 +95,8 @@ def cook_course(course, force, mii_manifest=None):
             with (work / 'export.log').open('w') as log:
                 subprocess.run(['node', str(ROOT / 'build/export_brres.mjs'), str(archive), str(work), model],
                                env=env, stdout=log, stderr=subprocess.STDOUT, check=True)
-            parts = cook(work, OUT, stem, 256, preserve_vertices=True, texture_prefix=texture_prefix, encoded_textures=encoded, texture_overrides=mii_textures.get(resource, {}))
+            parts = cook(work, OUT, stem, 256, preserve_vertices=True, texture_prefix=texture_prefix, encoded_textures=encoded, texture_overrides=mii_textures.get(resource, {}),
+                         texel_budget=COURSE_TEXELS)
             if len(parts) != 1:
                 raise ValueError(f'{course["name"]}: {resource}/{model} needs {len(parts)} mesh parts')
             info = json.loads((work / 'bank.json').read_text())

@@ -11,7 +11,7 @@ struct HW:Hardware {
  void start(int,const WaveData& w,int,u32)override{assert(w.loop);++starts;}
  void startStream(int,StreamFeed*,int)override{assert(false);}
  void stop(int)override{++stops;}void pause(int,bool)override{}
- void set(int,f32,f32,f32,f32)override{}
+ void set(int,f32,const Gains&,f32)override{}
  bool finished(int)override{return false;}
 };
 int main(int argc,char**argv){

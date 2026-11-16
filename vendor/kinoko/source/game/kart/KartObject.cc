@@ -1,4 +1,5 @@
 #include "KartObject.hh"
+#include <mkw/sim_profile.hpp>
 
 #include "game/kart/KartParam.hh"
 #include "game/kart/KartSub.hh"
@@ -99,7 +100,17 @@ void KartObject::init() {
 void KartObject::initImpl() {
     sub()->initAABB(m_pointers, this);
     sub()->init();
+    // mkw-3ds: the object collision hull goes into this kart's BlockArena too (see the
+    // KartObjectManager constructor); then the block is trimmed to what it holds.
+    EGG::BlockArena *arena = EGG::BlockArena::Containing(this);
+    if (arena) {
+        arena->enter();
+    }
     objectCollisionKart()->init(param()->playerIdx());
+    if (arena) {
+        EGG::BlockArena::Leave();
+        arena->trim(0);
+    }
 }
 
 /// @brief Sets the initial position and rotation of the kart based off the current track.
@@ -166,10 +177,43 @@ void KartObject::calcSub() {
     sub()->calcPass0();
 }
 
+void KartObject::calcSubA() {
+    sub()->calcPass0A();
+}
+
+void KartObject::calcSubB() {
+    sub()->calcPass0B();
+}
+
+void KartObject::calcSubA1() {
+    sub()->calcPass0A1();
+}
+
+void KartObject::calcSubA2() {
+    sub()->calcPass0A2();
+}
+
+void KartObject::calcSubB1() {
+    sub()->calcPass0B1();
+}
+
+void KartObject::calcSubB2() {
+    sub()->calcPass0B2();
+}
+
 /// @addr{0x8058EEBC}
 void KartObject::calc() {
     sub()->calcPass1();
-    model()->calc();
+    {MKW_SIM_SCOPE(K1Model);model()->calc();}
+}
+
+void KartObject::calcSerial() {
+    sub()->calcPass1Serial();
+}
+
+void KartObject::calcLocal() {
+    sub()->calcPass1Local();
+    {MKW_SIM_SCOPE(K1Model);model()->calc();}
 }
 
 const KartAccessor *KartObject::accessor() const {

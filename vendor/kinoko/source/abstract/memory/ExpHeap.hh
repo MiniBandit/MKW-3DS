@@ -82,6 +82,7 @@ public:
 
     void *alloc(size_t size, s32 align);
     void free(void *block);
+    u32 shrinkBlock(void *block, u32 size);
     [[nodiscard]] u32 getAllocatableSize(s32 align) const;
     void visitAllocated(Visitor visitor, uintptr_t param);
 

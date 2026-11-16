@@ -1,0 +1,35 @@
+w30 A w20 A w20 A w20 A w20 A w20 A w20 A
+w20 A w20 A w20 A w30 A
+auto:20000 next
+auto:20000 next
+auto:20000 next
+auto:20000 next
+auto:20000 next
+auto:20000 next
+auto:20000 next
+auto:20000 next
+auto:20000 next
+auto:20000 next
+auto:20000 next
+auto:20000 next
+auto:20000 next
+auto:20000 next
+auto:20000 next
+auto:20000 next
+auto:20000 next
+auto:20000 next
+auto:20000 next
+auto:20000 next
+auto:20000 next
+auto:20000 next
+auto:20000 next
+auto:20000 next
+auto:20000 next
+auto:20000 next
+auto:20000 next
+auto:20000 next
+auto:20000 next
+auto:20000 next
+auto:20000 next
+auto:20000 next
+end

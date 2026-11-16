@@ -71,7 +71,7 @@ Vec3 vec(const K::EGG::Vector3f& v){return {v.x,v.y,v.z};}
 Vec3 position(const C3D_Mtx& m){return {m.r[0].w,m.r[1].w,m.r[2].w};}
 bool named(const Visual& v,const char* name){return !std::strcmp(v.name,name);}
 C3D_Mtx liveMatrix(const K::Field::ObjectBase& object){return objectMatrix(object.transform(),object.scale());}
-// Beyond renderQuality().objectLowDistance a model's authored -low LOD replaces it.
+// Beyond renderQuality().objectLow (nearer in 3D) a model's authored -low LOD replaces it.
 int clip(const Tracks& t,const char* name){return t.model&&t.model->bank?t.model->bank->clip(name):-1;}
 int pattern(const Tracks& t,const char* name){return t.model&&t.model->bank?t.model->bank->pattern(name):-1;}
 int scroll(const Tracks& t,const char* name){return t.model&&t.model->bank?t.model->bank->scroll(name):-1;}
@@ -167,7 +167,7 @@ void drawGeneric(ObjectDraw& d,Visual& v){
         !static_cast<const K::Field::ObjectFlamePoleV*>(v.object)->modelVisible())return;
     const C3D_Mtx m=v.kinetic&&v.object?liveMatrix(*v.object):v.placement;
     const float frame=float(d.tick)*v.rate+v.phase;
-    const bool far=v.low.model&&length(position(m)-d.camera)>renderQuality().objectLowDistance;
+    const bool far=v.low.model&&length(position(m)-d.camera)>renderQuality().objectLow(d.stereo);
     const Tracks& t=far?v.low:v.main;
     Anim a=loopAt(t,frame);
     if(v.object&&v.object->id()==ObjectId::TownBridge)
@@ -233,7 +233,7 @@ void drawBeltCurve(ObjectDraw& d,Visual& v){
     const auto timing=BeltCurveTiming::fromSettings(v.geo->setting(1),v.geo->setting(2),v.geo->setting(3));
     const unsigned timer=K::System::RaceManager::Instance()->timer();
     const C3D_Mtx& m=v.placement;
-    const bool far=v.low.model&&length(position(m)-d.camera)>renderQuality().objectLowDistance;
+    const bool far=v.low.model&&length(position(m)-d.camera)>renderQuality().objectLow(d.stereo);
     const float scroll=timing.scroll(d.tick,timer);
     const Tracks& belt=far?v.low:v.main;
     d.submit(belt.model,m,animAt(belt,scroll));
@@ -348,7 +348,7 @@ void drawHanachan(ObjectDraw& d,Visual& v){
 void drawPuchiPakkun(ObjectDraw& d,Visual& v){
     const auto& p=*static_cast<const K::Field::ObjectDokan*>(v.object);
     const auto m=liveMatrix(p);
-    const bool far=v.low.model&&length(position(m)-d.camera)>renderQuality().objectLowDistance;
+    const bool far=v.low.model&&length(position(m)-d.camera)>renderQuality().objectLow(d.stereo);
     const Tracks& tracks=far?v.low:v.main;
     d.submit(tracks.model,m,loopAt(tracks,p.animationFrame()));
     if(v.shadow.model)d.shadow(v.shadow.model,m);
@@ -517,6 +517,60 @@ void drawParasol(ObjectDraw& d,Visual& v){
     Anim a;a.clip=clip(v.main,name);a.frame=p.animationFrame();
     const auto m=liveMatrix(p);d.submit(v.main.model,m,a);
     if(v.shadow.model){a.clip=clip(v.shadow,name);d.shadow(v.shadow.model,m,a);}
+}
+// Coconut Mall's escalator Pianta (escalator_group: USA ctor 0x807f3c00, calc
+// 0x807f4028, clips wait/turn/point_to 0x807f50ec). Settings 2 and 4 are the
+// escalators' reversal times in seconds. Around each one, by the race timer, it
+// eases back to its placed heading over 14 frames from 240 before, waits 50
+// after, then plays turn (a quarter turn over frames 10-24, sides alternating;
+// setting 1 > 0 turns the first one the other way) and points until the next.
+// moverState: clip (0 wait, 1 turn, 2 point_to); frames: its frame;
+// lastState: the ease-back is done (+0xcc); speed: heading change in radians.
+void stepEscalatorPianta(Visual& v,int time){
+    constexpr float Quarter=1.5707963705062866f;
+    const bool flag=int16_t(v.geo->setting(1))>0;
+    const int events[2]={int(v.geo->setting(2))*60,int(v.geo->setting(4))*60};
+    const float turnSide[2]={flag?-1.f:1.f,flag?1.f:-1.f},backSide[2]={turnSide[1],turnSide[0]};
+    const int current=v.moverState;const float frame=float(v.frames);
+    const auto ease=[&](float x){return Quarter*std::clamp(x,0.f,14.f)/14.f;};
+    int next=2;
+    for(unsigned k=0;k<2;++k){
+        const int e=events[k];
+        if(time<e-240){next=2;break;}
+        if(time<e){
+            next=0;
+            if(current==2)v.lastState=0;
+            else if(!v.lastState){const float a=ease(14-frame);if(a==0)v.lastState=1;v.speed=backSide[k]*a;}
+            else v.speed=0;
+            break;
+        }
+        if(time<=e+50){next=0;v.speed=0;break;}
+        if(time<e+290){
+            if(current==2)next=2;
+            else if(current==0)next=1;
+            else if(current==1&&frame>=24)next=2;
+            else{next=1;const float a=ease(frame-10);if(a!=0)v.speed=turnSide[k]*a;}
+            break;
+        }
+    }
+    if(next!=current){v.moverState=next;v.frames=0;return;}
+    const unsigned length=v.main.model&&v.main.model->bank&&v.clips[next]>=0?v.main.model->bank->clipFrames(v.clips[next]):0;
+    v.frames=length&&next!=1?(v.frames+1)%length:std::min(v.frames+1,length?length-1:0u);
+}
+void drawEscalatorPianta(ObjectDraw& d,Visual& v){
+    // Retail init (USA 0x807f3e6c): the heading starts a quarter turn toward the
+    // escalator going up first (rot.y + pi/2 * (setting 1 > 0 ? 1 : -1); +X is
+    // the right escalator, whose Kinoko speed has setting 1's sign), and calc
+    // leaves it there until 240 frames before the first reversal.
+    if(!v.railStarted){v.railStarted=true;v.moverState=0;v.frames=0;v.lastState=0;
+        v.speed=(int16_t(v.geo->setting(1))>0?1.f:-1.f)*1.5707963705062866f;v.lastTick=d.tick;}
+    const int time=int(K::System::RaceManager::Instance()->timer());
+    for(unsigned n=0;n<8&&v.lastTick!=d.tick;++n,++v.lastTick)stepEscalatorPianta(v,time);
+    v.lastTick=d.tick;
+    C3D_Mtx m=liveMatrix(*v.object);Mtx_RotateY(&m,v.speed,true);
+    Anim a;a.clip=v.clips[v.moverState];a.frame=float(v.frames);
+    d.submit(v.main.model,m,a);
+    if(v.shadow.model)d.shadow(v.shadow.model,m);
 }
 // Cataquack state/clock are simulation-owned; setting 0 selects body colour.
 void drawPoihana(ObjectDraw& d,Visual& v){
@@ -771,8 +825,10 @@ void drawTruckWagon(ObjectDraw& d,Visual& v){
         const auto& cart=*static_cast<const K::Field::ObjectTruckWagonCart*>(v.parts[i]);
         if(!cart.isActive())continue;
         const C3D_Mtx m=liveMatrix(cart);
-        Anim a;a.clip=v.clips[0];a.frame=float(d.tick);a.srt=v.clips[1];a.srtFrame=float(d.tick);
-        const bool far=v.low.model&&length(position(m)-d.camera)>renderQuality().objectLowDistance;
+        if(d.partBeyond(position(m)))continue;
+        const bool far=v.low.model&&length(position(m)-d.camera)>renderQuality().objectLow(d.stereo);
+        // Clip indices belong to each model's own bank; the LOD has no tire SRT.
+        Anim a;a.clip=v.clips[far?2:0];a.frame=float(d.tick);a.srt=far?-1:v.clips[1];a.srtFrame=float(d.tick);
         d.submit(far?v.low.model:v.main.model,m,a);
         if(v.shadow.model)d.shadow(v.shadow.model,m);
     }
@@ -883,10 +939,12 @@ void drawAurora(ObjectDraw& d,Visual& v){
 void drawTwistedWay(ObjectDraw& d,Visual& v){
     const auto& road=*static_cast<const K::Field::ObjectTwistedWay*>(v.object);
     const C3D_Mtx m=liveMatrix(road);
-    const bool far=v.low.model&&length(position(m)-d.camera)>renderQuality().objectLowDistance;
+    const bool far=v.low.model&&length(position(m)-d.camera)>renderQuality().objectLow(d.stereo);
     ObjModel* model=far?v.low.model:v.main.model;
     const ObjectBank* bank=beginPose(v,model);
-    const int root=bank?bank->node("joint1"):-1;
+    // picks (classifyObject): joint1, then joint3..joint20, of main then low.
+    const int* nodes=v.picks.size()==38?v.picks.data()+(far?19:0):nullptr;
+    const int root=bank?(nodes?nodes[0]:bank->node("joint1")):-1;
     if(root<0){d.submit(model,m,{});return;}
     uint32_t timer;
     // Retail reads the intro timer before Kinoko's calc increments it.
@@ -894,7 +952,7 @@ void drawTwistedWay(ObjectDraw& d,Visual& v){
     const float t=float((frame%120)*2);
     const float* parent=bank->nodes()[root].world;
     for(int i=1;i<19;++i){
-        const int n=jointNode(*bank,"joint%d",i+2);if(n<0)continue;
+        const int n=nodes?nodes[i]:jointNode(*bank,"joint%d",i+2);if(n<0)continue;
         const float z=-1.f+float(2*(i+1))/20.f;
         const float angle=.2f*(z+1.f)*(z+1.f)*(z-1.f)*(z-1.f)*std::sin(t*Pi/120.f+4.f*z);
         const float c=std::cos(angle),s=std::sin(angle);const float* l=bank->nodes()[n].local;
@@ -959,7 +1017,7 @@ void drawPress(ObjectDraw& d,Visual& v){
     float frame=0;
     if(state==3)frame=age<15.f?std::min(age*2.f,last):std::max(last+1.f-(age-15.f)*2.f,0.f);
     const C3D_Mtx m=liveMatrix(p);
-    const bool far=v.low.model&&length(position(m)-d.camera)>renderQuality().objectLowDistance;
+    const bool far=v.low.model&&length(position(m)-d.camera)>renderQuality().objectLow(d.stereo);
     d.submit(far?v.low.model:v.main.model,m,animAt(far?v.low:v.main,frame));
     if(v.shadow.model)d.shadow(v.shadow.model,m);
 }
@@ -1022,6 +1080,9 @@ bool classifyObject(Visual& v,const ObjectAssets& assets,int course){
     if(v.object&&K::Field::ObjectBlockStatue::isStatue(v.geo->id())&&course==33&&
        !static_cast<const K::Field::ObjectBlockStatue*>(v.object)->shown())return false;
     auto* main=assets.main(v.resource);
+    // The big pillar's flow entry names FlamePole_v_big, an archive no course has; it loads
+    // FlamePole_v like the small one.
+    if(!main&&v.object&&v.object->id()==ObjectId::FlamePoleVBig)main=assets.main("FlamePole_v");
     v.main=assets.tracks(main);
     v.low=assets.tracks(assets.low(main));
     // Gold Mine flags already bake at load, but FlagB's far asset also has
@@ -1179,7 +1240,7 @@ bool classifyObject(Visual& v,const ObjectAssets& assets,int course){
     }else if(id==ObjectId::TruckWagon&&live){
         v.present=drawTruckWagon;v.main=find(assets,"TruckWagon","TruckWagon");v.low=find(assets,"TruckWagon","TruckWagon_LOD");
         v.shadow=find(assets,"TruckWagon","TruckWagon-shadow");
-        v.clips[0]=clip(v.main,"TruckWagon_run");v.clips[1]=scroll(v.main,"TruckWagon_tire");
+        v.clips[0]=clip(v.main,"TruckWagon_run");v.clips[1]=scroll(v.main,"TruckWagon_tire");v.clips[2]=clip(v.low,"TruckWagon_run");
     }else if(id==ObjectId::Psea&&live){
         v.present=drawTide;static const char* seas[]={"Psea1sand","Psea2dark","Psea3nami","Psea4tex","Psea5spc"};
         for(unsigned i=0;i<5;++i)v.extra[i]=find(assets,"Psea",seas[i],seas[i]);
@@ -1187,6 +1248,12 @@ bool classifyObject(Visual& v,const ObjectAssets& assets,int course){
         v.present=drawAurora;
     }else if(id==ObjectId::TwistedWay&&live){
         v.present=drawTwistedWay;
+        // drawTwistedWay's joint nodes, looked up once.
+        v.picks.assign(38,-1);
+        for(unsigned k=0;k<2;++k)if(const ObjModel* model=k?v.low.model:v.main.model)if(const auto* bank=model->bank.get()){
+            v.picks[k*19]=bank->node("joint1");
+            for(int i=1;i<19;++i)v.picks[k*19+i]=jointNode(*bank,"joint%d",i+2);
+        }
     }else if(id==ObjectId::Turibashi&&live){
         v.present=drawTuribashi;
     }else if(id==ObjectId::Ami&&live){
@@ -1229,6 +1296,19 @@ bool classifyObject(Visual& v,const ObjectAssets& assets,int course){
         v.rate=.9f;
     }else if(id==ObjectId::BeltCrossing){
         v.rate=1.25f;
+    }else if(named(v,"escalator_group")&&live){
+        // ObjFlow lists "escalator;monte_a" and link() keeps the first archive,
+        // but the group's model is the Pianta (Kinoko getResources: monte_a).
+        const auto* pianta=assets.main("monte_a");
+        v.main=assets.tracks(pianta);v.low={};v.shadow=assets.tracks(assets.shadow(pianta));
+        v.present=drawEscalatorPianta;
+        // The Pianta stands at the group (between its escalators, raised 510,
+        // 50 forward, x1.75). link() lists the group first (ObjectDirector),
+        // then its two escalators (drivable director); the default last part
+        // is the left escalator, which put the Pianta on its treads.
+        if(v.parts.size()==3)v.object=v.parts.front();
+        v.clips[0]=clip(v.main,"wait");v.clips[1]=clip(v.main,"turn");v.clips[2]=clip(v.main,"point_to");
+        if(!v.main.model)return false;
     }else if(named(v,"monte_a")||named(v,"mare_a")||named(v,"mare_b")){
         // These archives name their idle CHR0 "wait", not the model name.
         // Leaving clip=-1 displayed the bind pose even though the bank loaded.
@@ -1251,6 +1331,31 @@ bool classifyObject(Visual& v,const ObjectAssets& assets,int course){
     return true;
 }
 void drawObject(ObjectDraw& d,Visual& v){if(v.present)v.present(d,v);}
+bool partsClipped(const Visual& v){return v.present==drawTruckWagon;}
+bool singleMatrixBounds(const Visual& v,Bounds& out){
+    // drawGeneric: submit (main, or low far away) and shadow at one matrix,
+    // each after its own frustum test (not DKRockGC: its shadow has its own
+    // transform). drawObakeBlock: main at one matrix. Neither changes any
+    // state before those tests.
+    bool any=false;
+    auto add=[&](const Tracks& t){
+        if(!t.model||!t.model->model)return;
+        if(!any){out=t.model->bounds;any=true;}
+        else{out.include(t.model->bounds.minimum);out.include(t.model->bounds.maximum);}
+    };
+    if(v.present==drawGeneric&&!(v.object&&v.object->id()==ObjectId::DKRockGC)){add(v.main);add(v.low);add(v.shadow);return any;}
+    if(v.present==drawObakeBlock&&v.object){add(v.main);return any;}
+    return false;
+}
+bool singleMatrix(const Visual& v,C3D_Mtx& m){
+    if(v.present==drawObakeBlock){
+        // A falling block moves every frame: no precull.
+        using State=K::Field::ObjectObakeBlock::FallState;
+        if(static_cast<const K::Field::ObjectObakeBlock*>(v.object)->fallState()==State::Falling)return false;
+        m=v.placement;return true;
+    }
+    m=v.kinetic&&v.object?liveMatrix(*v.object):v.placement;return true;
+}
 bool skyObject(const Visual& v){return v.present==drawSun;}
 bool waterObject(const Visual& v){return v.present==drawTide||v.present==drawVeniceWater;}
 const K::Field::ObjectBase* reviewFocus(const Visual& v){

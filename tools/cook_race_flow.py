@@ -7,6 +7,7 @@ adds to the package); the layout geometry and animation keys go to
 include/mkw/race_flow_layout.hpp. Nothing in the shared sd-card is written.
 """
 import argparse
+import tex3ds_cache
 import hashlib
 import json
 import struct
@@ -320,7 +321,7 @@ def texture_file(image, name, out, fmt):
     import subprocess
     png = out / 'textures' / (name + '.png')
     image.save(png)
-    subprocess.run([str(tool('tex3ds')), '-f', fmt, '-z', 'none', '-o', str(png.with_suffix('.t3x')), str(png)],
+    tex3ds_cache.run([str(tool('tex3ds')), '-f', fmt, '-z', 'none', '-o', str(png.with_suffix('.t3x')), str(png)],
                    check=True, stdout=subprocess.DEVNULL)
     return 'textures/' + name + '.t3x'
 

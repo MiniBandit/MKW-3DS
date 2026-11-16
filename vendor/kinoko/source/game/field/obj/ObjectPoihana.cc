@@ -54,9 +54,11 @@ void ObjectPoihana::init() {
     m_actionFrame = m_auxFrame = m_toppleCount = m_seekCursor = m_actionPhase = 0;
     m_target = m_lastTarget = -1;
     m_airVelocity = m_airOffset = 0.0f;
-    const auto &scenario = System::RaceConfig::Instance()->raceScenario();
-    m_fixedMovement = scenario.gameMode == System::RaceConfig::Scenario::GameMode::Time_Trial &&
-            scenario.isTimeTrial();
+    // USA80738c28..c5c: fixed movement while ObjectDirector +0x55 (mode 2 or 5,
+    // USA808169ac) or +0x54 (mode >= 7) is set: every Time Trial, not only a
+    // replay. A Cataquack that chased the racer could throw the ghost off its run.
+    const auto mode = static_cast<unsigned>(System::RaceConfig::Instance()->raceScenario().gameMode);
+    m_fixedMovement = mode == 2 || mode == 5 || mode >= 7;
     playAnimation("walk");
     m_nextStateId = 0;
 }
@@ -223,9 +225,13 @@ Kart::Reaction ObjectPoihana::onCollision(Kart::KartObject *kart,
     const auto reaction = static_cast<unsigned>(reactionOnObj);
     if (reaction == 4 || reaction == 6) {
         if (m_toppling || m_hitPending) return Kart::Reaction::WallAllSpeed;
+        // USA80739504..20: a ghost requests no throw unless IsTTReplay
+        // (USA8052d4d4: mode 2 or 5, and player 0 itself a ghost).
         const auto &scenario = System::RaceConfig::Instance()->raceScenario();
-        if (scenario.players[kart->param()->playerIdx()].type == System::RaceConfig::Player::Type::Ghost &&
-                !m_fixedMovement) return reactionOnKart;
+        const auto ghost = System::RaceConfig::Player::Type::Ghost;
+        const auto mode = static_cast<unsigned>(scenario.gameMode);
+        const bool replay = (mode == 2 || mode == 5) && scenario.playerCount && scenario.players[0].type == ghost;
+        if (scenario.players[kart->param()->playerIdx()].type == ghost && !replay) return reactionOnKart;
         if (!m_throwPending) {
             m_throwPending = true;
             m_throwPosition = kart->pos();

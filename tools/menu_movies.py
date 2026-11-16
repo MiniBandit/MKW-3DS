@@ -38,10 +38,14 @@ class ThpMovie:
             self.offsets.append(at);next_size=struct.unpack_from('>I',d,at)[0];at+=size;size=next_size
     def frame(self,index):
         at=self.offsets[index%self.count];size=struct.unpack_from('>I',self.data,at+8)[0]
-        start=at+8+self.components*4;jpeg=self.data[start:start+size]
-        # THP omits JPEG entropy byte stuffing. Restore it only after SOS,
-        # preserving all marker/header bytes and the end-of-image marker.
-        scan=jpeg.index(b'\xff\xda');scan+=2+int.from_bytes(jpeg[scan+2:scan+4],'big');end=jpeg.rfind(b'\xff\xd9')
-        if end<scan:raise ValueError('Truncated THP JPEG')
-        jpeg=jpeg[:scan]+jpeg[scan:end].replace(b'\xff',b'\xff\0')+jpeg[end:]
-        return Image.open(io.BytesIO(jpeg)).convert('RGBA')
+        start=at+8+self.components*4;return thp_image(self.data[start:start+size])
+
+
+def thp_image(jpeg):
+    """One THP frame's JPEG bytes as an RGBA image."""
+    # THP omits JPEG entropy byte stuffing. Restore it only after SOS,
+    # preserving all marker/header bytes and the end-of-image marker.
+    scan=jpeg.index(b'\xff\xda');scan+=2+int.from_bytes(jpeg[scan+2:scan+4],'big');end=jpeg.rfind(b'\xff\xd9')
+    if end<scan:raise ValueError('Truncated THP JPEG')
+    jpeg=jpeg[:scan]+jpeg[scan:end].replace(b'\xff',b'\xff\0')+jpeg[end:]
+    return Image.open(io.BytesIO(jpeg)).convert('RGBA')

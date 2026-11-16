@@ -15,7 +15,7 @@ struct Spy : Hardware {
  void startStream(int,StreamFeed*,int)override{assert(false);}
  void stop(int)override{}
  void pause(int,bool)override{}
- void set(int,f32,f32 l,f32 r,f32)override{gain=std::max(gain,l+r);}
+ void set(int,f32,const Gains& g,f32)override{gain=std::max(gain,g.left+g.right);}
  bool finished(int)override{return false;}
 };
 struct NoCache : WaveResidency {

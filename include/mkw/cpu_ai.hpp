@@ -21,7 +21,9 @@ class CoinBattleRuntime;
 // AISpeedRace and AIRankManager. Ported from the USA StaticR decompilation
 // with doldecomp/mkw class layouts; addresses and constants in docs/CPU_AI.md.
 // trick: KPad trick input (0 none, 1 up, 2 down, 3 left, 4 right).
-struct CpuCommand { uint16_t buttons=0; float stick=0; uint8_t trick=0; };
+// stick: the pad stick, neutral outside drifts (the AI turns the body). animationStick: the
+// stick the kart and driver models see (Enemy::AI +0x14); lean: a bike's lean input (KartMove +0x28C).
+struct CpuCommand { uint16_t buttons=0; float stick=0; uint8_t trick=0; float animationStick=0,lean=0; };
 // Item holder view for AIItemRace (ItemKind values, 20 = none) and its output:
 // the item button for this frame plus the stick-up/down throw direction.
 struct CpuItemView { uint8_t item=20,heldCount=0; bool roulette=false,held=false,heldRed=false,inked=false;uint8_t heldKind=20; };
@@ -107,6 +109,7 @@ private:
         float driftDir=0,timer=0,ramp=0,failFrames=0;
         bool switched=false;
         float feedForward=0;    // DriveInfo+0x1c, persists across ticks
+        float lean=0;           // KartMove +0x28C: written in the normal state only
         float lastAngle=0;      // controller +0xc
     };
     // AIControlBase +0x48 obstacle avoider (ctor fn_1_2161C0, vtable 808c688c).
@@ -149,7 +152,7 @@ private:
     struct Racer {
         Path path;Drive drive;Speed speed;Rank rank;CpuCommand command;
         ItemAi item;CpuItemView itemView;CpuItemCommand itemCommand;Avoid avoid;Stuck stuck;Block block;
-        bool active=false,human=false,mushroomRoute=false,dropping=false,recovering=false,wheelie=false,postRaceDriving=false;
+        bool active=false,human=false,mushroomRoute=false,dropping=false,respawning=false,recovering=false,wheelie=false,postRaceDriving=false;
         int startBoost=0;bool startDecided=false;uint8_t battleTrick=0;
         unsigned battleSearchMode=2;
         unsigned battleRole=0;bool battleHumanMajority=false;
@@ -169,7 +172,7 @@ private:
     // AIPathPoint / AIPathHandler.
     Vec3 pointPos(unsigned index) const;
     float widthOffset(unsigned index) const;
-    unsigned chooseBranch(unsigned racer,unsigned from);
+    unsigned chooseBranch(unsigned racer,unsigned from,bool allowMushroom=true);
     void computeCurvature(Path& p) const;
     void recalcTarget(Path& p,float inside) const;
     float slotOffset(unsigned racer) const;
@@ -178,6 +181,9 @@ private:
     void advance(unsigned racer,float inside);
     bool shouldGoNext(Path& p,Vec3 kartPos) const;
     void goNext(unsigned racer,Vec3 kartPos);
+    // Respawn: the ENPT linked to the racer's respawn point, and the path restart there.
+    unsigned respawnLink(unsigned racer) const;
+    void onOutOfBounds(unsigned racer,unsigned point);
     void updatePath(unsigned racer,Vec3 kartPos);
     void updateBattleSearch(unsigned tick);
     void assignBattleRoles(bool alternate);
@@ -219,6 +225,7 @@ private:
     Setup setup_{};
     std::array<Racer,Capacity> racers_{};
     std::array<Group,3> groups_{}; // top, middle, bottom
+    std::vector<uint8_t> respawnLinks_; // per JGPT: the ENPT a respawn there restarts at
     int topType=2;
     std::array<unsigned,Capacity> gpRankBonus_{};
     int rmState=0,rmFrame=0,rmDuration=0,rmPhase=0,rmInterval=-1;

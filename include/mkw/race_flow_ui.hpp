@@ -32,6 +32,9 @@ public:
  void drawResults(Renderer& renderer,const RaceResultsFlow& flow,const Texture* miiPortrait=nullptr);
  bool loadIntro(const RaceIntroInfo&);
  void unloadIntro(); // caller drains recorded frames/GPU first
+ // DIAG: hands the intro textures to Renderer::retire, which frees them once
+ // the GPU has finished every frame that may sample them (no drain).
+ void retireIntro(Renderer&);
  void drawIntro(Renderer&,const RaceIntroInfo&,unsigned frame);
 private:
  struct Impl;std::unique_ptr<Impl> impl_;

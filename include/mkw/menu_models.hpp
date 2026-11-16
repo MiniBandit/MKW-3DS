@@ -4,6 +4,8 @@
 #include "mkw/menu_transition.hpp"
 #include "mkw/asset_loader.hpp"
 #include "mkw/license_identity.hpp"
+#include "mkw/settings_preview.hpp"
+#include <array>
 #include <memory>
 #include <vector>
 
@@ -15,8 +17,13 @@ inline bool menuRigidModels=true;
 // A model on screen stays visible until its replacement is resident, so
 // browsing never waits on the SD card. begin() starts a frame and draw()
 // sits between the background and foreground UI passes.
+class NativeMiiHead;
 class MenuModels {
 public:
+    // Each license's Mii head is built once on the Character page (where the
+    // page reveal hides the wait), shared by outfits A and B; a finished Mii
+    // model is published only once it is wanted on screen. A/B: no-mii-head-early.txt.
+    static inline bool earlyHead=true;
     MenuModels();
     ~MenuModels();
     // Non-blocking: queues loads for the models this state shows.
@@ -34,6 +41,9 @@ public:
     // The menu camera and its stereo: Mario Kart 7's garage camera, whose
     // subject is the selection models.
     void begin(Renderer&);
+    // The same for this page: the Settings sample uses its own camera and
+    // may request bloom for its window.
+    void begin(Renderer&,const MenuState&);
     // Stereo disparity of the backdrop pane in the frame begin() started: at
     // the garage's back wall, behind the models.
     static float backdropParallax(const Renderer&);
@@ -47,11 +57,15 @@ private:
     Entry& obtain(int kind,int id);
     void show(Renderer&,int kind,int id);
     std::array<NativeMii,4> identities_{};
+    // earlyHead: each license slot's built head (or a failed build, not retried).
+    std::array<std::shared_ptr<NativeMiiHead>,4> heads_{};std::array<bool,4> headFailed_{};
+    std::shared_ptr<NativeMiiHead> licenseHead(Renderer&,unsigned slot);
     std::vector<std::unique_ptr<Entry>> entries_;
     int shownDriver_=-1,shownBackground_=-1,shownMachine_=-1;
     int driverClip_=-1,driverFace_=-1,backgroundClip_=-1;
     unsigned backgroundFrame_=0,driverFrame_=0;
     MenuVehicleRotation machineRotation_;
+    SettingsPreview settings_;
     std::uint32_t clock_=1;
 };
 }

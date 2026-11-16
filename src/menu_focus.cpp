@@ -1,4 +1,5 @@
 #include <mkw/menu_focus.hpp>
+#include <mkw/diag.hpp>
 #include <mkw/menu_ui.hpp>
 #include <mkw/menu_transition.hpp>
 #include <mkw/menu_animations.hpp>
@@ -56,7 +57,8 @@ const char* uiFocusControlName(const MenuState& state,unsigned slot){
   constexpr const char* parents[]={"TopMenuSingleWaku","TopMenuMultiWaku","TopMenuWifiWaku","TopMenuChannelWaku"};
   return parents[slot-UiFocusMainParentBase];
  }
- if(slot>=state.count())return "";
+ // The license screen's Settings button (slot 4) is past count().
+ if(slot>=state.count()&&slot!=state.auxiliarySlot())return "";
  switch(state.page){
  case UiPage::License:if(slot==4)return "LicenseSelectS";return slot<2?"LicenseSelectT":"LicenseSelectB";
  case UiPage::MainMenu:if(slot==7)return "FileAdmin";return slot==0?"TopMenuSingle":slot<4?"TopMenuMulti":slot<6?"TopMenuWifi":"TopMenuChannel";
@@ -155,7 +157,7 @@ void uiFocusMainConfirm(MenuState& state,unsigned slot){
  if(state.focus.page!=unsigned(state.page)||state.focus.cursor!=state.cursor)uiFocusReset(state);
  state.focus.mainConfirmSlot=slot;state.focus.mainConfirmFrame=0;
 }
-UiFocusView uiFocusAnimation(const MenuState& state,unsigned slot){
+UiFocusView uiFocusAnimation(const MenuState& state,unsigned slot){diag::ComposeTimer diagTimer_(21);
  UiFocusView view;view.control=uiFocusControlName(state,slot);if(slot>=UiFocusControlCount)return view;
  view.selected=selected(state,state.cursor,slot);
  if(state.focus.page==unsigned(state.page)&&state.focus.cursor==state.cursor){

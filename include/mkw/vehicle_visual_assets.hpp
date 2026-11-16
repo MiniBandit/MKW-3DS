@@ -5,6 +5,7 @@
 #include <array>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace mkw {
 // Owned meshes and banks, independent of KartObject / RaceConfig lifetimes.
@@ -18,8 +19,11 @@ struct VehicleVisualAssets {
  std::array<std::unique_ptr<DriverAnimation>,9> extraAnimation;
  // Worker-safe transaction: missing required parts leave the current set intact.
  // Replacing an already rendered set requires a GPU drain by the caller.
- // lowOnly: just the shadow and any separate tires, for a racer drawn entirely
- // with its low-detail models (RacerVisuals, Old 3DS memory).
- bool load(unsigned character,unsigned vehicle,RaceTeam team,std::string* failure=nullptr,bool lowOnly=false);
+ // unlitBanks (opponents, DIAG): the driver bank comes from its compact .dsku
+ // when race.pak has one (tools/pack_unlit_banks.py), else the .dskm.
+ // live: models keep their normals for shader lighting (no load-time bake).
+ bool load(unsigned character,unsigned vehicle,RaceTeam team,std::string* failure=nullptr,bool unlitBanks=false,bool live=false);
+ // The animation bank paths load() would read, for DriverAnimation::keepOnly.
+ static void bankPaths(unsigned character,unsigned vehicle,RaceTeam team,bool unlitBanks,std::vector<std::string>& out);
 };
 }

@@ -24,6 +24,14 @@ inline constexpr int VoicePriorityRelease = 1;  // Channel::PRIORITY_RELEASE
 
 enum SoundType : u8 { TypeInvalid = 0, TypeSeq = 1, TypeStrm = 2, TypeWave = 3 };
 enum PanMode : u8 { PanDual = 0, PanBalance = 1 };
+// NW4R SoundSystem output modes (AX): the voice mix differs per mode.
+enum OutputMode : u8 { OutputStereo = 0, OutputSurround = 1, OutputDpl2 = 2, OutputMono = 3 };
+// Main-bus gains for one hardware channel (AX mix 0x8000 == 1.0).
+struct Gains { f32 left = 0, right = 0, rearLeft = 0, rearRight = 0; };
+// 3DS Surround only (not retail): share of the front pair also sent to the
+// rear pair, at equal power (front x 1/sqrt(1+k^2), rear x k/sqrt(1+k^2)).
+// Music (streams, menu movies) more than effects; sounds behind keep their mix.
+inline constexpr f32 SurroundSpreadMusic = 0.75f, SurroundSpreadEffects = 0.6f;
 enum PanCurve : u8 { CurveSqrt, CurveSqrt0Db, CurveSqrt0DbClamp, CurveSinCos, CurveSinCos0Db, CurveSinCos0DbClamp,
                      CurveLinear, CurveLinear0Db, CurveLinear0DbClamp };
 
@@ -143,10 +151,7 @@ public:
  virtual void stop(int v) = 0;
  virtual void pause(int v, bool paused) = 0;
  // rate in Hz, gains linear (AX mix 0x8000 == 1.0), lpf 0 = bypass.
- virtual void set(int v, f32 rate, f32 left, f32 right, f32 lpfHz) = 0;
- // As set(), with rear (0..1) of the gain sent to the rear outputs instead
- // of the front (surround output only; hardware without rear outputs ignores it).
- virtual void setSurround(int v, f32 rate, f32 left, f32 right, f32 rear, f32 lpfHz) { (void)rear; set(v, rate, left, right, lpfHz); }
+ virtual void set(int v, f32 rate, const Gains& gains, f32 lpfHz) = 0;
  virtual bool finished(int v) = 0;
  // Called once at the end of every audio-thread pass, after all set() calls.
  virtual void commit() {}
@@ -184,11 +189,6 @@ public:
  virtual bool ready(u32 file, u32 wave) = 0;
  virtual void release(u32 file, u32 wave) = 0;
 };
-// The console's System Settings sound output is Surround: sounds use their
-// surround pan (0 front .. 2 rear) and 3D sounds behind the listener move to
-// the rear outputs, which the DSP's surround processing places behind.
-// Set once before the audio thread starts; Mono and Stereo leave it false.
-inline bool surroundOutput = false;
 inline constexpr int WaveWaitFrames = 60;       // game frames a sound may wait for its waves
 
 // ------------------------------------------------------------ public API
@@ -209,7 +209,9 @@ struct StartInfo {
 struct Ambient { f32 volume = 1, pitch = 1, pan = 0, surroundPan = 0, fxSend = 0, lpf = 0; int priority = 0; int distancePriority = -1; };
 
 struct EngineStats { u32 voicesActive = 0, voicesDropped = 0, soundsActive = 0, startsFailed = 0, missingData = 0, streamUnderruns = 0;
- u32 lastMissingSound = InvalidId, lastMissingFile = InvalidId, lastMissingWave = InvalidId; };  // QA
+ u32 lastMissingSound = InvalidId, lastMissingFile = InvalidId, lastMissingWave = InvalidId;  // QA
+ // QA: startsFailed by cause (unknown id, no free sound, player setup, waves never cached, stream setup) and the last id.
+ u32 failNoInfo = 0, failNoSlot = 0, failSetup = 0, failWaves = 0, failStream = 0, lastFailedSound = InvalidId; };
 
 // The NW4R runtime: SoundArchivePlayer + SoundPlayers + sequencer + channels +
 // voices. Not thread safe; one audio thread owns it.
@@ -275,6 +277,8 @@ public:
  void pausePlayer(u32 player, bool paused, int fadeFrames);
  int playingCount(u32 player) const;
  void setMasterVolume(f32 volume);
+ void setOutputMode(OutputMode mode);   // SoundSystem::SetOutputMode
+ OutputMode outputMode() const;
 
  // Game frame (60 Hz): BasicSound fades/params, player priority sorting.
  // Maintenance frames during a stalled game advance fades but cannot

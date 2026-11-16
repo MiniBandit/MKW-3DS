@@ -9054,9 +9054,7 @@ diff --git a/source/game/kart/KartBurnout.hh b/source/game/kart/KartBurnout.hh
 old mode 100644
 new mode 100755
 diff --git a/source/game/kart/KartCollide.cc b/source/game/kart/KartCollide.cc
-old mode 100644
-new mode 100755
-index 5ac1c77..f612075
+index 5ac1c77..8fa58d3 100644
 --- a/source/game/kart/KartCollide.cc
 +++ b/source/game/kart/KartCollide.cc
 @@ -1,7 +1,12 @@
@@ -9355,7 +9353,7 @@ index 5ac1c77..f612075
 +    EGG::Vector3f impulse = lateral * magnitude;
 +    impulse = impulse - victimUp * impulse.dot(victimUp);
 +
-+    victimMove->cueBump(magnitude); // USA 0x8056c388
++    victimMove->cueBump(magnitude, attacker->param()->playerIdx(), impulse); // USA 0x8056c388
 +
 +    KartDynamics *victimDynamics = victim->dynamics();
 +    victimDynamics->addForce(impulse);
@@ -10594,9 +10592,7 @@ index 3f8a267..9fa1c63
      m_maxWheelieRot = MAX_WHEELIE_ROTATION;
      m_wheelieCooldown = WHEELIE_COOLDOWN;
 diff --git a/source/game/kart/KartMove.hh b/source/game/kart/KartMove.hh
-old mode 100644
-new mode 100755
-index 9845504..e4b1e1c
+index 9845504..4273f04 100644
 --- a/source/game/kart/KartMove.hh
 +++ b/source/game/kart/KartMove.hh
 @@ -1,6 +1,8 @@
@@ -10713,7 +10709,7 @@ index 9845504..e4b1e1c
      }
  
      /// @addr{0x80581720}
-@@ -224,6 +294,109 @@ public:
+@@ -224,6 +294,113 @@ public:
      }
      /// @endSetters
  
@@ -10778,9 +10774,11 @@ index 9845504..e4b1e1c
 +        m_soundCues.bumpedBy |= static_cast<u16>(1u << playerIdx);
 +        m_soundCues.contact = contact;
 +    }
-+    void cueBump(f32 magnitude) {
++    void cueBump(f32 magnitude, u8 other, const EGG::Vector3f &impulse) {
 +        cueSound(SoundCue::Bump);
 +        m_soundCues.bump = magnitude;
++        m_soundCues.bumpTarget = other;
++        m_soundCues.bumpImpulse = impulse;
 +    }
 +    void cuePowerObjectContact(bool wall) {
 +        m_soundCues.powerObjectContact |= wall ? 2 : 1;
@@ -10808,6 +10806,8 @@ index 9845504..e4b1e1c
 +        bool objectHit = false; ///< Presentation observer; no physics/audio cue changes.
 +        EGG::Vector3f objectContact = EGG::Vector3f::zero;
 +        f32 bump = 0.0f;  ///< The last bump's signed magnitude.
++        u8 bumpTarget = 255; ///< Source of the accepted cooldown-gated bump.
++        EGG::Vector3f bumpImpulse = EGG::Vector3f::zero;
 +        u8 fallVoice = 0; ///< The fall voice type (0x16-0x19).
 +        u8 soundZone = 0; ///< The last sound trigger zone (KCL type 0x18 variant).
 +        bool poihanaThrow = false; ///< USA80739588 -> KartEffect806a325c.
@@ -10823,7 +10823,7 @@ index 9845504..e4b1e1c
      /// @beginGetters
      [[nodiscard]] DriftState driftState() const {
          return m_driftState;
-@@ -292,6 +465,10 @@ public:
+@@ -292,6 +469,10 @@ public:
          return m_lastDir;
      }
  
@@ -10834,7 +10834,7 @@ index 9845504..e4b1e1c
      [[nodiscard]] const EGG::Vector3f &vel1Dir() const {
          return m_vel1Dir;
      }
-@@ -300,6 +477,17 @@ public:
+@@ -300,6 +481,17 @@ public:
          return m_smoothedForward;
      }
  
@@ -10852,7 +10852,7 @@ index 9845504..e4b1e1c
      [[nodiscard]] f32 speedRatioCapped() const {
          return m_speedRatioCapped;
      }
-@@ -354,6 +542,7 @@ protected:
+@@ -354,6 +546,7 @@ protected:
          Respawned = 0,   ///< Set when Lakitu lets go of the player, cleared when landing.
          DriftReset = 1,  ///< Set when a wall bonk should cancel your drift.
          SsmtCharged = 2, ///< Set after holding a stand-still mini-turbo for 75 frames.
@@ -10860,7 +10860,7 @@ index 9845504..e4b1e1c
          LaunchBoost = 4,
          SsmtLeeway = 5,       ///< If set, activates SSMT when not pressing A or B.
          TrickableSurface = 6, ///< Set when driving on a trickable surface.
-@@ -383,12 +572,28 @@ protected:
+@@ -383,12 +576,28 @@ protected:
          f32 boostRotFactor;
      };
  
@@ -10890,7 +10890,7 @@ index 9845504..e4b1e1c
      f32 m_acceleration;   ///< Captures the acceleration from player input and boosts.
      f32 m_speedDragMultiplier;  ///< After 5 frames of airtime, this causes speed to slowly decay.
      EGG::Vector3f m_smoothedUp; ///< A smoothed up vector, mostly used after significant airtime.
-@@ -421,6 +626,7 @@ protected:
+@@ -421,6 +630,7 @@ protected:
      u16 m_smtCharge;         ///< A value between 0 and 300 representing current SMT charge.
      f32 m_outsideDriftBonus; ///< Added to angular velocity when outside drifting.
      KartBoost m_boost;
@@ -10898,7 +10898,7 @@ index 9845504..e4b1e1c
      s16 m_zipperBoostTimer;
      s16 m_zipperBoostMax;
      KartReject m_reject;
-@@ -464,12 +670,24 @@ protected:
+@@ -464,12 +674,24 @@ protected:
      s16 m_backwardsAllowCounter;         ///< Tracks the 15f delay before reversing.
      PadType m_padType;
      Flags m_flags;

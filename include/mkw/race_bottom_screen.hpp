@@ -54,6 +54,7 @@ struct BottomView {
     bool battle=false;
     bool timeTrial=false;         // no standings; full-width map and centred timer
     bool timerVisible=false;      // CtrlRaceTime: shown once the countdown runs
+    bool timerLabel=false;        // with its TIME label (Timer: Full)
     uint32_t milliseconds=0;      // official race time (the player's own once finished)
     bool standingsVisible=false;  // Mario Kart 7: from the start of the race
     uint32_t tick=0;              // simulation step (animations advance at 60 Hz)
@@ -66,6 +67,13 @@ struct BottomView {
 void fillBottomView(BottomView& view,const RaceGrid& grid,const RaceItems& items,bool introActive,uint32_t tick,float leaveFade);
 class RaceBottomScreen {
 public:
+    // On race courses the map is an opaque (ETC1) quad over the whole screen:
+    // the background fill under it is never seen and is not drawn, the
+    // target's per-frame clear is skipped, and the map draws without blending.
+    // A/B: no-bottom-cover.txt.
+    static inline bool skipCoveredFill=true;
+    // The opaque full-screen fill (battle arenas) also skips the clear. A/B: no-bottom-fill-cover.txt.
+    static inline bool fillCover=true;
     // Worst case by construction: fill 1, map 1, start line 24, 24 items as
     // blast rings (4 each) 96, racers 12 x 3 + searchlight 1, column 2,
     // standings 12 x 6 (up to three score digits in battle), timer 10,
@@ -88,10 +96,25 @@ public:
     void toggleView();
     // Records the frame's bottom screen (after Renderer::beginBottom()).
     void draw(Renderer& renderer,const BottomView& view);
+    // A race frame's bottom screen, with its own beginBottom(): when its
+    // quads equal those of the previous frame, which was shown, the lower
+    // LCD keeps that picture (no beginBottom, no clear, no draw, no transfer).
+    // A/B: no-race-bottom-keep.txt.
+    void drawRace(Renderer& renderer,const BottomView& view);
+    // A race frame not due to redraw the lower LCD (RenderQuality::bottomInterval):
+    // when the LCD shows this race's last shown picture, marks the frame as
+    // covering it (no clear, no transfer) and returns true; the next drawRace may
+    // still keep that picture. Otherwise returns false: draw this frame.
+    bool skipRace(Renderer& renderer);
     // runtime.log line: what is resident.
     void describe(char* text,unsigned size) const;
 private:
     struct Impl;
     std::unique_ptr<Impl> impl_;
+    bool compose(Renderer&,const BottomView&);
+    void submit(Renderer&);
+    uint64_t frameHash() const;
+    // DIAG: runtime.log "bottom keep:" with the race's kept and drawn frames.
+    void endRace();
 };
 }

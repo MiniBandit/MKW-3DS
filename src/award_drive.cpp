@@ -17,7 +17,14 @@ Vec3 heading(const Kinoko::Kart::KartObject& kart){const auto& p=kart.pose();ret
 bool AwardDrive::load(const AwardResults& results){
  actors_.clear();
  effects_=std::make_unique<RaceEffects>();
- if(!effects_->load("textures/award-driving-effects.bin")){failure_="ceremony driving smoke bank";return false;}
+ // tools/cook_race_effects.py --award-source cooks this bank: the always-resident
+ // race emitters plus Win_Demo's one surface root, rk_weed. Luigi Circuit's
+ // bank has the same roots and is byte-identical, so SD packages made
+ // before that cooker existed use it instead.
+ if(!effects_->load("textures/award-driving-effects.bin")){
+  effects_=std::make_unique<RaceEffects>();
+  if(!effects_->load("textures/race-effects-08.bin")){failure_="ceremony driving smoke bank";return false;}
+ }
  driftSmoke_=effects_->find("rk_driftSmoke");if(driftSmoke_<0)return false;
  effectTextures_.resize(effects_->textures.size());
  for(unsigned i=0;i<effectTextures_.size();++i){

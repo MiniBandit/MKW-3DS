@@ -44,8 +44,12 @@ void IntroClearancePath::build(const std::vector<IntroPathFrame>& frames,Query q
   const auto eyes=smoothShot(frames,begin,end,false),targets=smoothShot(frames,begin,end,true);
   std::vector<IntroPathFrame> shot;shot.reserve(end-begin);
   for(unsigned i=begin;i<end;++i)shot.push_back({eyes[i-begin],targets[i-begin],frames[i].fov,frames[i].shot});
+  // Starts at the frame that last failed: candidates mostly fail on the same
+  // frames, and the answer (every frame clear) doesn't depend on the order.
+  unsigned lastFail=0;
   const auto clear=[&](Vec3 translation){
-   for(const auto& f:shot){const auto p=correction(f,translation,query,context,2.f);if(dot(p,p)>.0025f)return false;}
+   const unsigned n=unsigned(shot.size());
+   for(unsigned k=0;k<n;++k){const unsigned i=(lastFail+k)%n;const auto p=correction(shot[i],translation,query,context,2.f);if(dot(p,p)>.0025f){lastFail=i;return false;}}
    return true;
   };
   Vec3 translation{};

@@ -13,7 +13,7 @@ struct HW:Hardware{
  void start(int,const WaveData&,int,u32)override{++starts;}
  void startStream(int,StreamFeed*,int)override{}
  void stop(int)override{}void pause(int,bool)override{}
- void set(int,f32,f32 l,f32 r,f32)override{peak=std::max(peak,std::max(l,r));}
+ void set(int,f32,const Gains& g,f32)override{peak=std::max(peak,std::max(g.left,g.right));}
  bool finished(int)override{return false;}
 };
 struct Spy:EngineObserver{

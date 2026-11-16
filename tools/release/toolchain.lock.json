@@ -19,5 +19,17 @@
       "windows-x86_64": "windows-x86_64/bannertool.exe"
     }
   },
-  "notes": "The Windows makerom and bannertool hashes equal the pins of 2gifts/melee-3ds tools/bootstrap_home_menu.py."
+  "node": {
+    "version": "24.22.1",
+    "platforms": {
+      "windows-x86_64": {"url": "https://nodejs.org/dist/v24.22.1/node-v24.22.1-win-x64.zip", "sha256": "d2046d28c2c3dcd211ac5145c0bf30e2047ef9dfb306693c8c6e2eccd8b95fa5", "member": "node-v24.22.1-win-x64/node.exe"}
+    }
+  },
+  "ffmpeg": {
+    "version": "9.0.2",
+    "platforms": {
+      "windows-x86_64": {"url": "https://www.gyan.dev/ffmpeg/builds/packages/ffmpeg-9.0.2-full_build.7z", "sha256": "f0e46253c70dfe902bac915dfb4224f0cf1b7c6eeab9da2ccc9a5581f9a71b13", "member": "ffmpeg-9.0.2-full_build/bin/ffmpeg.exe"}
+    }
+  },
+  "notes": "The Windows makerom and bannertool hashes equal the pins of 2gifts/melee-3ds tools/bootstrap_home_menu.py. tools/build.py downloads a tool only when it is not on PATH; Node and ffmpeg are pinned for Windows only (elsewhere install them with your package manager). ffmpeg is the full build: the banner sound needs its soxr resampler, which the essentials build lacks."
 }

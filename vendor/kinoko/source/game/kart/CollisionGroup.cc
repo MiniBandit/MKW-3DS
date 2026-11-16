@@ -51,6 +51,12 @@ Hitbox::~Hitbox() {
 /// @addr{0x805B7FBC}
 void Hitbox::calc(f32 totalScale, f32 sinkDepth, const EGG::Vector3f &scale, const EGG::Quatf &rot,
         const EGG::Vector3f &pos) {
+    m_relPos = calcRelPos(totalScale, sinkDepth, scale, rot);
+    m_worldPos = m_relPos + pos;
+}
+
+EGG::Vector3f Hitbox::calcRelPos(f32 totalScale, f32 sinkDepth, const EGG::Vector3f &scale,
+        const EGG::Quatf &rot) const {
     f32 fVar1 = 0.0f;
     if (scale.y < totalScale) {
         fVar1 = (totalScale - scale.y) * m_bspHitbox->radius;
@@ -59,8 +65,7 @@ void Hitbox::calc(f32 totalScale, f32 sinkDepth, const EGG::Vector3f &scale, con
     EGG::Vector3f scaledPos = m_bspHitbox->position * scale;
     scaledPos.y = (m_bspHitbox->position.y + sinkDepth) * scale.y + fVar1;
 
-    m_relPos = rot.rotateVector(scaledPos);
-    m_worldPos = m_relPos + pos;
+    return rot.rotateVector(scaledPos);
 }
 
 /// @addr{0x805B7F84}

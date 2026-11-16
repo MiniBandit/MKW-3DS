@@ -22,7 +22,18 @@ public:
     void resetPhysics();
 
     void calcPass0();
+    // mkw-3ds: calcPass0 in two halves (see KartObjectManager::calc), and each half
+    // in two parts (KartObjectManager::s_pass0Split): A = A1 + A2, B = B1 + B2.
+    void calcPass0A();
+    void calcPass0B();
+    void calcPass0A1();
+    void calcPass0A2();
+    void calcPass0B1();
+    void calcPass0B2();
     void calcPass1();
+    // mkw-3ds: calcPass1 = calcPass1Serial + calcPass1Local (KartObjectManager::s_pass1Grouped).
+    void calcPass1Serial();
+    void calcPass1Local();
     void resizeAABB(f32 radiusScale);
     void addFloor(const CollisionData &, bool);
     void updateSuspOvertravel(const EGG::Vector3f &suspOvertravel);
@@ -37,6 +48,9 @@ public:
     /// @endGetters
 
 private:
+    void pass1Serial();
+    void pass1Local();
+    bool m_pass0MoveDone = false;
     KartMove *m_move;
     KartAction *m_action;
     KartCollide *m_collide;

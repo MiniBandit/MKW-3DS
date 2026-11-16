@@ -357,6 +357,9 @@ def alpha_pass(sub, alpha8):
     source = bool(flags & (1 << 31))
     if source:
         extended = anim >> 16
+        if not (flags >> 26) & 7 and extended & 255:
+            # Two-sided band (tools/gx_material.py alpha_band): A <= lo or A >= hi.
+            return (alpha8 <= (extended & 255) - 1) | (alpha8 >= extended >> 8)
         ref = (extended & 255) or (0, 128, 165, 255)[(flags >> 29) & 3]
         return ALPHA_COMPARE[(flags >> 26) & 7](alpha8, ref)
     return alpha8 > 127

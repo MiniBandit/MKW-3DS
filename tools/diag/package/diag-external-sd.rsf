@@ -1,0 +1,136 @@
+# Manual makerom template. Supply APP_ROMFS and APP_REMASTER explicitly.
+# For external-SD builds, remove the RomFs block in your local working copy.
+# Platform ctr: Old 3DS and New 3DS. Old 3DS runs in its 80 MB mode (3dbrew
+# "Dev2"; the title launch reboots into it): 64 MB ran out of heap loading 11
+# opponents. New 3DS gets 124 MB, 804 MHz, L2 cache and core 2 (render
+# thread, job worker and audio). Based on 2gifts/melee-3ds port/3ds/melee.rsf.
+BasicInfo:
+  Title: MKW3DSDIAG
+  ProductCode: CTR-P-MKWD
+  Logo: Nintendo # the stock "Nintendo 3DS" splash; custom logos crash the HOME Menu
+TitleInfo:
+  Category: Application
+  UniqueId: 0xF4B5D
+Option:
+  UseOnSD: true
+  FreeProductCode: true
+  MediaFootPadding: false
+  EnableCrypt: false
+  EnableCompress: true
+AccessControlInfo:
+  CoreVersion: 2
+  DescVersion: 2
+  ReleaseKernelMajor: "02"
+  ReleaseKernelMinor: "50"
+  UseExtSaveData: false
+  FileSystemAccess:
+   - DirectSdmc
+   - DirectSdmcWrite
+  MemoryType: Application
+  SystemMode: 80MB
+  SystemModeExt: 124MB
+  CpuSpeed: 804MHz
+  EnableL2Cache: true
+  CanAccessCore2: true
+  IdealProcessor: 0
+  AffinityMask: 1
+  Priority: 16 # Application priorities have 32 added by makerom.
+  MaxCpu: 0xFF
+  HandleTableSize: 0x200
+  DisableDebug: false
+  EnableForceDebug: false
+  CanWriteSharedPage: true
+  CanUsePrivilegedPriority: true
+  CanUseNonAlphabetAndNumber: true
+  PermitMainFunctionArgument: true
+  CanShareDeviceMemory: true
+  RunnableOnSleep: false
+  SpecialMemoryArrange: true
+  IORegisterMapping:
+   - 1ff00000-1ff7ffff
+  MemoryMapping:
+   - 1f000000-1f5fffff:r
+  SystemCallAccess:
+    ArbitrateAddress: 34
+    Break: 60
+    CancelTimer: 28
+    ClearEvent: 25
+    ClearTimer: 29
+    CloseHandle: 35
+    ConnectToPort: 45
+    ControlMemory: 1
+    CreateAddressArbiter: 33
+    CreateEvent: 23
+    CreateMemoryBlock: 30
+    CreateMutex: 19
+    CreateSemaphore: 21
+    CreateThread: 8
+    CreateTimer: 26
+    DuplicateHandle: 39
+    ExitProcess: 3
+    ExitThread: 9
+    FlushProcessDataCache: 84
+    GetCurrentProcessorNumber: 17
+    GetHandleInfo: 41
+    GetProcessId: 53
+    GetProcessIdOfThread: 54
+    GetProcessIdealProcessor: 6
+    GetProcessInfo: 43
+    GetResourceLimit: 56
+    GetResourceLimitCurrentValues: 58
+    GetResourceLimitLimitValues: 57
+    GetSystemInfo: 42
+    GetSystemTick: 40
+    GetThreadContext: 59
+    GetThreadId: 55
+    GetThreadIdealProcessor: 15
+    GetThreadInfo: 44
+    GetThreadPriority: 11
+    InvalidateProcessDataCache: 82
+    MapMemoryBlock: 31
+    OutputDebugString: 61
+    QueryMemory: 2
+    ReleaseMutex: 20
+    ReleaseSemaphore: 22
+    SendSyncRequest1: 46
+    SendSyncRequest2: 47
+    SendSyncRequest3: 48
+    SendSyncRequest4: 49
+    SendSyncRequest: 50
+    SetThreadPriority: 12
+    SetTimer: 27
+    SignalEvent: 24
+    SleepThread: 10
+    StoreProcessDataCache: 83
+    UnmapMemoryBlock: 32
+    WaitSynchronization1: 36
+    WaitSynchronizationN: 37
+    KernelSetState: 124
+  ServiceAccessControl:
+   - APT:U
+   - cfg:u
+   - dsp::DSP
+   - fs:USER
+   - gsp::Gpu
+   - hid:USER
+   - ir:rst
+   - ptm:u
+   - ptm:sysm
+SystemControlInfo:
+  SaveDataSize: 0KB
+  RemasterVersion: $(APP_REMASTER)
+  StackSize: 0x20000 # As __stacksize__ in src/main.cpp: Old 3DS heap headroom is about 1 MB.
+  Dependency:
+    am: 0x0004013000001502
+    cfg: 0x0004013000001702
+    codec: 0x0004013000001802
+    dsp: 0x0004013000001a02
+    gpio: 0x0004013000001b02
+    gsp: 0x0004013000001c02
+    hid: 0x0004013000001d02
+    i2c: 0x0004013000001e02
+    ir: 0x0004013000003302
+    mcu: 0x0004013000001f02
+    pdn: 0x0004013000002102
+    ptm: 0x0004013000002202
+    spi: 0x0004013000002302

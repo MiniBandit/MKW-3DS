@@ -18,11 +18,21 @@ struct Job {
 class JobWorker {
 public:
     static constexpr unsigned Capacity=64;
-    bool start();
+    // cpuLimit: the Old 3DS core-1 time limit to ask for (at least; the audio
+    // threads ask for 30%). 80 is the old layout with the render thread there.
+    bool start(unsigned cpuLimit=80);
+    // Run on the calling (main) thread after finish() and finishAll(): the
+    // writes jobs queued for it (Renderer::runJobWrites); reset once no job runs.
+    void setDrain(void (*drain)(bool reset)){drain_=drain;}
     void stop();
     bool running() const { return thread_!=nullptr; }
+    // A worker with a fraction of a core (Old 3DS core 1 at 30%): only work needed
+    // well after it is queued belongs there; the rest stays on the caller.
+    bool slow() const { return slow_; }
     // Queue jobs in the order they will be needed. Jobs stay valid until done.
-    void submit(Job& job);
+    // wake=false queues without waking the worker (one wake() after a batch).
+    void submit(Job& job,bool wake=true);
+    void wake(){if(thread_)LightEvent_Signal(&wake_);}
     // Run the job here if no core has claimed it, else wait until it is done.
     void finish(Job& job);
     // Run the job here if no core has claimed it; never waits. True once done.
@@ -41,6 +51,10 @@ private:
     uint32_t fpscr_=0;
     void* metrics_=nullptr; // the worker thread's RenderMetrics
     LightEvent wake_{},done_{};
+    void (*drain_)(bool)=nullptr;
+    bool slow_=false;
 };
 JobWorker& jobWorker();
+// True on the job worker's own thread.
+bool onJobWorker();
 }

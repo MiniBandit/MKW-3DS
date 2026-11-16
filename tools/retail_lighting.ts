@@ -82,8 +82,10 @@ function lightTexturePattern(material:any){
  return {primary,primaryScale,secondary,albedoLerp,albedoScale,albedoTint,constant,add};
 }
 
-// fogged: false for the sky (vrcorn), which retail draws without the course
-// fog object (StaticR 0x805A36CC writes fog 0 of the race scene's ScnRoot).
+// fogged: false for menu and award backdrops. A race sky (vrcorn) is in the
+// same ScnRootEx as the course (0x8078531c registers both), so a sky material
+// with fog index 0 takes the course fog object's fog 0 (0x805A36B8): DK
+// Summit and 7 more skies; most skies use -1 (MKW_SKY_FOG=1 for race skies).
 export function retailLighting(material:any,vertexColorReplaced:boolean,fogged=true):RetailShape{
  const stages=material.gxMaterial.tevStages;
  const chan=material.gxMaterial.lightChannels[0];

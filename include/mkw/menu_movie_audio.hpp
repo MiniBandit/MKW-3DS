@@ -19,6 +19,9 @@ public:
  // Loads the DSP component once (call at boot); open() also ensures it.
  static void initialize();
  static bool dspReady();
+ // System Settings sound (config block 0x70001), as an NDSP output mode:
+ // 0 mono, 1 stereo, 2 surround. Read once in initialize().
+ static int outputMode();
  // Releases NDSP at application exit.
  static void shutdown();
 private:

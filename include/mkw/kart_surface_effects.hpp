@@ -23,7 +23,7 @@ public:
             spec_[3]=effects.find("rk_snowHDirt");spec_[4]=effects.find("rk_snowRoad0");
             spec_[5]=effects.find("rk_snowRoad1");spec_[6]=effects.find("rk_flower");
             // KartEffect constructor USA80689c88/80689d00: course3 volcano, course9 tile.
-            spec_[7]=effects.find(course==9?"rk_stoneTile":course==3?"rk_stoneVolc":"rk_stone");
+            spec_[7]=course==9?effects.find("rk_stoneTile"):course==3?effects.find("rk_stoneVolc"):effects.findDecorative("rk_stone");
         }
         base_=FirstSlot+racer*Slots;group_=uint8_t(2+racer);
         const bool local=racer==0;

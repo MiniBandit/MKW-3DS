@@ -1,26 +1,26 @@
 #include "game/field/obj/ObjectVolcanoPiece.hh"
 
-#include "game/system/RaceManager.hh"
 #include "game/system/RaceConfig.hh"
+#include "game/system/RaceManager.hh"
 
 namespace Kinoko::Field {
 
-namespace {
-// 0 at 150cc (Time Trials, Mirror), 1 at 100cc, 2 at 50cc.
-u32 classOffset() {
-    const auto *config = System::RaceConfig::Instance();
-    const u8 engineClass = config ? config->raceScenario().engineClass : 2;
-    return engineClass == 0 ? 2 : engineClass == 1 ? 1 : 0;
+/// USA80805104..80805148: the course gives three (rest, shake) pairs in
+/// seconds: settings 1-2 for 150cc, 3-4 for 100cc, 5-6 for 50cc. Block Plaza
+/// (course 0x21, its bricks) always uses the first pair.
+static u16 TimingSetting() {
+    const auto &scenario = System::RaceConfig::Instance()->raceScenario();
+    if (scenario.course == Course::Block_Plaza) {
+        return 1;
+    }
+    return scenario.engineClass == 1 ? 3 : scenario.engineClass == 0 ? 5 : 1;
 }
-} // namespace
 
 /// @addr{0x80817DE8}
 ObjectVolcanoPiece::ObjectVolcanoPiece(const System::MapdataGeoObj &params)
     : ObjectKCL(params), m_initialPos(pos()), m_initialRot(rot()),
-      // Rest and shake seconds per engine class: settings 1/2 at 150cc (and
-      // Mirror), 3/4 at 100cc, 5/6 at 50cc (later: the racers arrive later).
-      m_restDuration(params.setting(1 + 2 * classOffset()) * 60),
-      m_shakeDuration(m_restDuration + params.setting(2 + 2 * classOffset()) * 60),
+      m_restDuration(params.setting(TimingSetting()) * 60),
+      m_shakeDuration(m_restDuration + params.setting(TimingSetting() + 1) * 60),
       m_quakeDuration(m_shakeDuration + params.setting(7) + 1), m_colMgrB(nullptr),
       m_colMgrC(nullptr) {
     snprintf(m_modelName, sizeof(m_modelName), static_cast<u16>(id()) == 0x20d ? "bblock%hd" : "VolcanoPiece%hd",

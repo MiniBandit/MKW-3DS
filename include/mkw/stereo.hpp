@@ -18,9 +18,12 @@
 // Disparity is measured in top-screen pixels as right-eye x minus left-eye x:
 // positive behind the screen, negative in front of it.
 namespace mkw::stereo {
-// Dad requested stronger depth than the MK7 reference. Keep its convergence
-// planes and slider range; amplify the resulting binocular disparity only.
-inline constexpr float DepthStrength=1.5f;
+// Depth strength over the MK7 reference (1: MK7's disparities). It scales
+// the binocular disparity only; convergence planes and slider range stay.
+// 1.5 until Nov 2026, which strained the eyes on a New 3DS; 1.0 (MK7) was
+// comfortable; 1.1, then 1.05, chosen on the console. A/B (DIAG):
+// stereo-strength.txt holds another value (0.25..2).
+inline float DepthStrength=1.05f;
 // The console's stereo display settings (config block 0x50005, which the SDK
 // camera reads at start-up), in mm: the viewer's eye separation and distance,
 // the top screen's size, and the limit parallax (the disparity of the far
@@ -77,6 +80,10 @@ inline constexpr float HudLayer=19.2f;
 // The countdown digits come out of the screen: -3.05 px. The port's GO,
 // FINISH and position number use it too.
 inline constexpr float CountdownLayer=-14.1f;
+// The race HUD's panes (item window, lap counter, timer, battle counters)
+// come out of the screen with the position number, at the countdown's
+// layer, where MK7 puts them 4 px behind it (HudLayer): chosen on the console.
+inline constexpr float RaceHudLayer=CountdownLayer;
 // Menu and pause panes, labels and buttons: on the screen plane.
 inline constexpr float PaneLayer=0.f;
 
