@@ -138,12 +138,12 @@ Archive* lookup(Archives& all,const char* path,const Entry** entry){
   all.tried=true;for(auto& a:all.list)load(a);
 #ifndef MKW_RELEASE
   // DIAG A/B: no-sector-reads.txt reads entries exactly as stored.
-  if(std::FILE* off=std::fopen("sdmc:/3ds/MKWiiDS/no-sector-reads.txt","rb")){std::fclose(off);all.sectorReads=false;}
+  if(std::FILE* off=std::fopen("sdmc:/3ds/mkw-3ds/no-sector-reads.txt","rb")){std::fclose(off);all.sectorReads=false;}
   // no-read-ahead.txt: sector reads of the entry alone.
-  if(std::FILE* off=std::fopen("sdmc:/3ds/MKWiiDS/no-read-ahead.txt","rb")){std::fclose(off);all.readAhead=false;}
-  if(!all.trace)if(std::FILE* on=std::fopen("sdmc:/3ds/MKWiiDS/pack-trace.txt","rb")){std::fclose(on);all.trace=std::fopen("sdmc:/3ds/MKWiiDS/pack-trace.csv","a");}
+  if(std::FILE* off=std::fopen("sdmc:/3ds/mkw-3ds/no-read-ahead.txt","rb")){std::fclose(off);all.readAhead=false;}
+  if(!all.trace)if(std::FILE* on=std::fopen("sdmc:/3ds/mkw-3ds/pack-trace.txt","rb")){std::fclose(on);all.trace=std::fopen("sdmc:/3ds/mkw-3ds/pack-trace.csv","a");}
   // no-prefetch.txt: no background reads.
-  if(std::FILE* off=std::fopen("sdmc:/3ds/MKWiiDS/no-prefetch.txt","rb")){std::fclose(off);all.prefetch=false;}
+  if(std::FILE* off=std::fopen("sdmc:/3ds/mkw-3ds/no-prefetch.txt","rb")){std::fclose(off);all.prefetch=false;}
 #endif
   startPrefetch(all);
  }
@@ -596,7 +596,7 @@ size_t lz11(const unsigned char* in,size_t n,unsigned char* out){
 // destination alignment; then real entries as read now and sector-rounded.
 static void alignmentBench(Bench& b,unsigned char* buffer){
  FS_Archive sdmc=0;Handle file=0;
- if(R_FAILED(FSUSER_OpenArchive(&sdmc,ARCHIVE_SDMC,fsMakePath(PATH_EMPTY,"")))||R_FAILED(FSUSER_OpenFile(&file,sdmc,fsMakePath(PATH_ASCII,"/3ds/MKWiiDS/race.pak"),FS_OPEN_READ,0))){b.line("FAIL FSUSER open");return;}
+ if(R_FAILED(FSUSER_OpenArchive(&sdmc,ARCHIVE_SDMC,fsMakePath(PATH_EMPTY,"")))||R_FAILED(FSUSER_OpenFile(&file,sdmc,fsMakePath(PATH_ASCII,"/3ds/mkw-3ds/race.pak"),FS_OPEN_READ,0))){b.line("FAIL FSUSER open");return;}
  u64 fileSize=0;FSFILE_GetSize(file,&fileSize);
  b.line("race.pak %llu bytes",(unsigned long long)fileSize);
  struct Case {const char* name;std::uint32_t head,tail,dest;bool deep;};
@@ -671,7 +671,7 @@ void readBench(const char* resultPath,void(*log)(const char*),int mode){
  }else b.line("FAIL fopen race.pak");
  // 2. The FS service directly.
  FS_Archive sdmc=0;Handle file=0;
- if(R_FAILED(FSUSER_OpenArchive(&sdmc,ARCHIVE_SDMC,fsMakePath(PATH_EMPTY,"")))||R_FAILED(FSUSER_OpenFile(&file,sdmc,fsMakePath(PATH_ASCII,"/3ds/MKWiiDS/race.pak"),FS_OPEN_READ,0))){
+ if(R_FAILED(FSUSER_OpenArchive(&sdmc,ARCHIVE_SDMC,fsMakePath(PATH_EMPTY,"")))||R_FAILED(FSUSER_OpenFile(&file,sdmc,fsMakePath(PATH_ASCII,"/3ds/mkw-3ds/race.pak"),FS_OPEN_READ,0))){
   b.line("FAIL FSUSER open");std::free(buffer);if(b.out)std::fclose(b.out);return;
  }
  auto fsRead=[&](u64 offset,void* to,std::uint32_t bytes){std::uint32_t got=0;return R_SUCCEEDED(FSFILE_Read(file,&got,offset,to,bytes))&&got==bytes;};

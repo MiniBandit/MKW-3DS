@@ -55,9 +55,18 @@ struct RenderQuality {
     // Thundercloud, POW...) advance in steps of this many ticks (4: 15 Hz),
     // so their skinned pose repeats on alternate frames; 0 every tick.
     unsigned animationStep=0;
+    // The race's lower screen draws on every other presented frame (30 FPS
+    // while the top screen presents at 60). A skipped frame leaves the lower
+    // LCD showing its last image: citro3d only transfers targets drawn to.
+    bool lowerScreenHalfRate=false;
+    // Course bloom (retail posteffect.bblm); Balanced turns it off.
+    bool bloom=true;
     // Course, sky and course-object textures move from LINEAR (FCRAM) to VRAM
     // after the race's VRAM users have loaded, leaving vramReserve bytes free.
     bool vramCourseTextures=true;
+    // The player's dynamic shadow (License Settings). Off in Performance: it
+    // redraws the ground under each wheel, about a third of a race's draws.
+    bool dynamicShadow=true;
     static constexpr std::size_t vramReserve=1024*1024;
     // New 3DS races: nothing allocates VRAM after the move in a normal race. This
     // margin covers a Mii driver restored after a pause (Old 3DS pause textures
@@ -76,6 +85,15 @@ struct RenderQuality {
         if(!on)return;
         reduced=true;halfLargeTextures=true;minScreenRatio=.015f;objectLowDistance=4000.f;
         shadowVolumes=false;bloomBlurRounds=1;boxSparkleRatio=.04f;particleBudget=96;kartEffectScreens=2;racerLod=true;animationStep=4;vramCourseTextures=true;bottomRgba4=true;
+    }
+    // License Settings > Graphics: 0 Auto (Balanced on New 3DS, Performance on
+    // Old 3DS), 1 Quality, 2 Performance (reduced detail, no dynamic shadow,
+    // the race's lower screen at 30 FPS), 3 Balanced (full detail without the
+    // dynamic shadow and bloom, the two biggest drawing costs).
+    void setGraphics(unsigned choice,bool new3ds){
+        if(choice==0)choice=new3ds?3:2;
+        setReduced(choice==2);
+        if(choice==3){dynamicShadow=false;bloom=false;}
     }
 #ifdef MKW_RENDER_QUALITY_C3D
     // True when bounds b placed by transform t are too small to draw from camera.

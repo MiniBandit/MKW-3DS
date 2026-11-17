@@ -26,6 +26,18 @@ contributions keep their own terms: sgrontflix's Docker build (pull request
 #74) and ThePhilosophicalOne's retail-accuracy work ported from pull request
 #76 (commits co-authored by ThePhilosophicalOne) are MIT.
 
+ethanseagull's Mario Kart WiiDS
+-------------------------------
+Release 0.8.0 merges ethanseagull's changes from his fork, Mario Kart WiiDS
+(github.com/ethanseagull/MarioKartWiiDS, commit 59cd3ea of 2026-11-15): among
+them the ordered LZ4 packs (tools/pakpack.c), the race-load RAM cache, the
+Settings page, pipelined menus and races, the surround mix, the per-class
+Grumble Volcano timings and much Old 3DS work. His changes are MIT,
+copyright (c) 2026 ethanseagull; his licence and notice are in
+licenses/MIT-ethanseagull.txt and stay with his code. The MKW 3DS Licence
+does not cover them. His pause screen console photos (by smol_bug) were not
+taken: they were supplied for his project only.
+
 Bundled and external components
 -------------------------------
 Kinoko, noclip.website and gclib: MIT; see licenses/.

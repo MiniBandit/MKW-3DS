@@ -1,6 +1,6 @@
 #pragma once
 // Whole-game options from the Settings page (the license screen's corner
-// button): sd:/3ds/MKWiiDS/settings.dat. Version 2, 20 bytes: "MKWS0002",
+// button): sd:/3ds/mkw-3ds/settings.dat. Version 2, 20 bytes: "MKWS0002",
 // the six values, two spare bytes, then a CRC-32 of the first 16 bytes (files
 // from before the Minimap option have 0 in byte 13: 30fps).
 // Version 1 (16 bytes: "MKWS0001", four values, a CRC-32 of the first 12) is

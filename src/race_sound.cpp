@@ -528,7 +528,7 @@ void RaceSound::step(const Frame& f, RaceAudioFrame* actors) {
  // Bounded release diagnostics for silent race actors; no per-frame file I/O.
  if (tick_ == 300 || tick_ == 900 || tick_ == 1800) {
   const auto st = sys.stats();
-  if (FILE* log = std::fopen("sdmc:/3ds/MKWiiDS/audio-race-status.txt", "a")) {
+  if (FILE* log = std::fopen("sdmc:/3ds/mkw-3ds/audio-race-status.txt", "a")) {
    std::fprintf(log, "tick=%u course=%u ready=%d actor_frames=%lu actor_sounds=%lu voices=%lu missing=%lu failed=%lu (id %lu slot %lu setup %lu waves %lu stream %lu last %lu) last=%lu/%lu/%lu cache=%lu/%lu waves=%lu linear=%lu\n",
     tick_, setup_.course, int(sys.sceneReady()), (unsigned long)layer_.framesUsed.load(),
     (unsigned long)layer_.actorSounds.load(), (unsigned long)st.voices, (unsigned long)st.missing,

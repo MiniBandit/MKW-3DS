@@ -12,8 +12,8 @@ they always stay.
 Run it after the packs are final. Without --move-to it only reports. Moved
 files keep their paths, so moving them back restores the package exactly.
 
-    python3 tools/slim_sd_models.py D:/3ds/MKWiiDS
-    python3 tools/slim_sd_models.py D:/3ds/MKWiiDS --move-to C:/backup/mkw-duplicates
+    python3 tools/slim_sd_models.py D:/3ds/mkw-3ds
+    python3 tools/slim_sd_models.py D:/3ds/mkw-3ds --move-to C:/backup/mkw-duplicates
 """
 import argparse, shutil, struct
 from pathlib import Path

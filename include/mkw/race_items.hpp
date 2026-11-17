@@ -10,6 +10,7 @@
 #include <array>
 #include <cstdint>
 #include <memory>
+#include <string>
 #include <vector>
 
 namespace Kinoko::Field {class RailInterpolator;class ObjectItemboxPress;class ObjectDrivable;}
@@ -104,6 +105,12 @@ struct ItemActor {
     // Online: frames left for another console to confirm the hit of a Red Shell that
     // reached its racer here; it breaks when they run out (0: not waiting).
     uint8_t netGrace=0;
+    // Shell straight travel (USA 0x807a6a94): the last contact direction (+0x1b0), frames
+    // without Q1 floor (+0x15c, starts at 5) and its airborne flag (+0x78 bit 0x20), and the
+    // solid-fall countdown (+0x15e).
+    Vec3 lastDirection{0,0,1};
+    uint8_t airFrames=5,solidFallTicks=0;
+    bool airborne=false,floorContact=false,reflected=false;
     ShellGuidance guidance{};
     Vec3 visualPosition()const{return kind==ItemKind::BlueShell&&!explosion&&guidance.phase<4?Vec3{position.x,guidance.visualY,position.z}:position;}
     bool diving()const{return kind==ItemKind::BlueShell&&!explosion&&guidance.phase==5;}
@@ -201,6 +208,7 @@ public:
         return odds_.load(data,size,local,local+1,mode);
     }
     void setBattleScores(const std::array<uint16_t,12>& scores){battleScores_=scores;}
+    void setTimeTrial(bool timeTrial){timeTrial_=timeTrial;}
     unsigned oddsRank(unsigned player)const{
         if(!battleOdds_)return rank(player);
         std::array<RaceTeam,12> teams;for(unsigned i=0;i<12;++i)teams[i]=racers_[i].team;
@@ -212,6 +220,9 @@ public:
     bool oddsReady()const{return odds_.ready();}
     bool loadShellRoute(const void* bytes,size_t size,unsigned course=0xffff){shellCourse_=course;return shellRoute_.load(bytes,size);}
     const ShellRoute& shellRoute()const{return shellRoute_;}
+    /// Walls-only course query (KCL mask 0xD010F000, invisible walls included) that the
+    /// shell straight travel runs while its slide timer is set. Null skips it.
+    void setWallQuery(ItemWorldQuery query){wallQuery_=query;}
     void resetFromCourse(unsigned racers,uint32_t seed=0x4d4b5749);
     /// Course-object phase: input latch and item box motion.
     void beforeStep(const ItemRacer* racers,const ItemInput* inputs,unsigned count,bool raceActive,uint16_t bulletNoEndPlayers=0);
@@ -219,10 +230,17 @@ public:
     void afterStep(const ItemRacer* racers,unsigned count,ItemWorldQuery query=nullptr);
     void beforeStepNative(const ItemInput* inputs,unsigned count,bool raceActive,uint16_t bulletNoEndPlayers=0);
     void afterStepNative(unsigned count);
+    // QA (diagnostic build): fire Blue Shells from last place and trace their
+    // route. qaNearestItemPoints restores the old whole-course nearest point.
+    bool qaNearestItemPoints=false,qaBlueTrace=false;
+    std::vector<std::string> qaBlueLines;
+    bool qaFireBlueFromLast();
     /// One racer's box and item contacts against last step's item positions.
     void kartContacts(unsigned player);
     ItemInput autoItemInput(unsigned player) const;
     const ItemHud& hud(unsigned player) const { return hud_[player<MaxRacers?player:0]; }
+    // A running POW targets this racer (its stomps, then the hit window).
+    bool powThreat(unsigned player) const { return powTimer_>0&&player<MaxRacers&&powTargets_[player]; }
     // Presentation reads the roulette phase for the item window cube roll.
     const ItemRoulette& roulette(unsigned player) const { return roulettes_[player<MaxRacers?player:0]; }
     const std::vector<ItemBox>& boxes() const { return boxes_; }
@@ -233,6 +251,12 @@ public:
     unsigned successfulHits(unsigned player)const{return player<MaxRacers?successfulHits_[player]:0;}
     // Every Mushroom / Golden Mushroom use, for per-press boost presentation.
     uint16_t mushroomUses(unsigned player) const { return mushroomUses_[player<MaxRacers?player:0]; }
+    // Every KartMove::activateMushroom the items cause, per racer, whichever
+    // item it came from (the Time Trials ghost recorder times them).
+    static inline std::array<uint32_t,12> mushroomActivations{};
+    // Watch Replay: player 0 is a ghost, so Kinoko's KartItem keeps its Triple
+    // Mushroom and fires it from the ghost's inputs.
+    static inline bool ghostOwnsItems=false;
     unsigned rank(unsigned player) const;
     uint32_t frame() const { return frame_; }
     BlooperVisual blooperVisual(unsigned player,unsigned weight) const;
@@ -248,6 +272,8 @@ public:
     bool startRoulette(unsigned player);
     /// Live objects and inventory copies of a retail object type (ItemHolderItem_getCount).
     unsigned objectCount(unsigned type) const;
+    /// objectCount of every retail type 0..14 in one pass.
+    void objectCounts(std::array<unsigned,15>& out) const;
     /// The prize the running roulette will give (decided at the box, RMCU 0x807ab550).
     ItemKind rouletteChoice(unsigned player) const { return player<MaxRacers?rouletteChoice_[player]:ItemKind::None; }
     /// A racer-contact bump (RMCU fn_1_609F4): the attacker's Thunder Cloud may pass to the
@@ -300,14 +326,63 @@ private:
     std::vector<ItemBoxPress> presses_;
     struct RoadBox {const Kinoko::Field::ObjectDrivable* road=nullptr;Vec3 local{};uint16_t box=0;float lift=180;};
     std::vector<RoadBox> roadBoxes_;
+    // An s_itembox that landed on a moving object and keeps its offset from it.
+    struct RideBox {const Kinoko::Field::ObjectDrivable* object=nullptr;uint16_t box=0;Vec3 offset{};};
+    std::vector<RideBox> rides_;
     void stepMovers();
     void resolveCourseObjects(ItemActor& actor);
     void resolveHeldCourseObjects(unsigned player);
     std::array<ItemActor,MaxActors> actors_{};
+    // Kart contacts scan only the slots in contactMask_: every actor active when
+    // it was built (a superset; each slot still checks active). Activation goes
+    // through spawn() and the direct generation, which bump actorSerial_; a
+    // changed serial rebuilds the mask, also in the middle of a racer's scan.
+    // Old 3DS: an ItemActor is 376 B, so the full scan read 96 cache lines per
+    // racer per step (~0.25 ms a step at 268 MHz without L2).
+    uint32_t actorSerial_=0,contactMaskSerial_=~0u;
+    std::array<uint32_t,(MaxActors+31)/32> contactMask_{};
+    void refreshContactMask();
+public:
+    // DIAG A/B (ab-alternate.txt): true scans every slot as before.
+    static inline bool fullContactScan=false;
+    // Old 3DS: item snapshots fetch the kart's parts once (item_native.cpp); off: no-fast-snapshot.txt.
+    static inline bool fastSnapshot=true;
+    // Old 3DS: the actor step skips holder syncs and object counts that nothing changed since
+    // the last one, and held-item scans of racers holding nothing (item_world.cpp); off:
+    // no-fast-actor-step.txt.
+    static inline bool fastActorStep=true;
+    // Calls f(slot) for the actor slots in ascending order, as a scan of actors()
+    // would visit them, but only those in the contact mask (a superset of the
+    // active ones: f still checks active). f returns false to stop. Tick thread
+    // only (it may rebuild the mask). fullContactScan visits every slot.
+    template<class F> void forEachActorSlot(F&& f) const {
+        for(unsigned i=nextActorSlot(0);i<MaxActors;i=nextActorSlot(i+1))if(!f(i))return;
+    }
+    // Read-only form for draw-time readers (they may run on the job worker): the
+    // mask when it is current, else every slot; never rebuilds it. f returns false to stop.
+    template<class F> void forEachActorSlotRead(F&& f) const {
+        if(fullContactScan||contactMaskSerial_!=actorSerial_){for(unsigned i=0;i<MaxActors;++i)if(!f(i))return;return;}
+        for(unsigned w=0;w<contactMask_.size();++w)for(uint32_t bits=contactMask_[w];bits;bits&=bits-1)if(!f(w*32+unsigned(__builtin_ctz(bits))))return;
+    }
+    // The first slot >= i in the contact mask (MaxActors if none), rebuilding the
+    // mask first when an actor was activated since: an ascending walk over it
+    // sees the same active actors as a full scan, also ones activated during the
+    // walk. Old 3DS: each actor is 376 B, so a full scan of the 96 slots read 96
+    // cache lines; the item step ran ~50 such scans a tick. fullContactScan: every slot.
+    unsigned nextActorSlot(unsigned i) const {
+        if(fullContactScan||i>=MaxActors)return i<MaxActors?i:MaxActors;
+        if(contactMaskSerial_!=actorSerial_)const_cast<RaceItems*>(this)->refreshContactMask();
+        unsigned w=i>>5;uint32_t bits=contactMask_[w]&(~0u<<(i&31));
+        while(!bits&&++w<contactMask_.size())bits=contactMask_[w];
+        return bits?w*32+unsigned(__builtin_ctz(bits)):MaxActors;
+    }
+private:
     std::array<GroundReclaimOrder<MaxActors>,15> reclaimOrder_{};
     int reclaimPressure_=0;
     unsigned reclaimPhase_=0;
     bool nativeReclaimPhase_=false;
+    ItemWorldQuery wallQuery_=nullptr;
+    uint32_t itemClock_=0; // RaceManager +0x20 (native), the Red search phase
     void forgetReclaimSlot(unsigned slot);
     void syncReclaimOrder();
     std::array<bool,MaxActors> freeAtStepStart_{};
@@ -318,10 +393,11 @@ private:
     uint32_t rouletteRng_=1;
     std::array<uint16_t,4> itemSpawnTimers_{}; // Lightning, Blue, Blooper, POW
     std::array<ItemRacer,MaxRacers> racers_{};
-    // Racers whose item point is the nearest route point to itemPointFrom_,
-    // resolved on first use: only shell launches and guidance read it.
-    std::array<Vec3,MaxRacers> itemPointFrom_{};
-    uint16_t itemPointPending_=0;
+    // Each racer's maintained item point (ItemHolderPlayer +0x44): route point 0
+    // when the race starts, then ShellRoute::track every frame; reseeded when a
+    // respawn ends. respawning_ holds last frame's respawn bit per racer.
+    std::array<uint16_t,MaxRacers> itemPoints_{};
+    uint16_t respawning_=0;
     std::array<ItemInput,MaxRacers> inputs_{};
     std::array<bool,MaxRacers> held_{};
     // Thunder Cloud object state, kept with its carrier: transfer cooldown (+0x1d4) and age
@@ -329,6 +405,7 @@ private:
     std::array<uint16_t,MaxRacers> cloudTransfer_{},cloudAge_{},cloudSlot_{};
     std::array<bool,MaxRacers> itemLock_{};
     std::array<uint8_t,MaxRacers> heldDropTicks_{};
+    bool timeTrial_=false;
     struct InventoryDrop { ItemKind kind=ItemKind::None;uint8_t count=0,ticks=0;std::array<Vec3,3> velocity{}; };
     std::array<InventoryDrop,MaxRacers> inventoryDrops_{};
     std::array<uint32_t,MaxRacers> inkReadyFrame_{};
@@ -343,6 +420,7 @@ private:
     uint16_t bulletNoEnd_=0;
     struct HeldState {
         uint16_t angle=0,angularSpeed=600,spin=0,age=0;
+        Vec3 up{0,1,0}; // the held frame's eased up axis
         float radiusX=0,radiusZ=0,hop=0;
         std::array<float,3> scales{HeldInitialScale,HeldInitialScale,HeldInitialScale};
         std::array<Vec3,3> positions{},previous{},ups{},forwards{};
@@ -395,12 +473,15 @@ private:
     void updateShell(ItemActor& actor,ItemWorldQuery query);
     void shatter(ItemActor& actor);
     void moveShellRoute(ItemActor& actor,ItemWorldQuery query,int target,bool blue);
-    void shellTerrain(ItemActor& actor,ItemWorldQuery query,bool blue,bool route,bool approach=false);
+    void shellTerrain(ItemActor& actor,ItemWorldQuery query,bool blue,bool route,bool approach=false,bool wallBreak=true);
+    void straightShell(ItemActor& actor,ItemWorldQuery query,float targetSpeed);
+    void launchStraight(ItemActor& actor,const ItemRacer& thrower);
     int redRouteTarget(unsigned player)const;
-    int redTarget(const ItemActor& actor,bool ranked)const;
+    int redTarget(const ItemActor& actor,bool ranked,bool staggered=false)const;
     int blueTarget(const ItemActor& actor)const;
-    void trackShellRacers();
+    void trackShellRacers(bool advance);
     uint16_t itemPoint(unsigned racer);
+    void qaTraceBlue(ItemActor& actor);
     ItemActor& spawn(unsigned player,ItemKind kind,bool backwards,const Vec3* origin=nullptr);
     void releaseHeld(unsigned player,bool backwards);
     void removeHeld(unsigned player,unsigned slot,bool breakChain);

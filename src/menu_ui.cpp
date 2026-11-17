@@ -1,6 +1,9 @@
 #include <mkw/menu_ui.hpp>
+#include <iterator>
+#include <mkw/diag.hpp>
 #include <mkw/display_layout.hpp>
 #include <mkw/menu_assets.hpp>
+#include <mkw/menu_glyph_atlas.hpp>
 #include <mkw/menu_unlock_texts.hpp>
 #include <mkw/menu_movie_assets.hpp>
 #include <mkw/menu_animations.hpp>
@@ -23,7 +26,7 @@ constexpr float XScale=display::MenuScaleX,YScale=display::MenuScaleY;
 bool onlinePage(UiPage page){return page==UiPage::OnlineMenu||page==UiPage::OnlineCode||page==UiPage::OnlineLobby;}
 std::array<float,2> onlineCell(UiPage page){return page==UiPage::OnlineMenu?std::array<float,2>{288,58}:page==UiPage::OnlineCode?std::array<float,2>{78,36}:std::array<float,2>{280,36};}
 // License Settings rows on the lower screen (eight, ending at y 209).
-constexpr float LicenseRowTop=27.f,LicenseRowPitch=23.f,LicenseRowH=21.f;
+constexpr float LicenseRowTop=30.f,LicenseRowPitch=26.f,LicenseRowH=24.f;
 constexpr const char* OnlineAlphabet=" !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[]_abcdefghijklmnopqrstuvwxyz";
 constexpr const char* CupNames[]={"Mushroom Cup","Flower Cup","Star Cup","Special Cup","Shell Cup","Banana Cup","Leaf Cup","Lightning Cup"};
 constexpr const char* CourseNames[]={"Luigi Circuit","Moo Moo Meadows","Mushroom Gorge","Toad's Factory","Mario Circuit","Coconut Mall","DK Summit","Wario's Gold Mine","Daisy Circuit","Koopa Cape","Maple Treeway","Grumble Volcano","Dry Dry Ruins","Moonview Highway","Bowser's Castle","Rainbow Road","GCN Peach Beach","DS Yoshi Falls","SNES Ghost Valley 2","N64 Mario Raceway","N64 Sherbet Land","GBA Shy Guy Beach","DS Delfino Square","GCN Waluigi Stadium","DS Desert Hills","GBA Bowser Castle 3","N64 DK's Jungle Parkway","GCN Mario Circuit","SNES Mario Circuit 3","DS Peach Gardens","GCN DK Mountain","N64 Bowser's Castle"};
@@ -47,7 +50,7 @@ struct Name {
  operator const char*()const{return text;}
  const char* c_str()const{return text;}
 };
-Pose control(const char* name,const char* variant,unsigned focusSlot=~0u){
+Pose control(const char* name,const char* variant,unsigned focusSlot=~0u){diag::ComposeTimer diagTimer_(0);
  Pose value;value.source=name;value.focusSlot=focusSlot;
  if(const auto* p=uiFindControlPose(name,variant)){value.x=p->x;value.y=p->y;value.sx=p->sx;value.sy=p->sy;value.alpha=p->alpha;}
  if(const auto* motion=uiFindControlMotion(name,variant)){value.delay=motion->delay;value.moving=motion->enabled;}
@@ -86,12 +89,27 @@ struct Lookup {
  }
 };
 const Lookup& lookup(){static const Lookup value;return value;}
+// A license-name glyph's sprite by character code ("name_glyph_%04x"): codes below
+// 256 from a table built once with the same lookup, the rest as before.
+unsigned glyphSprite(unsigned code){
+ static const auto table=[]{std::array<unsigned,256> t{};for(unsigned c=0;c<256;++c){char key[32];std::snprintf(key,sizeof key,"name_glyph_%04x",c);t[c]=lookup().find(key);}return t;}();
+ if(code<256)return table[code];
+ char key[32];std::snprintf(key,sizeof key,"name_glyph_%04x",code);return lookup().find(key);
+}
+// Description captions: the footer caption with the same text, memoized per sprite.
+unsigned footerCaption(unsigned index){
+ static std::vector<unsigned> memo(std::size(UiSprites),~0u);
+ if(memo[index]==~0u){memo[index]=index;const char* caption=UiSprites[index].text;
+  for(unsigned i=0;i<std::size(UiSprites);++i)
+   if(!std::strncmp(UiSprites[i].key,"footer_caption_",15)&&!std::strcmp(UiSprites[i].text,caption)){memo[index]=i;break;}}
+ return memo[index];
+}
 class Composer {
 public:
  const MenuState& state;std::vector<UiQuad>& out;const UiTransitionView* transition;
  UiMenuLayout layout{};
  Composer(const MenuState& s,std::vector<UiQuad>& q,const UiTransitionView* t):state(s),out(q),transition(t){layout.page=s.page;}
- void group(UiMenuRole role,unsigned index=0,Pose p={},const char* panel=nullptr){
+ void group(UiMenuRole role,unsigned index=0,Pose p={},const char* panel=nullptr){diag::ComposeTimer diagTimer_(1);
   layout={state.page,role,index,0,0,400,240,false};
   const unsigned selectedGroup=state.page==UiPage::MainMenu?(state.cursor==0?0:state.cursor<4?1:state.cursor<6?2:3):state.cursor;
   layout.selected=index==selectedGroup;
@@ -115,7 +133,7 @@ public:
    }
   }
  }
- void groupPane(UiMenuRole role,Pose p,const char* panel,const char* name){
+ void groupPane(UiMenuRole role,Pose p,const char* panel,const char* name){diag::ComposeTimer diagTimer_(2);
   group(role);if(const auto* box=uiFindPane(panel,name)){
    layout.x=200+(p.x+box->x*p.sx)*XScale;layout.y=120+(-p.y+box->y*p.sy)*YScale;
    layout.w=box->w*p.sx*XScale;layout.h=box->h*p.sy*YScale;
@@ -144,7 +162,7 @@ public:
   if(!root)root=pane(family,"null_all");
   return root?focusMotion(*root,p):UiTextMotion{};
  }
- void quad(unsigned i,float x,float y,float w,float h,float alpha=1,uint32_t tint=0xffffffff,Pose p={},bool dynamic=false){
+ void quad(unsigned i,float x,float y,float w,float h,float alpha=1,uint32_t tint=0xffffffff,Pose p={},bool dynamic=false){diag::ComposeTimer diagTimer_(3);
   if((i>=std::size(UiSprites)&&!dynamic)||w<=0||h<=0)return;
   float controlAlpha=p.alpha,screenSlide=0;
   if(transition&&transition->preload)controlAlpha=1;
@@ -180,13 +198,17 @@ public:
   out.back().menu=layout;out.back().screenSlide=screenSlide;
  }
  void sprite(const char* key,float x,float y,float w,float h,float a=1,uint32_t tint=0xffffffff,Pose p={}){quad(uiFindSpriteKey(key),x,y,w,h,a,tint,p);}
- void region(const char* key,float x,float y,float w,float h,float u0,float v0,float u1,float v1,Pose p,float alpha,const char* focusKey=nullptr){
+ // `focus` is panelFocus(<the panel's key>,p), computed once per panel: every
+ // slice of a border loop shares it.
+ void region(const char* key,float x,float y,float w,float h,float u0,float v0,float u1,float v1,Pose p,float alpha,const UiTextMotion& focus){diag::ComposeTimer diagTimer_(4);
   x=p.x+x*p.sx;y=-p.y+y*p.sy;w*=p.sx;h*=p.sy;
-  applyMotion(x,y,w,h,alpha,p,panelFocus(focusKey?focusKey:key,p));
+  applyMotion(x,y,w,h,alpha,p,focus);
   const auto first=out.size();sprite(key,x,y,w,h,alpha,0xffffffff,p);
   if(out.size()>first){auto& q=out.back();q.u0=u0+(u1-u0)*q.u0;q.u1=u0+(u1-u0)*q.u1;q.v0=v0+(v1-v0)*q.v0;q.v1=v0+(v1-v0)*q.v1;}
  }
- void focusLayers(const char* key,Pose p,float opacity){
+ void focusLayers(const char* key,Pose p,float opacity,const UiTextMotion* panelMotion=nullptr){diag::ComposeTimer diagTimer_(5);
+  // Tails follow the panel's own focus motion: computed at most once.
+  UiTextMotion tailMotion;bool tailMotionReady=panelMotion!=nullptr;if(panelMotion)tailMotion=*panelMotion;
   Name family(key);unsigned part=0;
   if(char* suffix=std::strstr(family.text,"_underlay")){*suffix=0;part=1;}
   else if(char* suffix=std::strstr(family.text,"_overlay")){*suffix=0;part=2;}
@@ -228,7 +250,8 @@ public:
     auto drawTail=[&](unsigned mask){
      const auto* tailImage=uiFindPanel(tail.keys[selected?1:0][mask]);if(!tailImage)return;
      float tx=p.x+tailImage->x*p.sx,ty=-p.y+tailImage->y*p.sy,tw=tailImage->w*p.sx,th=tailImage->h*p.sy,ta=opacity;
-     applyMotion(tx,ty,tw,th,ta,p,panelFocus(key,p));
+     if(!tailMotionReady){tailMotion=panelFocus(key,p);tailMotionReady=true;}
+     applyMotion(tx,ty,tw,th,ta,p,tailMotion);
      sprite(tailImage->key,tx,ty,tw,th,ta,0xffffffff,p);
     };
     // Request every future depth variant before reveal; changing focus must
@@ -238,10 +261,11 @@ public:
    }
   }
  }
- void panel(const char* key,Pose p={},float alpha=1){
+ void panel(const char* key,Pose p={},float alpha=1){diag::ComposeTimer diagTimer_(6);
   const auto* found=uiFindPanel(key);if(!found)return;const auto& r=*found;
   if(const auto* border=uiFindBorderLoop(key)){const auto& loop=*border;
-   region(key,loop.x,loop.y,loop.w,loop.h,(loop.x-r.x)/r.w,(loop.y-r.y)/r.h,(loop.x+loop.w-r.x)/r.w,(loop.y+loop.h-r.y)/r.h,p,alpha);
+   const auto focus=panelFocus(key,p);
+   region(key,loop.x,loop.y,loop.w,loop.h,(loop.x-r.x)/r.w,(loop.y-r.y)/r.h,(loop.x+loop.w-r.x)/r.w,(loop.y+loop.h-r.y)/r.h,p,alpha,focus);
    const auto* clip=uiFindAnimationClip(loop.control,"Loop","Loop");
    const float sourceFrame=clip&&clip->duration>0?std::fmod(float(state.age)*clip->rate,clip->duration):float(state.age);
    const unsigned frame=unsigned(sourceFrame)%loop.frames;
@@ -249,17 +273,18 @@ public:
     // Residency is keyed by page/selection, not loop frame. Every atlas a
     // future frame can use must be requested before the page is revealed.
     const bool resident=transition&&transition->preload&&(at==loop.firstSlice||std::strcmp(slice.key,UiBorderSlices[at-1].key));
-    if(slice.frame==frame||resident)region(slice.key,slice.x,slice.y,slice.w,slice.h,slice.u0,slice.v0,slice.u1,slice.v1,p,alpha,key);
+    if(slice.frame==frame||resident)region(slice.key,slice.x,slice.y,slice.w,slice.h,slice.u0,slice.v0,slice.u1,slice.v1,p,alpha,focus);
    }
-   focusLayers(key,p,alpha);selectionGlow(key,p);return;
+   focusLayers(key,p,alpha,&focus);selectionGlow(key,p);return;
   }
   float x=p.x+r.x*p.sx,y=-p.y+r.y*p.sy,w=r.w*p.sx,h=r.h*p.sy;
   // These flattened button panels share an animated parent. Per-pane
   // submissions (movies, icons, text) sample their full ancestry separately.
   float baseAlpha=alpha;
-  applyMotion(x,y,w,h,baseAlpha,p,panelFocus(key,p));
+  const auto focus=panelFocus(key,p);
+  applyMotion(x,y,w,h,baseAlpha,p,focus);
   sprite(key,x,y,w,h,baseAlpha,0xffffffff,p);
-  focusLayers(key,p,alpha);selectionGlow(key,p);
+  focusLayers(key,p,alpha,&focus);selectionGlow(key,p);
  }
  void graph(float fraction,Pose p){
   fraction=std::clamp(fraction,0.f,1.f);if(fraction<=0)return;
@@ -269,7 +294,7 @@ public:
  Name buttonState(const char* base,unsigned slot)const{return Name(base,state.cursor==slot?"_select":"_free");}
  void movieOverlay(const char* base,Pose p){panel(Name(base,"_overlay"),p);}
  void movieButton(const char* base,Pose p){panel(Name(base,"_underlay"),p);}
- void inPane(const char* key,const char* base,const char* name,Pose p={},float a=1,bool movieImage=false){
+ void inPane(const char* key,const char* base,const char* name,Pose p={},float a=1,bool movieImage=false){diag::ComposeTimer diagTimer_(7);
   if(auto* r=pane(base,name);r&&r->visible){
    const auto before=out.size();
    float x=p.x+r->x*p.sx,y=-p.y+r->y*p.sy,w=r->w*p.sx,h=r->h*p.sy,alpha=a*r->alpha;
@@ -299,12 +324,10 @@ public:
   float x=align<0?cx:align>0?cx-w:cx-w/2;
   quad(i,x,y,w,h,1,tint);
  }
- void textSprite(unsigned index,const UiPaneInfo& pane,Pose p,uint32_t color=0xffffffff){
+ void textSprite(unsigned index,const UiPaneInfo& pane,Pose p,uint32_t color=0xffffffff){diag::ComposeTimer diagTimer_(8);
   if(index>=std::size(UiSprites)||!pane.visible)return;
-  if(layout.role==UiMenuRole::Description){
-   const char* caption=UiSprites[index].text;
-   for(unsigned i=0;i<std::size(UiSprites);++i)
-    if(!std::strncmp(UiSprites[i].key,"footer_caption_",15)&&!std::strcmp(UiSprites[i].text,caption)){index=i;break;}
+  if(layout.role==UiMenuRole::Description&&std::strncmp(UiSprites[index].key,"name_glyph_",11)){
+   index=footerCaption(index);
   }
   const auto& glyphs=UiSprites[index];const auto& cell=UiFontCells[glyphs.font];
   float w=glyphs.w*(pane.fontW>0?pane.fontW/cell[0]:pane.h/cell[1])*p.sx;
@@ -446,12 +469,17 @@ public:
  }
  // Existing native-font name glyphs allow runtime option values without
  // adding texture assets or using a platform/system font.
- void optionText(const char* value,const UiPaneInfo& original,Pose p,float cellW=296,float cellH=31){
-  if(transition&&transition->preload)value=onlinePage(layout.page)||layout.page==UiPage::LicenseSettings?OnlineAlphabet:"0123456789% Change Miis Erase License LED: Off Items + Events Drifts Dynamic Shadows On Brightness Graphics: Auto Quality Performance";
+ void optionText(const char* value,const UiPaneInfo& original,Pose p,float cellW=296,float cellH=31,bool fixed=false){
+  // A page's preload must make every value's glyph resident. Each character
+  // is preloaded once: the full list ran past the 128-glyph cap, so Settings
+  // never loaded "F", "R" or "p" and drew "Opponent Detail: educed".
+  const bool preload=!fixed&&transition&&transition->preload;
+  if(preload)value=onlinePage(layout.page)?OnlineAlphabet:"0123456789% Change Miis Erase License LED: Off Items + Events Drifts Brightness Texture Quality High Low Dynamic Shadows On Bloom Opponent Detail Full 800px Mode Minimap 30fps Speedometer Timer Minimal Map: Turns with Kart Fixed";
+  bool seen[256]{};
   unsigned indices[128]{},count=0;float widths[128]{},total=0;
   for(const unsigned char* ch=reinterpret_cast<const unsigned char*>(value);*ch&&count<128;++ch){
-   char key[32];std::snprintf(key,sizeof key,"name_glyph_%04x",unsigned(*ch));
-   const auto index=lookup().find(key);if(index>=std::size(UiSprites))continue;
+   if(preload){if(seen[*ch])continue;seen[*ch]=true;}
+   const auto index=glyphSprite(unsigned(*ch));if(index>=std::size(UiSprites))continue;
    indices[count]=index;const auto& glyph=UiSprites[index];
    widths[count]=glyph.w*original.fontH/UiFontCells[0][1]*YScale/XScale;total+=widths[count++];
   }
@@ -459,23 +487,76 @@ public:
   // Fit the complete run to the LCD button, not the much narrower Wii
   // source pane. Its characters and their advances use the SAME scale.
   const float groupScale=std::min(cellW/layout.w,cellH/layout.h);
-  const float fit=std::min(1.f,(cellW-32.f)/(total*p.sx*XScale*groupScale));
+  // 240 rather than the button's 264 (296 cells): the focused row's motion grows
+  // the run, and "Opponent Detail: Full" must stay inside its frame.
+  const float fit=std::min(1.f,(cellW>=296.f?cellW-56.f:cellW-32.f)/(total*p.sx*XScale*groupScale));
   float x=original.x+(original.w-total*fit)*.5f;
   for(unsigned i=0;i<count;++i){auto cell=original;cell.x=x;cell.w=widths[i]*fit;cell.fontW*=fit;cell.fontH*=fit;cell.textAlign=0;
    textSprite(indices[i],cell,p);x+=cell.w;}
  }
- void text(const char* text,const char* base,Pose p={},uint32_t tint=0xffffffff,const char* name="text"){
+ // A native-font glyph run in top-screen pixels: align -1 ends at x, 0
+ // centres on x, 1 starts at x. The pause controls diagram's labels.
+ void screenText(const char* value,float x,float centerY,float height,int align,uint32_t tint=0xffffffff,bool outline=false){
+  unsigned indices[32]{},count=0;float widths[32]{},total=0;
+  const float cell=UiFontCells[0][1];
+  for(const unsigned char* ch=reinterpret_cast<const unsigned char*>(value);*ch&&count<32;++ch){
+   const auto index=glyphSprite(unsigned(*ch));if(index>=std::size(UiSprites))continue;
+   indices[count]=index;widths[count]=UiSprites[index].w*height/cell;total+=widths[count++];
+  }
+  const float left=std::round(align<0?x-total:align>0?x:x-total*.5f);
+  // Small letters lose the font's own outline when minified (no mipmaps):
+  // outline ones draw a black copy half a pixel to each side first (filtered,
+  // so it fills the gaps without doubling the font's own outline).
+  constexpr float offsets[5][2]={{-.5f,0},{.5f,0},{0,-.5f},{0,.5f},{0,0}};
+  for(unsigned pass=outline?0:4;pass<5;++pass){
+   float at=left+offsets[pass][0];
+   for(unsigned i=0;i<count;++i){
+    // Whole pixels: the minified glyphs keep the same texels every frame.
+    const float h=UiSprites[indices[i]].h*height/cell,top=std::round(centerY-h*.5f)+offsets[pass][1];
+    const auto first=out.size();
+    quad(indices[i],(at-200.f)/XScale,(top-120.f)/YScale,widths[i]/XScale,h/YScale,1,pass<4?0x000000ffu:tint,{},true);
+    if(out.size()>first)out.back().menu.preserveAspect=true;
+    at+=widths[i];
+   }
+  }
+ }
+ // The Wii PauseMenu's controller page for the 3DS: labels and button
+ // letters over the diagram the renderer draws (tools/cook_pause_controls.py
+ // holds the same icon positions: L 163, R 237, Circle Pad 136, A 264).
+ void pauseControls(){
+  group(UiMenuRole::Content);
+  constexpr float top=32,bottom=104,size=16;
+  screenText("Use Item",163-13,top,size,-1);
+  screenText("Brake/Drift",237+13,top,size,1);
+  screenText("Steer",136-12,bottom,size,-1);
+  screenText("Accelerate",264+12,bottom,size,1);
+  // Icon letters at sizes the font's outline survives (no mipmaps).
+  // L/R centred in their 14 px domes (rows top-7..top+7), clear of both edges.
+  screenText("L",163,top-.5f,11,0,0xffffffffu,true);
+  screenText("R",237,top-.5f,11,0,0xffffffffu,true);
+  screenText("A",264,bottom,14,0);
+ }
+ void text(const char* text,const char* base,Pose p={},uint32_t tint=0xffffffff,const char* name="text"){diag::ComposeTimer diagTimer_(9);
   const auto* r=pane(base,name);if(!r)return;
+  if(layout.page==UiPage::Settings&&layout.role==UiMenuRole::Choice){optionText(text,*r,p);return;}
   if(layout.page==UiPage::LicenseSettings&&layout.role==UiMenuRole::Choice){optionText(text,*r,p,296,LicenseRowH);return;}
   if(onlinePage(layout.page)&&layout.role==UiMenuRole::Choice){const auto cell=onlineCell(layout.page);optionText(text,*r,p,cell[0],cell[1]);return;}
   const auto* shadow=pane(base,"text_shadow");
   if(!shadow&&!std::strcmp(name,"text"))shadow=pane(base,"TextBox_sha");
+  // Pause labels not baked by this menu cook ("Continue Game") use the
+  // native-font glyphs; their text is fixed, so preload draws it as is.
+  if(layout.page==UiPage::Pause&&lookup().find(text,true)>=std::size(UiSprites)){
+   if(shadow)optionText(text,*shadow,p,true);
+   optionText(text,*r,p,true);
+   if(!std::strcmp(name,"text"))selectionGlow(base,p,text);
+   return;
+  }
   if(shadow)textSprite(lookup().find(text,true,shadow->font,shadow->textStyle),*shadow,p);
   textSprite(lookup().find(text,true,r->font,r->textStyle),*r,p,tint);
   if(!std::strcmp(name,"text"))selectionGlow(base,p,text);
  }
  // Main-menu ink stays fixed. Confirmation deforms a separate light copy.
- void mainText(const char* value,const char* base,Pose p,const char* name="text"){
+ void mainText(const char* value,const char* base,Pose p,const char* name="text"){diag::ComposeTimer diagTimer_(10);
   const auto* r=pane(base,name);if(!r)return;
   const auto first=out.size();
   Pose stable=p;stable.source=nullptr;
@@ -509,7 +590,7 @@ public:
    out.push_back(q);
   }
  }
- void licensePortrait(const char* base,Pose p,unsigned slot){
+ void licensePortrait(const char* base,Pose p,unsigned slot){diag::ComposeTimer diagTimer_(11);
   if(slot>=state.licenseOccupied.size()||!state.licenseOccupied[slot])return;
   const auto* original=pane(base,"mii");if(!original)return;
   // The authored head-only pane extends above the blue frame. Our complete
@@ -523,7 +604,7 @@ public:
   const auto first=out.size();quad(~0u,x,y,w,h,alpha,0xffffffff,p,true);
   if(out.size()>first)out.back().licensePortrait=slot;
  }
- void licenseName(const char* base,Pose p,unsigned slot){
+ void licenseName(const char* base,Pose p,unsigned slot){diag::ComposeTimer diagTimer_(12);
   licensePortrait(base,p,slot);
   if(slot>=state.licenseNames.size())return;
   const auto& name=state.licenseNames[slot];
@@ -532,9 +613,8 @@ public:
   unsigned indices[10]{},count=0;float widths[10]{},total=0;
   for(auto code:name){
    if(!code)break;
-   char key[32];std::snprintf(key,sizeof key,"name_glyph_%04x",unsigned(code));
-   auto index=lookup().find(key);
-   if(index>=std::size(UiSprites))index=lookup().find("name_glyph_003f");
+   auto index=glyphSprite(unsigned(code));
+   if(index>=std::size(UiSprites))index=glyphSprite(0x3f);
    if(index>=std::size(UiSprites))continue;
    const auto& glyph=UiSprites[index];indices[count]=index;
    widths[count]=glyph.w*original->fontH/UiFontCells[0][1]*YScale/XScale;
@@ -548,8 +628,28 @@ public:
    textSprite(indices[i],cell,p);x+=cell.w;
   }
  }
- void icon(const char* prefix,unsigned i,const char* base,const char* name,Pose p={},float a=1,uint32_t tint=0xffffffff){char key[64];std::snprintf(key,sizeof key,"%s%u",prefix,i);const auto first=out.size();inPane(key,base,name,p,a);for(auto at=first;at<out.size();++at){out[at].menu.preserveAspect=true;out[at].tint=tint;}}
- void licenseTrophies(const char* base,Pose p,unsigned slot){
+ // A runtime caption (ghost names and times) in the native-font name glyphs.
+ void glyphText(const char* value,const char* base,Pose p,const char* name="text",bool fixed=false){
+  // The preload makes every glyph of every possible label resident ("Your
+  // Ghost" lost its Y and u without them).
+  if(!fixed&&transition&&transition->preload)value="Staff Ghost Expert Your 0123456789:.";
+  const auto* original=pane(base,name);if(!original)return;
+  unsigned indices[48]{},count=0;float widths[48]{},total=0;
+  for(const unsigned char* ch=reinterpret_cast<const unsigned char*>(value);*ch&&count<48;++ch){
+   const auto index=glyphSprite(unsigned(*ch));if(index>=std::size(UiSprites))continue;
+   const auto& glyph=UiSprites[index];indices[count]=index;
+   widths[count]=glyph.w*original->fontH/UiFontCells[0][1]*YScale/XScale;total+=widths[count++];
+  }
+  if(total<=0)return;
+  // 90% of the pane: the focused row's motion grows the run, and "Expert
+  // Staff Ghost 2:04.800" at the full pane width touched its frame.
+  const float fit=std::min(1.f,original->w*.9f/total);
+  float x=original->x+(original->w-total*fit)*.5f;
+  for(unsigned i=0;i<count;++i){auto cell=*original;cell.x=x;cell.w=widths[i]*fit;cell.fontW*=fit;cell.fontH*=fit;cell.textAlign=0;
+   textSprite(indices[i],cell,p);x+=cell.w;}
+ }
+ void icon(const char* prefix,unsigned i,const char* base,const char* name,Pose p={},float a=1,uint32_t tint=0xffffffff){diag::ComposeTimer diagTimer_(13);char key[64];std::snprintf(key,sizeof key,"%s%u",prefix,i);const auto first=out.size();inPane(key,base,name,p,a);for(auto at=first;at<out.size();++at){out[at].menu.preserveAspect=true;out[at].tint=tint;}}
+ void licenseTrophies(const char* base,Pose p,unsigned slot){diag::ComposeTimer diagTimer_(14);
   const auto& flags=state.licenseUnlocks[slot];
   const char* cupNames[]={"n_0_kinoko","n_1_flower","n_2_star","n_3_special","r_0_koura","r_1_banana","r_2_konoha","r_3_thunder"};
   const char* questions[]={nullptr,nullptr,"n_2_hatena","n_3_hatena",nullptr,nullptr,"r_2_hatena","r_3_hatena"};
@@ -572,7 +672,7 @@ public:
   }
   if(transition&&transition->preload)for(unsigned rank=1;rank<=3;++rank){char key[32];std::snprintf(key,sizeof key,"license_trophy_%u",rank);inPane(key,base,"cc50_00",p);}
  }
- void movie(const char* prefix,unsigned i,const char* base,const char* name,Pose p={},float a=1,float u0=0,float v0=0,float u1=1,float v1=1){
+ void movie(const char* prefix,unsigned i,const char* base,const char* name,Pose p={},float a=1,float u0=0,float v0=0,float u1=1,float v1=1){diag::ComposeTimer diagTimer_(15);
   char key[80];std::snprintf(key,sizeof key,"%s%u",prefix,i);
   unsigned frame=0;if(const auto* movie=uiFindMovie(key))frame=unsigned(double(state.age)*movie->fps*UiMovieFrameCount/(60.0*movie->frames))%UiMovieFrameCount;
   char sampled[96];std::snprintf(sampled,sizeof sampled,"%s_%u",key,frame);
@@ -582,7 +682,7 @@ public:
    if(const unsigned n=uiFindMovieRegion(key);n<std::size(UiMovieRegions))q.movie=n;
   }
  }
- void glowGroup(const char* family,Pose p,const char* caption,unsigned icon,bool pulse=false,bool textOnly=false){
+ void glowGroup(const char* family,Pose p,const char* caption,unsigned icon,bool pulse=false,bool textOnly=false){diag::ComposeTimer diagTimer_(16);
   if(!p.source)return;
   const bool preload=transition&&transition->preload;
   const bool clicked=transition&&!transition->entering&&!transition->back&&
@@ -646,7 +746,7 @@ public:
   }
  }
  void glow(const char* family,Pose p,const char* caption=nullptr,unsigned icon=~0u){glowGroup(family,p,caption,icon);}
- void selectionGlow(const char* key,Pose p,const char* caption=nullptr){
+ void selectionGlow(const char* key,Pose p,const char* caption=nullptr){diag::ComposeTimer diagTimer_(17);
   // Every button owns this pulse, including a just-deselected button.
   // Underlays wait for their overlay; glows themselves must not recurse.
   if(std::strstr(key,"_ok")||std::strstr(key,"_selectin")||std::strstr(key,"_underlay")||std::strstr(key,"focus_")||std::strstr(key,"panel_tail_"))return;
@@ -665,12 +765,18 @@ public:
   auto key=buttonState(base,slot);panel(key.c_str(),p);
   if(caption){text(caption,key.c_str(),p);if(state.cursor==slot)glow(base,p,caption);}
  }
- void chrome(const char* title,const char* description=""){
+ // glyphs: the description has no baked caption; it is set from the name glyphs.
+ void chrome(const char* title,const char* description="",bool glyphs=false){diag::ComposeTimer diagTimer_(18);
   group(UiMenuRole::Header);panel("header",motionOnly("MenuObiTop","MenuObiTop"));
   group(UiMenuRole::Footer);panel("footer",control("MenuObiBottom","MenuObiBottom"));
   const auto titlePose=control("MenuObiTitleText","MenuObiTitleText");groupPane(UiMenuRole::Title,titlePose,"header_text","text");text(title,"header_text",titlePose);
   Pose back=control("Back","ButtonBack");groupPane(UiMenuRole::Back,back,"back_free","touch");panel("back_free",back);inPane("button_back","back_free","text",back);
-  if(*description){const auto p=control("MenuObiInstructionText","MenuObiInstructionText");groupPane(UiMenuRole::Description,p,"footer_help","text");text(description,"footer_help",p,0xffffffff);}
+  if(*description){const auto p=control("MenuObiInstructionText","MenuObiInstructionText");groupPane(UiMenuRole::Description,p,"footer_help","text");
+   if(glyphs)glyphText(description,"footer_help",p,"text",true);else text(description,"footer_help",p,0xffffffff);}
+  group(UiMenuRole::Content);
+ }
+ void bareTitle(const char* title){
+  const auto titlePose=control("MenuObiTitleText","MenuObiTitleText");groupPane(UiMenuRole::Title,titlePose,"header_text","text");text(title,"header_text",titlePose);
   group(UiMenuRole::Content);
  }
  void timeTrialBest(){
@@ -802,12 +908,17 @@ public:
   // The normal footer uses complete 51px BRFNT cells, at LCD y222/h14.
   // Whole fragments preserve CWDH advances and their shared baseline.
   constexpr float height=14.f,icon=14.f,y=222.f;
+  const unsigned stars=grade>=1&&grade<=3?4-grade:0;
+  constexpr float starHeight=18.f,starGap=2.f;
+  const auto& starRect=CupRecordIconRects[5];
+  const float starWidth=starHeight*float(starRect[2])/float(starRect[3]);
+  const float gradeWidth=stars?stars*starWidth+(stars-1)*starGap:icon;
   auto fragment=[&](const char* value){char key[40];
    if(!std::strcmp(value,label))std::snprintf(key,sizeof key,"menu_record_class_%u",cc);
    else std::snprintf(key,sizeof key,"%s",!std::strcmp(value,"--")?"menu_record_none":"menu_record_rank");
    return lookup().find(key);};
   auto width=[&](const char* value){const auto i=fragment(value);return i<std::size(UiSprites)?height*UiSprites[i].w/UiSprites[i].h:0.f;};
-  float x=200.f-(width(label)+icon+width(" Rank: ")+icon)*.5f;
+  float x=200.f-(width(label)+icon+width(" Rank: ")+gradeWidth)*.5f;
   group(UiMenuRole::CupRecord);const auto firstRecord=out.size();
   auto sprite=[&](unsigned index,float w,float h,uint32_t tint=0xffffffffu){
    const auto begin=out.size();quad(index,(x-200.f)/XScale,(y-120.f+(height-h)*.5f)/YScale,w/XScale,h/YScale,1,tint,{},true);
@@ -815,9 +926,9 @@ public:
    x+=w;
   };
   auto text=[&](const char* value){sprite(fragment(value),width(value),height);};
-  auto recordIcon=[&](unsigned n){
+  auto recordIcon=[&](unsigned n,float w=14.f,float h=14.f){
    const auto& rect=CupRecordIconRects[n];const auto first=out.size();
-   sprite(lookup().find("cup_record_rank_atlas"),icon,icon);
+   sprite(lookup().find("cup_record_rank_atlas"),w,h);
    if(out.size()>first){auto& q=out.back();const float width=q.h*float(rect[2])/float(rect[3]);q.x+=(q.w-width)*.5f;q.w=width;
     q.u0=float(rect[0])/CupRecordAtlasWidth;q.v0=float(rect[1])/CupRecordAtlasHeight;
     q.u1=float(rect[0]+rect[2])/CupRecordAtlasWidth;q.v1=float(rect[1]+rect[3])/CupRecordAtlasHeight;
@@ -829,7 +940,9 @@ public:
   if(trophy>=1&&trophy<=3)recordIcon(trophy-1);
   else{const float next=x+icon;text("--");x=next;}
   text(" Rank: ");
-  if(grade>=1&&grade<=8)recordIcon(grade+2);else text("--");
+  if(stars){
+   for(unsigned i=0;i<stars;++i){recordIcon(5,starWidth,starHeight);if(i+1<stars)x+=starGap;}
+  }else if(grade>=4&&grade<=8)recordIcon(grade+2);else text("--");
   // Centre actual emitted artwork too: a missing record's dashes and a
   // narrow rank glyph need not occupy the complete nominal icon slot.
   float left=400.f,right=0.f;
@@ -845,7 +958,7 @@ public:
 };
 }
 std::vector<UiQuad> composeMenu(const MenuState& state,const UiRaceView& race){std::vector<UiQuad> out;composeMenu(state,race,out);return out;}
-static void composeMenuImpl(const MenuState& s,const UiRaceView& race,std::vector<UiQuad>& q,const UiTransitionView* transition){
+static void composeMenuImpl(const MenuState& s,const UiRaceView& race,std::vector<UiQuad>& q,const UiTransitionView* transition){diag::ComposeTimer diagTimer_(19);
  // The race and its end-of-race menu draw themselves (RaceFlowUi draws the
  // retail result boards and buttons over the running race).
  q.clear();q.reserve(256);if(s.page==UiPage::Race||s.page==UiPage::Results)return;
@@ -905,9 +1018,10 @@ static void composeMenuImpl(const MenuState& s,const UiRaceView& race,std::vecto
  if(s.page!=UiPage::Confirm&&s.page!=UiPage::DriftHelp){
   char artwork[48];std::snprintf(artwork,sizeof artwork,"title_%s_%u",
       s.page==UiPage::MainMenu||s.page==UiPage::License?"blur_scene":"scene",std::min(s.titleArtwork,5u));
-  c.panel(s.page==UiPage::Title||s.page==UiPage::Intro||s.page==UiPage::MainMenu||s.page==UiPage::License?artwork:"background");
+  c.panel(s.page==UiPage::Title||s.page==UiPage::Intro||s.page==UiPage::MainMenu||s.page==UiPage::License?artwork:
+      s.page==UiPage::Settings?"background_option":"background");
  }
- if(s.page==UiPage::License||s.page==UiPage::MainMenu)c.panel("background");
+ if(s.page==UiPage::License||s.page==UiPage::MainMenu)c.panel("background_lines");
  c.group(UiMenuRole::Content);
  switch(s.page){
  case UiPage::Unlock:{
@@ -981,19 +1095,16 @@ static void composeMenuImpl(const MenuState& s,const UiRaceView& race,std::vecto
   c.chrome(favorites?"Favorites":other?"Other Records":"General");break;
  }
  case UiPage::LicenseSettings:{
-  // Reuse the original control and game-font text, including the two port options.
-  const char* variants[]={"ChangeMii","Delete","ChangeMii","ChangeMii","ChangeMii","ChangeMii","ChangeMii","ChangeMii"};
+  // Reuse the original control and game-font text, including the port options.
+  const char* variants[]={"ChangeMii","Delete","ChangeMii","ChangeMii","ChangeMii","ChangeMii","ChangeMii"};
   const char* modes[]={"Off","Items","Items + Events","Items + Events + Drifts"};
-  char ledLabel[64],shadowLabel[64],brightnessLabel[48],graphicsLabel[48],timerLabel[48],mapLabel[48];
-  const char* graphicsNames[]={"Auto","Quality","Performance","Balanced"};
-  std::snprintf(graphicsLabel,sizeof graphicsLabel,"Graphics: %s",graphicsNames[std::min(s.selection.graphics,3u)]);
+  char ledLabel[64],brightnessLabel[48];
   std::snprintf(brightnessLabel,sizeof brightnessLabel,"LED Brightness: %u%%",s.selection.ledBrightness);
   std::snprintf(ledLabel,sizeof ledLabel,"LED: %s",modes[std::min(s.selection.ledMode,3u)]);
-  std::snprintf(shadowLabel,sizeof shadowLabel,"Dynamic Shadows: %s",s.selection.dynamicShadows?"On":"Off");
-  std::snprintf(timerLabel,sizeof timerLabel,"Race Timer: %s",s.selection.raceTimer?"Shown":"Hidden");
-  std::snprintf(mapLabel,sizeof mapLabel,"Map: %s",s.selection.mapTurns?"Turns with Kart":"Fixed");
-  const char* labels[]={"Change Miis","Erase License",ledLabel,shadowLabel,brightnessLabel,graphicsLabel,timerLabel,mapLabel};
-  for(unsigned i=0;i<8;++i){const auto row=control("LicenseManagementButton",variants[i],i);
+  const char* labels[]={"Change Miis","Erase License",ledLabel,brightnessLabel,s.selection.speedometer?"Speedometer: On":"Speedometer: Off",
+                        s.selection.raceTimer==0?"Timer: Off":s.selection.raceTimer==2?"Timer: Full":"Timer: Minimal",
+                        s.selection.mapTurns?"Map: Turns with Kart":"Map: Fixed"};
+  for(unsigned i=0;i<7;++i){const auto row=control("LicenseManagementButton",variants[i],i);
    c.group(UiMenuRole::Choice,i,row,"license_management_free");c.button("license_management",i,row,labels[i]);}
   // The card displays this license's saved cups; its identity stays separate
   // from whichever driver is currently selected for the next race.
@@ -1002,16 +1113,28 @@ static void composeMenuImpl(const MenuState& s,const UiRaceView& race,std::vecto
   c.chrome("License Settings");break;
  }
  case UiPage::Settings:{
-  const char* variants[]={"Rumble","Network","ChannelInstall"};
-  const char* captions[]={"Nintendo GameCube Controller","Network Settings","Mario Kart Channel"};
-  for(unsigned i=0;i<3;++i){auto p=control("OptionTopButton",variants[i],i);c.group(UiMenuRole::Choice,i,p,"settings_button_free");c.button("settings_button",i,p,captions[i]);}
-  c.chrome("Settings");break;
+  // The Wii's Settings page (its buttons, background and music) with the
+  // port's whole-game options. A, left and right switch the chosen row.
+  const char* variants[]={"Rumble","Network","ChannelInstall","ChannelInstall","ChannelInstall","ChannelInstall"};
+  const auto& o=s.settings;char captions[6][40];
+  std::snprintf(captions[0],sizeof captions[0],"Texture Quality: %s",o.textureQuality?"Low":"High");
+  std::snprintf(captions[1],sizeof captions[1],"Dynamic Shadows: %s",o.dynamicShadows?"On":"Off");
+  std::snprintf(captions[2],sizeof captions[2],"Bloom: %s",o.bloom?"On":"Off");
+  std::snprintf(captions[3],sizeof captions[3],"Opponent Detail: %s",o.opponentDetail?"Low":"Full");
+  std::snprintf(captions[4],sizeof captions[4],"800px Mode: %s",o.wide800?"On":"Off");
+  std::snprintf(captions[5],sizeof captions[5],"Minimap: %s",o.minimap60?"60fps":"30fps");
+  for(unsigned i=0;i<6;++i){auto p=control("OptionTopButton",variants[i],i);c.group(UiMenuRole::Choice,i,p,"settings_button_free");c.button("settings_button",i,p,captions[i]);}
+  c.chrome("Settings");
+  // The upper screen is only a live sample of the chosen row at its
+  // current value (SettingsPreview); the rows below name the values.
+  break;
  }
  case UiPage::License:{
   c.chrome("Select License");
   for(unsigned i=0;i<4;++i){char name[32];std::snprintf(name,sizeof name,"License%u",i);Pose p=control(i<2?"LicenseSelectT":"LicenseSelectB",name,i);const char* card=s.licenseOccupied[i]?(i<2?"license_top_used":"license_bottom_used"):(i<2?"license_top_empty":"license_bottom_empty");auto base=c.buttonState(card,i);c.group(UiMenuRole::Choice,i,p,(i<2?"license_top_empty_free":"license_bottom_empty_free"));c.panel(base.c_str(),p);if(s.licenseOccupied[i])c.licenseTrophies(base.c_str(),p,i);if(s.licenseOccupied[i])c.licenseName(base.c_str(),p,i);else c.text("NEW",base.c_str(),p,0xffffffff,"new");if(i==s.cursor)c.glow(card,p);
   }
-  // Wii-only Settings (GC rumble, WFC, Channel install) are hidden on 3DS.
+  // The Wii's corner Settings button opens the port's whole-game options.
+  {Pose option=control("LicenseSelectS","Option",4);c.group(UiMenuRole::Auxiliary,0,option,"option_free");auto optionBase=c.buttonState("option",4);c.panel(optionBase.c_str(),option);c.text("Settings",optionBase.c_str(),option);if(s.cursor==4)c.glow("option",option,"Settings");}
   break;
  }
  case UiPage::MainMenu:{
@@ -1339,15 +1462,18 @@ static void composeMenuImpl(const MenuState& s,const UiRaceView& race,std::vecto
   c.group(UiMenuRole::Choice,0,control("MenuEndConfirm","ButtonOK"),"confirm_free");c.button("confirm",0,control("MenuEndConfirm","ButtonOK"),"OK");break;
  }
  case UiPage::Pause:{
-  c.chrome("Pause");
+  // The Wii's PauseMenu: no title bar or Back button over the race.
+  // No menu banners over the paused race in any mode.
+  if(s.selection.mode!=UiMode::TimeTrials&&race.pauseControls)c.pauseControls();
   for(unsigned i=0;i<s.pauseCount();++i){
    auto p=control(uiPauseMenuControl(s),s.pauseVariant(i));
-   // Match the main project's three-action pause layout. TT retains its
-   // five authored slots, including course/character changes.
-   if(s.pauseCount()==3)p.y=90.f-float(i)*85.f;
-   else if(s.selection.mode==UiMode::TimeTrials){
-    // Five entries fit between the header and Back footer, including focus growth.
-    p.y=128.f-float(i)*64.f;p.sx*=.82f;p.sy*=.82f;
+   // GP/VS/BT keep the authored Continue Game/Quit Game rows (y -75/-150).
+   // TT retains its five slots, including course/character changes.
+   if(s.selection.mode==UiMode::TimeTrials){
+    // Five rows centred on the paused race (no banners), at the GP rows'
+    // scale. The button textures are fitted to that size: the old 0.82
+    // shrink minified them unfiltered (dashed end caps, blocky text glow).
+    p.y=136.f-float(i)*68.f;
    }
    // Use the common menu button's Select/SelectIn/OK font material and
    // tracks, retaining the authored pause positions/delays above.
@@ -1356,9 +1482,11 @@ static void composeMenuImpl(const MenuState& s,const UiRaceView& race,std::vecto
   }break;
  }
  case UiPage::EraseLicense:case UiPage::QuitConfirm:{
-  c.chrome(s.page==UiPage::EraseLicense?"Erase License?":"Quit this race?");auto yes=control("YesNoButton","Option0"),no=control("YesNoButton","Option1");
-  yes.x=no.x=0;yes.y=50;no.y=-55;
   const bool quit=s.page==UiPage::QuitConfirm;
+  // Over the paused race: the question without the menu banners or Back.
+  if(quit)c.bareTitle("Quit this race?");else c.chrome("Erase License?");
+  auto yes=control("YesNoButton","Option0"),no=control("YesNoButton","Option1");
+  yes.x=no.x=0;yes.y=50;no.y=-55;
   if(quit)yes.source=no.source="OptionTopButton";
   const char* family=quit?"settings_button":"button";
   const char* panel=quit?"settings_button_free":"button_free";
@@ -1375,7 +1503,9 @@ static void composeMenuImpl(const MenuState& s,const UiRaceView& race,std::vecto
  // license preview rectangle. Incoming license controls animate around it.
  if(s.page==UiPage::Title||(s.page==UiPage::License&&transition&&transition->active&&((transition->entering&&transition->from==UiPage::Title)||(!transition->entering&&transition->to==UiPage::Title)))){
   if(s.page==UiPage::Title){
-   c.group(UiMenuRole::Background);c.panel("background");
+   // The lower screen under the title: the License page's backdrop.
+   char blurred[32];std::snprintf(blurred,sizeof blurred,"title_blur_scene_%u",std::min(s.titleArtwork,5u));
+   c.group(UiMenuRole::Background);c.panel(blurred);c.panel("background_lines");
    c.group(UiMenuRole::Header);c.panel("header",motionOnly("MenuObiTop","MenuObiTop"));
    c.group(UiMenuRole::Footer);c.panel("footer",control("MenuObiBottom","MenuObiBottom"));
   }
@@ -1436,7 +1566,9 @@ void placeMenuQuad(const UiQuad& source,MenuRect target,bool lower,std::vector<U
  // Individually cooked native glyphs still form one string. Stretching
  // their centres with the button while preserving each glyph's aspect
  // produces tracking gaps; map the entire run about the button centre.
- if((g.page==UiPage::LicenseSettings||onlinePage(g.page))&&g.role==UiMenuRole::Choice&&
+ // Settings rows are the same native-glyph runs (optionText); without this
+ // their letters spread with the button and long values ran edge to edge.
+ if((g.page==UiPage::LicenseSettings||g.page==UiPage::Settings||onlinePage(g.page))&&g.role==UiMenuRole::Choice&&
     q.sprite<std::size(UiSprites)&&!std::strncmp(UiSprites[q.sprite].key,"name_glyph_",11))
   center[0]=target.x+target.w*.5f+(source.x+source.w*.5f-(g.x+g.w*.5f))*std::min(sx,sy);
  if(q.affine){for(auto& p:q.positions)p=point(p[0],p[1]);}
@@ -1503,9 +1635,8 @@ MenuRect menuChoiceRect(const UiQuad& q,const MenuState& state){
  case UiPage::BattleStage:return {12,34.f+35.f*i,296,30};
  case UiPage::VSRules:return {0,32.f+27.f*i,304,25};
  case UiPage::BattleRules:return {0,42.f+29.f*i,304,27};
- case UiPage::Settings:return {12,46.f+54.f*i,296,44};
- // Eight rows (Graphics, Race Timer, Map): tight spacing keeps the last
- // above the Back bar, which the six-row layout ended at (y 208).
+ case UiPage::Settings:return {12,33.f+29.f*i,296,26}; // six rows above Back
+ // Seven rows (Speedometer, Timer, Map): the last ends at 208, above the Back bar.
  case UiPage::LicenseSettings:return {12,LicenseRowTop+LicenseRowPitch*i,296,LicenseRowH};
  case UiPage::TeamConfirm:return {52,95,216,48};
  case UiPage::Confirm:return {72,83,176,80};
@@ -1525,6 +1656,7 @@ void layoutMenuScreens(const MenuState& state,const std::vector<UiQuad>& source,
  top.clear();bottom.clear();top.reserve(source.size());bottom.reserve(source.size());
  if(unchangedMenu(state.page)){top=source;for(auto& q:top)q.bottom=false;return;}
  const bool fullMovie=state.page==UiPage::Course||state.page==UiPage::BattleStage||state.page==UiPage::Confirm;
+ float glyphX=0;
  for(const auto& q:source){
   const auto& g=q.menu;const unsigned i=g.group;
   const bool upperConfirm=g.page==UiPage::Confirm;
@@ -1545,6 +1677,10 @@ void layoutMenuScreens(const MenuState& state,const std::vector<UiQuad>& source,
    placeMenuQuad(q,{14,6,372,20},false,top,true);if(!upperConfirm)placeMenuQuad(q,{12,6,296,20},true,bottom,true);break;
   case UiMenuRole::Description:
    {auto text=q;const auto& a=UiSprites[q.sprite];
+    // A description set from name glyphs: one glyph cell per quad, laid out
+    // left to right (the run is centred below).
+    if(!std::strncmp(a.key,"name_glyph_",11)){const float h=17.f,w=h*a.w/a.h;
+     text.x=glyphX;text.y=219;text.w=w;text.h=h;glyphX+=w;text.affine=false;text.bottom=false;top.push_back(text);break;}
     const float h=std::min(14.f,384.f*a.h/a.w),w=h*a.w/a.h;
     text.x=200-w*.5f;text.y=222;text.w=w;text.h=h;text.affine=false;
     text.bottom=false;top.push_back(text);break;}
@@ -1561,15 +1697,21 @@ void layoutMenuScreens(const MenuState& state,const std::vector<UiQuad>& source,
    break;
   }
   case UiMenuRole::Auxiliary:{
-   if(g.page==UiPage::MainMenu||g.page==UiPage::Drift||g.page==UiPage::VSMode||g.page==UiPage::BattleMode){
+   if(g.page==UiPage::MainMenu||g.page==UiPage::License||g.page==UiPage::Drift||g.page==UiPage::VSMode||g.page==UiPage::BattleMode){
     // Retail round panes are authored for the widescreen Wii canvas.
     // Restore its source X/Y ratio rather than stretching the group to a box.
-    const float sy=50.f/g.h,sx=sy*(92.f/68.f)*YScale/XScale;
-    placeMenuQuad(q,{392-g.w*sx,3,g.w*sx,50},false,top);break;
+    // The license screen's Settings button sits in the lower screen's top
+    // right corner (the Wii's place for it), a little smaller.
+    const bool lower=g.page==UiPage::License;
+    const float h=lower?38.f:50.f,sy=h/g.h,sx=sy*(92.f/68.f)*YScale/XScale;
+    if(lower){placeMenuQuad(q,{316-g.w*sx,2,g.w*sx,h},true,bottom);break;}
+    placeMenuQuad(q,{392-g.w*sx,3,g.w*sx,h},false,top);break;
    }
    const auto cell=menuChoiceRect(q,state);
    const MenuRect rect=(g.page==UiPage::Cup||g.page==UiPage::BattleCup)?MenuRect{cell.x+(cell.w-88.f)*.5f,cell.y+39.3f,88,18.4f}:
-    (g.page==UiPage::VSRules||g.page==UiPage::BattleRules)?MenuRect{112,197,96,21}:
+    // The OK group is 246x40: a 96-wide box scaled it 0.39 across but 0.53
+    // down, and its caption (aspect kept) took the smaller scale, 8 px tall.
+    (g.page==UiPage::VSRules||g.page==UiPage::BattleRules)?MenuRect{96,197,128,21}:
     g.page==UiPage::DriftHelp?MenuRect{136,194,48,30}:
     g.page==UiPage::EngineClass?MenuRect{180,216,128,21}:MenuRect{178,210,132,28};
    placeMenuQuad(q,rect,true,bottom);break;
@@ -1637,7 +1779,7 @@ void layoutMenuScreens(const MenuState& state,const std::vector<UiQuad>& source,
    placeMenuQuad(q,{r.x-40,r.y-display::LowerOriginY,r.w,r.h},true,bottom);break;
   }
   case UiMenuRole::Content:
-   if(state.page==UiPage::Title){auto upper=q;upper.bottom=false;top.push_back(upper);break;}
+   if(state.page==UiPage::Title||state.page==UiPage::Settings){auto upper=q;upper.bottom=false;top.push_back(upper);break;}
    // Future untagged content remains visible, but does not move race UI.
    placeMenuQuad(q,{0,0,320,240},true,bottom);break;
   }
@@ -1727,10 +1869,19 @@ void layoutMenuScreens(const MenuState& state,const std::vector<UiQuad>& source,
 }
 std::uint32_t uiResidentTextureBytes(const std::vector<UiQuad>& quads){
  std::array<bool,std::size(UiSprites)> needed{};
- for(const auto& q:quads)if(q.vehicleIcon>=12&&q.movie>=std::size(UiMovieRegions)&&q.sprite<needed.size())needed[q.sprite]=true;
+ for(const auto& q:quads)if(q.vehicleIcon>=12&&q.movie>=std::size(UiMovieRegions)&&q.sprite<needed.size())needed[uiTextureSprite(q.sprite)]=true;
  std::uint32_t bytes=0;
  for(unsigned i=0;i<needed.size();++i)if(needed[i])bytes+=UiSprites[i].gpuBytes;
  return bytes;
+}
+void uiResidentTextureList(const std::vector<UiQuad>& quads,char* out,std::size_t size){
+ std::array<bool,std::size(UiSprites)> needed{};
+ for(const auto& q:quads)if(q.vehicleIcon>=12&&q.movie>=std::size(UiMovieRegions)&&q.sprite<needed.size())needed[uiTextureSprite(q.sprite)]=true;
+ std::size_t at=0;if(size)out[0]=0;
+ for(unsigned i=0;i<needed.size()&&at+1<size;++i)if(needed[i]){
+  const int n=std::snprintf(out+at,size-at,"%s%s %u",at?", ":"",UiSprites[i].key,UiSprites[i].gpuBytes/1024);
+  if(n<0)break;at+=std::size_t(n);
+ }
 }
 
 }

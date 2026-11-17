@@ -1,3 +1,5 @@
+#include <mkw/game_settings.hpp>
+#include <mkw/console_model.hpp>
 #include <mkw/sd_unpack.hpp>
 #include <mkw/drift_button.hpp>
 #include <mkw/mii_voice.hpp>
@@ -149,6 +151,8 @@ extern "C" u32 __stacksize__=128u<<10;
 
 namespace K = Kinoko;
 static constexpr const char* DATA = "sdmc:/3ds/mkw-3ds";
+// Whole-game options of the Settings page (include/mkw/game_settings.hpp).
+static constexpr const char* SettingsFile="sdmc:/3ds/mkw-3ds/settings.dat";
 namespace mkw {extern std::atomic<unsigned> fileOpens;extern std::atomic<unsigned long long> fileOpenTicks;}
 static bool exists(const char* p) { FILE* f=fopen(p,"rb"); if(!f)return false; fclose(f);return true; }
 static K::u8* replayData=nullptr;
@@ -590,7 +594,15 @@ int main() {
      // Load the selected profile before any strap/title input can reach
      // the shared menu autosave path. Rules must never be replaced by UiSelection defaults.
      if(licenseSaves[last].occupied)menu.selection=licenseSaves[last].settings;
-     else menu.selection.license=last;}
+     else menu.selection.license=last;
+     // Whole-game settings (the Settings page); UiSettings defaults on first boot.
+     mkw::loadGameSettings(SettingsFile,menu.settings);
+     // Old 3DS: Texture Quality Low, Dynamic Shadows Off, Bloom Off and Opponent
+     // Detail Low whatever the file says; the page answers every row with "Not
+     // available". Applied before savedSettings, so the Old 3DS game never
+     // rewrites the file a New 3DS shares.
+     if(!mkw::isNew3ds()&&!(kQa&&exists("sdmc:/3ds/mkw-3ds/full-quality.txt"))){menu.old3dsSettings=true;mkw::lockOld3dsSettings(menu.settings);}}
+    mkw::UiSettings savedSettings=menu.settings;
     mkw::MenuRenderer menuRenderer;
     struct LicensePortraitCache {mkw::NativeMii identity{};bool checked=false;std::vector<std::uint8_t> rgba;};
     std::array<LicensePortraitCache,4> licensePortraits;
@@ -683,7 +695,7 @@ int main() {
         // QA: the staff credits as well, when staff-preview.txt exists.
         if(kQa&&outcome==mkw::AwardSceneResult::Complete&&std::remove("sdmc:/3ds/mkw-3ds/staff-preview.txt")==0){
             LOGF("award preview complete, staff next");
-            outcome=mkw::runStaff(renderer,preview,mkw::NativeMii{},false,report,previewScenes);
+            outcome=mkw::runStaff(renderer,preview,mkw::NativeMii{},false,false,report,previewScenes);
         }
         LOGF("preview outcome %d",int(outcome));
         // A title preview owns its temporary root; restore all singleton services
@@ -970,6 +982,8 @@ int main() {
             return result;
         };
         while(aptMainLoop()){
+            // 800px Mode follows the Settings page live (never with bloom).
+            renderer.wideSetting=menu.settings.wide800&&!menu.settings.bloom;
             if(selectionSave&&selectionSave->done()){
                 menu.saveFailed=!selectionSave->ok;
                 if(selectionSave->ok)licenseSaves[selectionSave->slot]=selectionSave->value;
@@ -1008,6 +1022,10 @@ int main() {
                 menu.selection.ghostIndex%=std::max<unsigned>(1,unsigned(menu.ghosts.size()));
             }
             if(onlineStep(transition)){menuSound.leave();return leave(mkw::UiAction::StartRace);}
+            if(acceptedInput&&beforeInput.page==mkw::UiPage::Settings&&menu.page!=mkw::UiPage::Settings&&menu.settings!=savedSettings){
+                if(mkw::saveGameSettings(SettingsFile,menu.settings))savedSettings=menu.settings;
+                else menu.saveFailed=true;
+            }
             if(acceptedInput&&menu.selectRaceMiiRequest>=24){
                 mkw::LicenseIdentity identity;mkw::MiiAppearance appearance;mkw::MiiBodySpec body;
                 const unsigned outfit=unsigned(menu.selectRaceMiiRequest-24);
@@ -1394,11 +1412,17 @@ int main() {
         // License Settings > Graphics, applied before the race loads (some reductions
         // apply at load). Test builds: qa-graphics.txt (0-3) overrides it.
         {
-            bool isNew3ds=false;APT_CheckNew3DS(&isNew3ds);unsigned graphics=menu.selection.graphics;int qaShadow=-1;
-            if(kQa)if(FILE* f=std::fopen("sdmc:/3ds/mkw-3ds/qa-graphics.txt","r")){unsigned g=0,shadow=1;const int n=std::fscanf(f,"%u %u",&g,&shadow);if(n>=1)graphics=std::min(g,2u);if(n==2){menu.selection.dynamicShadows=shadow!=0;qaShadow=int(shadow!=0);}std::fclose(f);}
-            const bool mipmaps=mkw::renderQuality().mipmaps;mkw::renderQuality().setGraphics(graphics,isNew3ds);mkw::renderQuality().mipmaps=mipmaps;
-            if(kQa&&qaShadow>=0)mkw::renderQuality().dynamicShadow=qaShadow!=0;
-            LOGF("graphics %u (%s)",graphics,mkw::renderQuality().reduced?"reduced":"full");
+            // The Settings page's options (Old 3DS keeps its reductions whatever
+            // they say): texture size, opponent detail, bloom, and the lower
+            // screen at 30 or 60 FPS. Test builds: qa-graphics.txt "g shadow" sets the shadow.
+            auto& quality=mkw::renderQuality();
+            if(kQa)if(FILE* f=std::fopen("sdmc:/3ds/mkw-3ds/qa-graphics.txt","r")){unsigned g=0,shadow=1;const int n=std::fscanf(f,"%u %u",&g,&shadow);if(n==2)menu.settings.dynamicShadows=shadow!=0;std::fclose(f);}
+            quality.halfLargeTextures=quality.reduced||menu.settings.textureQuality!=0;
+            quality.racerLod=quality.reduced||menu.settings.opponentDetail!=0;
+            quality.dynamicShadow=menu.settings.dynamicShadows;
+            renderer.bloomEnabled=menu.settings.bloom;
+            quality.bottomInterval=(!quality.reduced&&!menu.settings.minimap60)?2:1;
+            LOGF("settings: textures %s, shadows %s, bloom %s, opponents %s, minimap %s (%s)",menu.settings.textureQuality?"low":"high",menu.settings.dynamicShadows?"on":"off",menu.settings.bloom?"on":"off",menu.settings.opponentDetail?"low":"full",menu.settings.minimap60?"60":"30",quality.reduced?"reduced":"full");
         }
         // Time Trials: race or watch the ghost chosen on the ghost page (the
         // player's best, a friend's or a Wii's in ghosts/, or the disc's staff ghosts).
@@ -1999,14 +2023,14 @@ int main() {
         if(timeTrial){raceItems->reset({},raceGrid.count());raceItems->give(0,mkw::ItemKind::TripleMushroom);if(ghostRace)raceItems->give(1,mkw::ItemKind::TripleMushroom);}
         if(reload){if(!opponents.load()){trackLoadFailed=true;report("FAIL opponent graphics load");}}
         else opponents.resetAnimation();
-        LOGF("race_grid count=%u opponents=%u low_only=%u route=%d item_boxes=%u linear_free=%lu",raceGrid.count(),opponents.count(),opponents.lowOnlyCount(),raceGrid.routeReady(),unsigned(raceItems->boxes().size()),(unsigned long)linearSpaceFree());
+        LOGF("race_grid count=%u opponents=%u low_drivers=%u route=%d item_boxes=%u linear_free=%lu",raceGrid.count(),opponents.count(),opponents.lowDriverCount(),raceGrid.routeReady(),unsigned(raceItems->boxes().size()),(unsigned long)linearSpaceFree());
     };
     // The race bottom screen (docs/BOTTOM_SCREEN.md). Bloom's VRAM targets come
     // first, so the course's first bloom request (below) still finds its room.
     auto loadBottomScreen=[&](){
         const auto* bloom=mkw::courseBloom(Courses[courseChoice].archive);
-        if(!effectsTest&&mkw::renderQuality().bloom&&bloom&&bloom->enabled()&&!renderer.reserveBloom()){report("FAIL required bloom targets");return false;}
-        if(!effectsTest&&!renderer.configurePlayerShadow(menu.selection.dynamicShadows&&mkw::renderQuality().dynamicShadow))report("WARN player shadow target unavailable; native volume retained");
+        if(!effectsTest&&renderer.bloomEnabled&&bloom&&bloom->enabled()&&!renderer.reserveBloom()){report("FAIL required bloom targets");return false;}
+        if(!effectsTest&&!renderer.configurePlayerShadow(menu.settings.dynamicShadows))report("WARN player shadow target unavailable; native volume retained");
         if(!renderer.configureStadiumScreen(!effectsTest&&(int(Courses[courseChoice].id)==18||int(Courses[courseChoice].id)==6||int(Courses[courseChoice].id)==35))){report("FAIL stadium screen targets");return false;}
         if(!bottomScreen.load(renderer,courseChoice)){report("FAIL required bottom screen");return false;}
         if(driverChoice>=24&&!bottomScreen.setMiiPortrait(renderer,selectedRaceMii)){report("FAIL Mii map portrait");return false;}
@@ -2348,7 +2372,6 @@ int main() {
         target.y+=cameraKart->param()->camera().targetPosY-cameraKart->cameraDistY();
     };
     mkw::Job playerJob;bool playerJobQueued=false;
-    bool lowerDrewLast=false; // Performance graphics: the lower screen at 30 FPS
     mkw::DriftButton driftButton; // A while holding R does not hop
     const bool smoke=(kQa&&exists("sdmc:/3ds/mkw-3ds/smoke-test.txt"));
     bool capturedBlue=false;
@@ -2363,6 +2386,7 @@ int main() {
         // the prior GPU queue without inserting a second VBlank wait.
         // No presentation job may run while anything below can step the race.
         mkw::jobWorker().finishAll();
+        renderer.wideSetting=menu.settings.wide800&&!menu.settings.bloom;
         if(awardPending){
             const auto awardTransitionStart=svcGetSystemTick();
             awardPending=false;
@@ -2382,7 +2406,7 @@ int main() {
             const auto ending=mkw::staffEnding(licenseSaves[slot],awardResults);
             if(outcome==mkw::AwardSceneResult::Complete&&ending!=mkw::StaffEnding::None){
                 outcome=mkw::runStaff(renderer,awardResults,licenseSaves[slot].nativeMii,
-                    ending==mkw::StaffEnding::True,report,scenes);
+                    ending==mkw::StaffEnding::True,mkw::licenseCompleted(licenseSaves[slot].unlockFlags,ending==mkw::StaffEnding::True?56:57),report,scenes);
                 if(outcome==mkw::AwardSceneResult::Complete){
                     auto updated=licenseSaves[slot];const unsigned bit=ending==mkw::StaffEnding::True?56:57;
                     updated.unlockFlags[bit/32]|=1u<<(bit%32);
@@ -2564,7 +2588,7 @@ int main() {
             // Preserve the Wii input lattice used by ghost records.
             // Round dead zone, full lock at the rim; the vertical axis dives in
             // the air (Kinoko KartMove: stickY with airtime), as the Wii stick does.
-            const auto lattice=mkw::circlePadLattice(pad.dx,pad.dy);
+            const auto lattice=mkw::circlePadStick(pad.dx,pad.dy);
             int stick=lattice.x,stickY=lattice.y;
             if(garageTest){buttons=1;stick=frames%fixtureFrames<32?-4:4;stickY=0;}
             auto* controller=K::System::KPadDirector::Instance()->hostController();
@@ -3038,7 +3062,7 @@ int main() {
                             // The race has faded to black (RaceResultsFlow::Leaving).
                             // Keep full-file CRC/read/backup writes off the finish
                             // and score-count frames; commit before leaving the race.
-                            raceSound.carryResultMusic();
+                            raceSound.leaveResults(awardPending);
                             flushRaceSave();
                             if(results.finalRace()&&results.chosen()==0){
                                 std::array<uint8_t,12> vehicles{};
@@ -3051,6 +3075,8 @@ int main() {
                                 awardResults.calculateGrade(vsSet.performanceCourses);
                                 awardPending=mkw::hasAwardScene(awardResults);
                             }
+                            // The Wii fades the results music with the picture; only the ceremony keeps it.
+                            if(!awardPending)raceSound.fadeResultMusic(int(Flow::LeaveFrames));
                             sectionFadeIn=true;
                             vsSet.next=results.chosen()==0&&!results.finalRace();
                             if(menu.page==mkw::UiPage::Results){menu.cursor=unsigned(std::max(0,results.chosen()));nextRaceQueued=menu.input({false,false,false,false,true})==mkw::UiAction::StartRace;}
@@ -3624,7 +3650,7 @@ int main() {
             }
             profiler->mark(Profile::UiPrepare);
             if(fullRace&&!effectsTest&&(int(Courses[courseChoice].id)==18||int(Courses[courseChoice].id)==6||int(Courses[courseChoice].id)==35))courseObjects.requestStadiumScreen(renderer);
-            if(fullRace&&!effectsTest&&mkw::renderQuality().bloom)if(const auto* bloom=mkw::courseBloom(Courses[courseChoice].archive))renderer.requestBloom(*bloom);
+            if(fullRace&&!effectsTest&&renderer.bloomEnabled)if(const auto* bloom=mkw::courseBloom(Courses[courseChoice].archive))renderer.requestBloom(*bloom);
             {
                 // Fog follows the camera through KMP fog areas, one retail step per simulation step.
                 const unsigned steps=physicsSteps>retailFogSteps?physicsSteps-retailFogSteps:0;retailFogSteps=physicsSteps;
@@ -3722,7 +3748,7 @@ int main() {
             bool objectSupport=cameraKart->collisionData().bHasRoadVel;
             for(unsigned w=0;w<vehicleAnimation.wheelCount();++w)
                 objectSupport|=cameraKart->collisionData(w).bHasRoadVel;
-            const bool playerDynamicShadow=menu.selection.dynamicShadows&&mkw::renderQuality().dynamicShadow&&renderer.playerShadowReady();
+            const bool playerDynamicShadow=menu.settings.dynamicShadows&&renderer.playerShadowReady();
             // Test fixtures count clips while posing: they pose on this thread.
             playerJobQueued=fullRace&&!animationTest&&!effectsTest&&mkw::jobWorker().running();
             if(playerJobQueued){playerJob.reset(&runJob<decltype(posePlayer)>,&posePlayer);mkw::jobWorker().submit(playerJob);}
@@ -3858,8 +3884,7 @@ int main() {
                 std::array<const mkw::Model*,256> receivers{};unsigned count=0;
                 for(const auto& model:track)if(count<receivers.size())receivers[count++]=model.get();
                 const auto& objects=courseObjects.shadowReceivers(lakitu.position(),2400.f);
-                lakitu.drawShadow(renderer,receivers.data(),count,playerShadowLight,menu.selection.dynamicShadows&&mkw::renderQuality().dynamicShadow,
-                                  objects.data(),unsigned(objects.size()));
+                lakitu.drawShadow(renderer,receivers.data(),count,playerShadowLight,objects.data(),unsigned(objects.size()));
             }
             if(mergeJudgeShadow)renderer.setShadowUnion(false);
             renderer.drawSparks(driftEffects,sparkTexture);
@@ -3886,13 +3911,12 @@ int main() {
             if(fullRace&&menu.page!=mkw::UiPage::Race)menuRenderer.draw(renderer,raceQuads,false);
             // Leaving after the end-of-race menu: the scene fader covers everything.
             if(fullRace)renderer.drawScreenFade(results.leaveFade(),false);
-            // Performance graphics: the lower screen draws every other frame
-            // while the top presents at 60 (it keeps showing its last image).
-            // The first lower frame after the intro (and any fade out) always draws.
-            const bool lowerWanted=fullRace&&bottomScreen.active()&&!intro.active();
-            const bool lowerSkipped=lowerWanted&&lowerDrewLast&&mkw::renderQuality().lowerScreenHalfRate&&presentation.ticksPerSlot()==1&&results.leaveFade()<=0.f;
-            lowerDrewLast=lowerWanted&&!lowerSkipped;
-            if(lowerWanted&&!lowerSkipped){
+            // Settings > Minimap 30fps: the lower screen redraws every other frame
+            // (render_quality.hpp bottomInterval); an undrawn screen keeps its last
+            // picture. Fades draw every frame.
+            const unsigned bottomInterval=mkw::renderQuality().bottomInterval;
+            const bool bottomDue=bottomInterval<=1||results.leaveFade()>0||frames%bottomInterval==0;
+            if(fullRace&&bottomScreen.active()&&!intro.active()&&bottomDue){
                 // The lower LCD: the race read, never written (src/race_bottom_screen.cpp).
                 mkw::fillBottomView(bottomView,raceGrid,*raceItems,intro.active(),physicsSteps,results.leaveFade());
                 // License Settings: Race Timer and Map.

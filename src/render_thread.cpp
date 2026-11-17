@@ -447,7 +447,7 @@ void Renderer::cmdHashFrameEnd(void* self){
     if(!r.cmdHashActive_)return;
     r.cmdHashUpdate();r.cmdHashActive_=false;
     if(!r.cmdHashFile_){
-        r.cmdHashFile_=std::fopen("sdmc:/3ds/MKWiiDS/cmd-hash.csv","w");
+        r.cmdHashFile_=std::fopen("sdmc:/3ds/mkw-3ds/cmd-hash.csv","w");
         if(r.cmdHashFile_)std::fputs("frame,tick,words,hash,valid,buffers\n",r.cmdHashFile_);
     }
     if(r.cmdHashFile_){
@@ -458,7 +458,7 @@ void Renderer::cmdHashFrameEnd(void* self){
         if(r.cmdHashFrame_%120==0)std::fflush(r.cmdHashFile_);
     }
     if(r.cmdHashDumping_){
-        char path[96];std::snprintf(path,sizeof path,"sdmc:/3ds/MKWiiDS/cmd-dump-%05lu-%06lu.bin",(unsigned long)r.cmdHashTick_,(unsigned long)r.cmdHashFrame_);
+        char path[96];std::snprintf(path,sizeof path,"sdmc:/3ds/mkw-3ds/cmd-dump-%05lu-%06lu.bin",(unsigned long)r.cmdHashTick_,(unsigned long)r.cmdHashFrame_);
         if(FILE* f=std::fopen(path,"wb")){std::fwrite(r.cmdDumpWords_.data(),4,r.cmdDumpWords_.size(),f);std::fclose(f);}
         // One dump per listed tick.
         r.cmdDumpTicks_.erase(std::remove(r.cmdDumpTicks_.begin(),r.cmdDumpTicks_.end(),r.cmdHashTick_),r.cmdDumpTicks_.end());
@@ -586,22 +586,22 @@ void Renderer::execute(FrameList& list){
         }
         case CmdDrawAtScreen:{
             const auto& c=*static_cast<const DrawAtScreenCommand*>(body);
-            execFrame_=c.frame;execAdditive_=c.additive;
+            execFrame_=c.frame;execAdditive_=c.additive;execGhostPass_=0;
             drawAtScreenNow(*c.model,c.vertices,c.transform,c.x,c.y,c.brightness,c.scaleX,c.scaleY,c.material,c.context);break;
         }
         case CmdMenuIcon:{
             const auto& c=*static_cast<const MenuIconCommand*>(body);
-            execFrame_=c.frame;execAdditive_=c.additive;
+            execFrame_=c.frame;execAdditive_=c.additive;execGhostPass_=0;
             drawMenuIconNow(*c.model,c.vertices,c.transform,*c.quad);break;
         }
         case CmdMenuModelLayer:{
             const auto& c=*static_cast<const MenuModelLayerCommand*>(body);
-            execFrame_=c.frame;execAdditive_=c.additive;
+            execFrame_=c.frame;execAdditive_=c.additive;execGhostPass_=0;
             drawMenuModelLayerNow(*c.model,c.vertices,c.transform);break;
         }
         case CmdCoinHudModel:{
             const auto& c=*static_cast<const CoinHudModelCommand*>(body);
-            execFrame_=c.frame;execAdditive_=c.additive;
+            execFrame_=c.frame;execAdditive_=c.additive;execGhostPass_=0;
             drawCoinHudModelNow(*c.model,c.vertices,c.transform,c.firstColumn);break;
         }
         case CmdShadowUnion:{shadowUnionNow(static_cast<const ShadowUnionCommand*>(body)->active);break;}
@@ -1018,7 +1018,7 @@ void Renderer::drawAtScreen(const Model& model,const C3D_Mtx& transform,float x,
 }
 void Renderer::drawAtScreenWith(const Model& model,const C3D_Mtx& transform,float x,float y,float brightness,float scaleX,float scaleY,MaterialBinder material,const void* context,std::size_t contextSize){
     if(!recording()){
-        if(!renderThread){execFrame_=animationFrame;execAdditive_=additiveColor;}
+        if(!renderThread){execFrame_=animationFrame;execAdditive_=additiveColor;execGhostPass_=0;}
         drawAtScreenNow(model,model.vertices,transform,x,y,brightness,scaleX,scaleY,material,const_cast<void*>(context));
         return;
     }
@@ -1030,7 +1030,7 @@ void Renderer::drawAtScreenWith(const Model& model,const C3D_Mtx& transform,floa
 }
 void Renderer::drawMenuIcon(const Model& model,const C3D_Mtx& transform,const UiQuad& quad){
     if(!recording()){
-        if(!renderThread){execFrame_=animationFrame;execAdditive_=additiveColor;}
+        if(!renderThread){execFrame_=animationFrame;execAdditive_=additiveColor;execGhostPass_=0;}
         drawMenuIconNow(model,model.vertices,transform,quad);
         return;
     }
@@ -1040,7 +1040,7 @@ void Renderer::drawMenuIcon(const Model& model,const C3D_Mtx& transform,const Ui
 }
 void Renderer::drawMenuModelLayer(const Model& model,const C3D_Mtx& transform){
     if(!recording()){
-        if(!renderThread){execFrame_=animationFrame;execAdditive_=additiveColor;}
+        if(!renderThread){execFrame_=animationFrame;execAdditive_=additiveColor;execGhostPass_=0;}
         drawMenuModelLayerNow(model,model.vertices,transform);return;
     }
     auto& c=command<MenuModelLayerCommand>();
@@ -1048,7 +1048,7 @@ void Renderer::drawMenuModelLayer(const Model& model,const C3D_Mtx& transform){
 }
 void Renderer::drawCoinHudModel(const Model& model,const C3D_Mtx& transform,bool firstColumn){
     if(!recording()){
-        if(!renderThread){execFrame_=animationFrame;execAdditive_=additiveColor;}
+        if(!renderThread){execFrame_=animationFrame;execAdditive_=additiveColor;execGhostPass_=0;}
         drawCoinHudModelNow(model,model.vertices,transform,firstColumn);return;
     }
     auto& c=command<CoinHudModelCommand>();

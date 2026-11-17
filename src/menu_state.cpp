@@ -100,8 +100,9 @@ void MenuState::nextVsCourse(){selection.course=vsCourseDeck[++vsCourseIndex%32]
 unsigned MenuState::count()const{
  switch(page){
  case UiPage::License:return 4;
- case UiPage::Drift:case UiPage::VSMode:case UiPage::Settings:return 3;
- case UiPage::LicenseSettings:return 8;
+ case UiPage::Drift:case UiPage::VSMode:return 3;
+ case UiPage::Settings:return 6;
+ case UiPage::LicenseSettings:return 7;
  case UiPage::VSRules:return 7;
  case UiPage::BattleRules:return 6;
  case UiPage::Mode:return 4;
@@ -132,6 +133,10 @@ bool MenuState::choiceVisible(unsigned slot)const{
  case UiPage::Vehicle:return vehicleUnlocked(vehicleChoice(slot))&&raceVehicle(vehicleChoice(slot));
  case UiPage::Cup:return cupUnlocked(slot);
  case UiPage::EngineClass:return engineUnlocked(slot)&&raceEngineClass(UiEngineClass(slot));
+ // Staff Ghost, Expert Staff Ghost (once unlocked), Solo Time Trials.
+ case UiPage::Ghost:{const unsigned course=std::min(selection.course,31u);
+  // Staff ghost, expert staff ghost, the license's own ghost, solo.
+  return slot==3||(slot==2?ownGhostTime(course)!=0:staffGhostTimes[course][slot]&&(slot==0||expertGhostUnlocked(course)));}
  default:return true;
  }
 }
@@ -209,6 +214,20 @@ void MenuState::confirmRaceMii(unsigned weight,unsigned character){
  else enter(UiPage::Vehicle);
 }
 
+void MenuState::toggleSetting(unsigned row){
+ // Old 3DS: every setting is fixed (Texture Quality Low, Dynamic Shadows,
+ // Bloom Off, Opponent Detail Low, 800px Mode Off, Minimap 30fps).
+ if(old3dsSettings){unavailable=true;return;}
+ switch(row){
+ case 0:settings.textureQuality=settings.textureQuality?0:1;break;
+ case 1:settings.dynamicShadows=!settings.dynamicShadows;break;
+ case 2:settings.bloom=!settings.bloom;break;
+ case 3:settings.opponentDetail=settings.opponentDetail?0:1;break;
+ case 4:settings.wide800=!settings.wide800;break;
+ case 5:settings.minimap60=!settings.minimap60;break;
+ default:break;
+ }
+}
 void MenuState::advance(unsigned ticks){age+=ticks;focusAge+=ticks;uiFocusAdvance(*this,ticks);}
 
 void MenuState::enter(UiPage next){
@@ -257,15 +276,23 @@ void MenuState::enter(UiPage next){
 UiAction MenuState::input(UiInput key){
  normalize(selection);
  if(page==UiPage::Unlock){if(key.accept)unlockNextRequested=true;return UiAction::None;}
- cursor=std::min(cursor,count()-1);
+ // The license screen's Settings button is slot 4, past its four licenses
+ // (count()): keep it, or the cursor drops to license 3 the next frame.
+ if(cursor!=auxiliarySlot())cursor=std::min(cursor,count()-1);
  if(page==UiPage::Race){if(key.start)enter(UiPage::Pause);return UiAction::None;}
  if(page==UiPage::Pause&&(key.start||key.back)){enter(UiPage::Race);return UiAction::ResumeRace;}
+ // The stylus highlights the button under it, as the Wii pointer does.
+ if(key.point!=~0u&&key.point!=cursor&&(key.point==auxiliarySlot()||choiceVisible(key.point))){
+  const unsigned previousCursor=cursor;
+  if(key.point==auxiliarySlot())auxiliaryReturnCursor=cursor;
+  cursor=key.point;focusAge=0;uiFocusSelect(*this,previousCursor);unavailable=false;
+ }
  if(key.back){
   switch(page){
   case UiPage::Intro:enter(UiPage::Title);break;
   case UiPage::License:titleLicense=cursor;enter(UiPage::Title);break;
   case UiPage::MainMenu:enter(UiPage::License);break;
-  case UiPage::Settings:enter(UiPage::License);break;
+  case UiPage::Settings:enter(UiPage::License);cursor=auxiliarySlot();uiFocusReset(*this);break;
   case UiPage::RecordsGeneral:case UiPage::RecordsFavorites:case UiPage::RecordsOther:enter(UiPage::LicenseSettings);break;
   case UiPage::EraseLicense:enter(UiPage::LicenseSettings);cursor=1;uiFocusReset(*this);break;
   case UiPage::LicenseSettings:enter(UiPage::MainMenu);cursor=7;uiFocusReset(*this);break;
@@ -299,6 +326,11 @@ UiAction MenuState::input(UiInput key){
   }
   return UiAction::None;
  }
+ // Y on a ghost's row watches its replay; A races it.
+ if(key.switchType&&page==UiPage::Ghost){
+  if(cursor>=3||!choiceVisible(cursor))return UiAction::None;
+  ghostChoice=cursor+1;watchGhost=true;enter(UiPage::Confirm);return UiAction::None;
+ }
  if(key.switchType&&page==UiPage::EngineClass){
   if(!mixedTypesUnlocked(0)&&!mixedTypesUnlocked(1))return UiAction::None;
   // GPClassSelect::OnStartPress (USA 80825168) uses one toggle for both
@@ -307,20 +339,16 @@ UiAction MenuState::input(UiInput key){
   focusAge=0;unavailable=false;
   return UiAction::None;
  }
- // Left/right browse the course's ghosts.
- if(page==UiPage::Ghost&&(key.left||key.right)){
-  if(ghosts.size()>1)selection.ghostIndex=unsigned(selection.ghostIndex+(key.left?ghosts.size()-1:1))%unsigned(ghosts.size());
-  focusAge=0;return UiAction::None;
- }
- if(page==UiPage::LicenseSettings&&cursor>=2&&cursor<8&&(key.left||key.right)){
+ if(page==UiPage::LicenseSettings&&cursor>=2&&cursor<7&&(key.left||key.right)){
   if(cursor==2)selection.ledMode=(selection.ledMode+(key.left?3:1))%4;
-  else if(cursor==3)selection.dynamicShadows=!selection.dynamicShadows;
-  else if(cursor==5)selection.graphics=nextGraphics(selection.graphics,key.left);
-  else if(cursor==6)selection.raceTimer=!selection.raceTimer;
-  else if(cursor==7)selection.mapTurns=!selection.mapTurns;
-  else selection.ledBrightness=unsigned(std::clamp(int(selection.ledBrightness)+(key.left?-10:10),50,100));
+  else if(cursor==3)selection.ledBrightness=unsigned(std::clamp(int(selection.ledBrightness)+(key.left?-10:10),50,100));
+  else if(cursor==4)selection.speedometer=!selection.speedometer;
+  else if(cursor==5)selection.raceTimer=(selection.raceTimer+(key.left?2:1))%3;
+  else selection.mapTurns=!selection.mapTurns;
   focusAge=0;return UiAction::None;
  }
+ // Every Settings row is a two-way choice: left, right and A all switch it.
+ if(page==UiPage::Settings&&(key.left||key.right)){toggleSetting(cursor);focusAge=0;return UiAction::None;}
  if(rulePage()&&(key.left||key.right)&&cursor<ruleOkRow()){
   if(page==UiPage::BattleRules){
    if(cursor==4){unsigned i=0;while(i+1<std::size(UiBattleWinCounts)&&UiBattleWinCounts[i]!=selection.battleWins)++i;
@@ -345,7 +373,7 @@ UiAction MenuState::input(UiInput key){
   const bool hasAuxiliary=auxiliary!=~0u;
   const bool topRow=page==UiPage::License?cursor<2:page==UiPage::MainMenu?cursor<4:cursor==0;
   const bool rightEdge=page==UiPage::License?cursor%2==1:page==UiPage::MainMenu?(cursor==3||cursor==6):true;
-  if(page==UiPage::Character||page==UiPage::Vehicle||page==UiPage::Cup||page==UiPage::EngineClass){
+  if(page==UiPage::Character||page==UiPage::Vehicle||page==UiPage::Cup||page==UiPage::EngineClass||page==UiPage::Ghost){
    std::array<unsigned,26> visible{};unsigned n=0,current=0;
    for(unsigned i=0;i<count()&&n<visible.size();++i)if(choiceVisible(i)){if(i==cursor)current=n;visible[n++]=i;}
    if(n){
@@ -355,7 +383,10 @@ UiAction MenuState::input(UiInput key){
     cursor=visible[next];
    }
   }else if(hasAuxiliary&&cursor==auxiliary){
-   cursor=std::min(auxiliaryReturnCursor,auxiliary-1);
+   // The license screen's Settings button sits above and right of the
+   // licenses: only Down or Left lead back to them, so a held Up/Right
+   // (direction repeat) stays on the button instead of bouncing off it.
+   if(page!=UiPage::License||key.down||key.left)cursor=std::min(auxiliaryReturnCursor,auxiliary-1);
   }else if(hasAuxiliary&&((key.up&&topRow)||(key.right&&rightEdge))){
    auxiliaryReturnCursor=cursor;cursor=auxiliary;
   }else if(page==UiPage::MainMenu)cursor=moveMainMenu(cursor,key);
@@ -374,6 +405,7 @@ UiAction MenuState::input(UiInput key){
  // a settings/help activation into a license choice or manual-drift selection.
  if(cursor==auxiliarySlot()){
   if(page==UiPage::MainMenu)enter(UiPage::LicenseSettings);
+  else if(page==UiPage::License)enter(UiPage::Settings);
   else if(page==UiPage::Drift)enter(UiPage::DriftHelp);
   else if(page==UiPage::VSMode||page==UiPage::BattleMode){rulesReturn=page;enter(page==UiPage::BattleMode?UiPage::BattleRules:UiPage::VSRules);}
   else unavailable=true;
@@ -384,9 +416,9 @@ UiAction MenuState::input(UiInput key){
  case UiPage::Intro:enter(UiPage::Title);break;
  case UiPage::Title:enter(UiPage::License);if(titleLicense<4)cursor=titleLicense;uiFocusReset(*this);break;
  case UiPage::License:selection.license=cursor;enter(UiPage::MainMenu);break;
- // Wii-only destinations remain explicit until their platform handling is
- // provided: GC rumble, WFC settings and Wii Channel installation.
- case UiPage::Settings:unavailable=true;break;
+ // The Wii's page held GameCube rumble, Wi-Fi and Channel installation;
+ // this one holds the port's whole-game options instead.
+ case UiPage::Settings:toggleSetting(cursor);break;
  case UiPage::RecordsGeneral:enter(UiPage::RecordsFavorites);break;
  case UiPage::RecordsFavorites:enter(UiPage::RecordsOther);break;
  case UiPage::RecordsOther:enter(UiPage::RecordsGeneral);break;
@@ -394,11 +426,10 @@ UiAction MenuState::input(UiInput key){
   if(cursor==0)editLicenseRequest=int(selection.license);
   else if(cursor==1)enter(UiPage::EraseLicense);
   else if(cursor==2)selection.ledMode=(selection.ledMode+1)%4;
-  else if(cursor==3)selection.dynamicShadows=!selection.dynamicShadows;
-  else if(cursor==4)selection.ledBrightness=selection.ledBrightness>=100?50:selection.ledBrightness+10;
-  else if(cursor==5)selection.graphics=nextGraphics(selection.graphics,false);
-  else if(cursor==6)selection.raceTimer=!selection.raceTimer;
-  else if(cursor==7)selection.mapTurns=!selection.mapTurns;
+  else if(cursor==3)selection.ledBrightness=selection.ledBrightness>=100?50:selection.ledBrightness+10;
+  else if(cursor==4)selection.speedometer=!selection.speedometer;
+  else if(cursor==5)selection.raceTimer=(selection.raceTimer+1)%3;
+  else if(cursor==6)selection.mapTurns=!selection.mapTurns;
   break;
  case UiPage::EraseLicense:if(cursor==0){eraseLicenseRequest=int(selection.license);enter(UiPage::License);}else{enter(UiPage::LicenseSettings);cursor=1;uiFocusReset(*this);}break;
  case UiPage::MainMenu:
@@ -431,7 +462,9 @@ UiAction MenuState::input(UiInput key){
  case UiPage::Vehicle:
   if(!vehicleUnlocked(vehicleChoice(cursor))||!raceVehicle(vehicleChoice(cursor))){unavailable=true;break;}
   selection.vehicle=vehicleChoice(cursor);
-  cpuRoster.vehicles(selection.vehicle,selection.mode==UiMode::VS?selection.vsVehicles:selection.mode==UiMode::Battle?selection.battleVehicles:2u,selection.mode==UiMode::Battle,unlocks(),cpuRandom);
+  // Retail engine-class buttons (USA 808a6fc8+192) also limit the CPUs:
+  // 50cc karts, 100cc bikes, unless Karts and Bikes is on.
+  cpuRoster.vehicles(selection.vehicle,selection.mode==UiMode::VS?selection.vsVehicles:selection.mode==UiMode::Battle?selection.battleVehicles:kartsOnly(*this)?0u:bikesOnly(*this)?1u:2u,selection.mode==UiMode::Battle,unlocks(),cpuRandom);
   enter(UiPage::Drift);break;
  case UiPage::DriftHelp:enter(UiPage::Drift);cursor=2;uiFocusReset(*this);break;
  case UiPage::Drift:selection.automatic=cursor==0;
@@ -477,9 +510,11 @@ UiAction MenuState::input(UiInput key){
  case UiPage::Confirm:if(supportsRace())return UiAction::StartRace;unavailable=true;break;
  case UiPage::Pause:
   if(cursor==0){enter(UiPage::Race);return UiAction::ResumeRace;}
-  // Online, a restart would restart this console's race alone.
-  if(cursor==1){if(selection.online){unavailable=true;break;}return UiAction::RestartRace;}
+  // GP, VS and Battle pause as on the Wii: Continue Game, Quit Game. Time
+  // Trials adds Restart, Change Course and Change Character before Quit.
   if(selection.mode==UiMode::TimeTrials){
+   // Online, a restart would restart this console's race alone.
+   if(cursor==1){if(selection.online){unavailable=true;break;}return UiAction::RestartRace;}
    if(cursor==2){enter(UiPage::Cup);break;}
    if(cursor==3){enter(UiPage::Character);break;}
   }

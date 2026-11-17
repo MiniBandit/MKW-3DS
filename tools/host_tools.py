@@ -13,7 +13,6 @@ from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
 OUT=ROOT/'build/host-tools'
 PROGRAMS={
- 'mpk2':('mpk2',['tools/mpk2.cpp']),
  'mii-head':('export_mii_head',['tools/export_mii_head.cpp','src/mii_head.cpp','src/mii_part_bank.cpp']),
  'sprite-scales':('menu_sprite_scales',['tools/menu_sprite_scales.cpp','src/menu_ui.cpp','src/menu_state.cpp','src/menu_transition.cpp','src/menu_focus.cpp','src/menu_index.cpp','src/menu_text_motion.cpp']),
 }

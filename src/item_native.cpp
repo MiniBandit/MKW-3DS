@@ -247,7 +247,7 @@ void RaceItems::unhookNative(){
 }
 void RaceItems::nativeCoursePickup(void* context,Vec3 position,Vec3 velocity,uint8_t owner){
     auto& items=*static_cast<RaceItems*>(context);
-    if(!items.active_||owner>=items.count_||owner>=12)return;
+    if(!items.active_||owner>=items.count_||owner>=12||items.netRemote(owner))return;
     const auto type=ItemObjects[unsigned(ItemKind::Mushroom)].type;
     // GenerateItemDirect (USA80791120) declines when its original type pool
     // is full; a course pickup must never evict a live item to make room.

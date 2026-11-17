@@ -40,7 +40,7 @@ void traceLanding(const ItemActor& a,const ItemSurface& surface){
     static unsigned count=0;
     if(a.owner!=0||(!(a.kind==ItemKind::Banana)&&!a.scattered)||a.age%32||count>=16)return;
     ++count;
-    if(FILE* log=std::fopen("sdmc:/3ds/mkw-3ds/item-ground-state.txt","a")){
+    if(FILE* log=std::fopen("sdmc:/3ds/MKWiiDS/item-ground-state.txt","a")){
         std::fprintf(log,"kind=%u age=%u scattered=%u settled=%u pos=%.2f,%.2f,%.2f velocity=%.2f,%.2f,%.2f floor=%.3f,%.3f,%.3f correction=%.2f,%.2f,%.2f\n",unsigned(a.kind),a.age,a.scattered,a.settled,a.position.x,a.position.y,a.position.z,a.velocity.x,a.velocity.y,a.velocity.z,surface.floorNormal.x,surface.floorNormal.y,surface.floorNormal.z,surface.correction.x,surface.correction.y,surface.correction.z);
         std::fclose(log);
     }
@@ -79,7 +79,7 @@ ItemActor& RaceItems::spawn(unsigned player,ItemKind kind,bool backwards,const V
     if(it==actors_.end())it=std::find_if(actors_.begin(),actors_.end(),[](const ItemActor& a){return !a.active;});
     if(it==actors_.end())it=std::max_element(actors_.begin(),actors_.end(),[](const ItemActor& a,const ItemActor& b){return a.age<b.age;});
     forgetReclaimSlot(unsigned(it-actors_.begin()));
-    auto& a=*it;a={};a.kind=kind;a.owner=int8_t(player);a.active=true;a.lifetime=kind==ItemKind::Banana?0:1800;
+    auto& a=*it;a={};a.kind=kind;a.owner=int8_t(player);a.active=true;++actorSerial_;a.lifetime=kind==ItemKind::Banana?0:1800;
     reclaimOrder_[retailObjectId(kind)].add(unsigned(it-actors_.begin()));
     Vec3 direction=normalized(racers_[player].forward,{0,0,1});
     const bool trap=kind==ItemKind::Banana||kind==ItemKind::FakeBox;
@@ -93,15 +93,13 @@ ItemActor& RaceItems::spawn(unsigned player,ItemKind kind,bool backwards,const V
     // Green update 297f88 expires only after age 1500. Its launch starts a
     // bounce counter at 9 forward / 4 backward and destroys it below zero.
     if(kind==ItemKind::GreenShell){
-        a.lifetime=1501;a.bounceLimit=backwards?5:10;
+        // 297ebc: the bounce counter starts at 4 backward / 9 forward, 3 / 7 in Battle
+        // (item global +3), and the shell breaks below zero.
+        a.lifetime=1501;a.bounceLimit=battleOdds_?(backwards?4:8):(backwards?5:10);
         // 297ebc -> 29a6e4 -> 27fe48/27fff0: ordinary straight driving
         // inherits signed speed, including the source backward subtraction.
         // Drift-side aim/special movement predicates remain in the audit.
-        const Vec3 motion=itemMotion(racers_[player]);const float speed=length(motion);
-        const bool movingForward=dot(motion,racers_[player].forward)>0;
-        a.travelSpeed=backwards?(movingForward?30.f-speed:30.f+speed):(movingForward?85.f+speed:85.f-speed);
-        a.flightDirection=normalized(direction*(backwards?40.f:35.f)+(movingForward?(backwards?-motion:motion):Vec3{}),direction);
-        a.velocity=a.flightDirection*a.travelSpeed;
+        launchStraight(a,racers_[player]);
     }
     if(trapItem(kind)){
         const auto& r=racers_[player];const Vec3 motion=itemMotion(r);
@@ -224,7 +222,7 @@ void RaceItems::syncReclaimOrder(){
             if(!a.active||retailObjectId(a.kind)!=type)h.remove(slot);else ++i;
         }
     }
-    for(unsigned i=0;i<MaxActors;++i){
+    for(unsigned i=nextActorSlot(0);i<MaxActors;i=nextActorSlot(i+1)){
         const auto& a=actors_[i];if(!a.active)continue;
         auto& h=reclaimOrder_[retailObjectId(a.kind)];h.add(i);
         if(a.settled&&(a.scattered||a.kind==ItemKind::Banana))h.land(i);
@@ -238,36 +236,56 @@ void RaceItems::updateActors(ItemWorldQuery query){
     // USA8078d464 uses the gameplay limit, not allocated capacity. USA80790844
     // computes the global pressure AFTER all holders, so every holder reads the
     // previous step's value. All fifteen retail +0x5c weights are one.
+    // fastActorStep (Old 3DS): the sync and the object counts change only when a holder's
+    // step below touched an actor (a reclaim or a member's update). After a holder with
+    // neither, a sync is a no-op (it is idempotent) and the counts are unchanged, so both
+    // are skipped until the next change; racers holding nothing skip the held-item scan.
+    const bool fast=fastActorStep;
+    bool changed=false;std::array<unsigned,15> counts{};bool countsValid=false;
     for(unsigned type=0;type<15;++type){
-        syncReclaimOrder();
+        if(!fast||changed)syncReclaimOrder();
+        changed=false;
         auto& h=reclaimOrder_[type];
-        const int free=int(ItemObjectLimits[type])-int(objectCount(type));
+        if(fast&&!countsValid){objectCounts(counts);countsValid=true;}
+        const int free=int(ItemObjectLimits[type])-int(fast?counts[type]:objectCount(type));
         if(ItemObjectLimits[type]>1&&(free<2||reclaimPressure_>-5)){
             h.sort(phase,type==2,eligible,
                 [&](unsigned slot){return actors_[slot].floorTypes;},
                 [&](unsigned slot){return actors_[slot].explosion;});
             if(phase==0&&(free<1||reclaimPressure_>0)&&h.count&&eligible(h.slots[0])){
                 const auto slot=h.slots[0];actors_[slot].active=false;h.remove(slot);
+                changed=true;
             }
         }
         // Keep holder order for movement and contacts, too. Copy the slot list
         // because a contact can remove another actor during this holder's step.
         const auto order=h.slots;const unsigned n=h.count;
+        if(n)changed=true;
+        if(changed)countsValid=false;
         for(unsigned k=0;k<n;++k){
             auto& a=actors_[order[k]];if(!a.active)continue;
             updateActor(a,query);
+            // Base calc 0x80796734: any item below y = 0 is removed (Blooper and Thunder
+            // Cloud are exempt; neither is an actor here). Every course runs above y 400.
+            if(a.active&&!a.explosion&&a.position.y<0)a.active=false;
             if(!a.active){h.remove(order[k]);continue;}
             if(a.settled&&(a.scattered||a.kind==ItemKind::Banana))h.land(order[k]);
             resolveCourseObjects(a);if(!a.active)continue;
-            for(unsigned owner=0;owner<count_&&a.active;++owner)
+            for(unsigned owner=0;owner<count_&&a.active;++owner){
+                // resolveActorHeld returns at once for an empty slot.
+                if(fast&&!hud_[owner].heldMask)continue;
                 for(unsigned slot=0;slot<3&&a.active;++slot)resolveActorHeld(a,owner,slot);
-            for(unsigned other=0;other<MaxActors&&a.active;++other)
+            }
+            for(unsigned other=nextActorSlot(0);other<MaxActors&&a.active;other=nextActorSlot(other+1))
                 if(other!=order[k]&&actors_[other].active)resolveActorPair(a,actors_[other]);
         }
     }
-    syncReclaimOrder();
+    if(!fast||changed)syncReclaimOrder();
     reclaimPressure_=-30;
-    for(unsigned type=0;type<15;++type)reclaimPressure_+=int(objectCount(type));
+    if(fast){
+        if(!countsValid)objectCounts(counts);
+        for(unsigned type=0;type<15;++type)reclaimPressure_+=int(counts[type]);
+    }else for(unsigned type=0;type<15;++type)reclaimPressure_+=int(objectCount(type));
 }
 
 void RaceItems::updateActor(ItemActor& a,ItemWorldQuery query){
@@ -278,6 +296,12 @@ void RaceItems::updateActor(ItemActor& a,ItemWorldQuery query){
             a.radius=bombBlastRadius(a.age,a.blastInitialScale);
             if(a.age>=a.lifetime)a.active=false;
             return;
+        }
+        if(!a.scattered&&(a.kind==ItemKind::GreenShell||a.kind==ItemKind::RedShell)){
+            // Base calc 0x807960b8 / 0x80796580 / 0x80796764: frames without a Q1 floor,
+            // capped at 6; the airborne flag is the previous update's count >= 5.
+            if(a.age>1){if(a.floorContact)a.airFrames=0;a.airborne=a.airFrames>=5;}
+            a.floorContact=a.reflected=false;if(a.airFrames<=5)++a.airFrames;
         }
         const auto prop=itemProperties(unsigned(a.kind));
         a.scale=std::min(prop.releasedScale,a.scale+(a.backwards?prop.dropGrowth:prop.growth));
@@ -309,9 +333,14 @@ void RaceItems::updateActor(ItemActor& a,ItemWorldQuery query){
             updateScattered(a,query);
         }else if(a.kind==ItemKind::RedShell||a.kind==ItemKind::BlueShell){
             updateShell(a,query);
+        }else if(a.kind==ItemKind::GreenShell){
+            // Green calc 0x807a3fbc: past age 900 the counter is held at zero, so the next
+            // wall, ceiling or steep entry breaks it; then straight travel toward 105.
+            if(a.age>900&&a.bounces+1<a.bounceLimit)a.bounces=uint8_t(a.bounceLimit-1);
+            straightShell(a,query,105);
         }else{
-            // Green's retail update moves first, projects at KCL contact, then
-            // applies gravity/speed convergence for the following frame.
+            // Thrown traps (and any other unguided item) move first, then resolve the
+            // KCL contact. Green has its own straight travel above.
             if(trapItem(a.kind)&&!a.settled){
                 const float drag=a.kind==ItemKind::Banana?(a.backwards?.97f:.999f):a.kind==ItemKind::FakeBox?(a.backwards?.97f:.996f):(a.backwards?.973f:.999f);
                 a.velocity=a.velocity*drag;
@@ -324,10 +353,7 @@ void RaceItems::updateActor(ItemActor& a,ItemWorldQuery query){
                 if(length(surface.floorNormal)>.1f){
                     const Vec3 normal=normalized(surface.floorNormal);const float into=dot(a.velocity,normal);
                     a.up=normal;
-                    if(a.kind==ItemKind::GreenShell){
-                        a.flightDirection=normalized(a.flightDirection-normal*dot(a.flightDirection,normal),a.flightDirection);
-                        a.velocity=a.flightDirection*a.travelSpeed-normal*2.5f;
-                    }else if(trapItem(a.kind)){
+                    if(trapItem(a.kind)){
                         // fn_1_294794: a Bob-omb thuds on every floor hit.
                         if(a.kind==ItemKind::Bobomb&&!a.settled)sound(ItemSoundCue::Bounce,a);
                         if(a.floorBounces){
@@ -341,8 +367,7 @@ void RaceItems::updateActor(ItemActor& a,ItemWorldQuery query){
                             a.velocity={};a.settled=true;
                         }
                     }else if(into<0)a.velocity=a.velocity-normal*into;
-                }else if(a.kind==ItemKind::GreenShell)a.velocity.y-=a.velocity.y>0?4.2f:2.f;
-                else if(trapItem(a.kind)){
+                }else if(trapItem(a.kind)){
                     a.settled=false;
                     const float gravity=a.kind==ItemKind::Banana?(a.backwards?1.8f:2.2f):a.kind==ItemKind::FakeBox?(a.backwards?1.8f:2.1f):(a.backwards?2.8f:2.3f);
                     const float terminal=std::clamp(100.f+150.f*(float(a.age)-150.f)/(30.f-150.f),100.f,250.f);
@@ -352,7 +377,7 @@ void RaceItems::updateActor(ItemActor& a,ItemWorldQuery query){
                     if(a.kind==ItemKind::RedShell){shatter(a);return;}
                     if(into<0){
                         a.velocity=a.velocity-normal*(2*into);a.flightDirection=normalized(a.flightDirection-normal*(2*dot(a.flightDirection,normal)),a.flightDirection);
-                        if(++a.bounces>=a.bounceLimit||(a.kind==ItemKind::GreenShell&&a.age>900)){shatter(a);return;}
+                        if(++a.bounces>=a.bounceLimit){shatter(a);return;}
                         if(shell(a.kind))sound(ItemSoundCue::WallBounce,a);   // fn_1_2A5140: SE_ITM_KAME_HANSHA
                     }
                 }
@@ -360,10 +385,6 @@ void RaceItems::updateActor(ItemActor& a,ItemWorldQuery query){
                 const float gravity=a.kind==ItemKind::Banana?(a.backwards?1.8f:2.2f):a.kind==ItemKind::FakeBox?(a.backwards?1.8f:2.1f):(a.backwards?2.8f:2.3f);
                 const float terminal=std::clamp(100.f+150.f*(float(a.age)-150.f)/(30.f-150.f),100.f,250.f);
                 a.velocity.y=std::max(-terminal,a.velocity.y-gravity);
-            }
-            if(a.kind==ItemKind::GreenShell){
-                if(!query)a.velocity.y-=a.velocity.y>0?4.2f:2.f;
-                a.travelSpeed+=.01f*(105.f-a.travelSpeed);
             }
             if(a.position.y<-100000){a.active=false;return;}
         }
@@ -471,8 +492,9 @@ void RaceItems::actorKartContact(ItemActor& a,unsigned player){
         // pursuing in special state 5 instead of breaking; the contact still requests the hit.
         const float close=r.radius+1.5f*a.radius;
         if(shellXZ2(a.position-r.position)>=close*close){
+            // 0x807a5350 resets the aim but keeps the pursuit vector (+0x2a0).
             a.target=int8_t(player);a.guidance.pending=5;a.guidance.hasRoute=false;
-            a.guidance.targetBack=-normalized(r.forward,{0,0,1});a.guidance.homing={};
+            a.guidance.targetBack=-normalized(r.forward,{0,0,1});
         }
     }
     if(!a.explosion){
@@ -491,6 +513,7 @@ void RaceItems::heldKartContacts(unsigned player){
         // Online: only this console's racer runs into the other consoles' items here.
         if(netRemote(owner)&&!netSelf(player))continue;
         auto& h=hud_[owner];auto& state=deployments_[owner];
+        if(fastActorStep&&!h.heldMask)continue; // every slot below would be skipped
         for(unsigned slot=0;slot<3;++slot){
             if(!(h.heldMask&(1u<<slot))||state.scales[slot]<HeldContactMinimumScale)continue;
             const float radius=heldItemContactRadius(owner,slot);
@@ -530,7 +553,6 @@ void RaceItems::boxContacts(unsigned player){
 }
 void RaceItems::kartContacts(unsigned player){
     if(!active_||player>=count_)return;
-    const auto& r=racers_[player];
     boxContacts(player);
     // Online: another console's racer meets items on its own console, which reports the
     // hit. A Red Shell that has caught it here waits for that word, but not for ever.
@@ -538,13 +560,29 @@ void RaceItems::kartContacts(unsigned player){
         for(auto& a:actors_)if(a.active&&a.kind==ItemKind::RedShell&&!a.scattered&&!a.netGrace&&a.target==int(player)&&itemTouchesKart(a,player))a.netGrace=NetRedGrace;
         return;
     }
-    if(r.finished)return;
-    // Actor pool order stands in for the retail entity search order.
-    for(auto& a:actors_)if(a.active&&itemTouchesKart(a,player)){
-        const bool wasBlast=a.explosion;lastStarted_=-1;
-        actorKartContact(a,player);
-        if(netSelf(player))netContact(player,a,wasBlast,lastStarted_,lastDirection_);
+    // Online: this console reports its own racer's hits to the others.
+    auto contact=[&](ItemActor& a){const bool wasBlast=a.explosion;lastStarted_=-1;actorKartContact(a,player);if(netSelf(player))netContact(player,a,wasBlast,lastStarted_,lastDirection_);};
+    // Retail runs the item pass for every kart, finished or not. Only a Time Trial or
+    // ghost race has no item contact (ItemHolder_checkPlayerCollision, flag 0x809C38BC).
+    if(timeTrial_)return;
+    // Actor pool order stands in for the retail entity search order. Forward
+    // through the mask's slots: one a contact spawns is found in a rebuilt mask
+    // when it lies ahead, as the full scan would.
+    for(unsigned i=0;i<MaxActors;++i){
+        if(fullContactScan){auto& a=actors_[i];if(a.active&&itemTouchesKart(a,player))contact(a);continue;}
+        if(contactMaskSerial_!=actorSerial_)refreshContactMask();
+        unsigned w=i>>5;uint32_t bits=contactMask_[w]&(~0u<<(i&31));
+        while(!bits&&++w<contactMask_.size())bits=contactMask_[w];
+        if(!bits)break;
+        i=w*32+unsigned(__builtin_ctz(bits));
+        auto& a=actors_[i];
+        if(a.active&&itemTouchesKart(a,player))contact(a);
     }
     heldKartContacts(player);
+}
+void RaceItems::refreshContactMask(){
+    contactMask_={};
+    for(unsigned i=0;i<MaxActors;++i)if(actors_[i].active)contactMask_[i>>5]|=1u<<(i&31);
+    contactMaskSerial_=actorSerial_;
 }
 }

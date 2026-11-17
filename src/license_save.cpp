@@ -5,6 +5,7 @@
 #include <cstring>
 #include <memory>
 #include <string>
+#include <utility>
 
 namespace mkw {
 namespace {
@@ -36,38 +37,29 @@ bool read(const std::string& p,Core& b){
 // Port-only options never consume unknown bytes in the retail save. Bind each
 // slot companion to the stored Mii ID, so importing a different license does
 // not silently inherit the previous license's settings.
-// MKWO0002 (32 bytes): MKWO0001's 24 (magic, Mii ID, LED mode, shadows, LED
-// brightness, graphics) with the race timer, turning map and speedometer at
-// 20/21/22, spare zeros to 27 and the CRC of bytes 0..27 at 28. MKWO0001 files (CRC of 0..19
-// at 20) still load; the new options then keep their defaults (shown/turning).
-using Options=std::array<unsigned char,32>;
-constexpr unsigned OptionsV1Size=24,OptionsV2Body=28;
-std::uint32_t optionsCrc(const unsigned char* b,unsigned n){std::uint32_t c=~0u;for(unsigned i=0;i<n;++i)c=(c>>8)^CrcTable[(c^b[i])&255];return ~c;}
+using Options=std::array<unsigned char,24>;
+// Byte 19: bit 0 the speedometer, bits 1-2 the race timer as 0 Minimal (files
+// from before the setting), 1 Off, 2 Full; bit 3 set: the map stays fixed (0: turns).
+constexpr unsigned TimerFile[3]={1,0,2};
+std::uint32_t optionsCrc(const Options& b){std::uint32_t c=~0u;for(unsigned i=0;i<20;++i)c=(c>>8)^CrcTable[(c^b[i])&255];return ~c;}
 std::string optionsPath(const char* root,unsigned slot){return std::string(root)+"/license-options-"+std::to_string(slot)+".dat";}
 bool commonOptions(const Options& b){return b[16]<4&&b[17]<2&&b[18]>=50&&b[18]<=100&&b[18]%10==0&&b[19]<4;}
 bool readOptions(const std::string& path,Options& b){
- b={};FILE* f=std::fopen(path.c_str(),"rb");if(!f)return false;
- const std::size_t n=std::fread(b.data(),1,b.size(),f);const bool end=std::fgetc(f)==EOF;std::fclose(f);
- if(!end)return false;
- if(n==OptionsV1Size&&!std::memcmp(b.data(),"MKWO0001",8)&&commonOptions(b)&&be32(b.data()+20)==optionsCrc(b.data(),20)){
-  b[20]=1;b[21]=1;b[22]=b[23]=0;return true;
- }
- return n==b.size()&&!std::memcmp(b.data(),"MKWO0002",8)&&commonOptions(b)&&b[20]<2&&b[21]<2&&b[22]<2&&be32(b.data()+OptionsV2Body)==optionsCrc(b.data(),OptionsV2Body);
+ FILE* f=std::fopen(path.c_str(),"rb");if(!f)return false;
+ const bool ok=std::fread(b.data(),1,b.size(),f)==b.size()&&std::fgetc(f)==EOF;std::fclose(f);
+ return ok&&!std::memcmp(b.data(),"MKWO0001",8)&&b[16]<4&&b[17]<2&&b[18]>=50&&b[18]<=100&&b[18]%10==0&&b[19]<16&&be32(b.data()+20)==optionsCrc(b);
 }
 void loadOptions(const char* root,unsigned slot,LicenseSave& r){
  if(!r.occupied)return;
  Options b{};const auto file=optionsPath(root,slot);
  if(!(readOptions(file,b)||readOptions(file+".bak",b))||!std::equal(r.miiId.begin(),r.miiId.end(),b.begin()+8))return;
- r.settings.ledMode=b[16];r.settings.dynamicShadows=b[17]!=0;r.settings.ledBrightness=b[18];r.settings.graphics=b[19];
- r.settings.raceTimer=b[20]!=0;r.settings.mapTurns=b[21]!=0;r.settings.speedometer=b[22]!=0;
+ r.settings.ledMode=b[16];r.settings.dynamicShadows=b[17]!=0;r.settings.ledBrightness=b[18];r.settings.speedometer=(b[19]&1)!=0;r.settings.raceTimer=TimerFile[(b[19]>>1)&3];r.settings.mapTurns=!(b[19]&8);
 }
 bool writeOptions(const char* root,unsigned slot,const LicenseSave& r,const unsigned char* identity){
- Options b{},old{};std::memcpy(b.data(),"MKWO0002",8);std::copy_n(identity,8,b.begin()+8);
- b[16]=r.occupied?r.settings.ledMode:0;b[17]=r.occupied?r.settings.dynamicShadows:true;b[18]=r.occupied?r.settings.ledBrightness:100;b[19]=r.occupied?uint8_t(std::min(r.settings.graphics,3u)):0;
- b[20]=r.occupied?r.settings.raceTimer:true;b[21]=r.occupied?r.settings.mapTurns:true;b[22]=r.occupied&&r.settings.speedometer;
- put32(b.data()+OptionsV2Body,optionsCrc(b.data(),OptionsV2Body));const auto file=optionsPath(root,slot),tmp=file+".tmp",bak=file+".bak";
- // An unchanged MKWO0002 file is kept; an MKWO0001 file is rewritten as 0002.
- if(readOptions(file,old)&&!std::memcmp(old.data(),"MKWO0002",8)&&b==old)return true;
+ Options b{},old{};std::memcpy(b.data(),"MKWO0001",8);std::copy_n(identity,8,b.begin()+8);
+ b[16]=r.occupied?r.settings.ledMode:0;b[17]=r.occupied?r.settings.dynamicShadows:true;b[18]=r.occupied?r.settings.ledBrightness:100;b[19]=r.occupied?(r.settings.speedometer?1:0)|(r.settings.mapTurns?0:8)|unsigned(TimerFile[std::min(r.settings.raceTimer,2u)]<<1):0;
+ put32(b.data()+20,optionsCrc(b));const auto file=optionsPath(root,slot),tmp=file+".tmp",bak=file+".bak";
+ if(readOptions(file,old)&&b==old)return true;
  FILE* f=std::fopen(tmp.c_str(),"wb");if(!f)return false;
  bool ok=std::fwrite(b.data(),1,b.size(),f)==b.size();if(std::fflush(f))ok=false;if(std::fclose(f))ok=false;
  if(!ok){std::remove(tmp.c_str());return false;}
@@ -92,6 +84,7 @@ void decode(const unsigned char* p,unsigned slot,LicenseSave& r){
  for(unsigned i=0;i<r.name.size();++i)r.name[i]=be16(p+0x14+2*i);
  std::copy_n(p+0x28,r.miiId.size(),r.miiId.begin());
  for(unsigned i=0;i<r.unlockFlags.size();++i)r.unlockFlags[i]=be32(p+0x30+4*i);
+ r.staffGhosts=be32(p+0x0c);r.expertGhosts=be32(p+0x10);
  const unsigned rules=be16(p+0x80);auto& s=r.settings;
  s.vsClass=rules>>14;s.vsCpu=(rules>>12)&3;s.vsVehicles=(rules>>10)&3;s.vsCourses=(rules>>8)&3;s.vsItems=(rules>>6)&3;
  const unsigned races=(rules>>2)&15;s.vsRaces=races<std::size(UiVsRaceCounts)?UiVsRaceCounts[races]:4;
@@ -141,6 +134,8 @@ void encode(unsigned char* p,unsigned slot,const LicenseSave& r){
   std::copy(r.miiId.begin(),r.miiId.end(),p+0x28);
  for(unsigned i=0;i<r.unlockFlags.size();++i)
   if(r.unlockFlags[i]!=previous.unlockFlags[i])put32(p+0x30+4*i,r.unlockFlags[i]);
+ if(r.staffGhosts!=previous.staffGhosts)put32(p+0x0c,r.staffGhosts);
+ if(r.expertGhosts!=previous.expertGhosts)put32(p+0x10,r.expertGhosts);
  const auto& s=r.settings;const unsigned raceIndex=std::find(std::begin(UiVsRaceCounts),std::end(UiVsRaceCounts),s.vsRaces)-std::begin(UiVsRaceCounts);
  if(!previous.occupied||s.vsClass!=previous.settings.vsClass||s.vsCpu!=previous.settings.vsCpu||s.vsVehicles!=previous.settings.vsVehicles||s.vsCourses!=previous.settings.vsCourses||s.vsItems!=previous.settings.vsItems||s.vsRaces!=previous.settings.vsRaces)
   put16(p+0x80,(s.vsClass<<14)|(s.vsCpu<<12)|(s.vsVehicles<<10)|(s.vsCourses<<8)|(s.vsItems<<6)|(raceIndex<<2)|(be16(p+0x80)&3));
@@ -214,8 +209,12 @@ std::vector<LicenseUnlockNotice> LicenseSave::availableUnlocks() const{
  grant(58,place(0,3,3)&&place(0,7,3));grant(59,place(1,3,3)&&place(1,7,3));
  unsigned timeCourses=0;for(auto time:times)timeCourses+=time!=0;
  grant(18,timeCourses==32);grant(25,timeCourses>=16);grant(48,timeCourses>=8);
- // USA 8085ea98, SetTitleBMG 808592a4. Unsupported ghost/online/
- // Galaxy conditions remain false rather than selecting their messages.
+ // Expert staff ghosts unlocked (RKPD +0x0c bits) and ghost races won (+0xa8).
+ const unsigned experts=unsigned(__builtin_popcount(staffGhosts));
+ grant(38,experts>=1);grant(29,experts>=4);grant(21,experts>=8);grant(55,experts>=12);grant(43,experts>=24);grant(33,experts>=32);
+ grant(49,records.ghostWins>=5);grant(30,records.ghostWins>=25);grant(35,records.ghostWins>=100);grant(56,records.ghostWins>=200);grant(36,records.ghostWins>=250);
+ // USA 8085ea98, SetTitleBMG 808592a4. Unsupported online/Galaxy
+ // conditions remain false rather than selecting their messages.
  constexpr unsigned bits[]={14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,52,
   0,1,1,2,3,4,5,6,7,11,11,8,10,10,9,12,13,13,3,7,34,35,35,36,37,38,39,
   40,41,42,43,44,44,45,46,47,48,49,50,50,51,30,31,39};
@@ -239,6 +238,16 @@ std::vector<LicenseUnlockNotice> LicenseSave::availableUnlocks() const{
   notices.push_back({bit,61,0x1fe4u,0,unsigned(races[bit])});
  }
  return notices;
+}
+unsigned licenseSaveCourse(unsigned course){return course<32?SaveCourse[course]:0;}
+bool LicenseSave::staffGhostBeaten(unsigned course)const{return course<32&&(staffGhosts>>SaveCourse[course]&1);}
+bool LicenseSave::expertGhostBeaten(unsigned course)const{return course<32&&(expertGhosts>>SaveCourse[course]&1);}
+bool LicenseSave::timeTrialFinish(unsigned course,unsigned ms,unsigned staffMs,unsigned expertMs){
+ if(course>=32||!ms)return false;
+ const auto before=std::pair(staffGhosts,expertGhosts);const std::uint32_t bit=std::uint32_t(1)<<SaveCourse[course];
+ if(staffMs&&ms<staffMs)staffGhosts|=bit;
+ if(expertMs&&ms<expertMs)expertGhosts|=bit;
+ return before!=std::pair(staffGhosts,expertGhosts);
 }
 bool LicenseSave::refreshUnlocks(){
  const auto notices=availableUnlocks();

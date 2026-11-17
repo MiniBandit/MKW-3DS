@@ -1,4 +1,5 @@
 #include "mkw/race_items.hpp"
+#include "mkw/sim_profile.hpp"
 #include "mkw/bullet_bill.hpp"
 #include "mkw/blooper.hpp"
 #include "mkw/item_box.hpp"
@@ -26,7 +27,7 @@ void RaceItems::setKarts(ItemKarts* karts){karts_=karts?karts:ownKarts_.get();}
 void RaceItems::reset(const std::vector<ItemBox>& boxes,unsigned racers,uint32_t seed){
     boxes_=boxes;for(auto& box:boxes_){box.respawn=0;box.active=true;box.appearance=ItemBoxAppearanceFrames+1;}
     movers_.clear();lines_.clear();presses_.clear();roadBoxes_.clear();
-    shellRoute_.clear();shellCourse_=0xffff;actors_={};reclaimOrder_={};reclaimPressure_=0;reclaimPhase_=0;nativeReclaimPhase_=false;freeAtStepStart_.fill(true);hud_={};racers_={};itemPointPending_=0;inputs_={};held_={};heldDropTicks_={};inventoryDrops_={};cloudTransfer_={};cloudAge_={};cloudSlot_={};itemLock_={};bullets_={};bulletNoEnd_=0;
+    shellRoute_.clear();shellCourse_=0xffff;actors_={};reclaimOrder_={};reclaimPressure_=0;reclaimPhase_=0;nativeReclaimPhase_=false;freeAtStepStart_.fill(true);hud_={};racers_={};itemPoints_.fill(ShellRoute::Invalid);respawning_=0;inputs_={};held_={};heldDropTicks_={};inventoryDrops_={};cloudTransfer_={};cloudAge_={};cloudSlot_={};itemLock_={};bullets_={};bulletNoEnd_=0;
     inkReadyFrame_={};rouletteChoice_.fill(ItemKind::None);roulettes_={};rouletteRank_={};rouletteRng_=seed^0x72756c65u;
     // Retail ItemSlotData_updateTimers (USA2a0f58) initializes these during
     // countdown; the Blue timer has no reset call in the offline controller.
@@ -90,7 +91,7 @@ bool RaceItems::startRoulette(unsigned player){
 unsigned RaceItems::objectCount(unsigned type) const{
     unsigned n=0;
     auto add=[&](ItemKind kind,unsigned copies){if(unsigned(kind)<19&&ItemObjects[unsigned(kind)].type==type)n+=copies;};
-    for(const auto& a:actors_)if(a.active)add(a.kind,1);
+    for(unsigned i=nextActorSlot(0);i<MaxActors;i=nextActorSlot(i+1))if(actors_[i].active)add(actors_[i].kind,1);
     for(unsigned i=0;i<count_;++i){
         const auto& h=hud_[i];
         if(h.item!=ItemKind::None&&!(h.item==ItemKind::ThunderCloud&&!h.charges))add(h.item,h.charges);
@@ -101,6 +102,21 @@ unsigned RaceItems::objectCount(unsigned type) const{
     }
     if(frame_<blooperBusyUntil_)add(ItemKind::Blooper,1);
     return n;
+}
+void RaceItems::objectCounts(std::array<unsigned,15>& out) const{
+    // objectCount(type) for every type at once: the same sums.
+    out.fill(0);
+    auto add=[&](ItemKind kind,unsigned copies){if(unsigned(kind)<19){const unsigned type=ItemObjects[unsigned(kind)].type;if(type<15)out[type]+=copies;}};
+    for(unsigned i=nextActorSlot(0);i<MaxActors;i=nextActorSlot(i+1))if(actors_[i].active)add(actors_[i].kind,1);
+    for(unsigned i=0;i<count_;++i){
+        const auto& h=hud_[i];
+        if(h.item!=ItemKind::None&&!(h.item==ItemKind::ThunderCloud&&!h.charges))add(h.item,h.charges);
+        if(h.deployed)add(h.heldKind,h.heldCharges);
+        if(h.cloud)add(ItemKind::ThunderCloud,1);
+        if(h.bullet)add(ItemKind::Bullet,1);
+        if(h.pow)add(ItemKind::Pow,i==powUser_?1:0);
+    }
+    if(frame_<blooperBusyUntil_)add(ItemKind::Blooper,1);
 }
 unsigned RaceItems::courseDropWeight(unsigned slot)const{
     if(slot!=6||!woodboxOdds_.ready())return 0;
@@ -124,7 +140,7 @@ bool RaceItems::createCourseDrop(unsigned slot,Vec3 position,Vec3 velocity,uint8
     auto it=std::find_if(actors_.begin(),actors_.end(),[](const ItemActor& a){return !a.active;});
     if(it==actors_.end())return false; // direct generation never evicts a live actor
     forgetReclaimSlot(unsigned(it-actors_.begin()));
-    auto& a=*it;a={};a.active=true;a.kind=kind;a.owner=int8_t(owner);
+    auto& a=*it;a={};a.active=true;++actorSerial_;a.kind=kind;a.owner=int8_t(owner);
     reclaimOrder_[ItemObjects[unsigned(kind)].type].add(unsigned(it-actors_.begin()));
     a.position=a.previous=position;a.velocity=velocity+Vec3{0,timeTrial?35.f:25.f,0};
     a.scattered=true;a.up={0,1,0};a.yaw=std::atan2(velocity.x,velocity.z);
@@ -290,14 +306,15 @@ void RaceItems::updateHeldItems(unsigned player,ItemWorldQuery query){
     if(state.age<65535)++state.age;
     // The source computes positions using the previous tick's terrain volume,
     // then grows the object and updates its separate contact volume.
+    const Vec3 heldY=heldUp(state.up,racer);
     if(trailing(h.heldKind)){
         const float terrain=prop.terrain*state.scales[0]*racer.scale.y;
         const float oldHop=state.trailing.hop;
-        state.trailing.step(trailingPose(racer,terrain),h.heldCharges);
+        state.trailing.step(trailingPose(racer,heldY,terrain),h.heldCharges);
         for(unsigned slot=0;slot<h.heldCharges;++slot){
             Vec3 position=state.trailing.positions[slot];
             const float slotTerrain=prop.terrain*state.scales[slot]*racer.scale.y;
-            if(slot)position+=racer.up*(slotTerrain-terrain);
+            if(slot)position+=heldY*(slotTerrain-terrain);
             state.trailing.positions[slot]=position;
             const auto surface=query&&!racer.inCannon?query(state.previous[slot],position,slotTerrain):ItemSurface{};
             // Cannon KCL destroys released actors, not items tethered to the
@@ -307,9 +324,10 @@ void RaceItems::updateHeldItems(unsigned player,ItemWorldQuery query){
             state.positions[slot]=state.trailing.positions[slot];
             // 27d9b8/27da58: rear-facing traps, forward-facing shells, spring
             // tilt from hop displacement, and .08 up-vector response.
-            Vec3 facing=normalized(racer.forward+state.trailing.backward*2+Vec3{0,-.0007f*state.trailing.hop*(state.trailing.hop-oldHop),0},-racer.forward);
+            const Vec3 up=heldY,forward=heldForward(racer,up);
+            Vec3 facing=normalized(forward+state.trailing.backward*2+Vec3{0,-.0007f*state.trailing.hop*(state.trailing.hop-oldHop),0},-forward);
             if(h.heldKind==ItemKind::GreenShell||h.heldKind==ItemKind::RedShell)facing=-facing;
-            state.ups[slot]=normalized(lerp(state.ups[slot],racer.up,.08f),racer.up);
+            state.ups[slot]=normalized(lerp(state.ups[slot],up,.08f),up);
             state.forwards[slot]=facing;
             const float before=state.scales[slot];
             state.scales[slot]=heldGrowth(state.scales[slot],prop.heldScale,state.age,singleHeld(h.heldKind),slot);
@@ -319,13 +337,19 @@ void RaceItems::updateHeldItems(unsigned player,ItemWorldQuery query){
         }
         return;
     }
-    // 27f654: slot orbit and model spin are independent uint16 angles.
-    if(state.angularSpeed<1200)state.angularSpeed+=70;
-    state.angle+=state.angularSpeed;state.spin+=2000;
+    // 27f654: slot orbit and model spin are independent uint16 angles. In an action the ring
+    // stops and its speed resets; a trick slows it to .7.
+    if(racer.inAction)state.angularSpeed=0;
+    else{
+        if(racer.trickRotating)state.angularSpeed=uint16_t(float(state.angularSpeed)*.7f);
+        if(state.angularSpeed<1200)state.angularSpeed+=70;
+        state.angle+=state.angularSpeed;
+    }
+    state.spin+=2000;
     state.radiusX+=.2f*((racer.itemGeometry[1]+30)*racer.scale.z-state.radiusX);
     state.radiusZ+=.2f*((racer.itemGeometry[0]+30)*racer.scale.x-state.radiusZ);
     state.hop=(state.hop+.4f*racer.hop)*.8f;
-    const Vec3 forward=normalized(racer.forward,{0,0,1}),up=normalized(racer.up,{0,1,0});
+    const Vec3 up=heldY,forward=heldForward(racer,up);
     const Vec3 right=normalized(cross(up,forward),{1,0,0});
     const Vec3 center=racer.position+forward*(racer.itemGeometry[3]*racer.scale.z)+up*(racer.itemGeometry[2]*racer.scale.y+prop.terrain*state.scales[0]*racer.scale.y+state.hop-racer.hop);
     for(unsigned slot=0;slot<3;++slot)if(h.heldMask&(1u<<slot)){
@@ -348,7 +372,6 @@ void RaceItems::scatterHeld(unsigned player,unsigned slot){
     // Preserve the held model's current facing, including a triple shell's
     // independent spin phase, when damage turns it into a dropped object.
     a.up=d.ups[slot];a.yaw=std::atan2(d.forwards[slot].x,d.forwards[slot].z);
-    if(singleHeld(h.heldKind)&&spinningShell(kind))a.yaw+=shellVisualSpin(frame_);
     // Shared dropped-object initializer 291f34: tangent velocity, 25-unit
     // up impulse plus clamped inherited vertical motion and radial 13*index.
     const auto& r=racers_[player];const Vec3 up=normalized(r.up,{0,1,0});
@@ -405,7 +428,8 @@ void RaceItems::useLightning(unsigned player){
     // cannon racers are skipped first (fn_288374).
     for(unsigned i=0;i<count_;++i){
         if(i==player||netRemote(i)||sameRaceTeam(racers_[player].team,racers_[i].team))continue;const auto& r=racers_[i];
-        if(r.damageProtected||r.unavailable||r.inCannon||r.finished)continue;
+        // Nothing on this path tests a finish: a racer past the line is struck too.
+        if(r.damageProtected||r.unavailable||r.inCannon)continue;
         // fn_1_288374 restarts the struck racer's bolt (KartEffect +0x4c) whatever the
         // kart's own immunity decides.
         events_.push_back({ItemEffect::Bolt,uint8_t(i),0});
@@ -448,7 +472,8 @@ void RaceItems::use(unsigned player,bool backwards){
 void RaceItems::beginHeld(unsigned player,ItemKind kind){
     deployments_[player]={};
     auto& state=deployments_[player];
-    if(trailing(kind)){state.trailing.init(trailingPose(racers_[player]));state.positions=state.trailing.positions;}
+    state.up=normalized(racers_[player].up,{0,1,0});heldUp(state.up,racers_[player]);
+    if(trailing(kind)){state.trailing.init(trailingPose(racers_[player],state.up));state.positions=state.trailing.positions;}
     else state.positions.fill(racers_[player].position);
     // TripleTrailPrepare 8078a534 / SpinPrepare 8078b664: SE_ITM_EQUIP for the triples.
     if(!singleHeld(kind))sound(ItemSoundCue::Equip,player,kind,racers_[player].position);
@@ -633,6 +658,13 @@ void RaceItems::updateHolder(unsigned i){
     if(h.golden&&!--h.golden){h.item=ItemKind::None;h.charges=0;}
     // Respawning (fn_1_288494) clears the inventory, the roulette and the slot lock.
     if(racers_[i].unavailable&&!racers_[i].inCannon){applyLoss(i,{true,true,false});h.slotLock=ItemKind::None;}
+    // ItemHolderPlayer_update (0x80797928): a finished racer's inventory is cleared every
+    // frame and its trailing items vanish (no drop, no break). The Thunder Cloud never
+    // enters the retail inventory, so its slot stays.
+    if(racers_[i].finished){
+        if(h.item!=ItemKind::ThunderCloud){h.item=ItemKind::None;h.charges=0;h.golden=0;}
+        if(h.deployed){heldDropTicks_[i]=0;for(unsigned slot=0;slot<3;++slot)removeHeld(i,slot,false);}
+    }
     auto& drop=inventoryDrops_[i];
     if(drop.ticks&&--drop.ticks&&(drop.ticks==7||drop.ticks==5||drop.ticks==3)&&drop.count){
         const auto velocity=drop.velocity[--drop.count];
@@ -695,8 +727,8 @@ void RaceItems::beforeStep(const ItemRacer* racers,const ItemInput* inputs,unsig
     for(unsigned i=0;i<count_;++i){racers_[i]=racers[i];inputs_[i]=inputs?inputs[i]:ItemInput{};}
     karts_->bind(racers_.data(),count_);
     for(unsigned i=0;i<count_;++i)karts_->overlay(i,racers_[i]);
-    trackShellRacers();
-    for(unsigned i=0;i<MaxActors;++i)freeAtStepStart_[i]=!actors_[i].active;
+    trackShellRacers(false);
+    freeAtStepStart_.fill(true);for(unsigned i=nextActorSlot(0);i<MaxActors;i=nextActorSlot(i+1))freeAtStepStart_[i]=!actors_[i].active;
     // Course objects animate during the starting countdown as on Wii. Their
     // presentation clock is independent of item roulette/RNG and draw rate.
     for(auto& box:boxes_)box.phase=(box.phase+1)%181;
@@ -718,7 +750,7 @@ void RaceItems::afterStep(const ItemRacer* racers,unsigned count,ItemWorldQuery 
     karts_->bind(racers_.data(),count_);
     for(unsigned i=0;i<count_;++i)karts_->overlay(i,racers_[i]);
     if(!active_){for(unsigned i=0;i<count_;++i){held_[i]=inputs_[i].use;syncKart(i);}stepSounds_=sounds_.size();return;}
-    trackShellRacers();
+    trackShellRacers(true);
     // Host models resolve the kart pass here; the native kart did it inside its pass. Racer
     // contact stands in for the native bump (both orders, as the kart pass calls it).
     if(!karts_->contactsInKartPass()&&!contactsDone_){
@@ -745,8 +777,8 @@ void RaceItems::afterStep(const ItemRacer* racers,unsigned count,ItemWorldQuery 
         blooperCaster_=MaxRacers;
     }
     updatePow();
-    updateActors(query);
-    for(unsigned i=0;i<count_;++i){updateHolder(i);updateHeldItems(i,query);if(!netRemote(i))resolveHeldCourseObjects(i);}
+    {MKW_SIM_SCOPE(ItActors);updateActors(query);}
+    {MKW_SIM_SCOPE(ItHolders);for(unsigned i=0;i<count_;++i){updateHolder(i);updateHeldItems(i,query);if(!netRemote(i))resolveHeldCourseObjects(i);}}
     // Re-read the kart's power-up state after this step's item effects (host models overlay it
     // on the racers the caller supplied).
     for(unsigned i=0;i<count_;++i){

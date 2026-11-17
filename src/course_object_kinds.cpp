@@ -149,9 +149,6 @@ void drawObakeBlock(ObjectDraw& d,Visual& v){
     d.submit(v.main.model,m,loopAt(v.main,float(d.tick)));
 }
 void drawBattleDesert(ObjectDraw& d,Visual& v);
-void drawEscalatorPianta(ObjectDraw& d,Visual& v){
-    d.submit(v.main.model,objectMatrix(v.object->transform(),v.object->scale()),loopAt(v.main,float(d.tick)*v.rate+v.phase));
-}
 void drawGeneric(ObjectDraw& d,Visual& v){
     if(v.object&&K::Field::ObjectBlockStatue::isStatue(v.geo->id())&&d.course==33&&
        !static_cast<const K::Field::ObjectBlockStatue*>(v.object)->shown())return;
@@ -1070,13 +1067,6 @@ bool hidden(const Visual& v,int course){
 }
 bool classifyObject(Visual& v,const ObjectAssets& assets,int course){
     if(hidden(v,course))return false;
-    if(course==5&&named(v,"escalator_group")){
-        // ObjectEscalatorGroup (0x8080178C) is itself a Pianta (monte_a)
-        // between its two escalators, which the Coconut Mall path draws:
-        // Kinoko gives it 510 up, 50 forward and 1.75x scale.
-        auto* pianta=assets.main("monte_a");if(!pianta||!v.object)return false;
-        v.main=assets.tracks(pianta,"wait");v.low={};v.present=drawEscalatorPianta;return true;
-    }
     if(v.object&&K::Field::ObjectBlockStatue::isStatue(v.geo->id())&&course==33&&
        !static_cast<const K::Field::ObjectBlockStatue*>(v.object)->shown())return false;
     auto* main=assets.main(v.resource);

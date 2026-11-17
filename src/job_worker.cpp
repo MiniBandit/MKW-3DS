@@ -25,7 +25,9 @@ bool JobWorker::start(unsigned cpuLimit){
     // Keep the render core free of higher-priority animation jobs. finish()
     // still executes unclaimed work immediately; physics preempts this worker.
     s32 priority=0x30;svcGetThreadPriority(&priority,CUR_THREAD_HANDLE);
-    thread_=threadCreate(entry,this,32*1024,std::clamp<s32>(priority+1,0x1a,0x3f),n3ds?0:1,false);
+    thread_=threadCreate(entry,this,32*1024,std::clamp<s32>(priority+1,0x1a,0x3f),1,false);
+    // New 3DS fallback: the main core, as before, if core 1 is unavailable.
+    if(!thread_&&n3ds)thread_=threadCreate(entry,this,32*1024,std::clamp<s32>(priority+1,0x1a,0x3f),0,false);
     return thread_!=nullptr;
 }
 void JobWorker::stop(){

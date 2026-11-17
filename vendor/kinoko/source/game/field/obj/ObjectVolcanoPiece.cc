@@ -2,6 +2,7 @@
 
 #include "game/system/RaceConfig.hh"
 #include "game/system/RaceManager.hh"
+#include "game/system/RaceConfig.hh"
 
 namespace Kinoko::Field {
 

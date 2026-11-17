@@ -1,7 +1,7 @@
 #pragma once
 // Diagnostic build only (MKW_AUTO_PROFILE). Two measurement aids:
 //  - SD log deferral: while a race is being profiled, append-mode opens of
-//    sdmc:/3ds/MKWiiDS/ logs (runtime.log, item/effect/audio traces) go to RAM
+//    sdmc:/3ds/mkw-3ds/ logs (runtime.log, item/effect/audio traces) go to RAM
 //    and are written when profiling stops, so log I/O never lands inside a
 //    measured frame (src/linear_lock.cpp wraps fopen).
 //  - GPU pass leave-out: on one presented frame in PassPeriod the render
@@ -249,7 +249,7 @@ inline void drawWriteTally(DrawTally& t,int race,const char* suffix){
     LightLock_Lock(&t.lock);rows.assign(t.entries,t.entries+t.count);frames=t.frames;LightLock_Unlock(&t.lock);
     if(!frames||race<0)return;
     std::sort(rows.begin(),rows.end(),[](const DrawEntry& a,const DrawEntry& b){return a.pass!=b.pass?a.pass<b.pass:a.draws>b.draws;});
-    char path[72];std::snprintf(path,sizeof path,"sdmc:/3ds/MKWiiDS/perf-race-%03d-%sdraws.csv",race,suffix);
+    char path[72];std::snprintf(path,sizeof path,"sdmc:/3ds/mkw-3ds/perf-race-%03d-%sdraws.csv",race,suffix);
     FILE* f=std::fopen(path,"w");if(!f)return;
     std::fprintf(f,"pass,model,records_per_frame,draws_per_frame,triangles_per_frame,frames,%s\n",modelPixels?"pixels_per_frame":"quad_pixels_per_frame");
     for(const auto& e:rows){
@@ -297,7 +297,7 @@ inline void textureUseWrite(int race){
     auto& t=textureUseTally;std::vector<TextureInfo> info;std::vector<TextureUseEntry> used;unsigned frames;
     LightLock_Lock(&t.lock);info=t.info;frames=t.frames;for(const auto& e:t.entries)if(e.data)used.push_back(e);LightLock_Unlock(&t.lock);
     if(!frames)return;
-    char path[72];std::snprintf(path,sizeof path,"sdmc:/3ds/MKWiiDS/perf-race-%03d-textures.csv",race);
+    char path[72];std::snprintf(path,sizeof path,"sdmc:/3ds/mkw-3ds/perf-race-%03d-textures.csv",race);
     FILE* f=std::fopen(path,"w");if(!f)return;
     std::fprintf(f,"owner,index,where,width,height,fmt,levels,bytes,unit1,draws_per_frame,%s,units,frames\n",modelPixels?"pixels_per_frame":"pixels_off");
     for(const auto& i:info){
@@ -345,7 +345,7 @@ inline void writesWrite(int race){
     if(!frames||race<0)return;
     auto byTime=[](const WriteEntry& a,const WriteEntry& b){return a.ticks>b.ticks;};
     std::sort(rows.begin(),rows.end(),byTime);std::sort(prepared.begin(),prepared.end(),byTime);
-    char path[72];std::snprintf(path,sizeof path,"sdmc:/3ds/MKWiiDS/perf-race-%03d-hook-writes.csv",race);
+    char path[72];std::snprintf(path,sizeof path,"sdmc:/3ds/mkw-3ds/perf-race-%03d-hook-writes.csv",race);
     FILE* f=std::fopen(path,"w");if(!f)return;
     const double ms=1000.0/SYSCLOCK_ARM11;
     std::fprintf(f,"kind,run,writes_per_frame,ms_per_frame,max_ms_frame,max_writes_frame,frames\n");
@@ -403,7 +403,7 @@ inline void skinReset(){skinTally=SkinTally{};for(auto& e:hiddenTally)e=HiddenEn
 // per frame. The "total" row's peak is the largest frame (at peak_frame).
 inline void skinWrite(int race){
     const auto& t=skinTally;if(!t.frames||race<0)return;
-    char path[64];std::snprintf(path,sizeof path,"sdmc:/3ds/MKWiiDS/perf-race-%03d-skin.csv",race);
+    char path[64];std::snprintf(path,sizeof path,"sdmc:/3ds/mkw-3ds/perf-race-%03d-skin.csv",race);
     FILE* f=std::fopen(path,"w");if(!f)return;
     std::fprintf(f,"path,resource,mean_vertices,peak_vertices,draws_per_frame,frames,peak_frame,mean_beyond_20k,mean_beyond_40k,max_distance\n");
     std::fprintf(f,"all,total,,%u,,%u,%u,,,\n",t.peakTotal,t.frames,t.peakFrame);
@@ -466,12 +466,12 @@ inline bool passWrite(int race,unsigned course){
     normalGpu=s.normalGpu;normalFrames=s.normalFrames;counted=s.countedFrames;
     LightLock_Unlock(&s.lock);
     if(!normalFrames)return false;
-    char path[64];std::snprintf(path,sizeof path,"sdmc:/3ds/MKWiiDS/perf-race-%03d-passes.csv",race);
+    char path[64];std::snprintf(path,sizeof path,"sdmc:/3ds/mkw-3ds/perf-race-%03d-passes.csv",race);
     // Older files move aside: v2 has draw counts, v1 neither (no vertex_ms).
-    bool fresh=true;if(FILE* f=std::fopen("sdmc:/3ds/MKWiiDS/perf-passes.csv","r")){char head[512]{};const bool ok=std::fgets(head,sizeof head,f)!=nullptr;std::fclose(f);
+    bool fresh=true;if(FILE* f=std::fopen("sdmc:/3ds/mkw-3ds/perf-passes.csv","r")){char head[512]{};const bool ok=std::fgets(head,sizeof head,f)!=nullptr;std::fclose(f);
         fresh=!ok||!std::strstr(head,"vertex_ms");
-        if(fresh&&ok)std::rename("sdmc:/3ds/MKWiiDS/perf-passes.csv",std::strstr(head,"draws_per_frame")?"sdmc:/3ds/MKWiiDS/perf-passes-v2.csv":"sdmc:/3ds/MKWiiDS/perf-passes-v1.csv");}
-    FILE* all=std::fopen("sdmc:/3ds/MKWiiDS/perf-passes.csv","a");
+        if(fresh&&ok)std::rename("sdmc:/3ds/mkw-3ds/perf-passes.csv",std::strstr(head,"draws_per_frame")?"sdmc:/3ds/mkw-3ds/perf-passes-v2.csv":"sdmc:/3ds/mkw-3ds/perf-passes-v1.csv");}
+    FILE* all=std::fopen("sdmc:/3ds/mkw-3ds/perf-passes.csv","a");
     if(all&&fresh)std::fputs("race,course,pass,samples,gpu_saved_ms,stderr_ms,neighbour_gpu_ms,share_pct,race_gpu_ms,draws_per_frame,triangles_per_frame,vertex_samples,vertex_ms,vertex_stderr_ms\n",all);
     if(FILE* f=std::fopen(path,"w")){
         std::fputs("pass,samples,gpu_saved_ms,stderr_ms,neighbour_gpu_ms,share_pct,race_gpu_ms,draws_per_frame,triangles_per_frame,vertex_samples,vertex_ms,vertex_stderr_ms\n",f);

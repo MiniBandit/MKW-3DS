@@ -3,7 +3,7 @@
 A build of the game from this tree with the QA layer and automatic per-race
 profiling (`MKW_AUTO_PROFILE`, no `MKW_RELEASE`). It is packaged as its own
 title, `000400000F4B5D00` "MKW3DSDIAG", so it installs beside the release CIA
-and shares its SD data (`sd:/3ds/MKWiiDS/`).
+and shares its SD data (`sd:/3ds/mkw-3ds/`).
 
 For developers measuring performance. To play the game, build the standard
 version with `tools/build.py` (see the main README).
@@ -36,7 +36,7 @@ commit and hashes.
 
 ## Unattended benchmark (32 courses)
 
-Copy both files from `tools/diag/benchmark/` into `sd:/3ds/MKWiiDS/`, start
+Copy both files from `tools/diag/benchmark/` into `sd:/3ds/mkw-3ds/`, start
 the DIAG title and leave the console on charge. It goes through the menus,
 races all 32 courses in order in VS with the CPU driving your kart, then exits
 to the HOME Menu (about 100 minutes).
@@ -73,7 +73,7 @@ so the other passes get more samples.
 
 ## A/B switches
 
-Create an empty file in `sd:/3ds/MKWiiDS/` to turn one change off:
+Create an empty file in `sd:/3ds/mkw-3ds/` to turn one change off:
 `no-pipeline.txt`, `no-bloom-merge.txt`, `no-bottom-cover.txt`,
 `no-shadow-rect.txt`, `no-player-vram.txt`, `no-draw-distance.txt`,
 `no-spatial-course.txt`, `no-hud-shrink.txt`, `no-fakebox-rainbow.txt`,

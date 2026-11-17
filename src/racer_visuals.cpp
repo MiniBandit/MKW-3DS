@@ -38,12 +38,13 @@ struct RacerVisuals::Impl {
     struct Racer : VehicleVisualAssets {
         std::unique_ptr<LumaVisual> luma;
         std::unique_ptr<Model> driverLod,bodyLod,bodyLodRear,handleLod,handleLodRear;RacerLod lod;
+        bool lowOnly=false; // no full models or animation banks: always a low-detail stage
+        bool ghost=false;   // a Time Trial ghost: see-through, no shadow, drawn by drawGhosts
         DriverController controller;
         DriverPose pose;
         VehicleAnimation vehicle;
         struct Clock {int clip=-1;unsigned start=0;} bodyClock;
         std::array<Clock,9> extraClocks;
-        bool ghost=false;
         // Set by the last drawn frame (prepareRacer): the animated driver (LOD 1)
         // was in view. Reduced quality (Old 3DS) aims heads only for those.
         bool headShown=true;
@@ -155,9 +156,10 @@ bool RacerVisuals::load(){
             impl_->racers[i-1]=std::move(r);++impl_->count;++impl_->reused;continue;
         }
         auto r=std::make_unique<Impl::Racer>();const auto& player=config.players[i];
+        r->ghost=player.type==K::System::RaceConfig::Player::Type::Ghost;
         std::string failure;
         if(!r->load(unsigned(player.character),unsigned(player.vehicle),config.teams?RaceTeam(player.team):RaceTeam::None,&failure,diag::unlitBanks&&!diag::liveOpponents,diag::liveOpponents)){
-            if(auto* log=std::fopen("sdmc:/3ds/MKWiiDS/opponent-load-error.txt","w")){
+            if(auto* log=std::fopen("sdmc:/3ds/mkw-3ds/opponent-load-error.txt","w")){
                 // Free heap and the largest LINEAR block (a free total says nothing about fragmentation).
                 const struct mallinfo m=mallinfo();const size_t heapTotal=envGetHeapSize();
                 const size_t heapFree=(heapTotal>size_t(m.arena)?heapTotal-size_t(m.arena):0)+size_t(m.fordblks);
@@ -182,6 +184,7 @@ bool RacerVisuals::load(){
         auto loadLow=[&](const char* part){char name[160];std::snprintf(name,sizeof name,"models/%s%s%s.gmdl",r->choice->prefix,teamVehicleSuffix(unsigned(player.vehicle),config.teams?RaceTeam(player.team):RaceTeam::None),part);auto model=std::make_unique<Model>();if(!model->load(name))return std::unique_ptr<Model>{};model->freezeLighting();model->enableStaticCulling();return model;};
         r->bodyLod=loadLow("body_lod");r->bodyLodRear=loadLow("body_lod_rear");
         if(VehicleLodLayout[r->choice->vehicle].handle){r->handleLod=loadLow("handle_lod");r->handleLodRear=loadLow("handle_lod_rear");}
+        if(r->lowOnly&&(!r->driverLod||!r->bodyLod||!r->bodyLodRear)){reset();return false;}
         freeze(r->driver,r->animation);freeze(r->body,r->bodyAnimation);
         for(unsigned n=0;n<r->extras.size();++n)freeze(r->extras[n],r->extraAnimation[n]);
         for(auto& wheel:r->wheels)if(wheel){if(!diag::liveOpponents)wheel->freezeLighting();wheel->enableStaticCulling();}
@@ -305,9 +308,12 @@ void RacerVisuals::Impl::prepareRacer(unsigned i){
     };
     const char* name=r->pose.clipName;float frame=r->pose.frame;
     name=driverVehicleClipName(name,r->choice->bike);
+    int expression=-1;float faceFrame=frame;
+    if(r->animation){
     if(!std::strcmp(name,"jump")&&r->animation->find(name)<0){name="jump_st";int c=r->animation->find(name);frame=c>=0?r->animation->duration(c)-1:0;}
-    int expression=r->animation->face(name);float faceFrame=frame;
+    expression=r->animation->face(name);faceFrame=frame;
     if(expression<0){expression=r->animation->face(r->pose.faceName);faceFrame=r->pose.faceFrame;}
+    }
     C3D_Mtx seated=transform;Mtx_Translate(&seated,0,r->choice->seatY,r->choice->seatZ,true);
     auto frustum=view.model(seated);
     out.draw=K::Kart::KartObjectManager::Instance()->object(i+1)->move()->battleVisible();out.body=transform;out.seated=seated;
@@ -353,7 +359,7 @@ void RacerVisuals::prepare(const Renderer& renderer,const RaceItems& items,Vec3 
     for(unsigned i=0;i<11;++i){
         d.queued[i]=false;auto* r=d.racers[i].get();if(!r)continue;
         // CPU-skinned banks share one scratch buffer: those racers stay on this thread.
-        bool gpu=r->animation&&r->animation->gpuSkinned()&&(!r->bodyAnimation||r->bodyAnimation->gpuSkinned());
+        bool gpu=r->lowOnly||(r->animation&&r->animation->gpuSkinned()&&(!r->bodyAnimation||r->bodyAnimation->gpuSkinned()));
         for(const auto& a:r->extraAnimation)gpu&=!a||a->gpuSkinned();
         if(!gpu||!worker.running())continue;
         d.jobContext[i]={&d,i};

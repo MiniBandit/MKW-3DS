@@ -5,6 +5,7 @@
 #include <mkw/license_times.hpp>
 #include <mkw/license_unlocks.hpp>
 #include <mkw/cpu_roster.hpp>
+#include <mkw/game_settings.hpp>
 #include <array>
 #include <algorithm>
 #include <vector>
@@ -21,7 +22,8 @@ inline constexpr std::array<UiMainMenuControl,7> UiMainMenuControls{{
  {0,-135.f,68.8f},{1,86.4f,68.8f},{1,135.f,68.8f},{1,183.6f,68.8f},
  {2,-172.8f,-93.2f},{2,-97.2f,-93.2f},{3,135.f,-93.2f}
 }};
-struct UiInput {bool up=false,down=false,left=false,right=false,accept=false,back=false,start=false,switchType=false;};
+// point: the touch screen highlights this cursor slot (~0u: none).
+struct UiInput {bool up=false,down=false,left=false,right=false,accept=false,back=false,start=false,switchType=false;unsigned point=~0u;};
 inline constexpr unsigned UiBattleWinCounts[]={2,3,4,5,8,10}; // original808a6d58
 inline constexpr unsigned UiVsRaceCounts[]={2,3,4,5,8,10,12,16,32};
 struct UiSelection {
@@ -40,13 +42,18 @@ struct UiSelection {
  // The retail unlocked engine-class page switches both 50cc/100cc entries
  // together between their restricted type and the combined kart/bike list.
  bool mixedEngineTypes=false;
- unsigned ledMode=0,ledBrightness=100;bool dynamicShadows=true; // Per-license port options, separate from retail RKSD.
- // Graphics: 0 Auto (Old 3DS Performance, New 3DS Quality), 1 Quality, 2 Performance.
- unsigned graphics=0;
- // Race lower screen: the race time shown, and the map turning with the kart.
- bool raceTimer=true,mapTurns=true;
- // The race speedometer (SELECT toggles it), remembered per license.
+ // Per-license port options, separate from retail RKSD. dynamicShadows is
+ // unused now (see UiSettings); it only keeps the file layout.
+ unsigned ledMode=0,ledBrightness=100;bool dynamicShadows=true;
+ // Speedometer at the start of a race; SELECT still switches it during one.
  bool speedometer=false;
+ // The race timer on the lower screen (License Settings: Timer):
+ // 0 Off, 1 Minimal (digits only), 2 Full (with the TIME label).
+ unsigned raceTimer=1;
+ // Race lower screen: the map turning with the kart (License Settings: Map).
+ bool mapTurns=true;
+ // Unused since the Settings page (kept so older code compiles): graphics preset.
+ unsigned graphics=0;
  bool operator==(const UiSelection&)const=default;
 };
 struct UiCharacterInfo {const char* name;unsigned retailId,weight;};
@@ -76,6 +83,8 @@ inline constexpr const char* UiBattleStageNames[]={"Block Plaza","Delfino Pier",
 class MenuState {
 public:
  UiPage page=UiPage::Strap;UiSelection selection{};
+ UiSettings settings{}; // Settings page; saved by main when the page is left
+ bool old3dsSettings=false; // Old 3DS: every row locked (lockOld3dsSettings)
  unsigned cursor=0,age=0,focusAge=0;bool unavailable=false;
  int previewCourse=-1;
  LicenseRecords licenseRecords{};
@@ -108,6 +117,19 @@ public:
  std::array<std::array<std::uint16_t,10>,4> licenseNames{};
  std::array<LicenseUnlockFlags,4> licenseUnlocks{};
  const LicenseUnlockFlags& unlocks()const{return licenseUnlocks[std::min(selection.license,3u)];}
+ // Time Trials staff ghosts: finish times (ms) of the disc's normal/expert
+ // ghost per course, 0 while not read or not on the SD card (main fills a
+ // cup's four courses before its Course page). Bit n: course n's staff ghost
+ // beaten, which unlocks its expert staff ghost (retail RKPD +0x0c).
+ std::array<std::array<std::uint32_t,2>,32> staffGhostTimes{};
+ std::array<std::uint32_t,4> licenseExpertGhosts{};
+ bool expertGhostUnlocked(unsigned course)const{return course<32&&(licenseExpertGhosts[std::min(selection.license,3u)]>>course&1);}
+ // The license's own ghost per course: its finish time (ms), 0 for none
+ // (main reads a cup's four with the staff ghosts).
+ std::array<std::array<std::uint32_t,32>,4> ownGhostTimes{};
+ std::uint32_t ownGhostTime(unsigned course)const{return course<32?ownGhostTimes[std::min(selection.license,3u)][course]:0;}
+ // Ghost page choice: 0 alone, 1 staff ghost, 2 expert staff ghost, 3 own ghost.
+ unsigned ghostChoice=0;bool watchGhost=false; // Y on a ghost row: watch its replay
  int selectRaceMiiRequest=-1;unsigned selectedMiiVoice=0;
  void confirmRaceMii(unsigned weight,unsigned character);
  unsigned driverWeight()const{return selection.driver<24?UiCharacters[selection.driver].weight:std::min(selection.miiWeight,2u);}
@@ -133,26 +155,33 @@ public:
  void prepareVsCourses();
  void nextVsCourse();
  // The corner control is an independent PushButton, outside the main grid.
- unsigned auxiliarySlot()const{return page==UiPage::MainMenu?7:(page==UiPage::Drift||page==UiPage::VSMode||page==UiPage::BattleMode)?2:~0u;}
+ unsigned auxiliarySlot()const{return page==UiPage::MainMenu?7:page==UiPage::License?4:(page==UiPage::Drift||page==UiPage::VSMode||page==UiPage::BattleMode)?2:~0u;}
  // Results is the retail VS end-of-race menu (VSRaceEnd): Next Race / Quit
  // Game, or only Next after the final race of a VS set (IsFinalRace).
- // Dad requested Restart in every playable mode; retain TT's extra
- // ChangeCourse/ChangeCharacter actions. Original GP/VS/BT omit Restart. TT adds
+ // GP/VS/BT match the retail PauseMenu: Continue Game / Quit Game. TT adds
  // Restart,ChangeCourse,ChangeCharacter before Quit (USA808a84a8..d0).
- unsigned pauseCount()const{return selection.mode==UiMode::TimeTrials?5u:3u;}
+ // Watching a ghost: PauseMenuGhostWatch (USA list 808a8534: Continue, Restart,
+ // BattleGhost, Quit; texts 0x404, 0x406, 0x3fe, 0x405). ChangeGhost is unused.
+ bool watchingGhost()const{return selection.mode==UiMode::TimeTrials&&watchGhost;}
+ unsigned pauseCount()const{return watchingGhost()?4u:selection.mode==UiMode::TimeTrials?5u:2u;}
  unsigned pauseQuitSlot()const{return pauseCount()-1;}
  const char* pauseVariant(unsigned i)const{
   static constexpr const char* tt[]={"ButtonContinue","ButtonRestart","ButtonChangeCourse","ButtonChangeCharacter","ButtonQuit"};
-  return selection.mode==UiMode::TimeTrials?tt[std::min(i,4u)]:i==0?"ButtonContinue":i==1?"ButtonRestart":"ButtonQuit";
+  static constexpr const char* watch[]={"ButtonContinue","ButtonRestart","ButtonBattleGhost","ButtonQuit"};
+  if(watchingGhost())return watch[std::min(i,3u)];
+  return selection.mode==UiMode::TimeTrials?tt[std::min(i,4u)]:i==0?"ButtonContinue":"ButtonQuit";
  }
  const char* pauseLabel(unsigned i)const{
   static constexpr const char* tt[]={"Continue","Restart","Change Course","Change Character","Quit"};
-  return selection.mode==UiMode::TimeTrials?tt[std::min(i,4u)]:i==0?"Continue":i==1?"Restart":"Quit";
+  static constexpr const char* watch[]={"Continue Replay","Restart Replay","Start Race","Quit Replay"};
+  if(watchingGhost())return watch[std::min(i,3u)];
+  return selection.mode==UiMode::TimeTrials?tt[std::min(i,4u)]:i==0?"Continue Game":"Quit Game";
  }
  bool finalRace=false;
  UiFocusState focus{};
  UiAction input(UiInput);
  void advance(unsigned ticks);
+ void toggleSetting(unsigned row);
  void enter(UiPage);
  void raceStarted(){enter(UiPage::Race);}
  void finish(bool last=false){finalRace=last;enter(UiPage::Results);}
@@ -187,7 +216,10 @@ struct UiMenuLayout {
 };
 struct UiQuad {unsigned sprite;float x,y,w,h,alpha=1;uint32_t tint=0xffffffff;bool bottom=false;float u0=0,v0=0,u1=1,v1=1;unsigned movie=~0u;std::array<uint32_t,4> corners{{0xffffffff,0xffffffff,0xffffffff,0xffffffff}};bool additive=false;unsigned vehicleIcon=~0u;uint32_t vehicleColor0=0,vehicleColor1=0xffffffff;bool fontRemap=false;uint32_t fontColor0=0,fontColor1=0xffffffff;bool affine=false;std::array<std::array<float,2>,4> positions{};UiMenuLayout menu{};float screenSlide=0;float titleTransfer=0;float previewFullAlpha=-1;unsigned licensePortrait=~0u;};
 struct UiRacer {unsigned driver=0,rank=1,lap=1;bool finished=false;float x=0,z=0;};
-struct UiRaceView {std::array<UiRacer,12> racers{};unsigned count=0;unsigned milliseconds=0;};
+// pauseControls: this SD card has the pause controls diagram
+// (Renderer::pauseControlsAvailable); without it the pause page leaves out
+// the diagram's labels.
+struct UiRaceView {std::array<UiRacer,12> racers{};unsigned count=0;unsigned milliseconds=0;bool pauseControls=true;};
 // The same command list is consumed by Citro3D and the host layout preview.
 struct UiTransitionView;
 void composeMenu(const MenuState&,const UiRaceView&,std::vector<UiQuad>&);
@@ -200,5 +232,7 @@ void layoutMenuScreens(const MenuState&,const std::vector<UiQuad>& source,
 // Allocation size of the actual sprite-index set requested by MenuRenderer.
 // Does not read or retain textures; movies and live vehicle icons are excluded.
 std::uint32_t uiResidentTextureBytes(const std::vector<UiQuad>&);
+// DIAG: the same set as "key KB" pairs (runtime.log).
+void uiResidentTextureList(const std::vector<UiQuad>&,char* out,std::size_t size);
 std::vector<UiQuad> composeMenu(const MenuState&,const UiRaceView&);
 }

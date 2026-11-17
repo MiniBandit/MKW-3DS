@@ -1,5 +1,6 @@
 #include <mkw/vehicle_visual_assets.hpp>
 #include <mkw/mii_garage.hpp>
+#include <mkw/vehicle_lod_layout.hpp>
 #include <cstdio>
 #include <cstring>
 #include <mkw/asset_pack.hpp>

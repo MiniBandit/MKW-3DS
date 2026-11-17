@@ -143,9 +143,15 @@ public:
   if(*token=="skip"){++cursor_;return;}
   if(*token=="S"){down=KEY_START;++cursor_;return;}
   if(*token=="A"){if(++gap_>=8){gap_=0;down=KEY_A;++cursor_;}return;}
+  // The pause menu runs inside the race loop: its choices arrive here.
+  if(*token=="U"||*token=="D"||*token=="L"||*token=="R"||*token=="B"){
+   if(++gap_>=8){gap_=0;down=*token=="U"?KEY_DUP:*token=="D"?KEY_DDOWN:*token=="L"?KEY_DLEFT:*token=="R"?KEY_DRIGHT:KEY_B;++cursor_;}
+   return;
+  }
   if((*token)[0]=='w'){if(++wait_>=unsigned(std::atoi(token->c_str()+1))){wait_=0;++cursor_;}return;}
   if(*token=="next"||*token=="quit"){
-   if(!endMenu){if(++raceWait_>12000)fail("end-of-race menu did not appear");return;}
+   // The result boards before it take A, once they stop counting.
+   if(!endMenu){held=0;if(++raceWait_>12000)fail("end-of-race menu did not appear");else if(raceWait_%120==0)down=KEY_A;return;}
    raceWait_=0;if(++gap_<8)return;gap_=0;
    const unsigned wanted=*token=="quit"?1:0;
    if(endCursor!=wanted){down=KEY_DDOWN;return;}

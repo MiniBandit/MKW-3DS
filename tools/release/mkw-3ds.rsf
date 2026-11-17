@@ -1,18 +1,17 @@
 # Manual makerom template. Supply APP_ROMFS and APP_REMASTER explicitly.
 # For external-SD builds, remove the RomFs block in your local working copy.
-# Platform ctr: Old 3DS and New 3DS. Old 3DS runs in its 80 MB mode (3dbrew
-# "Dev2"; the title launch reboots into it): 64 MB ran out of heap loading 11
-# opponents. New 3DS gets 124 MB, 804 MHz, L2 cache and core 2 (render
+# Platform ctr: Old 3DS and New 3DS. Old 3DS runs in the 64 MB mode the port
+# is budgeted for; New 3DS gets 124 MB, 804 MHz, L2 cache and core 2 (render
 # thread, job worker and audio). Based on 2gifts/melee-3ds port/3ds/melee.rsf.
 BasicInfo:
-  Title: MKWiiDS
+  Title: MKW3DS
   ProductCode: CTR-P-MKW3
   Logo: Nintendo # the stock "Nintendo 3DS" splash; custom logos crash the HOME Menu
 RomFs:
   RootPath: $(APP_ROMFS)
 TitleInfo:
   Category: Application
-  UniqueId: 0xF4B60
+  UniqueId: 0xF4B57
 Option:
   UseOnSD: true
   FreeProductCode: true
@@ -29,7 +28,7 @@ AccessControlInfo:
    - DirectSdmc
    - DirectSdmcWrite
   MemoryType: Application
-  SystemMode: 80MB
+  SystemMode: 64MB
   SystemModeExt: 124MB
   CpuSpeed: 804MHz
   EnableL2Cache: true

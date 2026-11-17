@@ -17,6 +17,6 @@ Mall with 12 racers (CPU AI driving the player), default settings (core-1 jobs o
 
 A profile that no longer matches its source is ignored for the functions that changed.
 Regenerate together with Kinoko's (`tools/pgo/kinoko/README.md`): one training build
-(`MKW_KINOKO_PGO=generate`) profiles both; copy `sdmc:/3ds/MKWiiDS/pgo/src/` here.
+(`MKW_KINOKO_PGO=generate`) profiles both; copy `sdmc:/3ds/mkw-3ds/pgo/src/` here.
 Train on two races (`flower2-autoplay.txt`: Mario Circuit, Coconut Mall): the fully
 instrumented build hung loading a third race. Training runs value profiling only in Kinoko.

@@ -24,7 +24,9 @@ base={rel:src for rel,src in mapping.items() if not overlay_model(rel)}
 (paks/'runtime-files.json').write_text(json.dumps(base,indent=2)+'\n')
 tool('pack_race_assets.py',paks/'runtime-files.json',paks/'race-base.pak','--exclude-menu',assets/'menu.pak')
 tool('pack_racer_lod.py','--base',paks/'race-base.pak','--overlay',assets,'--output',paks/'race-lod.pak')
-tool('pack_mii_racers.py','--base',paks/'race-lod.pak','--overlay',ROOT/'build/mii-racers','--output',paks/'race.pak')
+tool('pack_mii_racers.py','--base',paks/'race-lod.pak','--overlay',ROOT/'build/mii-racers','--output',paks/'race-mii.pak')
+# Opponents' compact driver banks (.dsku, about 40% smaller), from ethanseagull's work.
+tool('pack_unlit_banks.py',paks/'race-mii.pak',paks/'race.pak')
 files={Path(src):Path(rel) for rel,src in base.items()}
 files[assets/'menu.pak']=Path('menu.pak');files[paks/'race.pak']=Path('race.pak')
 manifest={}
@@ -68,19 +70,22 @@ for source in [*(ROOT/'include/mkw').iterdir(),*(ROOT/'src').glob('*.cpp')]:
 absent=sorted(name for name in referenced if name not in in_paks and not (out/name).is_file())
 for name in absent[:40]:print(f'WARNING: {name} (named in {referenced[name]}) is not in the package',file=sys.stderr)
 if absent:print(f'WARNING: {len(absent)} of {len(referenced)} referenced assets are not in the package',file=sys.stderr)
-# Last: menu.pak and race.pak become MPK2, LZ4-compressed where it saves
-# space, on 512-byte sectors (tools/mpk2.cpp). Every pak tool above reads MPK1;
-# the game reads both.
-program=subprocess.check_output([sys.executable,str(ROOT/'tools/host_tools.py'),'mpk2'],cwd=ROOT,text=True).strip().splitlines()[-1]
-for archive in ('menu.pak','race.pak'):
- packed=out/(archive+'.mpk2')
- print(archive,subprocess.check_output([program,str(out/archive),str(packed)],text=True).strip())
- packed.replace(out/archive);manifest[archive]=hashlib.sha256((out/archive).read_bytes()).hexdigest()
-# And every movie becomes GMV2: each frame LZ4-compressed (src/menu_movie.cpp).
-for movie in sorted(out.glob('movies/*.gmv')):
- packed=movie.with_suffix('.gmv2')
- print(movie.name,subprocess.check_output([program,'--gmv',str(movie),str(packed)],text=True).strip())
- packed.replace(movie);manifest[movie.relative_to(out).as_posix()]=hashlib.sha256(movie.read_bytes()).hexdigest()
+# menu.pak and race.pak become MPK2 (tools/pakpack.c, from ethanseagull's work):
+# entries in the order the game reads them (tools/pak-order/), LZ4-compressed
+# where that saves space. Lossless; race.pak drops from about 1.8 to 1 GB.
+sys.path.insert(0,str(ROOT/'tools'))
+import host_tools
+pakpack=paks/('pakpack.exe' if sys.platform=='win32' else 'pakpack')
+subprocess.run([host_tools.compiler(),'-x','c','-O2','-pthread','-o',str(pakpack),str(ROOT/'tools/pakpack.c')],cwd=ROOT,check=True)
+for index,name in enumerate(('menu','race')):
+ source=out/f'{name}.pak';packed=paks/f'{name}-mpk2.pak'
+ order=subprocess.run([sys.executable,str(ROOT/'tools/pak_order.py'),str(source),str(index),str(ROOT/f'tools/pak-order/{name}.txt')],
+                      cwd=ROOT,check=True,capture_output=True,text=True).stdout
+ (paks/f'{name}-order.txt').write_text(order)
+ packed.unlink(missing_ok=True)
+ subprocess.run([str(pakpack),'--threads','6',str(source),str(paks/f'{name}-order.txt'),str(packed)],cwd=ROOT,check=True)
+ shutil.copyfile(packed,source);packed.unlink()
+ manifest[f'{name}.pak']=hashlib.sha256(source.read_bytes()).hexdigest()
 (out/'CONTROLS.txt').write_text(controls);manifest['CONTROLS.txt']=hashlib.sha256((out/'CONTROLS.txt').read_bytes()).hexdigest()
 (out/'manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
 # This directory is generated package staging. Keep it as strict as the ZIP,

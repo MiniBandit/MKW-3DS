@@ -55,9 +55,10 @@ void RaceConfig::initControllers() {
 /// @brief Initializes the ghost.
 /// @details This is normally scoped within RaceConfig::Scenario, but Kinoko doesn't support menus.
 void RaceConfig::initGhost(size_t index) {
-    GhostFile ghost(m_ghost);
+    ASSERT(index < m_ghosts.size());
+    GhostFile ghost(m_ghosts[index]);
 
-    // A replay picks the course; a raced ghost was loaded for the chosen one.
+    // A replay sets the course; a ghost raced in Time Trials keeps the chosen one.
     if (index == 0) {
         m_raceScenario.course = ghost.course();
     }
@@ -102,6 +103,7 @@ void RaceConfig::Scenario::init() {
     engineClass = 2;
     gameMode = GameMode::Time_Trial;
     mirror = false;
+    timeTrial = false;
 
     for (size_t i = 0; i < players.size(); ++i) {
         Player &player = players[i];
@@ -117,7 +119,7 @@ RaceConfig *RaceConfig::s_instance = nullptr; ///< @addr{0x809BD728}
 /** @brief Host-agnostic way of initializing RaceConfig.
     The type of the first player *must* be set to either Local or Ghost.
 
-    - If the type is Ghost, m_ghost must be set to a decompressed ghost file.
+    - If the type is Ghost, m_ghosts[index] must be set to a ghost file.
 
     - If the type is Local, the race scenario's course and the first player's character, vehicle,
     and driftIsAuto must be set.

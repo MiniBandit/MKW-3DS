@@ -1,6 +1,7 @@
 #include "mkw/console_model.hpp"
 #include <mkw/driver_look_target.hpp>
 #include "mkw/animation.hpp"
+#include <malloc.h>
 #include <mkw/render_metrics.hpp>
 #include <mkw/animation_budget.hpp>
 #include <mkw/skin_draw_reuse.hpp>
@@ -157,6 +158,12 @@ void DriverAnimation::keepOnly(const std::vector<std::string>& paths){
 }
 unsigned DriverAnimation::keptCount(){auto& k=kept();LightLock_Lock(&k.lock);const unsigned n=unsigned(k.banks.size());LightLock_Unlock(&k.lock);return n;}
 unsigned DriverAnimation::reusedCount(){return kept().reused;}
+// Ordinary heap still available: the unclaimed space up to the heap's end plus
+// the allocator's free blocks inside what it already claimed (log lines).
+size_t heapSpaceFree(){
+    const struct mallinfo m=mallinfo();const size_t total=envGetHeapSize();
+    return (total>size_t(m.arena)?total-size_t(m.arena):0)+size_t(m.fordblks);
+}
 bool DriverAnimation::load(const char* path,const Model& model){
     reset();
     // These banks are read by the CPU, never directly by PICA or DSP. Leave
@@ -536,7 +543,7 @@ bool DriverAnimation::apply(Model& model,int clip,float frame,unsigned tick,int 
         static std::vector<std::string> seen;
         if(std::find(seen.begin(),seen.end(),path_)==seen.end()){
             seen.push_back(path_);
-            if(FILE* f=std::fopen("sdmc:/3ds/MKWiiDS/cpu-pose-banks.txt","a")){
+            if(FILE* f=std::fopen("sdmc:/3ds/mkw-3ds/cpu-pose-banks.txt","a")){
                 std::fprintf(f,"%s matrices=%u vertices=%u model_vertices=%u skin_normals=%d baked=%d bone_indices=%d\n",path_.c_str(),matrices_,vertices_,
                              unsigned(model.vertexCount),int(skinNormals_),int(model.staticLightingBaked),int(model.skinBoneIndices!=nullptr));
                 std::fclose(f);

@@ -137,7 +137,7 @@ AwardSceneResult runAwardPodium(Renderer& renderer,const AwardResults& results,v
 #ifndef MKW_RELEASE
   renderer.waitForGpu();
   const double ms=double(svcGetSystemTick()-started)*1000.0/SYSCLOCK_ARM11;
-  if(FILE* file=std::fopen("sdmc:/3ds/MKWiiDS/award-load-times.jsonl","a")){
+  if(FILE* file=std::fopen("sdmc:/3ds/mkw-3ds/award-load-times.jsonl","a")){
    std::fprintf(file,"{\"stage\":\"%s\",\"milliseconds\":%.3f,\"within2000ms\":%s}\n",stage,ms,ms<=2000?"true":"false");std::fclose(file);
   }
 #endif
@@ -233,6 +233,7 @@ AwardSceneResult runAwardPodium(Renderer& renderer,const AwardResults& results,v
   heartbeat.loop("input",unsigned(phase),frame,tick,pending,session.assets->drive.get(),soundReadyToLoad?int(sound.sceneReady()):-1,1);
   // AwardFade and AwardResults register only the Front input (80621178, 80621f70): A, not B or START.
   hidScanInput();bool advance=(hidKeysDown()&KEY_A)!=0;
+  if(awardAutoAdvance&&tick%240==239)advance=true;
   const auto now=svcGetSystemTick();pending+=std::min(0.1,double(now-previous)/SYSCLOCK_ARM11)*60.;previous=now;
   // Handle edges once per display refresh; simulation may owe zero or several ticks.
   // AwardFade::HandleClick (80621408..24) accepts a skip after tick70,

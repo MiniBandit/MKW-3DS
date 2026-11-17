@@ -21,6 +21,7 @@
 #include "game/field/obj/ObjectRegistry.hh"
 #include "game/field/obj/ObjectBlockStatue.hh"
 
+#include "game/kart/KartMove.hh"
 #include "game/kart/KartObject.hh"
 
 #include "game/system/CourseMap.hh"
@@ -143,7 +144,15 @@ size_t ObjectDirector::checkKartObjectCollision(Kart::KartObject *kartObj,
     if (kartObj->status().onBit(Kart::eStatus::Bullet)) return 0;
     size_t count = 0;
 
+    // Retail 0x8082AB04: a CPU far from every local human (state bit 88, set by the AI)
+    // skips each object whose vtable +0xd8 returns 0.
+    const bool farCpu = kartObj->status().onBit(Kart::eStatus::FarFromHumans);
+
     while (ObjectCollidable *obj = BoxColManager::Instance()->getNextObject()) {
+        if (farCpu && !obj->collidesWithFarCpu()) {
+            continue;
+        }
+
         auto *objCollision = obj->collision();
         if (!objCollision) {
             continue;
@@ -167,11 +176,17 @@ size_t ObjectDirector::checkKartObjectCollision(Kart::KartObject *kartObj,
         Kart::Reaction reaction =
                 obj->onCollision(kartObj, reactionOnKart, reactionOnObj, m_hitDepths[count]);
         m_reactions[count] = reaction;
+        // Port, audio only: the contact as onCollision saw it (no state or reaction changes).
+        kartObj->move()->cueObjectReaction(static_cast<const ObjectBase *>(obj),
+                static_cast<s32>(reactionOnObj));
 
-        if (reaction == Kart::Reaction::WallAllSpeed || reaction == Kart::Reaction::WallSpark) {
-            obj->onWallCollision(kartObj, m_hitDepths[count]);
-        } else {
-            obj->onObjectCollision(kartObj);
+        // Retail calls the contact callbacks only outside an action (status bit 32).
+        if (kartObj->status().offBit(Kart::eStatus::InAction)) {
+            if (reaction == Kart::Reaction::WallAllSpeed || reaction == Kart::Reaction::WallSpark) {
+                obj->onWallCollision(kartObj, m_hitDepths[count]);
+            } else {
+                obj->onObjectCollision(kartObj);
+            }
         }
 
         m_collidingObjects[count] = obj;
@@ -250,10 +265,8 @@ void ObjectDirector::createObjects() {
     bool sun = false;
 
     // Retail (USA 0x80813378) builds no item boxes and no Bob-omb cars while ObjectDirector
-    // +0x55 is set, as in time trials: the Time Trials mode, or a replayed ghost as player 0.
-    const auto &scenario = System::RaceConfig::Instance()->raceScenario();
-    const bool timeTrial = scenario.gameMode == System::RaceConfig::Scenario::GameMode::Time_Trial ||
-            (scenario.playerCount > 0 && scenario.players[0].type == System::RaceConfig::Player::Type::Ghost);
+    // +0x55 is set, as in time trials.
+    const bool timeTrial = System::RaceConfig::Instance()->raceScenario().isTimeTrial();
 
     // The max pitch of the Chain Chomp only needs to be set once,
     // so we set it here instead of in the Chain Chomp constructor.
@@ -495,6 +508,8 @@ ObjectBase *ObjectDirector::createObject(const System::MapdataGeoObj &params) {
         return EGG::egg_new<ObjectEscalator>(params);
     case ObjectId::EscalatorGroup:
         return EGG::egg_new<ObjectEscalatorGroup>(params);
+    case ObjectId::StarRing:
+        return EGG::egg_new<ObjectStarRing>(params);
 
     // Non-specified objects are stock collidable objects by default
     // However, we need to specify an impl, so we don't use default

@@ -122,13 +122,13 @@ private:
   if(!frames_){reset();return;}
   if(current_.loops&&final)closeSecond();
   if(index_<0)for(int i=0;i<1000;++i){
-   char probe[64];std::snprintf(probe,sizeof probe,"sdmc:/3ds/MKWiiDS/perf-race-%03d-seconds.csv",i);
+   char probe[64];std::snprintf(probe,sizeof probe,"sdmc:/3ds/mkw-3ds/perf-race-%03d-seconds.csv",i);
    if(FILE* f=std::fopen(probe,"r")){std::fclose(f);continue;}
    index_=i;break;
   }
   if(index_<0){reset();return;}
   char path[64];
-  std::snprintf(path,sizeof path,"sdmc:/3ds/MKWiiDS/perf-race-%03d-seconds.csv",index_);
+  std::snprintf(path,sizeof path,"sdmc:/3ds/mkw-3ds/perf-race-%03d-seconds.csv",index_);
   if(FILE* f=std::fopen(path,"w")){
    std::fputs("second,loops,rendered,late_frames,very_late_frames,max_interval_ms,physics_ticks",f);
    for(auto* n:StageNames)std::fprintf(f,",%s_ms",n);
@@ -144,7 +144,7 @@ private:
    }
    std::fclose(f);
   }
-  std::snprintf(path,sizeof path,"sdmc:/3ds/MKWiiDS/perf-race-%03d-spikes.csv",index_);
+  std::snprintf(path,sizeof path,"sdmc:/3ds/mkw-3ds/perf-race-%03d-spikes.csv",index_);
   if(FILE* f=std::fopen(path,"w")){
    std::fputs("race_time_s,frame,rendered,interval_ms,physics_ticks",f);
    for(auto* n:StageNames)std::fprintf(f,",%s_ms",n);
@@ -162,11 +162,11 @@ private:
   }
   if(final){
    bool fresh=true;
-   if(FILE* f=std::fopen("sdmc:/3ds/MKWiiDS/perf-races.csv","r")){char head[1024]{};const bool v13=std::fgets(head,sizeof head,f)&&std::strstr(head,"vram_priority");std::fclose(f);
+   if(FILE* f=std::fopen("sdmc:/3ds/mkw-3ds/perf-races.csv","r")){char head[1024]{};const bool v13=std::fgets(head,sizeof head,f)&&std::strstr(head,"vram_priority");std::fclose(f);
     // Rows without the vram_priority column move aside (v12: fast_vertex, v11: racer_lod, v10: plain_uv, v9: sky_last, v8: draw_distance, v7: player_vram, v6: shadow_rect, v5: bottom_cover, v4: bloom_merge (never filled in),
     // v3: pipelined, v2: earlier diagnostic builds).
-    fresh=!v13;if(!v13)std::rename("sdmc:/3ds/MKWiiDS/perf-races.csv",std::strstr(head,"fast_vertex")?"sdmc:/3ds/MKWiiDS/perf-races-v12.csv":std::strstr(head,"racer_lod")?"sdmc:/3ds/MKWiiDS/perf-races-v11.csv":std::strstr(head,"plain_uv")?"sdmc:/3ds/MKWiiDS/perf-races-v10.csv":std::strstr(head,"sky_last")?"sdmc:/3ds/MKWiiDS/perf-races-v9.csv":std::strstr(head,"draw_distance")?"sdmc:/3ds/MKWiiDS/perf-races-v8.csv":std::strstr(head,"player_vram")?"sdmc:/3ds/MKWiiDS/perf-races-v7.csv":std::strstr(head,"shadow_rect")?"sdmc:/3ds/MKWiiDS/perf-races-v6.csv":std::strstr(head,"bottom_cover")?"sdmc:/3ds/MKWiiDS/perf-races-v5.csv":std::strstr(head,"bloom_merge")?"sdmc:/3ds/MKWiiDS/perf-races-v4.csv":std::strstr(head,"pipelined")?"sdmc:/3ds/MKWiiDS/perf-races-v3.csv":std::strstr(head,"stereo_pct")?"sdmc:/3ds/MKWiiDS/perf-races-v2.csv":"sdmc:/3ds/MKWiiDS/perf-races-v1.csv");}
-   if(FILE* f=std::fopen("sdmc:/3ds/MKWiiDS/perf-races.csv","a")){
+    fresh=!v13;if(!v13)std::rename("sdmc:/3ds/mkw-3ds/perf-races.csv",std::strstr(head,"fast_vertex")?"sdmc:/3ds/mkw-3ds/perf-races-v12.csv":std::strstr(head,"racer_lod")?"sdmc:/3ds/mkw-3ds/perf-races-v11.csv":std::strstr(head,"plain_uv")?"sdmc:/3ds/mkw-3ds/perf-races-v10.csv":std::strstr(head,"sky_last")?"sdmc:/3ds/mkw-3ds/perf-races-v9.csv":std::strstr(head,"draw_distance")?"sdmc:/3ds/mkw-3ds/perf-races-v8.csv":std::strstr(head,"player_vram")?"sdmc:/3ds/mkw-3ds/perf-races-v7.csv":std::strstr(head,"shadow_rect")?"sdmc:/3ds/mkw-3ds/perf-races-v6.csv":std::strstr(head,"bottom_cover")?"sdmc:/3ds/mkw-3ds/perf-races-v5.csv":std::strstr(head,"bloom_merge")?"sdmc:/3ds/mkw-3ds/perf-races-v4.csv":std::strstr(head,"pipelined")?"sdmc:/3ds/mkw-3ds/perf-races-v3.csv":std::strstr(head,"stereo_pct")?"sdmc:/3ds/mkw-3ds/perf-races-v2.csv":"sdmc:/3ds/mkw-3ds/perf-races-v1.csv");}
+   if(FILE* f=std::fopen("sdmc:/3ds/mkw-3ds/perf-races.csv","a")){
     if(fresh){std::fputs("race,course,new3ds,reduced_quality,seconds,loops,rendered,avg_fps,late_frames,very_late_frames,p50_ms,p90_ms,p99_ms,max_ms",f);
      for(auto* n:StageNames)std::fprintf(f,",%s_ms",n);
      std::fputs(",gpu_ms,draws,triangles,min_linear_free_kb,stereo_pct,bloom,stadium,dynamic_shadows,shadow_volumes,pass_profiling,file_opens,file_open_ms,pipelined,bloom_merge,bottom_cover,shadow_rect,player_vram,draw_distance,spatial_course,hud_shrink,sky_last,plain_uv,racer_lod,fast_vertex,vram_priority\n",f);}
@@ -211,7 +211,7 @@ public:
 #else
  RuntimeProfile(){
 #ifndef MKW_FRAME_CAPTURE
-  if(FILE* marker=std::fopen("sdmc:/3ds/MKWiiDS/performance.txt","r")){std::fclose(marker);openFile();}
+  if(FILE* marker=std::fopen("sdmc:/3ds/mkw-3ds/performance.txt","r")){std::fclose(marker);openFile();}
 #endif
  }
  void start(){
@@ -264,7 +264,7 @@ private:
   // Diagnostic overlay: keep every capture (performance-000.csv, -001, ...).
   char path[64];
   for(unsigned i=0;i<1000;++i){
-   std::snprintf(path,sizeof path,"sdmc:/3ds/MKWiiDS/performance-%03u.csv",i);
+   std::snprintf(path,sizeof path,"sdmc:/3ds/mkw-3ds/performance-%03u.csv",i);
    if(FILE* existing=std::fopen(path,"r")){std::fclose(existing);continue;}
    file_=std::fopen(path,"w");break;
   }

@@ -2,6 +2,7 @@
 """List existing runtime inputs only; does not copy files or build a package."""
 import hashlib,json,struct
 from gx_material import GMDL_SUBMESH_BYTES
+from menu_asset_inputs import compiled_menu_textures,supplemental_menu_textures
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1];assets=ROOT/'sd-card/3ds/mkw-3ds'
 roster_overlay=ROOT/'build/roster'
@@ -35,19 +36,26 @@ files[assets/'mii/parts.mpr']=Path('mii/parts.mpr')
 # License portraits use the native 3DS resource supplied by the owner. Without
 # one the game reads the console's own copy (vendor/cfl-mii, system title).
 native_mii=ROOT/'build/native-mii-resource'
-if (native_mii/'receipt.json').is_file():
- native_info=json.loads((native_mii/'receipt.json').read_text())
- native_resource=native_mii/'mii/CFL_Res.dat'
- if native_resource.stat().st_size!=native_info['bytes'] or hashlib.sha256(native_resource.read_bytes()).hexdigest()!=native_info['sha256']:
-  raise ValueError('Native Mii resource changed; run stage_native_mii_resource.py')
- files[native_resource]=Path('mii/CFL_Res.dat')
+native_info=json.loads((native_mii/'receipt.json').read_text())
+native_resource=native_mii/'mii/CFL_Res.dat'
+# Built without --cfl: the game mounts the console's CFL archive instead.
+if native_info.get('absent'):pass
+elif native_resource.stat().st_size!=native_info['bytes'] or hashlib.sha256(native_resource.read_bytes()).hexdigest()!=native_info['sha256']:
+ raise ValueError('Native Mii resource changed; run stage_native_mii_resource.py')
+if not native_info.get('absent'):files[native_resource]=Path('mii/CFL_Res.dat')
 # Real ceremony kart simulation reads its original KMP/KCL through ResourceManager.
 for name in ('winningrun_demo','ending_demo'):
  files[ROOT/f'build/award-source/Race/Course/{name}.szs']=Path(f'Race/Course/{name}.szs')
+# Time Trials staff ghosts (ghost1) and expert staff ghosts (ghost2), as on the disc.
+for kind in (1,2):
+ for n in range(32):
+  name=f'Race/TimeAttack/ghost{kind}/ghost{kind}_comp_{n:02d}.rkg';source=ROOT/'data/extracted'/name
+  if not source.is_file():raise ValueError('Staff ghost missing from the extracted disc: '+name)
+  files[source]=Path(name)
 staff=ROOT/'build/staff'
 staff_receipt=staff/'models/staff-ui.json'
 if not staff_receipt.is_file():raise ValueError('Cook Staff UI and both movies into build/staff before packaging')
-for folder,suffix in (('textures','.t3x'),('models','.gmdl'),('movies','.gmv'),('movies','.wav')):
+for folder,suffix in (('textures','.t3x'),('models','.gmdl'),('movies','.gmv'),('movies','.adp')):
  for source in (staff/folder).glob('*'+suffix):files[source]=source.relative_to(staff)
 files[staff_receipt]=Path('models/staff-ui.json')
 for name in ('kartParam.bin','driverParam.bin'):
@@ -148,31 +156,35 @@ for name,expected in menu_ui.get('sourceHashes',{}).items():
  source=ROOT/name
  if '..' in Path(name).parts or not source.is_file() or digest_file(source)!=expected:raise ValueError('Menu UI source changed: '+name)
 movie_manifest=json.loads((assets/'models/menu-movies.json').read_text())
-# Some streams deliberately keep every second source frame (about 30 fps, CHANGELOG.md).
 if movie_manifest.get('version')!=1 or len(movie_manifest.get('streams',[]))<17:raise ValueError('Cook complete retail menu movies before packaging')
+if movie_manifest.get('everySourceFrame')!=all(m.get('sourceFrameStep',1)==1 for m in movie_manifest['streams']):raise ValueError('Inconsistent menu movie frame policy')
 files[assets/'models/menu-movies.json']=Path('models/menu-movies.json')
 for movie in movie_manifest['streams']:
  relative=Path(movie['path']);source_relative=Path(movie['source']);source=ROOT/source_relative
  if relative.parent!=Path('movies') or relative.suffix!='.gmv' or '..' in source_relative.parts or not source_relative.as_posix().startswith('data/extracted/thp/'):raise ValueError('Invalid menu movie path')
  if digest_file(source)!=movie['sourceSha256']:raise ValueError('Menu movie source changed: '+str(source_relative))
+ # Match make_spec: every source frame, at the source rate (59.94 fps).
+ # Verify against the source THP rather than trusting the conversion receipt.
+ with source.open('rb') as stream:thp_header=stream.read(0x18)
+ if thp_header[:4]!=b'THP\0':raise ValueError('Invalid source THP')
+ source_fps,source_frames=struct.unpack_from('>fI',thp_header,0x10)
+ if movie.get('sourceFrameStep',1)!=1 or movie['frames']!=source_frames or movie['fpsDenominator']!=100000 or movie['fpsNumerator']!=round(source_fps*100000):raise ValueError('Invalid menu movie source cadence: '+movie['name'])
  path=assets/relative
  with path.open('rb') as stream:header=stream.read(64)
  if len(header)!=64:raise ValueError('Truncated GMV header')
  magic,version,width,height,count,numerator,denominator,frame_bytes,offset=struct.unpack('<4sIHHIIIII32x',header)
- if magic!=b'GMV1' or version!=1 or [width,height]!=movie['textureSize'] or count!=movie['frames'] or numerator!=movie['fpsNumerator'] or denominator!=movie['fpsDenominator'] or frame_bytes!=width*height//2 or offset!=64 or path.stat().st_size!=64+count*frame_bytes:raise ValueError('Invalid full-rate GMV stream: '+str(relative))
+ if magic!=b'GMV2' or version!=2 or [width,height]!=movie['textureSize'] or count!=movie['frames'] or numerator!=movie['fpsNumerator'] or denominator!=movie['fpsDenominator'] or frame_bytes!=width*height//2 or offset!=64 or path.stat().st_size!=movie.get('bytes'):raise ValueError('Invalid GMV stream: '+str(relative))
  if digest_file(path)!=movie.get('sha256'):raise ValueError('Menu movie payload changed: '+str(relative))
  files[path]=relative
 intro_audio=movie_manifest['introAudio'];audio_relative=Path(intro_audio['path'])
-if audio_relative!=Path('movies/title.wav') or digest_file(assets/audio_relative)!=intro_audio['sha256']:raise ValueError('Opening movie audio changed')
+if audio_relative!=Path('movies/title.adp') or digest_file(assets/audio_relative)!=intro_audio['sha256']:raise ValueError('Opening movie audio changed')
 if digest_file(ROOT/intro_audio['source'])!=intro_audio['sourceSha256']:raise ValueError('Opening movie audio source changed')
 files[assets/audio_relative]=audio_relative
 menu_audio=json.loads((assets/'models/menu-audio.json').read_text())
 if menu_audio.get('version')!=1 or digest_file(ROOT/menu_audio['source'])!=menu_audio['sourceSha256']:raise ValueError('Title music source changed')
 files[assets/'models/menu-audio.json']=Path('models/menu-audio.json')
-for sound in menu_audio['waves']:
- relative=Path(sound['path'])
- if relative.parent!=Path('movies') or relative.suffix!='.wav' or digest_file(assets/relative)!=sound['sha256']:raise ValueError('Title music payload changed')
- files[assets/relative]=relative
+# The title music WAVs (cook_menu_audio.py) stay out: the sound engine plays
+# the title wave from the shipped sound archive.
 
 
 for sprite in menu_ui['sprites'].values():
@@ -273,6 +285,11 @@ overlay={};effect_tables=[]
 if (vfx/'race-effects.bin').is_file():
  overlay['textures/race-effects.bin']=vfx/'race-effects.bin'
  effect_tables.append((vfx/'race-effects.bin').read_bytes())
+# The ceremony driving bank (cook_race_effects.py --award-source); without it
+# src/award_drive.cpp loads Luigi Circuit's identical bank.
+if (vfx/'award-driving-effects.bin').is_file():
+ overlay['textures/award-driving-effects.bin']=vfx/'award-driving-effects.bin'
+ effect_tables.append((vfx/'award-driving-effects.bin').read_bytes())
 profiles=json.loads((vfx/'course-effects.json').read_text())
 mode_vfx=[ROOT/'build'/f'battle-{mode}-effects/textures' for mode in ('balloon','coin')]
 for mode,stage in zip(('balloon','coin'),mode_vfx):
@@ -360,6 +377,8 @@ if (water_mipmaps/'receipt.json').is_file():
   if digest_file((assets/rel).with_suffix('.png'))!=info['pngSha256']:
    raise ValueError('Water mipmap pixels changed: '+rel)
   overlay[rel]=src
+ water_textures=set(water['textures'])
+else:water_textures=set()
 # Static world minification levels, retaining maximum-resolution pixels.
 world_mipmaps=ROOT/'build/world-mipmaps'
 if (world_mipmaps/'receipt.json').is_file():
@@ -367,6 +386,8 @@ if (world_mipmaps/'receipt.json').is_file():
  for rel,info in world['models'].items():
   if digest_file(ROOT/info['source'])!=info['sha256']:raise ValueError('World mipmap model changed: '+rel)
  for rel,info in world['textures'].items():
+  # Psea's original mip levels replace box-filtered ones (yo_wave_soko).
+  if rel in water_textures:continue
   src=world_mipmaps/rel
   if rel not in packaged or Path(rel).parent!=Path('textures') or Path(rel).suffix!='.t3x':
    raise ValueError('Invalid world mipmap override: '+rel)
@@ -397,6 +418,12 @@ if (blooper/'receipt.json').is_file():
   tex=b[24+ns*stride+i*64:24+ns*stride+(i+1)*64].split(b'\0')[0].decode()
   overlay['textures/'+tex+'.t3x']=blooper/'textures'/(tex+'.t3x')
 else:raise ValueError('Run tools/cook_blooper.py before packaging')
+# Retail lens flare textures (cook_lens_flare.py; src/lens_flare.cpp loads all four).
+lens=ROOT/'build/lens-flare'
+if not (lens/'receipt.json').is_file():raise ValueError('Run tools/cook_lens_flare.py before packaging')
+lens_info=json.loads((lens/'receipt.json').read_text())
+if digest_file(ROOT/lens_info['source'])!=lens_info['source_sha256']:raise ValueError('Lens flare source changed')
+for t in lens_info['textures']:overlay[f"textures/lensflare_{t['index']:02d}.t3x"]=lens/'textures'/f"lensflare_{t['index']:02d}.t3x"
 # Race-flow UI (tools/cook_race_flow.py): out-of-bounds wipe, result board and
 # end-of-race menu textures, cooked into this tree's own overlay directory.
 flow=ROOT/'build/race-flow/textures'
@@ -428,7 +455,7 @@ for rel,info in intro_info['textures'].items():
 # Race bottom screen (tools/cook_race_map.py): 32 course maps, their overviews
 # and the UI atlas, cooked into this tree's own overlay directory.
 race_map=ROOT/'build/race-map/textures'
-if not (race_map/'race_bottom_ui.t3x').is_file():raise ValueError('Run tools/cook_race_map.py before packaging')
+if not (race_map/'race_bottom_ui_256.t3x').is_file():raise ValueError('Run tools/cook_race_map.py before packaging')
 for extra in sorted(race_map.glob('race_*.t3x')):
  if not extra.name.startswith('._'):overlay['textures/'+extra.name]=extra
 # Offline sprites for the live minimap object layer; only the active course is resident.
@@ -506,6 +533,11 @@ for ghost in sorted(staff_ghosts.glob('ghost[12]/ghost[12]_comp_[0-3][0-9].rkg')
 # Indexed archives (tools/pack_menu_assets.py, tools/pack_race_assets.py): the
 # runtime reads packed assets with one open handle; loose files remain as a
 # fallback for anything not packed.
+for relative,source in supplemental_menu_textures(ROOT).items():files[source]=Path(relative)
+missing_menu=compiled_menu_textures(ROOT)-{relative.as_posix() for relative in files.values()}
+if missing_menu:raise ValueError('Compiled menu textures missing from resource map: '+', '.join(sorted(missing_menu)))
 for archive in ('menu.pak','race.pak'):
  if (assets/archive).is_file():files[assets/archive]=Path(archive)
+# Cook receipts (.json) are build records: the game reads none of them.
+files={src:rel for src,rel in files.items() if rel.suffix!='.json'}
 print(json.dumps({rel.as_posix():str(src) for src,rel in files.items()},indent=2))

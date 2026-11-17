@@ -3,7 +3,7 @@
     slow-job timings, sound stats, full-quality.txt toggle, subsystem logs).
   - MKW_AUTO_PROFILE: every race is profiled automatically from the end of
     the intro to results; per-second, spike and summary CSVs are written to
-    sdmc:/3ds/MKWiiDS/ on pause, race end and exit.
+    sdmc:/3ds/mkw-3ds/ on pause, race end and exit.
 
 Inputs: the standard build's work directory (tools/build.py; MKW_WORK,
 default build/standard): compile/libCFL.a and compile/libcitro3d.a (built
@@ -33,7 +33,7 @@ NAME = 'mkw-3ds-diag'
 # MKW_KINOKO_PGO: profile-guided optimization of Kinoko (vendor/kinoko, built with LTO)
 # and, in the Old 3DS variants, of the port's own sources (src/).
 #   generate  a training build in <out>-pgogen whose instrumented code writes its profile
-#             counters to sdmc:/3ds/MKWiiDS/pgo/<path below objects/>.gcda at each race
+#             counters to sdmc:/3ds/mkw-3ds/pgo/<path below objects/>.gcda at each race
 #             end (merged over races); copy pgo/vendor/kinoko/source/ to tools/pgo/kinoko/
 #             and pgo/src/ to tools/pgo/port/ (READMEs there).
 #   off       ignore tools/pgo/kinoko/.

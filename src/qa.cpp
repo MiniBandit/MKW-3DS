@@ -66,7 +66,7 @@ bool runControlChecks(K::EGG::SceneManager& scenes){
     }
     bool stable=freeBytes[0]==freeBytes[1]&&freeBytes[1]==freeBytes[2]&&freeBytes[2]==freeBytes[3];
     bool pass=valid&&ground&&drift&&trickStarted&&trickBoost&&speedBefore>20&&speedAfter<speedBefore&&boostAfter>boostBefore&&stable;
-    if(FILE* f=fopen("sdmc:/3ds/MKWiiDS/controls-result.json","w")){
+    if(FILE* f=fopen("sdmc:/3ds/mkw-3ds/controls-result.json","w")){
         fprintf(f,"{\"pass\":%s,\"finite_and_restart_position\":%s,\"ground_bounds\":%s,\"drift_observed\":%s,\"wall_observed\":%s,\"synthetic_trick_input_started\":%s,\"trick_landing_boost\":%s,\"speed_before_brake\":%.5f,\"speed_after_brake\":%.5f,\"speed_before_boost\":%.5f,\"speed_after_boost\":%.5f,\"heap_free\":[%u,%u,%u,%u],\"steps\":%u,\"mean_step_us\":%.3f,\"max_step_us\":%.3f}\n",pass?"true":"false",valid?"true":"false",ground?"true":"false",drift?"true":"false",wall?"true":"false",trickStarted?"true":"false",trickBoost?"true":"false",speedBefore,speedAfter,boostBefore,boostAfter,freeBytes[0],freeBytes[1],freeBytes[2],freeBytes[3],steps,total/steps,worst);fclose(f);
     }
     return pass;

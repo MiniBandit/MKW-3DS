@@ -50,6 +50,7 @@ public:
     // QA: opponents drawn with the Wii's low-detail driver in the last draw().
     unsigned lowDriverCount() const;
 private:
+    void drawRacer(Renderer& renderer,unsigned i);
     struct Impl;
     std::unique_ptr<Impl> impl_;
 };

@@ -58,11 +58,11 @@ bool staticPrecull=true,precullCheck=false,objectSetLog=false,resetSkip=true,swi
 void readSwitches(){
     if(switchesRead)return;switchesRead=true;
     auto exists=[](const char* path){FILE* f=std::fopen(path,"r");if(f)std::fclose(f);return f!=nullptr;};
-    staticPrecull=!exists("sdmc:/3ds/MKWiiDS/no-static-precull.txt");
+    staticPrecull=!exists("sdmc:/3ds/mkw-3ds/no-static-precull.txt");
 #ifndef MKW_RELEASE
-    precullCheck=exists("sdmc:/3ds/MKWiiDS/precull-check.txt");
-    objectSetLog=exists("sdmc:/3ds/MKWiiDS/object-set.txt");
-    resetSkip=!exists("sdmc:/3ds/MKWiiDS/no-reset-skip.txt");
+    precullCheck=exists("sdmc:/3ds/mkw-3ds/precull-check.txt");
+    objectSetLog=exists("sdmc:/3ds/mkw-3ds/object-set.txt");
+    resetSkip=!exists("sdmc:/3ds/mkw-3ds/no-reset-skip.txt");
 #endif
 }
 CourseObjects::PrecullStats precullStats;
@@ -545,7 +545,7 @@ bool CourseObjects::loadCoconut(){
         if(!built.model){d.palm.reset();return false;}
         d.escalator=std::move(built.model);d.escalatorBones=built.bones;
 #ifndef MKW_RELEASE
-        if(FILE* f=std::fopen("sdmc:/3ds/MKWiiDS/runtime.log","a")){
+        if(FILE* f=std::fopen("sdmc:/3ds/mkw-3ds/runtime.log","a")){
             std::fprintf(f,"escalators: one skinned draw each, %u bones, %lu vertices, %lu indices; %u cooked extension triangles dropped; strip colour %s\n",
                 built.bones,(unsigned long)d.escalator->vertexCount,(unsigned long)d.escalator->indexCount,built.dropped,built.uniform?"uniform":"varies");
             std::fclose(f);
@@ -739,7 +739,7 @@ void CourseObjects::Impl::logObjectSet(){
     char line[96];std::snprintf(line,sizeof line,"%u,%u,%u,%u,%08lx\n",tick,unsigned(objects.records.size()),unsigned(water.records.size()),unsigned(shadows.size()),(unsigned long)h);
     objectSetLines+=line;
     if(objectSetLines.size()>8192){
-        if(FILE* f=std::fopen("sdmc:/3ds/MKWiiDS/object-set.csv","a")){std::fputs(objectSetLines.c_str(),f);std::fclose(f);}
+        if(FILE* f=std::fopen("sdmc:/3ds/mkw-3ds/object-set.csv","a")){std::fputs(objectSetLines.c_str(),f);std::fclose(f);}
         objectSetLines.clear();
     }
 }

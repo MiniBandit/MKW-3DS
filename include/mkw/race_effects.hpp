@@ -21,7 +21,7 @@ struct EffectTexture { char name[32]; uint16_t width,height,paddedWidth,paddedHe
 // Steps at the 60 Hz simulation rate; presentation only.
 class RaceEffects {
 public:
-    static constexpr unsigned SlotCount=1983;
+    static constexpr unsigned SlotCount=2075;
     RaceEffects();
     ~RaceEffects();
     bool load(const char* path);
@@ -30,6 +30,11 @@ public:
     int loadErrno() const {return loadErrno_;}
     void unload();
     int find(const char* name) const;
+    // find for a decorative emitter: none (-1) on Old 3DS (reduced quality), where
+    // idle exhaust smoke (new in 1.1.0) and three effects 1.0.0 simulated but never
+    // drew (Koopa Cape stone dust, DK Mountain boulder pieces, Sherbet Land penguin
+    // spray) are left out. The course-roots check still uses find.
+    int findDecorative(const char* name) const;
     // One-shot effect with its authored emission life, not tied to a slot.
     void burst(int spec,const EffectFrame& frame);
     // Important one-shot: queue until simulation calc, ahead of decorative emission.

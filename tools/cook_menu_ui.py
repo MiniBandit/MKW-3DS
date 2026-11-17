@@ -3,7 +3,9 @@
 Uses original TPL/BRFNT, BRLYT pane trees, BRCTR transforms and BRLAN curves.
 No system fonts or replacement map silhouettes. See the emitted provenance.
 """
-import json, struct, subprocess, re, io, hashlib, math, sys
+import json, struct, subprocess, re, io, hashlib, math, sys, os, argparse
+from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from fractions import Fraction
 from pathlib import Path
 import numpy as np
@@ -11,11 +13,15 @@ from PIL import Image, ImageDraw
 from cook_race_hud import sections,string,layout,animation,sample,font_strings,variant
 from cook_race_items import cook_image_sprite,decode_tpl,digest
 from cook_roster import ROOT
+from t3x_check import t3x_matches
 from menu_layout import render_layout,controllers,controller_alphas,controller_animations,messages,message_font_indices,pane_nodes
 from menu_movies import extract_movies,ThpMovie
 from menu_unlock_messages import entries as unlock_entries
 OUT=ROOT/'sd-card/3ds/mkw-3ds'
 UI=ROOT/'assets/menu-ui/MenuSingle'
+# Sprite PNG/T3X writes run on a thread pool (main() sets it); tex3ds waits
+# release the GIL while layouts render. Records are built here, in call order.
+pool=None;pending={};queue=deque()
 records={}; evidence={}; panel_records={}; pane_records={}; node_records={}; movie_records=[]; glow_records=[]; focus_records=[]; panel_layer_records={}; border_records=[]; border_slices=[]; runtime_palette=[]
 def source(p):
  key=p.relative_to(ROOT).as_posix()
@@ -25,21 +31,37 @@ def save(name,img,p=None):
  if max(img.size)>1024:
   scale=1024/max(img.size);img=img.resize((round(img.width*scale),round(img.height*scale)),Image.Resampling.LANCZOS)
  width,height=img.size; padded=[max(8,1<<(v-1).bit_length()) for v in img.size]
+ # The record cook_image_sprite returns.
+ r={'name':'ui_'+name,'path':'textures/ui_'+name+'.t3x','width':width,'height':height,'padded':padded,'u':width/padded[0],'v':height/padded[1]}
+ if name in pending:pending.pop(name).result()
+ if not pool:write_sprite(name,img,padded)
+ else:
+  # A bounded queue keeps memory flat; the same name waits for its last write.
+  while len(queue)>=64:queue.popleft().result()
+  job=pool.submit(write_sprite,name,img.copy(),padded);pending[name]=job;queue.append(job)
+ if p:source(p);r.update(source=str(p.relative_to(ROOT)),source_sha256=evidence[str(p.relative_to(ROOT))])
+ if (native_width,native_height)!=(width,height):r.update(width=native_width,height=native_height,rasterWidth=width,rasterHeight=height)
+ records[name]=r
+ return r
+def write_sprite(name,img,padded):
  target=OUT/'textures'/('ui_'+name+'.png')
  cached=False
- if target.exists() and target.with_suffix('.t3x').exists():
+ if target.exists() and t3x_matches(target.with_suffix('.t3x'),padded,'rgba8'):
+  # The whole padded image must match what cook_image_sprite writes now
+  # (content, transparent padding): an older, wider image can leave pixels
+  # in the padding that bilinear sampling picks up at the edge.
+  full=Image.new('RGBA',tuple(padded));full.paste(img.convert('RGBA'),(0,0))
   with Image.open(target) as previous:
-   cached=previous.size==tuple(padded) and previous.crop((0,0,width,height)).convert('RGBA').tobytes()==img.convert('RGBA').tobytes()
- r={'name':'ui_'+name,'path':'textures/ui_'+name+'.t3x','width':width,'height':height,'padded':padded,'u':width/padded[0],'v':height/padded[1]} if cached else cook_image_sprite(img,'ui_'+name,OUT)
- if p:source(p);r.update(source=p.relative_to(ROOT).as_posix(),source_sha256=evidence[p.relative_to(ROOT).as_posix()])
- if (native_width,native_height)!=(width,height):r.update(width=native_width,height=native_height,rasterWidth=width,rasterHeight=height)
- if name=='background':
+   cached=previous.size==tuple(padded) and previous.convert('RGBA').tobytes()==full.tobytes()
+ if not cached:cook_image_sprite(img,'ui_'+name,OUT)
+ if name in ('background','background_lines','background_option'):
   # One source row before/after content, filled periodically through POT padding.
   # Runtime adds 1/textureHeight to V. This preserves bilinear continuity.
   from menu_background_texture import write_wrapped_background
-  write_wrapped_background(img,OUT)
- records[name]=r
- return r
+  write_wrapped_background(img,OUT,name)
+def drain():
+ while queue:queue.popleft().result()
+ pending.clear()
 def tpl(name,p):return save(name,decode_tpl(p),p)
 
 def font_style(image,colors,vertices):
@@ -100,14 +122,18 @@ def bake_border_loop(key,p,control,bindings,animations,animation_groups,render_a
    for left in range(l,r,step):
     small=(left,t,min(r,left+step),b)
     crops.append(dict(frame=frame,box=small,image=image.crop(small)))
+ # At most 512x512 RGBA8 (1 MB) per atlas: menu textures load into LINEAR
+ # beside the caches, and a 2-4 MB block was often not contiguous there (VS
+ # page held ~5 s retrying ui_border_vs_select_underlay_0, 512x1024).
+ BorderAtlas=512
  # Pack padded thin strips, rather than allocating a full button per frame.
  # A neighboring source texel protects bilinear samples at atlas boundaries.
  atlases=[];atlas=[];x=y=row_h=used_w=0
  for crop in sorted(crops,key=lambda c:(-c['image'].height,-c['image'].width)):
   w,h=crop['image'].width+2,crop['image'].height+2
-  if w>1024 or h>1024:raise ValueError('Border strip exceeds native texture size')
-  if x+w>1024:x=0;y+=row_h;row_h=0
-  if y+h>1024:
+  if w>BorderAtlas or h>BorderAtlas:raise ValueError('Border strip exceeds the atlas size')
+  if x+w>BorderAtlas:x=0;y+=row_h;row_h=0
+  if y+h>BorderAtlas:
    atlases.append((atlas,used_w,y+row_h));atlas=[];x=y=row_h=used_w=0
   crop['atlasXY']=(x+1,y+1);atlas.append(crop);x+=w;used_w=max(used_w,x);row_h=max(row_h,h)
  if atlas:atlases.append((atlas,used_w,y+row_h))
@@ -164,6 +190,9 @@ def bake_panel(name,resource,states=('free','select'),exclude=(),bounds=None,ove
   colors={'fuchi_pattern':[c0,c1,[255,255,255,255]],'color_base':[base,base,[255,255,255,255]]} if states!=('',) else {}
   pane_overrides=dict(overrides or {})
   for hidden_pane in hidden:pane_overrides[hidden_pane]={'visible':False}
+  # Unselected license cards at full size (user, Nov 10). Retail's free clip
+  # scales null_all to 0.87 (select 1.15); players read them as too small.
+  if name.startswith('license_') and name.endswith(('_used','_empty')) and state=='free':pane_overrides['null_all']={'sx':1,'sy':1}
   if name=='character':
    # ButtonDriver::{Reset,Set}ButtonColours modifies its black_base pane in
    # addition to the shared PushButton border palette (RMCU 807dde6c/807de0a0).
@@ -345,8 +374,9 @@ def cook_strap():
   key='strap_a' if t['name'].startswith('strapA') else 'strap_b'
   record=save(key,img,brres);record['sourceTexture']=t['name'];panel_records[key]=[-304,-228,304,228]
 
-def main():
- global runtime_palette
+def main(jobs=1):
+ global runtime_palette,pool
+ if jobs>1:pool=ThreadPoolExecutor(max_workers=jobs)
  # Exact dynamic PushButton palette written by retail Update at0x805b60f4.
  # The values come from the original REL, not hand-picked UI colours.
  from verify_menu_retail import BASE,EXPECTED_HASH
@@ -460,6 +490,13 @@ def main():
   bake_panel('license_'+position+'_used','Title/button/blyt/common_w076_license_icon_tex_'+position+'.brlyt',hidden=used_hidden,exclude=trophy_prefixes)
   bake_panel('license_'+position+'_empty','Title/button/blyt/common_w076_license_icon_tex_'+position+'.brlyt',hidden=empty_license)
  bake_panel('background','MenuSingle/bg/blyt/bg.brlyt',states=('',),bounds=(-304,-228,304,228))
+ # The title-section pages (title, licenses, main menu) hide the black base:
+ # only the faint stripes cover the blurred title picture. Dolphin frames of
+ # the license screen measure them at half the layout's alpha (235/255 over
+ # white, where the full pane gives 215/248).
+ bake_panel('background_lines','Title/bg/blyt/bg.brlyt',states=('',),bounds=(-304,-228,304,228),hidden=('black_parts',),overrides={'line0':{'alpha':.5}})
+ # The Settings page's own light background.
+ bake_panel('background_option','Channel/bg/blyt/option_bg.brlyt',states=('',),bounds=(-304,-228,304,228))
  bake_panel('header','MenuSingle/bg/blyt/obi_top.brlyt',states=('',),bounds=(-304,-228,304,-125),overrides={'RootPane':{'x':2.1972661,'y':210}})
  bake_panel('footer','MenuSingle/bg/blyt/obi_bottom.brlyt',states=('',),bounds=(-304,125,304,228))
  bake_panel('footer_help','MenuSingle/bg/blyt/obi_bottom_message.brlyt',states=('',),bounds=(-304,125,304,228))
@@ -579,7 +616,9 @@ def main():
   'record_next':['Next'],
   'record_row':['Overall Ranking','Distance Traveled','Total Race Count','Total Battle Count','Wii Wheel %','Tricks','Favorite Character','Favorite Vehicle','Favorite Course','Favorite Stage','First-Place Appearances','% Race Time in 1st Place','Item Hits Delivered','Item Hits Received','Ghost Races','Tournaments Played','--','0%']+course_names+[c['name'] for c in garage['choices']]+[info['name'] for info in roster['characters']]+battle_labels+list('0123456789%'),
   'license_management':['Check Records','Change Miis','Erase License'],
-  'settings_button':['Nintendo GameCube Controller','Network Settings','Mario Kart Channel'],
+  # The pause rows (TT) and the quit question also use this family; without
+  # their styles the focus pulse falls back to the outlined plain text.
+  'settings_button':['Nintendo GameCube Controller','Network Settings','Mario Kart Channel','Continue','Restart','Change Course','Change Character','Quit','Yes','No','Continue Replay','Restart Replay','Start Race','Quit Replay'],
   'rule_base':['Class','CPU','CPU Vehicles','Courses','Items','Race Count'],
   'rule_option':['50cc','100cc','150cc','Mirror','Easy','Normal','Hard','Karts','Bikes','All','Choose','Random','In Order','Balanced','Aggressive','Strategic','None'],
   'rule_chosen':['50cc','100cc','150cc','Mirror','Easy','Normal','Hard','Karts','Bikes','All','Choose','Random','In Order','Balanced','Aggressive','Strategic','None'],
@@ -723,10 +762,11 @@ def main():
  controller_paths += [ROOT/'assets/menu-ui/Globe/button/ctrl/WifiMenuSingleTop.brctr',ROOT/'assets/menu-ui/Channel/button/ctrl/RegisterFriendKeyboard.brctr']
  controller_paths += [ROOT/'assets/menu-ui/Present/common/ctrl/NextButton.brctr']
  controller_paths += list((ROOT/'assets/menu-ui/Present/control/ctrl').glob('*.brctr'))
- controller_paths += [ROOT/'assets/race-ui/Race/button/ctrl'/(name+'.brctr') for name in ['PauseMenuVS','PauseMenuGrandPrix','PauseMenuTimeAttack','PauseMenuBT']]
+ controller_paths += [ROOT/'assets/race-ui/Race/button/ctrl'/(name+'.brctr') for name in ['PauseMenuVS','PauseMenuGrandPrix','PauseMenuTimeAttack','PauseMenuBT','PauseMenuGhostWatch']]
  for p in controller_paths:
   if p.name.startswith('._'):continue
   source(p);data=controllers(p);ctr.setdefault(p.stem,{}).update(data);alphas.setdefault(p.stem,{}).update(controller_alphas(p));qualified_controllers[p.relative_to(ROOT).as_posix()]=data
+ drain()
  manifest={'version':2,'canvas':{'width':608,'height':456,'artBleedWidth':832,'aspectAdjustScale':[608/832,1.0],'displayAspect':'16:9','target':'400x225 centered on top LCD; lower LCD unused'},'sprites':records,'maps':maps,'sourceHashes':evidence,'archiveInventory':inventory,'controllers':ctr,'controllerAlphas':alphas,'controllerSources':qualified_controllers,'messageSources':message_sources,'helpMessageIds':help_ids,'runtimePalette':{'source':'build/itembox-retail.rel','tableAddress':'0x8088fd18','slots':runtime_palette,'borderPane':'fuchi_pattern','basePane':'color_base'},'textStyles':text_styles,'driverStats':driver_stats,'vehicleStats':vehicle_stats,'panels':panel_records,'panes':pane_records,'paneNodes':node_records,'movies':movie_records,'glows':glow_records,'focusSprites':focus_records,'panelTails':list(panel_layer_records.values()),'borderLoops':border_records,'borderSlices':border_slices,'selectionScale60Hz':scales,'limitations':['This menu inventory uses 16 source samples across each retail loop for host previews and fallback. Full-rate streamed movies are cooked and receipted separately.','Offline pane rasterization supports 2D affine transforms and authored TEV arithmetic; live 3D preview objects are rendered separately.','Original font glyphs and spacing are retained; per-page dynamic text effects are runtime responsibilities.']}
  (OUT/'models/menu-ui.json').write_text(json.dumps(manifest,indent=2)+'\n')
  notice_header=['#pragma once','namespace mkw {','struct UiUnlockText {unsigned condition,bit;const char* title;const char* body;const char* kind;int retailId;};','inline constexpr UiUnlockText UiUnlockTexts[]={']
@@ -786,4 +826,6 @@ def main():
  # The runtime textures are fitted to the 3DS screen and LZ11-compressed from
  # these full-resolution PNGs; that pass also rewrites the header's UVs.
  # Texture fitting runs after menu movies generate its compile-time metadata.
-if __name__=='__main__':main()
+if __name__=='__main__':
+ a=argparse.ArgumentParser(description=__doc__);a.add_argument('--jobs',type=int,default=os.cpu_count() or 1)
+ main(max(1,a.parse_args().jobs))

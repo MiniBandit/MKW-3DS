@@ -64,7 +64,7 @@ WATER_ROOTS = ['rk_wave', 'rk_awa', 'rk_spinWaterHalf', 'rk_spinWaterHalfS',
 # KartEffect power-ups (docs/POWERUPS_SOURCE.md), S variants for other racers.
 POWERUP_ROOTS = ['rk_star', 'rk_starS', 'rk_killerS', 'rk_killer1TS', 'rk_thunder', 'rk_thunderS',
                  'rk_kaminariGumo', 'rk_kaminariGumoS', 'rk_thunderBiri', 'rk_kyodai', 'rk_kyodaiS',
-                 'rk_pow', 'rk_powS', 'rk_pow1', 'rk_pow1S', 'rk_powUp']
+                 'rk_pow', 'rk_powS', 'rk_pow1', 'rk_pow1S', 'rk_powUp', 'rk_powReduce', 'rk_powReduceS']
 # KartEffect slipstream (RMCU 0x8068abbc, 0x806972c0): drafting and the boost, S variants
 # for other racers (docs/VFX_RESEARCH.md "Slipstream").
 SLIPSTREAM_ROOTS = ['rk_slipStreamPre', 'rk_slipStreamPreS', 'rk_slipStream', 'rk_slipStreamS']
@@ -75,9 +75,10 @@ OPPONENT_DRIVING_ROOTS = ['rk_miniTurboS', 'rk_driftSpark1L_Spark01S', 'rk_drift
                          'rk_driftSpark1LB_Spark01S', 'rk_driftSpark1RB_Spark01S', 'rk_driftSpark1CB_Spark01S']
 # KartEffect smoke and dust (names from StaticR's KartEffect tables, RMCU 0x8038e24a..):
 # start-dash rear-wheel layers (rk_start0/1/2; S for other racers), the start burnout,
-# drift tyre smoke, off-road dust and landing puffs.
+# drift tyre smoke, off-road dust and landing puffs, and the exhaust's idle rk_gasSmoke
+# (one per pipe, USA 0x8068cfb4).
 SMOKE_ROOTS = ['rk_wheelSpin0', 'rk_wheelSpin1', 'rk_wheelSpin2', 'rk_wheelSpinS', 'rk_start0', 'rk_start1', 'rk_start2', 'rk_startS', 'rk_startMiss', 'rk_startMissS',
-               'rk_driftSmoke', 'rk_brakeSmk', 'rk_dirtSmokeA', 'rk_jumpSmoke', 'rk_jumpSmokeS', 'rk_jumpSmokeMini', 'rk_jumpSmokeMiniS',
+               'rk_driftSmoke', 'rk_brakeSmk', 'rk_gasSmoke', 'rk_dirtSmokeA', 'rk_jumpSmoke', 'rk_jumpSmokeS', 'rk_jumpSmokeMini', 'rk_jumpSmokeMiniS',
                'rk_jumpSmokeBikeL', 'rk_jumpSmokeBikeLMini', 'rk_jumpSmokeBikeS', 'rk_jumpSmokeBikeL_S', 'rk_jumpSmokeBikeS_S']
 # Per-course road materials select these instead of making them globally resident.
 SURFACE_ROOTS = ['rk_weed', 'rk_mud', 'rk_snowHDirt', 'rk_snowRoad0', 'rk_snowRoad1', 'rk_flower', 'rk_stone', 'rk_stoneTile', 'rk_stoneVolc']
@@ -585,7 +586,7 @@ def cannon_attachment(root):
         ','.join(format(x, '.9f')+'f' for x in matrix) + '};\n}\n')
 
 
-def cook(root, output, course_only=False, balloon_only=False, coin_only=False, course_id=None):
+def cook(root, output, course_only=False, balloon_only=False, coin_only=False, course_id=None, award_source=None):
     if balloon_only and coin_only: raise ValueError("Choose one battle mode bank")
     breff = root / 'assets/common/Effect/RKRace.breff'
     br, reft = breff.read_bytes(), breff.with_suffix('.breft').read_bytes()
@@ -640,6 +641,8 @@ def cook(root, output, course_only=False, balloon_only=False, coin_only=False, c
                            ('koopa_course', 'dossun', ['rk_dossun']),
                            ('sand_battle', 'quicksand', ['rk_qsandDossun']),
                            ('desert_course', 'sanbo', ['rk_sanbo']),
+                           ('old_peach_gc', 'poihana', ['rk_poihanaExclm']),
+                           ('old_desert_ds', 'FireSnake', ['rk_fireSnake']),
                            ('rainbow_course', 'StarRing', ['rk_StarRing']),
                            ('rainbow_course', 'entry', ['rk_entry']),
                            ('treehouse_course', 'hanachan', ['rk_hanaSmk']),
@@ -660,7 +663,7 @@ def cook(root, output, course_only=False, balloon_only=False, coin_only=False, c
         # original descriptors/curves differ. Keep the battle archive distinct.
         alias = (lambda name: 'W_' + name) if archive == 'truckChimSmkW' else (lambda name: name)
         course_roots[archive] = [alias(name) for name in roots]
-        effect_name = {'DonkyCannon_wii':'dkCannon', 'hanachan':'hana', 'Steam':'steam', 'Alarm':'alarm', 'choropu':'choropuMoko', 'Epropeller':'epropeller', 'VolcanoBall1':'volc', 'FlamePole':'flamePole', 'FlamePole_v':'flamePole', 'FlamePole_v_big':'flamePoleL', 'KoopaFigure64':'koopaFire', 'Block':'block', 'quicksand':'qsandDossun'}.get(archive, archive)
+        effect_name = {'DonkyCannon_wii':'dkCannon', 'hanachan':'hana', 'Steam':'steam', 'Alarm':'alarm', 'choropu':'choropuMoko', 'Epropeller':'epropeller', 'VolcanoBall1':'volc', 'FlamePole':'flamePole', 'FlamePole_v':'flamePole', 'FlamePole_v_big':'flamePoleL', 'KoopaFigure64':'koopaFire', 'Block':'block', 'quicksand':'qsandDossun', 'FireSnake':'fireSnake'}.get(archive, archive)
         path = root / f'assets/courses/{course}/effect/{archive}/rk_{effect_name}.breff'
         source, pixels = path.read_bytes(), path.with_suffix('.breft').read_bytes()
         index, pixel_index = entries(source), entries(pixels)
@@ -715,6 +718,29 @@ def cook(root, output, course_only=False, balloon_only=False, coin_only=False, c
     # The race actually loads its course bank; package_sd reads every bank's
     # texture dependencies, including these entry textures.
     aggregate = [name for name in order if namespaces[name] != 'entry_']
+    if award_source is not None:
+        # The ceremony's driving scene (src/award_drive.cpp) loads one bank,
+        # award-driving-effects.bin: the always-resident race emitters plus the
+        # surface roots of its course, Win_Demo (55), from the ceremony archive.
+        course = {'key': 'winningrun_demo', 'id': 55}
+        kcl = award_source / 'unpacked/winningrun_demo/course.kcl'
+        stage = output.parent / 'award-course'
+        (stage / 'assets/courses/winningrun_demo').mkdir(parents=True, exist_ok=True)
+        (stage / 'assets/courses/winningrun_demo/course.kcl').write_bytes(kcl.read_bytes())
+        roots = surface_roots(stage, course)
+        selected = {name for name in order if name in always_common}; queue = list(roots)
+        while queue:
+            name = queue.pop()
+            if name in selected: continue
+            if name not in records: raise ValueError('Missing ceremony effect dependency: ' + name)
+            selected.add(name); queue.extend(records[name].references())
+        names_ = [name for name in order if name in selected]
+        textures_, size_ = write_bank(names_, records, namespaces, texture_archives, output, [], 'award-driving-effects.bin', texture_cache)
+        if len(textures_) > 128: raise ValueError('Ceremony effects exceed texture budget')
+        (output / 'award-driving-effects.json').write_text(json.dumps({'id': 55, 'course': course['key'], 'bank': 'award-driving-effects.bin', 'roots': roots,
+            'emitters': len(names_), 'textures': len(textures_), 'payload_bytes': size_, 'kcl_sha256': hashlib.sha256(kcl.read_bytes()).hexdigest()}, indent=2) + '\n')
+        print(f'Cooked award-driving-effects.bin: {len(names_)} emitters, {len(textures_)} textures, surface roots {roots}')
+        return len(names_)
     files, blob_size = ([],0) if course_only or balloon_only or coin_only else write_bank(aggregate, records, namespaces, texture_archives, output, notes, texture_cache=texture_cache)
     from course_catalog import courses
     profiles = []
@@ -767,6 +793,7 @@ if __name__ == '__main__':
     p.add_argument('--course-only', action='store_true', help='Build only the bounded banks loaded by races, without a globally resident aggregate')
     p.add_argument('--balloon-only', action='store_true', help='Stage the ten Balloon Battle banks without touching shared banks or generated headers')
     p.add_argument('--coin-only', action='store_true', help='Stage ten Coin Runners banks and their original coin archive dependencies')
+    p.add_argument('--award-source', type=Path, help='Stage only award-driving-effects.bin, the ceremony driving bank, from this award source (unpacked/winningrun_demo)')
     a = p.parse_args()
-    # Build-local output; tools/package_sd.py overlays it onto the SD assets.
-    cook(a.root, a.output or a.root / 'build/vfx/textures', a.course_only, a.balloon_only, a.coin_only, a.course_id)
+    # Build-local output; tools/resource_manifest.py overlays it onto the SD assets.
+    cook(a.root, a.output or a.root / 'build/vfx/textures', a.course_only, a.balloon_only, a.coin_only, a.course_id, a.award_source)
