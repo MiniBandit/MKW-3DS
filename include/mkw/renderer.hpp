@@ -140,6 +140,13 @@ public:
 inline bool shrinkHudTextures=false;
 // DIAG no-material-tracks.txt: skip GMDL MAN1 (course/sky CLR0/PAT0) overrides.
 inline bool materialTracksOff=false,materialSwapOff=false;
+// Racer parts with banks ship welded, cache-ordered indices
+// (tools/pack_racer_weld.py); their cooked indices were the identity, as for
+// every model with as many indices as vertices. DIAG no-racer-weld.txt loads
+// such models with identity indices again: the old data, same binary and pack.
+inline bool racerWeldOff=false;
+// DIAG racer-weld-alternate.txt only: see main.cpp.
+inline bool racerWeldKeepOrder=false;
 // Fake Item Boxes take the real boxes' rainbow with distance, as retail does
 // (one more draw per far fake box). A/B: no-fakebox-rainbow.txt.
 inline bool fakeBoxRainbow=true;
@@ -205,6 +212,19 @@ public:
     std::vector<SubmeshVisibility> contactVisibility,contactCoarseVisibility;
     uint16_t* contactIndices=nullptr;
     void enableStaticCulling(bool contact=false);
+    // Course draw order for the post-vertex cache (mkw/vertex_cache_order.hpp):
+    // contactIndices with each order-safe 128-triangle culling block's
+    // triangles reordered (Tipsify), so blocks, culling and the shadow passes'
+    // contactIndices stay as they are; the castle's region copies are
+    // reordered in place. After enableStaticCulling(true) and
+    // enableCastleRegions. Returns FIFO-16 shaded vertices before/after over
+    // the reordered blocks (for the log). cooked: the course cook's order for
+    // this part (tools/course_cache_order.cpp), used when it was made from
+    // this exact contact order; otherwise it is computed here.
+    uint16_t* cacheIndices=nullptr;
+    struct CacheOrderStats {uint32_t indices=0,before=0,after=0,kept=0;bool cooked=false,stale=false;};
+    // install=false (DIAG timing control): all the work, nothing changed.
+    CacheOrderStats enableCacheOrder(bool install=true,const char* cooked=nullptr);
     // Immutable checkpoint-selected terrain index copies, original kept whole.
     std::array<uint16_t*,2> regionIndices{};
     std::array<std::vector<SubmeshVisibility>,2> regionVisibility;
@@ -559,16 +579,6 @@ public:
     // multiplied by darkness once. Call after everything that receives shadows.
     struct ShadowVolume {const Model* model;C3D_Mtx transform;};
     void drawShadowVolumes(const ShadowVolume* volumes,unsigned count,float darkness);
-    struct ShadowCaster {const Model* model=nullptr;C3D_Mtx transform;const float* palette=nullptr;unsigned bones=0,stride=21,first=0,count=0;bool wheelContact=false,softTerrain=false,movingSupport=false,hideContact=false;Vec3 contactCenter{},contactNormal{0,1,0};float contactRadius=0,contactSpread=1.3f,contactHalfWidth=0;};
-    // A solid receiver from the current course-object draw, including its
-    // exact transform/pose. Rigid parts arrive as individual index ranges.
-    struct ShadowReceiver {const Model* model=nullptr;C3D_Mtx transform;unsigned first=0,count=0,lighting=0;const float* palette=nullptr;unsigned bones=0;Bounds bounds;};
-    // Allocate/release while the rendering thread is idle. Only the local
-    // racer is captured; the same completed texture is shared by both eyes.
-    bool configurePlayerShadow(bool enabled);
-    bool playerShadowReady()const{return playerShadowTarget_!=nullptr;}
-    void drawPlayerShadow(const ShadowCaster* casters,unsigned count,const Model* const* receivers,unsigned receiverCount,Vec3 origin,Vec3 lightDirection,float scale,const ShadowVolume* fallback=nullptr,const ShadowReceiver* objects=nullptr,unsigned objectCount=0,bool actor=false);
-
     // Translate the rendered image in LCD pixels after perspective projection.
     // Wii menu models are rendered with a centered camera into a texture before
     // their UI pane moves; world translation would change the viewing angle.
@@ -623,7 +633,6 @@ public:
     void drawMenuEffects(RaceEffects&,const Texture*,EffectLayerBuffer&);
     void drawCinemaBars(float topHeight,float bottomHeight,float opacity);
     void drawScreenFade(float opacity,bool white);
-    void setShadowUnion(bool active);
     // Screen-space sprite in top-screen pixels (origin top-left), texture
     // region [0,u1]x[0,v1] modulated by alpha and RRGGBBAA tint.
     // Up to kSpriteCapacity per frame; each submitted quad survives to frame end.
@@ -663,7 +672,10 @@ public:
     // Call after end(). Waits for the finished frame and copies the top-screen
     // render target to rgb (400*240*3 bytes, rows top to bottom). Test capture
     // only. eye 1 is the right eye of a stereo frame (false otherwise).
-    bool captureTop(uint8_t* rgb,unsigned eye=0);
+    // wide: an 800px frame's whole 800x240 picture (rgb holds 800*240*3);
+    // otherwise its first 400 columns, as before.
+    bool captureTop(uint8_t* rgb,unsigned eye=0,bool wide=false);
+    bool topWide() const {return target_&&target_==wideTarget_;}
     // The same for the bottom screen's target (320*240*3 bytes); false without one.
     bool captureBottom(uint8_t* rgb);
     bool copyPresentedBottom(uint8_t* bgr);
@@ -972,27 +984,14 @@ private:
     void requestBloomNow(const CourseBloom& settings,const float* clip=nullptr);
     void applyBloomNow();
     void shadowVolumesNow(const ShadowVolume* volumes,unsigned count,float darkness,uint8_t excludedStencil=0);
-    void playerShadowNow(const ShadowCaster*,unsigned,const Model* const*,unsigned,Vec3,Vec3,float,const ShadowVolume*,const ShadowReceiver*,unsigned,bool);
-    C3D_Tex playerShadowTex_{},playerShadowClipTex_{};
-    Texture playerContactTex_,playerShadowDepthTex_,playerShadowFadeTex_;
-    int shadowReceiverFadeLoc_=-1;
-    int playerShadowProjectLoc_=-1,shadowCaptureLoc_=-1,shadowDepthLoc_=-1,shadowFloorLoc_=-1;
-    C3D_RenderTarget* playerShadowTarget_=nullptr;
-    C3D_Tex actorShadowTex_{};
-    C3D_RenderTarget* actorShadowTarget_=nullptr;
-    Vec3 playerShadowGround_{},playerShadowGroundNormal_{0,1,0};
-    bool playerShadowReceiver_=false,playerShadowBuried_=false;
-    unsigned playerShadowBuriedEnter_=0,playerShadowBuriedExit_=0;
-    Vec3 playerShadowLastOrigin_{};
-    float playerShadowRoadOpacity_=1.f;
+    // The vertex shader still has the removed player-shadow paths; these bools stay off.
+    int playerShadowProjectLoc_=-1,shadowCaptureLoc_=-1;
 
     void environmentUvNow(const C3D_Mtx& transform,const float (&uv)[6],bool texture2=false,float blend=1.f);
     void normalMatrixNow(const C3D_Mtx& modelView,bool environment=false);
     void uv1TransformNow(const float (&uv)[6]);
     void clearEnvironmentUvNow();
     void cinemaBarsNow(float topHeight,float bottomHeight,float opacity);
-    bool shadowUnion_=false;
-    void shadowUnionNow(bool active);
     // rect: x0,y0,x1,y1 in screen pixels (the whole screen when null).
     void screenFadeNow(float opacity,bool white,bool depthOnly=false,int shadowMode=0,const float* rect=nullptr);
     // shadowVolumesNow's shade over several rectangles (volumeRects).
@@ -1029,6 +1028,20 @@ private:
 public:
     bool wideSetting=false;
     bool wideCapable() const {return wideTarget_!=nullptr;}
+    // CRT look, 800px frames only (test): scanlines and a vignette multiplied
+    // over the finished top screen (HUD included) in one blended draw.
+    // Factors are per physical row: bright rows x bright, the rows between x
+    // dark; vignette is the corners' darkening. Read from crt.txt at startup.
+    struct CrtLook {bool file=false,on=false;float bright=1.12f,dark=0.72f,vignette=0.30f;};
+    CrtLook crt;
+private:
+    void crtNow();
+    void freeCrt();
+    bool crtDrawn_=false,crtBottomDrawn_=false;
+    C3D_Tex crtTex_{};
+    Vertex* crtVertices_=nullptr;
+    uint16_t* crtIndices_=nullptr;
+public:
 private:
     C3D_RenderTarget* bottomTarget_=nullptr;
     float screenWidth_=400.f;
@@ -1177,6 +1190,11 @@ private:
     Vertex* bloomVertices_=nullptr;
     unsigned bloomCount_=0;
     bool bloomRequested_=false,bloomFrame_=false,bloomFailed_=false,bloomClipped_=false;
+    // 800px bloom (targets made while 800px Mode was on): the scene stays on
+    // the LCD and sceneTex_ (256x1024, no render target) receives a copy of
+    // it for the glow. bloomWideWanted: the mode the next allocation takes.
+    bool bloomWide_=false;
+    bool bloomWideWanted() const {return wideTarget_&&wideSetting;}
     float bloomClip_[4]{};
     const CourseBloom* bloomSettings_=nullptr;
     C3D_Tex white_{};

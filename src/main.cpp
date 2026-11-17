@@ -78,6 +78,7 @@
 #include <mkw/race_effects.hpp>
 #include <mkw/resource_load.hpp>
 #include <mkw/loading_screen.hpp>
+#include <optional>
 #include <mkw/kart_item_effects.hpp>
 #include <mkw/kart_effect_lod.hpp>
 #include <mkw/kart_wall_contact.hpp>
@@ -703,10 +704,22 @@ int main() {
     // Diagnostic overlay, short single-course A/B: benchmark-course.txt (0-31, cup
     // order) races every race of the set on that course; unit1-alternate.txt
     // turns no-unit1-vram.txt's change off on every second race load (on first).
-    unsigned benchmarkCourse=32;
-    if(benchmark)if(FILE* f=fopen("sdmc:/3ds/MKWiiDS/benchmark-course.txt","r")){unsigned n=32;if(fscanf(f,"%u",&n)==1&&n<32)benchmarkCourse=n;fclose(f);}
+    // Several numbers: the set cycles through them in that order.
+    unsigned benchmarkCourse=32;std::vector<unsigned> benchmarkCourses;
+    if(benchmark)if(FILE* f=fopen("sdmc:/3ds/MKWiiDS/benchmark-course.txt","r")){unsigned n=32;while(benchmarkCourses.size()<32&&fscanf(f,"%u",&n)==1&&n<32)benchmarkCourses.push_back(n);fclose(f);}
+    if(!benchmarkCourses.empty())benchmarkCourse=benchmarkCourses[0];
     const bool unitOneAlternate=benchmark&&exists("sdmc:/3ds/MKWiiDS/unit1-alternate.txt");
     unsigned unitOneRace=0;
+    // racer-weld-alternate.txt: races cycle welded and cache-ordered (as shipped),
+    // no-racer-weld.txt (the old indices), and the old indices with the player's
+    // corners shared at load (welded, stored order: racerWeldKeepOrder);
+    // set reuse goes off with it, so every race load reads the racer models again.
+    const bool racerWeldAlternate=benchmark&&exists("sdmc:/3ds/MKWiiDS/racer-weld-alternate.txt");
+    unsigned racerWeldRace=0;
+    // object-weld-alternate.txt: course objects welded on the first race load,
+    // unwelded (no-object-weld.txt's copies) on the next, and so on.
+    const bool objectWeldAlternate=benchmark&&exists("sdmc:/3ds/MKWiiDS/object-weld-alternate.txt");
+    unsigned objectWeldRace=0;
     // GPU pass leave-out (mkw/diag.hpp): unattended runs, or gpu-passes.txt.
     // no-gpu-passes.txt: no leave-out frames, so every racing frame draws every pass (cross-build comparisons).
     mkw::diag::passState.enabled=kQa&&(autoplay||exists("sdmc:/3ds/MKWiiDS/gpu-passes.txt"))&&!exists("sdmc:/3ds/MKWiiDS/no-gpu-passes.txt");
@@ -810,6 +823,17 @@ int main() {
     // Course objects past retail's draw distance are not drawn (A/B: no-draw-distance.txt).
     renderer.drawDistance=!exists("sdmc:/3ds/MKWiiDS/no-draw-distance.txt");
     renderer.spatialCourse=!exists("sdmc:/3ds/MKWiiDS/no-spatial-course.txt");
+    // Course triangles reordered for the post-vertex cache inside their culling
+    // blocks (Model::enableCacheOrder; same triangles per block). A/B:
+    // no-course-reorder.txt; DIAG course-reorder-alternate.txt turns it off on
+    // every second course load (on first).
+    bool courseCacheOrder=!exists("sdmc:/3ds/MKWiiDS/no-course-reorder.txt");
+    const bool courseCacheOrderAlternate=kQa&&exists("sdmc:/3ds/MKWiiDS/course-reorder-alternate.txt");
+    unsigned courseCacheOrderLoads=0;
+    // DIAG course-reorder-control.txt: the reorder's work at load, the old order drawn (timing control).
+    const bool courseCacheOrderControl=kQa&&exists("sdmc:/3ds/MKWiiDS/course-reorder-control.txt");
+    // DIAG no-cooked-order.txt: compute the order at load even where the cook stored it.
+    const bool courseCacheOrderCooked=!(kQa&&exists("sdmc:/3ds/MKWiiDS/no-cooked-order.txt"));
     mkw::shrinkHudTextures=!exists("sdmc:/3ds/MKWiiDS/no-hud-shrink.txt");
     mkw::fakeBoxRainbow=!exists("sdmc:/3ds/MKWiiDS/no-fakebox-rainbow.txt");
     mkw::fakeBoxSparkle=!exists("sdmc:/3ds/MKWiiDS/no-fakebox-sparkle.txt");
@@ -828,6 +852,7 @@ int main() {
 #endif
     mkw::materialTracksOff=exists("sdmc:/3ds/MKWiiDS/no-material-tracks.txt");if(mkw::materialTracksOff)report("material tracks off");
     mkw::materialSwapOff=exists("sdmc:/3ds/MKWiiDS/no-material-swap.txt");if(mkw::materialSwapOff)report("material swap off");
+    mkw::racerWeldOff=exists("sdmc:/3ds/MKWiiDS/no-racer-weld.txt");if(mkw::racerWeldOff)report("racer weld off");
     renderer.fastVertex=!exists("sdmc:/3ds/MKWiiDS/no-fast-vertex.txt");
     renderer.rigidSkin=!exists("sdmc:/3ds/MKWiiDS/no-rigid-skin.txt");
     renderer.bloomTriple=!exists("sdmc:/3ds/MKWiiDS/no-bloom-triple.txt");if(!renderer.bloomTriple)report("bloom triple off");if(!renderer.rigidSkin)report("rigid skin off");
@@ -837,6 +862,16 @@ int main() {
     // Course archives (Yaz0) decode with the faster loop (same bytes).
     Kinoko::EGG::Decomp::fastDecode=!exists("sdmc:/3ds/MKWiiDS/no-fast-yaz0.txt");if(!Kinoko::EGG::Decomp::fastDecode)report("fast yaz0 off");
     renderer.unitOneEtc1a4=!exists("sdmc:/3ds/MKWiiDS/no-unit1-vram.txt");
+    // CRT look (800px frames, Settings: Screen 800px CRT or the Retro preset).
+    // crt.txt tunes it: "bright dark vignette" (defaults 1.12 0.72 0.30).
+    // L+Select in a race flips it until the Settings page is next opened.
+    bool crtFlip=false;
+    if(FILE* f=std::fopen("sdmc:/3ds/MKWiiDS/crt.txt","r")){
+        auto& c=renderer.crt;float b=c.bright,d=c.dark,v=c.vignette;
+        if(std::fscanf(f,"%f %f %f",&b,&d,&v)>=1){c.bright=std::clamp(b,0.f,2.f);c.dark=std::clamp(d,0.f,2.f);c.vignette=std::clamp(v,0.f,1.f);}
+        std::fclose(f);
+        LOGF("crt look: bright %.2f dark %.2f vignette %.2f",c.bright,c.dark,c.vignette);
+    }
     renderer.lightTextureSkip=!exists("sdmc:/3ds/MKWiiDS/no-light-blend.txt");
     renderer.bloomList=!exists("sdmc:/3ds/MKWiiDS/no-bloom-list.txt");
     C3D_FastState=!exists("sdmc:/3ds/MKWiiDS/no-c3d-fast.txt");
@@ -850,7 +885,14 @@ int main() {
     mkw::DeferredWrites::prepareWrites=!exists("sdmc:/3ds/MKWiiDS/no-hook-prep.txt");if(!mkw::DeferredWrites::prepareWrites)report("hook prepare off");
     mkw::VehicleAnimation::lazyParts=!exists("sdmc:/3ds/MKWiiDS/no-lazy-parts.txt");
     // unit1-alternate.txt (above): set before every race load.
+    mkw::objectWeldOff=exists("sdmc:/3ds/MKWiiDS/no-object-weld.txt");if(mkw::objectWeldOff)report("object weld off");
     auto alternateUnitOne=[&](){
+        if(racerWeldAlternate){const unsigned state=racerWeldRace++%3;mkw::racerWeldOff=state!=0;mkw::racerWeldKeepOrder=state==2;
+            LOGF("racer weld %s (alternate race %u)",state==0?"on":state==1?"off":"stored order",racerWeldRace);}
+        if(objectWeldAlternate){
+            mkw::objectWeldOff=objectWeldRace++%2!=0;
+            LOGF("object weld %s (alternate race %u)",mkw::objectWeldOff?"off":"on",objectWeldRace);
+        }
         if(!unitOneAlternate)return;
         renderer.unitOneEtc1a4=unitOneRace++%2==0;
         LOGF("unit1 vram %s (alternate race %u)",renderer.unitOneEtc1a4?"on":"off",unitOneRace);
@@ -980,9 +1022,9 @@ int main() {
      else menu.selection.license=last;
      // Whole-game settings (the Settings page); UiSettings defaults on first boot.
      mkw::loadGameSettings(SettingsFile,menu.settings);
-     // Old 3DS: Texture Quality Low, Dynamic Shadows Off, Bloom Off and
-     // Opponent Detail Low, whatever the file says; the page answers every row
-     // with "Not available". Applied before savedSettings, so the Old 3DS title
+     // Old 3DS: the Performance preset (Texture Quality Low, Bloom Off,
+     // Opponent Detail Low, 400px), whatever the file says; the License screen's
+     // Settings button answers "Not available". Applied before savedSettings, so the Old 3DS title
      // never rewrites the file the New 3DS game shares. DIAG full-quality.txt
      // lifts it with reduced quality.
      bool settingsNew3ds=mkw::isNew3ds();
@@ -1293,8 +1335,10 @@ int main() {
             return result;
         };
         while(aptMainLoop()){
-            // 800px Mode follows the Settings page live (never with bloom).
-            renderer.wideSetting=menu.settings.wide800&&!menu.settings.bloom;
+            // 800px Mode and the CRT look follow the Settings page live.
+            renderer.wideSetting=menu.settings.wide800;
+            if(menu.page==mkw::UiPage::Settings)crtFlip=false;
+            renderer.crt.on=menu.settings.crt!=crtFlip;
             if(selectionSave&&selectionSave->done()){
                 menu.saveFailed=!selectionSave->ok;
                 if(selectionSave->ok)licenseSaves[selectionSave->slot]=selectionSave->value;
@@ -1312,7 +1356,7 @@ int main() {
                 // (prepareVsCourses has just put the set's first course on Confirm).
                 if(!benchmarkSeeded&&menu.page==mkw::UiPage::Confirm&&menu.vsCourseIndex==0){
                     benchmarkSeeded=true;menu.vsCourseIndex=benchmarkStart;menu.selection.course=menu.vsCourseDeck[benchmarkStart];
-                    if(benchmarkCourse<32){menu.vsCourseDeck.fill(benchmarkCourse);menu.selection.course=benchmarkCourse;}}}
+                    if(benchmarkCourse<32){for(unsigned i=0;i<32;++i)menu.vsCourseDeck[i]=benchmarkCourses[i%benchmarkCourses.size()];menu.selection.course=menu.vsCourseDeck[benchmarkStart];}}}
             menuProfile->begin(unsigned(menu.page),transition.active());
             hidScanInput();unsigned down=mkw::consoleKeys(hidKeysDown());
             unsigned navigation=down|mkw::consoleKeys(hidKeysDownRepeat());
@@ -1329,6 +1373,13 @@ int main() {
             // Diagnostic overlay: a pending license save discards input (below), so the
             // script waits instead of spending its next token on a dropped press.
             if(autoplay){input=autopilot->menu(menu,revealed&&!transition.active()&&!selectionSave&&!pendingRaceMiiConfirm);if(autopilot->finished())return leave(mkw::UiAction::Exit);}
+            if(autoplay&&autopilot->takeShot()){
+                static unsigned shot=0;const bool wide=renderer.topWide();std::vector<uint8_t> rgb((wide?800:400)*240*3);char path[64];
+                snprintf(path,sizeof path,"sdmc:/3ds/MKWiiDS/menu-shot-%02u.ppm",shot);
+                if(renderer.captureTop(rgb.data(),0,wide))if(FILE* f=fopen(path,"wb")){fprintf(f,"P6\n%u 240\n255\n",wide?800u:400u);fwrite(rgb.data(),1,rgb.size(),f);fclose(f);}
+                snprintf(path,sizeof path,"sdmc:/3ds/MKWiiDS/menu-shot-%02u-bottom.ppm",shot++);
+                if(renderer.captureBottom(rgb.data()))if(FILE* f=fopen(path,"wb")){fprintf(f,"P6\n320 240\n255\n");fwrite(rgb.data(),1,320*240*3,f);fclose(f);}
+            }
             {   // The touch screen: lower-screen buttons as last drawn (DIAG scripts: T:x,y).
                 touchPosition point{};bool touching=(hidKeysHeld()&KEY_TOUCH)!=0;if(touching)hidTouchRead(&point);
                 float x=point.px,y=point.py;
@@ -1748,12 +1799,12 @@ int main() {
     if((kQa&&exists("sdmc:/3ds/MKWiiDS/menu-test.txt"))){
         struct Snapshot {const char* name;mkw::UiPage page;unsigned cursor;mkw::UiEngineClass engine=mkw::UiEngineClass::CC150;int flip=-1;};
         const Snapshot pages[]={{"strap",mkw::UiPage::Strap,0},{"license",mkw::UiPage::License,0},{"class",mkw::UiPage::EngineClass,1},{"title",mkw::UiPage::Title,0},{"main",mkw::UiPage::MainMenu,0},{"single-player",mkw::UiPage::Mode,0},{"character",mkw::UiPage::Character,8},{"vehicle",mkw::UiPage::Vehicle,0},{"drift",mkw::UiPage::Drift,1},{"cup",mkw::UiPage::Cup,0},{"course",mkw::UiPage::Course,0},{"confirm",mkw::UiPage::Confirm,0},{"pause",mkw::UiPage::Pause,0},
-            {"vs-mode",mkw::UiPage::VSMode,0},{"vs-rules",mkw::UiPage::VSRules,0},{"battle-mode",mkw::UiPage::BattleMode,0},{"battle-cup",mkw::UiPage::BattleCup,0},{"battle-stage",mkw::UiPage::BattleStage,0},{"team-confirm",mkw::UiPage::TeamConfirm,0},{"drift-help",mkw::UiPage::DriftHelp,0},{"settings",mkw::UiPage::Settings,0},{"settings-bloom",mkw::UiPage::Settings,2},{"settings-texture-standard",mkw::UiPage::Settings,0,mkw::UiEngineClass::CC150,0},{"settings-shadows",mkw::UiPage::Settings,1},{"settings-shadows-off",mkw::UiPage::Settings,1,mkw::UiEngineClass::CC150,1},{"settings-bloom-off",mkw::UiPage::Settings,2,mkw::UiEngineClass::CC150,2},{"settings-detail",mkw::UiPage::Settings,3},{"settings-detail-reduced",mkw::UiPage::Settings,3,mkw::UiEngineClass::CC150,3},{"settings-minimap",mkw::UiPage::Settings,5},{"settings-minimap-60",mkw::UiPage::Settings,5,mkw::UiEngineClass::CC150,5},{"settings-bike",mkw::UiPage::Settings,3,mkw::UiEngineClass::CC150,6},{"license-option",mkw::UiPage::License,4},{"license-settings",mkw::UiPage::LicenseSettings,0},{"erase-license",mkw::UiPage::EraseLicense,1},{"quit-confirm",mkw::UiPage::QuitConfirm,1},
+            {"vs-mode",mkw::UiPage::VSMode,0},{"vs-rules",mkw::UiPage::VSRules,0},{"battle-mode",mkw::UiPage::BattleMode,0},{"battle-cup",mkw::UiPage::BattleCup,0},{"battle-stage",mkw::UiPage::BattleStage,0},{"team-confirm",mkw::UiPage::TeamConfirm,0},{"drift-help",mkw::UiPage::DriftHelp,0},{"settings",mkw::UiPage::Settings,0},{"settings-presets",mkw::UiPage::Settings,1},{"settings-presets-retro",mkw::UiPage::Settings,2,mkw::UiEngineClass::CC150,7},{"settings-presets-purist",mkw::UiPage::Settings,1,mkw::UiEngineClass::CC150,8},{"settings-presets-fidelity",mkw::UiPage::Settings,3},{"settings-bloom",mkw::UiPage::Settings,1},{"settings-texture-standard",mkw::UiPage::Settings,0,mkw::UiEngineClass::CC150,0},{"settings-bloom-off",mkw::UiPage::Settings,1,mkw::UiEngineClass::CC150,2},{"settings-detail",mkw::UiPage::Settings,2},{"settings-detail-reduced",mkw::UiPage::Settings,2,mkw::UiEngineClass::CC150,3},{"settings-minimap",mkw::UiPage::Settings,4},{"settings-minimap-60",mkw::UiPage::Settings,4,mkw::UiEngineClass::CC150,5},{"settings-bike",mkw::UiPage::Settings,2,mkw::UiEngineClass::CC150,6},{"license-option",mkw::UiPage::License,4},{"license-settings",mkw::UiPage::LicenseSettings,0},{"erase-license",mkw::UiPage::EraseLicense,1},{"quit-confirm",mkw::UiPage::QuitConfirm,1},
             {"vehicle-karts",mkw::UiPage::Vehicle,0,mkw::UiEngineClass::CC50},{"vehicle-bikes",mkw::UiPage::Vehicle,0,mkw::UiEngineClass::CC100}};
         bool snapshotsOnly=false;
         if(FILE* f=fopen("sdmc:/3ds/MKWiiDS/menu-test.txt","r")){char mode[24]{};if(fscanf(f,"%23s",mode)==1)snapshotsOnly=!strcmp(mode,"snapshots");fclose(f);}
         bool ok=renderer.enableBottom();renderer.setDualScreenIntro(false);
-        unsigned captured=0,expected=std::size(pages),motionFrames=0,covered=0,frames=0;std::vector<uint8_t> pixels(400*240*3);mkw::UiRaceView fixture{};
+        unsigned captured=0,expected=std::size(pages),motionFrames=0,covered=0,frames=0;std::vector<uint8_t> pixels(800*240*3);mkw::UiRaceView fixture{};
         auto capture=[&](const char* name,const mkw::MenuState& visual,const mkw::UiTransitionView& motion,bool save=true,bool models=true){
             std::vector<mkw::UiQuad> quads,resident,upper,lower;mkw::composeMenu(visual,fixture,quads,motion);
             auto preload=motion;preload.active=false;preload.entering=false;preload.back=false;preload.preload=true;preload.holdFrame=0;preload.selectedControl=mkw::uiSelectedMenuControl(visual);
@@ -1781,7 +1832,9 @@ int main() {
             renderer.end();
             if(!save)return;
             char path[96];snprintf(path,sizeof path,"sdmc:/3ds/MKWiiDS/menu-%s.ppm",name);
-            if(renderer.captureTop(pixels.data())){if(FILE* f=fopen(path,"wb")){fprintf(f,"P6\n400 240\n255\n");fwrite(pixels.data(),1,pixels.size(),f);fclose(f);++captured;}else ok=false;}else ok=false;
+            // 800px frames: the whole 800x240 picture.
+            const bool wide=renderer.topWide();const unsigned columns=wide?800u:400u;
+            if(renderer.captureTop(pixels.data(),0,wide)){if(FILE* f=fopen(path,"wb")){fprintf(f,"P6\n%u 240\n255\n",columns);fwrite(pixels.data(),1,columns*240*3,f);fclose(f);++captured;}else ok=false;}else ok=false;
             saveRightEye(renderer,path);
             std::string lowerPath(path);lowerPath.insert(lowerPath.size()-4,"-bottom");
             if(renderer.captureBottom(pixels.data())){if(FILE* f=fopen(lowerPath.c_str(),"wb")){fprintf(f,"P6\n320 240\n255\n");fwrite(pixels.data(),1,320*240*3,f);fclose(f);}else ok=false;}else ok=false;
@@ -1792,14 +1845,16 @@ int main() {
             // Settings snapshots: the defaults, or one row switched.
             menu.settings={};
             if(page.flip==0)menu.settings.textureQuality=1;
-            if(page.flip==1)menu.settings.dynamicShadows=false;
             if(page.flip==2)menu.settings.bloom=false;
             if(page.flip==3)menu.settings.opponentDetail=1;
             if(page.flip==5)menu.settings.minimap60=true;
             // A bike (Standard Bike M): its front wheel hangs from the handle.
-            if(page.flip==6){menu.settings.dynamicShadows=false;menu.selection.vehicle=3;}
+            if(page.flip==6)menu.selection.vehicle=3;
+            if(page.flip==7)menu.settings=mkw::settingsPreset(2);
+            if(page.flip==8)menu.settings=mkw::settingsPreset(1);
+            renderer.wideSetting=menu.settings.wide800;renderer.crt.on=menu.settings.crt;
             if(page.page==mkw::UiPage::Vehicle||page.page==mkw::UiPage::Drift||page.page==mkw::UiPage::Cup||page.page==mkw::UiPage::Confirm){menu.selection.driver=10;menu.selection.vehicle=page.page==mkw::UiPage::Vehicle?0:4;}
-            menu.enter(page.page);menu.cursor=page.cursor;menu.advance(54);
+            menu.enter(page.page);menu.settingsCustom=page.page==mkw::UiPage::Settings&&std::strncmp(page.name,"settings-presets",16)!=0;menu.cursor=page.cursor;menu.advance(54);
             for(unsigned tick=0;tick<6;++tick){menu.advance(1);capture(page.name,menu,{},false);}
             capture(page.name,menu,{});
             if(page.page==mkw::UiPage::Mode){++expected;capture("single-player-flat",menu,{},true,false);}
@@ -1870,6 +1925,8 @@ int main() {
         report(ok?"TRACE PASS":"TRACE FAIL");gfxExit();return ok?0:2;
     }
     if(fullRace){if(runMenu()!=mkw::UiAction::StartRace){finishAutoplay();renderer.waitForGpu();menuModels.reset(renderer);menuIcons.reset(renderer);menuRenderer.release();mkw::SoundSystem::instance().stop();mkw::MenuMovieAudio::shutdown();mkw::shutdownLoadingScreen();renderer.shutdown();gfxExit();return 0;}applySelection();menu.raceStarted();menuProfile->write("sdmc:/3ds/MKWiiDS/menu-performance.csv");raceLoadStart=svcGetSystemTick();}
+    // The first race's load shows the loading picture (the later ones: StartRace below).
+    std::optional<mkw::RaceLoadingPicture> firstRacePicture;if(fullRace)firstRacePicture.emplace();
     bool dataReady=exists("Race/Common.szs")&&courseAvailable(courseChoice);
     const bool effectsTest=(kQa&&exists("sdmc:/3ds/MKWiiDS/effects-test.txt"));
     // QA (autoplay + lakitu-test.txt): drop the player out of bounds at this step.
@@ -2298,6 +2355,14 @@ int main() {
         char path[128];snprintf(path,sizeof path,"models/%sdriver.dskm",prefix);
         bool ok=driver&&driverAnimation.load(path,*driver);driverAnimation.fullRate=true;driverController.reset();driverAnimation.resetLook();driverPose={};
         if(driver)driverAnimation.prepareLitSkinning(*driver);else driverAnimation.skinNormals(false);
+        // DIAG racer-weld-alternate.txt, third race: the old identity indices with
+        // the player's equal corners sharing an index at load, as opponents' do
+        // (DriverAnimation::shareDrawVertices): welded, in the stored order.
+        if(mkw::racerWeldKeepOrder){
+            if(driver&&driverAnimation.gpuSkinned())driverAnimation.shareDrawVertices(*driver);
+            if(vehicle&&bodyAnimation&&bodyAnimation->gpuSkinned())bodyAnimation->shareDrawVertices(*vehicle);
+            for(unsigned i=0;i<accessories.size();++i)if(accessories[i]&&accessoryAnimations[i]&&accessoryAnimations[i]->gpuSkinned())accessoryAnimations[i]->shareDrawVertices(*accessories[i]);
+        }
         for(unsigned i=0;i<driverAnimation.count();++i)driverController.setDuration(driverAnimation.name(i),driverAnimation.duration(i));
         if(bike){static const char* kartNames[]={"sjump_a","sjump_b","sjump_c"};static const char* bikeNames[]={"sjump_ma","sjump_mb","sjump_mc"};
             for(unsigned i=0;i<3;++i){int clip=driverAnimation.find(bikeNames[i]);if(clip>=0)driverController.setDuration(kartNames[i],driverAnimation.duration(clip));}
@@ -2416,7 +2481,6 @@ int main() {
     auto loadBottomScreen=[&](){
         const auto* bloom=mkw::courseBloom(Courses[courseChoice].archive);
         if(!effectsTest&&bloom&&bloom->enabled()&&!renderer.reserveBloom()){report("FAIL required bloom targets");return false;}
-        if(!effectsTest&&!renderer.configurePlayerShadow(menu.settings.dynamicShadows))report("WARN player shadow target unavailable; native volume retained");
         if(!renderer.configureStadiumScreen(stadiumScreenOn&&!effectsTest&&(int(Courses[courseChoice].id)==18||int(Courses[courseChoice].id)==6||int(Courses[courseChoice].id)==35))){report("FAIL stadium screen targets");return false;}
         if(!bottomScreen.load(renderer,courseChoice)){report("FAIL required bottom screen");return false;}
         if(driverChoice>=24&&!bottomScreen.setMiiPortrait(renderer,selectedRaceMii)){report("FAIL Mii map portrait");return false;}
@@ -2497,6 +2561,7 @@ int main() {
         LOGF("course textures left in LINEAR track+sky=%u/%luKB unit1=%u/%luKB objects=%u/%luKB unit1=%u/%luKB",courseLeft.count,(unsigned long)(courseLeft.bytes>>10),
             courseLeft.unitOne,(unsigned long)(courseLeft.unitOneBytes>>10),objectsLeft.count,(unsigned long)(objectsLeft.bytes>>10),objectsLeft.unitOne,(unsigned long)(objectsLeft.unitOneBytes>>10));
         if(mkw::shareObjectTextures)LOGF("course objects share textures copies=%u bytes=%lu",mkw::sharedObjectTextures,(unsigned long)mkw::sharedObjectTextureBytes);
+        LOGF("course objects weld %s unwelded meshes=%u banks=%u",mkw::objectWeldOff?"off":"on",mkw::unweldedObjectMeshes,mkw::unweldedObjectBanks);
         if(kQa){
             // One line per object texture left in LINEAR (a shared texture
             // once, under its first model), and the texture-use.txt registry
@@ -2587,7 +2652,9 @@ int main() {
         mkw::Model::setLightingCourse(mkw::courseLighting(Courses[courseChoice].archive));
         bool failed=false;
         track.clear();sky.clear();
-        auto loadList=[&](const char* list,auto& parts){
+        // paths: each loaded part's GMDL path (the course parts' cooked cache order sits beside it).
+        std::vector<std::string> trackPaths;
+        auto loadList=[&](const char* list,auto& parts,std::vector<std::string>* paths){
             if(!*list)return;
             // DIAG (no-load-cache.txt): a course list in models/ names its
             // parts <list>_000, _001, ... in order (all 125 race lists whose
@@ -2601,7 +2668,7 @@ int main() {
                     snprintf(path,sizeof path,"%s_%03u.gmdl",stem,i);
                     if(!mkw::pack::contains(path))break;
                     auto model=std::make_unique<mkw::Model>();
-                    if(model->load(path))parts.push_back(std::move(model));else {failed=true;report(path);report("FAIL course part load");}
+                    if(model->load(path)){parts.push_back(std::move(model));if(paths)paths->push_back(path);}else {failed=true;report(path);report("FAIL course part load");}
                 }
                 if(!parts.empty()||failed)return;
             }
@@ -2610,46 +2677,36 @@ int main() {
             char name[64];while(fscanf(f,"%63s",name)==1){
                 if(strchr(name,'/')||strstr(name,"..")){failed=true;break;}
                 auto model=std::make_unique<mkw::Model>();char path[128];snprintf(path,sizeof path,"models/%s.gmdl",name);
-                if(model->load(path))parts.push_back(std::move(model));else {failed=true;report(path);report("FAIL course part load");}
+                if(model->load(path)){parts.push_back(std::move(model));if(paths)paths->push_back(path);}else {failed=true;report(path);report("FAIL course part load");}
             }fclose(f);
             if(parts.empty())failed=true;
         };
-        loadList(Courses[courseChoice].models,track);
-        loadList(Courses[courseChoice].sky,sky);
+        loadList(Courses[courseChoice].models,track,&trackPaths);
+        loadList(Courses[courseChoice].sky,sky,nullptr);
         // map_model.brres is the minimap projection, not race scenery. Several
         // courses contain a full-size untextured map mesh that otherwise draws
         // a white sheet over the actual road.
-        for(auto& model:track){
+        for(size_t part=0;part<track.size();++part){
+            auto& model=track[part];
             model->enableStaticCulling(true);
             if(int(Courses[courseChoice].id)==12)model->enableCastleRegions(renderer.spatialCourse);
+            const bool order=courseCacheOrderAlternate?(courseCacheOrderLoads%2==0):courseCacheOrder;
+            if(order){
+                // models/<part>.cord: the cook's order (tools/course_cache_order.cpp).
+                std::string cooked=part<trackPaths.size()?trackPaths[part]:std::string();
+                if(cooked.size()>5&&cooked.compare(cooked.size()-5,5,".gmdl")==0)cooked.replace(cooked.size()-5,5,".cord");else cooked.clear();
+                const auto start=svcGetSystemTick();const auto s=model->enableCacheOrder(!courseCacheOrderControl,cooked.empty()||!courseCacheOrderCooked?nullptr:cooked.c_str());
+                LOGF(courseCacheOrderControl?"course cache order CONTROL%s (computed, not drawn): %lu indices, fifo16 %lu -> %lu shaded, %lu blocks kept, %.1f ms":"course cache order on (%s): %lu indices, fifo16 %lu -> %lu shaded, %lu blocks kept, %.1f ms",
+                    courseCacheOrderControl?"":s.cooked?"cooked":s.stale?"computed, cooked file stale":"computed",
+                    (unsigned long)s.indices,(unsigned long)s.before,(unsigned long)s.after,(unsigned long)s.kept,double(svcGetSystemTick()-start)*1000.0/SYSCLOCK_ARM11);
+            }else LOGF("course cache order off");
         }
+        ++courseCacheOrderLoads;
         return !failed&&!track.empty();
     };
-    mkw::Vec3 playerShadowLight{};
     auto loadTrack=[&](){
         courseObjects.reset();
         trackLoadFailed=!loadSceneryMeshes();stage("course meshes");
-        playerShadowLight=mkw::playerShadow::direction(mkw::courseLighting(Courses[courseChoice].archive));
-        // One world-space sun direction for this loaded course: moving past
-        // the decorative sun can never flip the light or enter a fallback.
-        // Decorative sea/backdrops can extend far beyond the drivable map.
-        // Use the already-loaded route bounds, once per load, so they cannot
-        // rotate the sun vector (Coconut Mall's sea flipped its Z direction).
-        mkw::Vec3 lightCenter{};
-        const bool haveLightCenter=raceGrid.routeCenter(lightCenter);
-        if(const auto* map=K::System::CourseMap::Instance())for(unsigned i=0;i<map->getGeoObjCount();++i){
-            const auto* object=map->getGeoObj(i);
-            if(haveLightCenter&&(object->id()==0x6f||object->id()==0x178)&&(object->presenceFlag()&1)){
-                playerShadowLight=lightCenter-vec(object->pos());break;
-            }
-        }
-        // HW105: Dad requested 180 degrees from HW104 and the existing reach cap.
-        // One load-time direction; preserve the global and downhill safeguards.
-        if(Courses[courseChoice].id==K::Course::Moonview_Highway){
-            playerShadowLight={.119735f,-1.f,.557371f};
-            playerShadowLight.y=-std::hypot(playerShadowLight.x,playerShadowLight.z)/mkw::playerShadow::MaxLengthPerHeight;
-        }
-        playerShadowLight=mkw::playerShadow::limitedDirection(playerShadowLight);
         if(Courses[courseChoice].id==K::Course::Coconut_Mall){
             if(!courseObjects.loadCoconut()){trackLoadFailed=true;report("FAIL Coconut object assets");}
             LOGF("Coconut palms=%u; escalators use live collision transforms",courseObjects.palmCount());
@@ -2675,7 +2732,7 @@ int main() {
         notificationLed.clear();
         flushRaceSave();
         renderer.waitForGpu();balloonRuntime.clear();raceGrid.ai().clearBattleSearch();coinBattle.clear();
-        renderer.configureStadiumScreen(false);renderer.configurePlayerShadow(false);
+        renderer.configureStadiumScreen(false);
         raceGraphicsSuspended=false;
         if(parkSetAssets){opponents.park();raceHud.park();}else{opponents.reset();raceHud.reset();}
         lakitu.unload();flowUi.unload();
@@ -2787,9 +2844,9 @@ int main() {
             if(fullRace&&!loadBottomScreen())return false;stage("bottom screen");
             moveCourseTexturesToVram();stage("texture VRAM transfer");
             if(kQa){const auto& q=mkw::renderQuality();
-                snprintf(line,sizeof line,"settings in race: texture %s (halved %u), dynamic shadows %s (player target %d), bloom %s, opponents %s, 800px %s",
-                         menu.settings.textureQuality?"Low":"High",q.halvedTextures,menu.settings.dynamicShadows?"On":"Off",int(renderer.playerShadowReady()),
-                         renderer.bloomEnabled?"On":"Off",q.racerLod?"Low":"Full",renderer.wideSetting?"On":"Off");report(line);mkw::renderQuality().halvedTextures=0;}
+                snprintf(line,sizeof line,"settings in race: texture %s (halved %u), bloom %s, opponents %s, 800px %s, crt %s",
+                         menu.settings.textureQuality?"Low":"High",q.halvedTextures,
+                         renderer.bloomEnabled?"On":"Off",q.racerLod?"Low":"Full",renderer.wideSetting?"On":"Off",renderer.crt.on?"On":"Off");report(line);mkw::renderQuality().halvedTextures=0;}
             mkw::pack::cacheReads(true);
             resetRaceSystems(true);mkw::pack::cacheReads(false);if(trackLoadFailed)return false;stage("grid and opponents");
             if(fullRace){moveRaceTexturesToVram(since);stage("race texture VRAM transfer");}
@@ -2891,7 +2948,7 @@ int main() {
     {char text[64];snprintf(text,sizeof text,"sound ram cache limit %lu KB",(unsigned long)soundCacheLimit/1024);report(text);}
     // The opponents and item/HUD assets stay loaded across a set's races when the
     // lineup and settings allow (New 3DS; Old 3DS releases them as before). A/B: no-set-reuse.txt.
-    mkw::RacerVisuals::setReuse=mkw::RaceHud::setReuse=new3ds&&!exists("sdmc:/3ds/MKWiiDS/no-set-reuse.txt");
+    mkw::RacerVisuals::setReuse=mkw::RaceHud::setReuse=new3ds&&!exists("sdmc:/3ds/MKWiiDS/no-set-reuse.txt")&&!racerWeldAlternate;
     report(mkw::RacerVisuals::setReuse?"set reuse on":"set reuse off");
     mkw::renderQuality().setReduced(!new3ds&&!(kQa&&exists("sdmc:/3ds/MKWiiDS/full-quality.txt")));
     // New 3DS: the race's lower screen redraws every other frame (30 Hz) unless
@@ -2982,7 +3039,7 @@ int main() {
         }
         if((kQa&&exists("sdmc:/3ds/MKWiiDS/controls-test.txt"))){bool ok=mkw::runControlChecks(scenes);report(ok?"CONTROLS PASS":"CONTROLS FAIL");for(auto& texture:sparkTexture)texture.reset();for(auto& texture:*effectTextures)texture.reset();mkw::shutdownLoadingScreen();renderer.shutdown();gfxExit();return ok?0:3;}
         LOGF("race_heap_free=%lu linear_free=%lu",(unsigned long)scenes.currentScene()->heap()->getAllocatableSize(),(unsigned long)linearSpaceFree());
-        loadRequiredRace();
+        loadRequiredRace();firstRacePicture.reset();
         prepareGarageFixture();
         LOGF("graphics_loaded track_parts=%u vehicle=%d driver=%d linear_free=%lu vram_free=%lu",unsigned(track.size()),!!vehicle,!!driver,(unsigned long)linearSpaceFree(),(unsigned long)vramSpaceFree());
     }else report("WAIT required game data absent");
@@ -3100,7 +3157,9 @@ int main() {
     // From here the game writes into its folder: exists() opens files again.
     bootListed=false;bootNames.clear();bootNames.shrink_to_fit();
     while(aptMainLoop()){
-        renderer.wideSetting=menu.settings.wide800&&!menu.settings.bloom;
+        renderer.wideSetting=menu.settings.wide800;
+        if(menu.page==mkw::UiPage::Settings)crtFlip=false;
+        renderer.crt.on=menu.settings.crt!=crtFlip;
         // DIAG: report the iteration that ended the intro or reached GO, then three more.
         {const auto now=mkw::diag::iterationBegin();
          static int lastStage=-1;const auto* raceManager=K::System::RaceManager::Instance();
@@ -3223,6 +3282,7 @@ int main() {
                     // reach this race's first pause.
                     sectionFadeIn=false;
                     mkw::LoadingScope loading;
+                    mkw::RaceLoadingPicture loadingPicture;
                     raceGraphicsSuspended=false;
                     raceLoadStart=svcGetSystemTick();
                     renderer.waitForGpu();menuRenderer.release();
@@ -3233,7 +3293,7 @@ int main() {
                     alternateUnitOne();
                     const bool settingsChanged=menu.settings!=appliedSettings;
                     if(settingsChanged){applyGameSettings();appliedSettings=menu.settings;}
-                    const bool reloadTrack=trackCourse!=int(courseChoice)||unitOneAlternate||settingsChanged;
+                    const bool reloadTrack=trackCourse!=int(courseChoice)||unitOneAlternate||objectWeldAlternate||settingsChanged;
                     if(reloadTrack){courseObjects.reset();track.clear();sky.clear();}
                     stage("start");
                     // Kinoko cannot recover from a missing course archive, so check first.
@@ -3275,7 +3335,7 @@ int main() {
         if(!pausing)profiler->autoFrame(profiled);
         if(profiled){if(!cpuTrace.every)mkw::diag::deferSdLogs(true);
             const auto* bloom=mkw::courseBloom(Courses[courseChoice].archive);const int id=int(Courses[courseChoice].id);
-            profiler->context(renderer.stereoWanted(),bloom&&bloom->enabled()&&renderer.bloomEnabled,id==18||id==6||id==35,menu.settings.dynamicShadows,renderer.pipelineFrames,renderer.bloomMerge,renderer.shadowRects,playerTexturesVram,renderer.drawDistance,renderer.spatialCourse,mkw::shrinkHudTextures,skyDrawnLast(renderer,Courses[courseChoice].id),renderer.plainUv,renderer.fastVertex,vramPriority);}
+            profiler->context(renderer.stereoWanted(),bloom&&bloom->enabled()&&renderer.bloomEnabled,id==18||id==6||id==35,false,renderer.pipelineFrames,renderer.bloomMerge,renderer.shadowRects,playerTexturesVram,renderer.drawDistance,renderer.spatialCourse,mkw::shrinkHudTextures,skyDrawnLast(renderer,Courses[courseChoice].id),renderer.plainUv,renderer.fastVertex,vramPriority);}
         mkw::diag::passFrame(profiled);}
         mkw::diag::iterationMark("pre-begin");
         profiler->begin(unsigned(Courses[courseChoice].id),frames,physicsSteps,float(delta*1000));
@@ -3293,7 +3353,8 @@ int main() {
                 scenes.currentScene()->heap()->enableAllocation();scenes.changeSiblingScene(2);courseObjects.invalidate();
                 animationPass&=loadDriver();prepareGarageFixture();driftEffects.reset();raceEffects.reset();resetKartFx();accumulator=0;
             }
-            if(fullRace&&(down&KEY_SELECT))raceHud.speedometer=!raceHud.speedometer;
+            if(fullRace&&(down&KEY_SELECT)&&(held&KEY_L)){crtFlip=!crtFlip;renderer.crt.on=menu.settings.crt!=crtFlip;LOGF("crt look %s",renderer.crt.on?"on":"off");}
+            else if(fullRace&&(down&KEY_SELECT))raceHud.speedometer=!raceHud.speedometer;
             if(qaMode&&((down&KEY_SELECT)||(!replay&&(down&(KEY_X|KEY_Y))))){
                 renderer.waitForGpu();
                 if(!replay&&(down&(KEY_X|KEY_Y))){
@@ -4492,21 +4553,7 @@ int main() {
             // worker reads VehicleAnimation's lazy matrices.
             const C3D_Mtx playerShadowTransform=vehicleAnimation.body();
             const bool playerBattleVisible=cameraKart->move()->battleVisible();
-            // Native soft-wall contact distinguishes an entered snow shell
-            // from the supporting ground underneath; ordinary offroad wheel
-            // depth is not a soft wall. Keep casting on the lower support.
-            bool softTerrainContact=cameraKart->collisionData().bSoftWall;
-            for(unsigned w=0;w<vehicleAnimation.wheelCount();++w)
-                softTerrainContact|=cameraKart->collisionData(w).bSoftWall;
-            const bool insideSoftTerrain=softTerrainContact&&
-                cameraKart->status().onBit(K::Kart::eStatus::SoftWallSuspension);
             const bool playerCastsShadow=vehicleShadow&&(!fullRace||!raceItems->hud(0).bullet)&&playerBattleVisible;
-            // Retail collision already distinguishes drivable-object support.
-            // Choose one whole shadow, never fill silhouette gaps with a blob.
-            bool objectSupport=cameraKart->collisionData().bHasRoadVel;
-            for(unsigned w=0;w<vehicleAnimation.wheelCount();++w)
-                objectSupport|=cameraKart->collisionData(w).bHasRoadVel;
-            const bool playerDynamicShadow=menu.settings.dynamicShadows&&renderer.playerShadowReady();
             // Test fixtures count clips while posing: they pose on this thread.
             playerJobQueued=fullRace&&!animationTest&&!effectsTest&&mkw::jobWorker().running();
             if(playerJobQueued){playerJob.reset(&runJob<decltype(posePlayer)>,&posePlayer);mkw::jobWorker().submit(playerJob);}
@@ -4548,15 +4595,15 @@ int main() {
             playerJobQueued=false;
             renderer.diagPass(mkw::diag::PassOpponents);
             if(fullRace)opponents.draw(renderer,*raceItems,vec(cameraKart->pos()),physicsSteps,
-                playerCastsShadow&&!playerDynamicShadow?vehicleShadow.get():nullptr,&playerShadowTransform);
-            if(playerCastsShadow&&!fullRace&&!playerDynamicShadow){
+                playerCastsShadow?vehicleShadow.get():nullptr,&playerShadowTransform);
+            if(playerCastsShadow&&!fullRace){
                 mkw::Renderer::ShadowVolume shadow{vehicleShadow.get(),playerShadowTransform};
                 renderer.drawShadowVolumes(&shadow,1,.5f);
             }
             profiler->mark(Profile::Opponents);
             renderer.diagPass(mkw::diag::PassItems);
             if(fullRace)raceHud.drawWorld(renderer,*raceItems,vec(cameraKart->pos()),physicsSteps);
-            if(fullRace&&!playerDynamicShadow)lakitu.drawGroundVolume(renderer);
+            if(fullRace)lakitu.drawGroundVolume(renderer);
             if(fullRace)lakitu.draw(renderer);
             profiler->mark(Profile::Items);
             renderer.diagPass(mkw::diag::PassPlayer);
@@ -4607,67 +4654,6 @@ int main() {
             for(auto& model:track)drawCourseLayer(renderer,*model,transform,int(Courses[courseChoice].id),true);
             courseObjects.drawWater(renderer);
             renderer.setCourseLighting(false);
-            // Resolve local projected shadows after all scene layers. Keep scene
-            // depth intact so opaque actors and entered snow still occlude them.
-            renderer.diagPass(mkw::diag::PassPlayerShadow);
-            const bool mergeJudgeShadow=playerDynamicShadow&&fullRace&&lakitu.shadowVisible();
-            if(mergeJudgeShadow)renderer.setShadowUnion(true);
-            if(playerDynamicShadow&&vehicle&&(!fullRace||!raceItems->hud(0).bullet)&&playerBattleVisible){
-                std::array<mkw::Renderer::ShadowCaster,32> casters{};unsigned casterCount=0;
-                auto caster=[&](const mkw::Model* model,const C3D_Mtx& matrix,const mkw::DriverAnimation* bank=nullptr){
-                    if(!model||casterCount==casters.size())return;
-                    auto& c=casters[casterCount++];c.model=model;c.transform=matrix;c.softTerrain=insideSoftTerrain;c.movingSupport=objectSupport;
-                    if(bank&&bank->gpuSkinned()){c.palette=bank->palette();c.bones=bank->matrixCount();}
-                };
-                const C3D_Mtx chassis=vehicleAnimation.body();caster(vehicle.get(),chassis,bodyAnimation.get());
-                if(driver){C3D_Mtx seated=chassis;const auto& choice=selectedVehicle();
-                    if(!replay)Mtx_Translate(&seated,0,choice.seatY,choice.seatZ,true);
-                    caster(driver.get(),seated,&driverAnimation);
-                    C3D_Mtx head;if(miiHeadTransform(seated,head))caster(playerMiiHead->shadowModel(),head);}
-                const auto contactPose=vehicleAnimation.snapshot();
-                const bool rescueContact=cameraKart->status().onBit(K::Kart::eStatus::BeforeRespawn,K::Kart::eStatus::InRespawn);
-                const bool tiltedContact=mkw::playerShadow::hideContactForRoll(
-                    {chassis.r[0].x,chassis.r[1].x,chassis.r[2].x},
-                    {chassis.r[0].y,chassis.r[1].y,chassis.r[2].y});
-                for(unsigned w=0;w<vehicleAnimation.wheelCount();++w){
-                    const auto before=casterCount;
-                    caster(wheels[vehicleAnimation.modelIndex(w)].get(),vehicleAnimation.wheel(w));
-                    if(casterCount>before){
-                        auto& part=casters[casterCount-1];part.wheelContact=cameraKart->collisionData(w).bFloor;
-                        part.contactCenter=contactPose.tirePositions[w];
-                        part.contactNormal=mkw::normalized(vec(cameraKart->collisionData(w).floorNrm));
-                        // Wheelie is intentionally exempt from the small-hop allowance.
-                        // Bike wheel 0 is the front; keep only the rear decal.
-                        const bool liftedFront=selectedVehicle().bike&&w==0&&cameraKart->status().onBit(K::Kart::eStatus::Wheelie);
-                        part.contactRadius=liftedFront?0.f:contactPose.radius[w]*contactPose.scale.y;
-                        part.hideContact=rescueContact||tiltedContact||courseObjects.suppressWheelContact(part.contactCenter,part.contactRadius);
-                        part.contactSpread=1.53f*.8f*1.2f;
-                        // Wheel roll is around local X, so its width/axle are
-                        // stable through wheel spin. Retain authored rear scale.
-                        const auto& wheelMesh=*part.model;
-                        const mkw::Vec3 axle{part.transform.r[0].x,part.transform.r[1].x,part.transform.r[2].x};
-                        const float halfWidth=.5f*(wheelMesh.maximum.x-wheelMesh.minimum.x)*mkw::length(axle);
-                        part.contactHalfWidth=(halfWidth*1.15f+1.f)*1.1f*1.15f*1.2f;
-                    }
-                }
-                for(unsigned j=0;j<accessories.size();++j)if(accessories[j])
-                    for(unsigned n=0;n<vehicleAnimation.accessoryCount(mkw::GarageExtraNames[j]);++n)
-                        caster(accessories[j].get(),vehicleAnimation.accessory(mkw::GarageExtraNames[j],accessoryAnimations[j]&&accessoryAnimations[j]->handleDriveClip()>=0,n),accessoryAnimations[j].get());
-                std::array<const mkw::Model*,256> receivers{};unsigned receiverCount=0;
-                for(const auto& model:track)if(receiverCount<receivers.size())receivers[receiverCount++]=model.get();
-                const auto origin=vec(cameraKart->pos());
-                const mkw::Renderer::ShadowVolume fallback{vehicleShadow.get(),playerShadowTransform};
-                const auto& objectReceivers=courseObjects.shadowReceivers(origin,std::max(320.f,320.f*cameraKart->scale().y)*4.f);
-                renderer.drawPlayerShadow(casters.data(),casterCount,receivers.data(),receiverCount,origin,playerShadowLight,cameraKart->scale().y,playerCastsShadow&&!insideSoftTerrain?&fallback:nullptr,objectReceivers.data(),unsigned(objectReceivers.size()));
-            }
-            if(mergeJudgeShadow){
-                std::array<const mkw::Model*,256> receivers{};unsigned count=0;
-                for(const auto& model:track)if(count<receivers.size())receivers[count++]=model.get();
-                const auto& objects=courseObjects.shadowReceivers(lakitu.position(),2400.f);
-                lakitu.drawShadow(renderer,receivers.data(),count,playerShadowLight,
-                                  objects.data(),unsigned(objects.size()));
-            }
-            if(mergeJudgeShadow)renderer.setShadowUnion(false);
             // A staff ghost blends over everything opaque, the player's shadow included.
             if(fullRace&&timeTrial){renderer.diagPass(mkw::diag::PassOpponents);opponents.drawGhosts(renderer);}
             renderer.diagPass(mkw::diag::PassEffects);
@@ -4779,8 +4765,10 @@ int main() {
         }
         // QA (autoplay + race-capture.txt): sample race frames for review.
         if(raceCapture&&captureLive&&((physicsSteps-captureBase)/raceCaptureEvery!=raceCaptured||(raceCaptureLeave&&results.phase()>=mkw::RaceFlowPhase::Chosen))){raceCaptured=(physicsSteps-captureBase)/raceCaptureEvery;
-            std::vector<uint8_t> pixels(400*240*3);char path[64];snprintf(path,sizeof path,"sdmc:/3ds/MKWiiDS/race-r%02u-%05u.ppm",captureRace,physicsSteps-captureBase);
-            if(renderer.captureTop(pixels.data()))if(FILE* f=fopen(path,"wb")){fprintf(f,"P6\n400 240\n255\n");fwrite(pixels.data(),1,pixels.size(),f);fclose(f);}
+            // 800px frames: the whole 800x240 picture.
+            const bool wide=renderer.topWide();
+            std::vector<uint8_t> pixels((wide?800:400)*240*3);char path[64];snprintf(path,sizeof path,"sdmc:/3ds/MKWiiDS/race-r%02u-%05u.ppm",captureRace,physicsSteps-captureBase);
+            if(renderer.captureTop(pixels.data(),0,wide))if(FILE* f=fopen(path,"wb")){fprintf(f,"P6\n%u 240\n255\n",wide?800u:400u);fwrite(pixels.data(),1,pixels.size(),f);fclose(f);}
             saveRightEye(renderer,path);
             LOGF("race capture r%02u-%05u low drivers=%u",captureRace,physicsSteps-captureBase,opponents.lowDriverCount());
             // The lower LCD's frame beside it (name-bottom.ppm, 320x240).

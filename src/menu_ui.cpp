@@ -467,7 +467,7 @@ public:
   // is preloaded once: the full list ran past the 128-glyph cap, so Settings
   // never loaded "F", "R" or "p" and drew "Opponent Detail: educed".
   const bool preload=!fixed&&transition&&transition->preload;
-  if(preload)value="0123456789% Change Miis Erase License LED: Off Items + Events Drifts Brightness Texture Quality High Low Dynamic Shadows On Bloom Opponent Detail Full 800px Mode Minimap 30fps";
+  if(preload)value="0123456789% Change Miis Erase License LED: Off Items + Events Drifts Brightness Texture Quality High Low Dynamic Shadows On Bloom Opponent Detail Full 800px Mode Minimap 30fps Performance Purist Retro Fidelity Custom (Current) CRT, Map";
   bool seen[256]{};
   unsigned indices[128]{},count=0;float widths[128]{},total=0;
   for(const unsigned char* ch=reinterpret_cast<const unsigned char*>(value);*ch&&count<128;++ch){
@@ -490,9 +490,9 @@ public:
  // A native-font glyph run in top-screen pixels: align -1 ends at x, 0
  // centres on x, 1 starts at x. The pause controls diagram's labels.
  void screenText(const char* value,float x,float centerY,float height,int align,uint32_t tint=0xffffffff,bool outline=false){
-  unsigned indices[32]{},count=0;float widths[32]{},total=0;
+  unsigned indices[96]{},count=0;float widths[96]{},total=0;
   const float cell=UiFontCells[0][1];
-  for(const unsigned char* ch=reinterpret_cast<const unsigned char*>(value);*ch&&count<32;++ch){
+  for(const unsigned char* ch=reinterpret_cast<const unsigned char*>(value);*ch&&count<96;++ch){
    const auto index=glyphSprite(unsigned(*ch));if(index>=std::size(UiSprites))continue;
    indices[count]=index;widths[count]=UiSprites[index].w*height/cell;total+=widths[count++];
   }
@@ -1012,12 +1012,30 @@ static void composeMenuImpl(const MenuState& s,const UiRaceView& race,std::vecto
   // port's whole-game options. A, left and right switch the chosen row.
   const char* variants[]={"Rumble","Network","ChannelInstall","ChannelInstall","ChannelInstall","ChannelInstall"};
   const auto& o=s.settings;char captions[6][40];
+  if(!s.settingsCustom){
+   // Three presets and Custom (its own page of every option). The values'
+   // preset (or Custom) is marked.
+   const unsigned current=settingsPresetOf(o);
+   for(unsigned i=0;i<=SettingsPresetCount;++i)
+    std::snprintf(captions[i],sizeof captions[i],i==current?"%s (Current)":"%s",i<SettingsPresetCount?SettingsPresetNames[i]:"Custom");
+   for(unsigned i=0;i<=SettingsPresetCount;++i){auto p=control("OptionTopButton",variants[i],i);c.group(UiMenuRole::Choice,i,p,"settings_button_free");c.button("settings_button",i,p,captions[i]);}
+   // Above the sample window (the lower band covers the space under it):
+   // what the highlighted row sets.
+   const UiSettings shown=s.cursor<SettingsPresetCount?settingsPreset(s.cursor):o;
+   char line[96];
+   std::snprintf(line,sizeof line,"%s%s%s, %s textures, %s opponents%s",shown.wide800?"800px":"400px",shown.bloom?", Bloom":"",shown.crt?", CRT":"",
+                 shown.textureQuality?"Low":"High",shown.opponentDetail?"Low":"Full",shown.minimap60?", Map 60fps":"");
+   c.group(UiMenuRole::Content);
+   c.screenText(line,200,39,12,0);
+   c.chrome("Settings");
+   break;
+  }
   std::snprintf(captions[0],sizeof captions[0],"Texture Quality: %s",o.textureQuality?"Low":"High");
-  std::snprintf(captions[1],sizeof captions[1],"Dynamic Shadows: %s",o.dynamicShadows?"On":"Off");
-  std::snprintf(captions[2],sizeof captions[2],"Bloom: %s",o.bloom?"On":"Off");
-  std::snprintf(captions[3],sizeof captions[3],"Opponent Detail: %s",o.opponentDetail?"Low":"Full");
-  std::snprintf(captions[4],sizeof captions[4],"800px Mode: %s",o.wide800?"On":"Off");
-  std::snprintf(captions[5],sizeof captions[5],"Minimap: %s",o.minimap60?"60fps":"30fps");
+  std::snprintf(captions[1],sizeof captions[1],"Bloom: %s",o.bloom?"On":"Off");
+  std::snprintf(captions[2],sizeof captions[2],"Opponent Detail: %s",o.opponentDetail?"Low":"Full");
+  std::snprintf(captions[3],sizeof captions[3],"800px Mode: %s",o.wide800?"On":"Off");
+  std::snprintf(captions[4],sizeof captions[4],"Minimap: %s",o.minimap60?"60fps":"30fps");
+  std::snprintf(captions[5],sizeof captions[5],"CRT: %s",o.crt?"On":"Off");
   for(unsigned i=0;i<6;++i){auto p=control("OptionTopButton",variants[i],i);c.group(UiMenuRole::Choice,i,p,"settings_button_free");c.button("settings_button",i,p,captions[i]);}
   c.chrome("Settings");
   // The upper screen is only a live sample of the chosen row at its
@@ -1487,7 +1505,8 @@ MenuRect menuChoiceRect(const UiQuad& q,const MenuState& state){
  case UiPage::BattleStage:return {12,34.f+35.f*i,296,30};
  case UiPage::VSRules:return {0,32.f+27.f*i,304,25};
  case UiPage::BattleRules:return {0,42.f+29.f*i,304,27};
- case UiPage::Settings:return {12,33.f+29.f*i,296,26}; // six rows above Back
+ // Custom's six rows above Back, or the five preset rows, spaced wider.
+ case UiPage::Settings:return state.settingsCustom?MenuRect{12,33.f+29.f*i,296,26}:MenuRect{12,33.f+34.f*i,296,28};
  case UiPage::LicenseSettings:return {12,33.f+29.f*i,296,26}; // six rows above Back
  case UiPage::TeamConfirm:return {52,95,216,48};
  case UiPage::Confirm:return {72,83,176,80};

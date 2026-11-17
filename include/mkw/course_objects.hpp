@@ -10,6 +10,13 @@ namespace mkw {
 inline bool shareObjectTextures=true;
 // The last course load's shared copies and their bytes (runtime.log).
 inline unsigned sharedObjectTextures=0;inline std::size_t sharedObjectTextureBytes=0;
+// Course-object meshes are cooked with identical corners welded for the
+// post-vertex cache (tools/object_weld.py). DIAG A/B: true loads the unwelded copies the
+// cook keeps beside them (<name>_pv.gmdl/.dobj) where they exist
+// (no-object-weld.txt, object-weld-alternate.txt). Set before a course load.
+inline bool objectWeldOff=false;
+// The last course load's meshes and banks loaded from those copies (runtime.log).
+inline unsigned unweldedObjectMeshes=0,unweldedObjectBanks=0;
 // Course-object presentation. Original per-MDL0 models and animation banks
 // (tools/cook_course_objects.py) are drawn from Kinoko's live object state, or
 // for placements Kinoko does not simulate, from their retail presentation
@@ -42,8 +49,6 @@ public:
     // Transparent tide layers, after opaque scenery and racers, before effects.
     void drawWater(Renderer& renderer);
     // Only bobbing/deforming bridge supports; never all moving platforms.
-    bool suppressWheelContact(Vec3 center,float radius) const;
-    const std::vector<Renderer::ShadowReceiver>& shadowReceivers(Vec3 origin,float radius);
     // Sky-pass objects (suns, Rainbow Road's Earth glow): drawn after the sky,
     // before the course, so walls and scenery cover them.
     void drawSky(Renderer& renderer,unsigned tick,Vec3 camera);

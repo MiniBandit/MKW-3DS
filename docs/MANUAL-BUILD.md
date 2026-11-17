@@ -141,11 +141,14 @@ with `-Wl,--wrap=<name>`. Then
 
 ```sh
 python tools/pack_menu_assets.py
+g++ -O2 -std=c++17 -ffp-contract=off -Iinclude -o course_cache_order tools/course_cache_order.cpp
+./course_cache_order $(for c in sd-card/3ds/mkw-3ds/models/course_[0-9][0-9].list; do for p in $(cat $c); do echo sd-card/3ds/mkw-3ds/models/$p.gmdl; done; done)
 python tools/resource_manifest.py > runtime-files.json
 python tools/pack_race_assets.py runtime-files.json race-base.pak --exclude-menu sd-card/3ds/mkw-3ds/menu.pak
 python tools/pack_racer_lod.py --base race-base.pak --overlay build/racer-lod --output race-lod.pak
 python tools/pack_mii_racers.py --base race-lod.pak --overlay build/mii-racers --output race-mii.pak
-python tools/pack_unlit_banks.py race-mii.pak race.pak
+python tools/pack_unlit_banks.py race-mii.pak race-unlit.pak
+python tools/pack_racer_weld.py race-unlit.pak race.pak
 gcc -O2 -o pakpack tools/pakpack.c
 python tools/pak_order.py sd-card/3ds/mkw-3ds/menu.pak 0 tools/pak-order/menu.txt > menu-order.txt
 python tools/pak_order.py race.pak 1 tools/pak-order/race.txt > race-order.txt
@@ -158,6 +161,9 @@ python tools/pak_order.py race.pak 1 tools/pak-order/race.txt > race-order.txt
 `build/mkw-3ds.3dsx` to exist. `pack_unlit_banks.py` adds compact `.dsku`
 opponent animation banks (about 40% smaller). Every other entry is copied
 unchanged, and the player and the award ceremony keep the full `.dskm`.
+`pack_racer_weld.py` rewrites the index buffers of the animated racer parts
+(drivers, animated bodies) so the GPU's vertex cache reuses shared corners;
+vertices and banks stay as they are.
 
 `pakpack` rewrites both packs as MPK2: entries in the order the game reads
 them (`tools/pak-order/` holds the read order from DIAG pack traces; the rest

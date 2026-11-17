@@ -111,7 +111,6 @@ struct Lakitu::Impl {
     unsigned phaseTimer=0,ascendTimer=0,introFrames=0,lastLap=1,tick=0;
     bool started=false,wasRespawning=false,wasFinished=false,released=false;
     std::unique_ptr<Model> shadow;
-    std::vector<Renderer::ShadowCaster> shadowCasters;
     float reverseActivation=0;bool reverseOn=false;
     // Direct placement (pickup, goal): position, facing, oscillation phases.
     Vec3 pos{},goalFrom{},goalTo{},forward{0,0,1};float phaseX=0,phaseY=0;
@@ -184,7 +183,7 @@ bool Lakitu::load(){
 void Lakitu::unload(){
     auto& m=*impl_;
     for(auto* p:{&m.body,&m.rod,&m.flag,&m.signal,&m.lap,&m.lapFinal,&m.reverse}){p->bank.reset();p->model.reset();p->rigid=false;}
-    m.shadow.reset();m.shadowCasters.clear();
+    m.shadow.reset();
     m.bodyJoints.data.clear();m.rodJoints.data.clear();m.ready=false;m.move.reset();m.kart=nullptr;
 }
 void Lakitu::reset(){
@@ -356,7 +355,7 @@ uint16_t Lakitu::soundLoop()const{
 }
 Vec3 Lakitu::position()const{const auto& w=impl_->world;return {w.r[0].c[0],w.r[1].c[0],w.r[2].c[0]};}
 void Lakitu::draw(Renderer& renderer){
-    auto& m=*impl_;m.shadowCasters.clear();if(!m.ready||!m.kart||m.mode==Mode::Away)return;
+    auto& m=*impl_;if(!m.ready||!m.kart||m.mode==Mode::Away)return;
     const unsigned elapsed=m.tick-m.clipStart;
     auto frameOf=[&](DriverAnimation& bank,const char* name){
         const int clip=bank.find(name);if(clip<0)return std::pair<int,unsigned>{-1,0};
@@ -364,28 +363,18 @@ void Lakitu::draw(Renderer& renderer){
         const unsigned f=m.clipFrame>=0?unsigned(m.clipFrame):elapsed;
         return std::pair<int,unsigned>{clip,bank.loop(clip)?f%duration:std::min(f,duration-1)};
     };
-    auto append=[&](const Model* model,const C3D_Mtx& transform,unsigned first=0,unsigned count=0,const DriverAnimation* bank=nullptr){
-        Renderer::ShadowCaster c;c.model=model;c.transform=transform;c.first=first;c.count=count;
-        if(bank&&bank->gpuSkinned()){c.palette=bank->palette();c.bones=bank->matrixCount();}
-        m.shadowCasters.push_back(c);
-    };
     auto drawPart=[&](Impl::Part& p,const char* name,const C3D_Mtx& transform){
         auto [clip,frame]=frameOf(*p.bank,name);if(clip<0)return;
         if(p.rigid){
             RigidPose pose;pose.parts=&p.bank->rigidParts();pose.palette=p.bank->pose(clip,float(frame),m.tick);pose.matrices=p.bank->matrixCount();
             if(!pose.palette)return;
             renderer.setRigidPose(&pose);renderer.draw(*p.model,transform);renderer.setRigidPose(nullptr);
-            for(const auto& sub:*pose.parts)for(const auto& part:sub){
-                C3D_Mtx bone,world;store(bone,pose.palette+part.matrix*pose.stride);Mtx_Multiply(&world,&transform,&bone);
-                append(p.model.get(),world,part.first,part.count);
-            }
         }else{
             p.bank->apply(*p.model,clip,float(frame),m.tick);
             const bool gpu=p.bank->gpuSkinned();
             if(gpu)renderer.setSkinPalette(p.bank->palette(),p.bank->matrixCount(),21);
             renderer.draw(*p.model,transform);
             if(gpu)renderer.setSkinPalette(nullptr,0,12);
-            append(p.model.get(),transform,0,0,p.bank.get());
         }
     };
     drawPart(m.body,m.bodyClip,m.world);
@@ -402,9 +391,8 @@ void Lakitu::draw(Renderer& renderer){
     Model* board=m.attachment==Signal?m.signal.model.get():m.attachment==LapBoard?m.lap.model.get():
                  m.attachment==LapFinal?m.lapFinal.model.get():m.reverse.model.get();
     const Binding binding{board,m.lamps,m.attachment==Signal,m.attachment==LapBoard?m.digit:-1,m.attachment==Reverse?int(elapsed%60):-1};
-    renderer.draw(*board,hookWorld,false,bindLakitu,binding);append(board,hookWorld);
+    renderer.draw(*board,hookWorld,false,bindLakitu,binding);
 }
-bool Lakitu::shadowVisible()const{return impl_->ready&&impl_->kart&&impl_->mode!=Mode::Away&&!impl_->shadowCasters.empty();}
 bool Lakitu::shadowPose(C3D_Mtx& pose)const{
     auto& m=*impl_;if(!m.ready||!m.kart||m.mode==Mode::Away)return false;
     // RMCU 8071eb3c..8071ec70: identity rotation, kart Y + 100,
@@ -429,13 +417,6 @@ void Lakitu::drawGroundVolume(Renderer& renderer){
     C3D_Mtx pose;if(!impl_->shadow||!shadowPose(pose))return;
     const Renderer::ShadowVolume volume{impl_->shadow.get(),pose};
     renderer.drawShadowVolumes(&volume,1,.5f);
-}
-void Lakitu::drawShadow(Renderer& renderer,const Model* const* receivers,unsigned receiverCount,Vec3 light,
-                        const Renderer::ShadowReceiver* objects,unsigned objectCount){
-    auto& m=*impl_;C3D_Mtx pose;if(m.shadowCasters.empty()||!shadowPose(pose))return;
-    const Renderer::ShadowVolume fallback{m.shadow.get(),pose};
-    renderer.drawPlayerShadow(m.shadowCasters.data(),unsigned(m.shadowCasters.size()),receivers,receiverCount,position(),light,1.f,
-                              m.shadow?&fallback:nullptr,objects,objectCount,true);
 }
 
 }

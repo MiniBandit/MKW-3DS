@@ -7,6 +7,11 @@ palettes, PAT0/SRT0/CLR0 material tracks and the joint table). Textures are
 encoded once per source archive. Output per course:
   models/course_NN_visuals.list   lines: resource model gmdl bank|-
 Original archives are only read; nothing in them is modified.
+
+Each GMDL's identical corners are then welded for the post-transform vertex
+cache (tools/object_weld.py, same picture), with its bank remapped to match. While
+KEEP_UNWELDED is set, the unwelded GMDL and bank also ship as <name>_pv.gmdl
+and <name>_pv.dobj for the DIAG A/B (no-object-weld.txt).
 """
 import argparse, concurrent.futures, hashlib, json, os, struct, subprocess, sys
 from pathlib import Path
@@ -14,10 +19,14 @@ from course_catalog import ROOT, courses
 from cook_model import cook, COURSE_TEXELS
 from cook_shape_morph import append_parasol_morph, append_wanwan_morph
 from course_mii_textures import load_course_mii_textures
+from object_weld import weld
 from cook_course_mii_heads import inputs as mii_head_inputs, cook as cook_mii_heads
 
 OUT = ROOT / 'sd-card/3ds/mkw-3ds'
 EXCLUDED = {'course_model.brres', 'vrcorn_model.brres', 'map_model.brres'}
+# Ship the unwelded meshes and banks beside the welded ones (DIAG A/B
+# no-object-weld.txt / object-weld-alternate.txt). Off for a release.
+KEEP_UNWELDED = False
 # Archives whose models share joint names: keep each model's own clips.
 CLIP_EXCLUDE = {
     ('hanachan', 'hanachan'): '^(wait|walk)$',
@@ -60,7 +69,7 @@ def cook_course(course, force, mii_manifest=None):
     folder = ROOT / 'assets/courses' / course['key']
     manifest = OUT / f"models/course_{course['id']:02d}_visuals.list"
     stamp = ROOT / 'build/object-exports' / course['key'] / 'stamp.json'
-    tools = [ROOT / 'build/export_brres.mjs', ROOT / 'tools/cook_model.py', ROOT / 'tools/gx_material.py', ROOT / 'tools/coplanar_layers.py', ROOT / 'tools/world_uv.py', ROOT / 'tools/cook_shape_morph.py', Path(__file__)]
+    tools = [ROOT / 'build/export_brres.mjs', ROOT / 'tools/cook_model.py', ROOT / 'tools/gx_material.py', ROOT / 'tools/coplanar_layers.py', ROOT / 'tools/world_uv.py', ROOT / 'tools/cook_shape_morph.py', ROOT / 'tools/object_weld.py', Path(__file__)]
     archives = sorted(p for p in folder.glob('*.brres') if not p.name.startswith('._') and p.name not in EXCLUDED)
     mii_textures, mii_inputs = load_course_mii_textures(mii_manifest, course['key'])
     missing = set(mii_textures) - {p.stem for p in archives}
@@ -105,17 +114,43 @@ def cook_course(course, force, mii_manifest=None):
                 info['morph'] = append_wanwan_morph(archive, bank)
                 (work / 'bank.json').write_text(json.dumps(info, indent=2)+'\n')
             animated = info['chr'] or info['pat'] or info['srt'] or info['clr'] or info['palette'] > 1
+            # Weld (the work folder's bank too: cook_map_objects.py
+            # poses the shipped GMDL with it).
+            mesh = OUT / 'models' / (parts[0]['name'] + '.gmdl')
+            unwelded, unwelded_bank = mesh.read_bytes(), bank.read_bytes() if bank.is_file() else None
+            welded, welded_bank, weld_stats = weld(stem, unwelded, unwelded_bank)
+            mesh.write_bytes(welded)
+            if welded_bank is not None:
+                bank.write_bytes(welded_bank)
+            keep = OUT / 'models' / (parts[0]['name'] + '_pv.gmdl')
+            if KEEP_UNWELDED and welded != unwelded:
+                keep.write_bytes(unwelded)
+            else:
+                keep.unlink(missing_ok=True)
+            parts[0].update(vertices=weld_stats['vertices_after'], bytes=len(welded), sha256=hashlib.sha256(welded).hexdigest())
+            receipt_path = OUT / 'models' / (stem + '-receipt.json')
+            receipt = json.loads(receipt_path.read_text())
+            receipt['parts'] = parts
+            receipt['weld'] = weld_stats
+            receipt_path.write_text(json.dumps(receipt, indent=2) + '\n')
             bank_name = '-'
+            keep_bank = OUT / 'models' / (stem + '_pv.dobj')
             if animated:
                 bank_name = stem
                 target = OUT / 'models' / (stem + '.dobj')
                 target.write_bytes(bank.read_bytes())
+                if KEEP_UNWELDED and unwelded_bank != welded_bank:
+                    keep_bank.write_bytes(unwelded_bank)
+                else:
+                    keep_bank.unlink(missing_ok=True)
             else:
                 (OUT / 'models' / (stem + '.dobj')).unlink(missing_ok=True)
+                keep_bank.unlink(missing_ok=True)
             lines.append(f"{resource} {model} {parts[0]['name']} {bank_name}\n")
             report.append({'resource': resource, 'model': model, 'gmdl': parts[0]['name'], 'bank': bank_name,
                            'bank_bytes': bank.stat().st_size if animated else 0, 'gmdl_bytes': parts[0]['bytes'],
-                           'triangles': parts[0]['triangles'], **{k: info[k] for k in ('palette', 'nodes', 'weighted', 'chr', 'pat', 'srt', 'clr')}})
+                           'triangles': parts[0]['triangles'], 'weld': weld_stats,
+                           **{k: info[k] for k in ('palette', 'nodes', 'weighted', 'chr', 'pat', 'srt', 'clr')}})
     heads = cook_mii_heads(course, OUT)
     lines += heads
     for line in heads:

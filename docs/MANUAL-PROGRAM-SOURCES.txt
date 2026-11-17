@@ -270,7 +270,6 @@ src/race_sound.cpp
 src/racer_visuals.cpp
 src/render_thread.cpp
 src/renderer.cpp
-src/renderer_player_shadow.cpp
 src/renderer_retail.cpp
 src/retail_lighting.cpp
 src/shell_guidance.cpp

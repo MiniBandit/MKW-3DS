@@ -1,3 +1,5 @@
+<p align="center"><img src="tools/release/artwork/logo.png" alt="Mario Kart WiiDS" width="640"></p>
+
 # Mario Kart WiiDS
 
 A native Nintendo 3DS port of Mario Kart Wii. This fork builds on

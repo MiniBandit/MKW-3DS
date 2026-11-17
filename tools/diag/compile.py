@@ -69,12 +69,12 @@ env = dict(os.environ)
 env['PATH'] = os.pathsep.join([str(SDK / 'devkitARM/bin'), str(SDK / 'tools/bin'), env['PATH']])
 
 ARCH = ['-march=armv6k', '-mtune=mpcore', '-mfloat-abi=hard', '-mtp=soft']
-RELEASE_VARIANT = VARIANT == 'o3dsrelease'
+RELEASE_VARIANT = VARIANT in ('o3dsrelease', 'release')
 FLAGS = ARCH + ['-O2', '-g', '-mword-relocations', '-ffunction-sections', '-fdata-sections', '-ffp-contract=off',
                 '-std=gnu++23', '-D__3DS__', '-DREVOLUTION', *(['-DMKW_RELEASE'] if RELEASE_VARIANT else ['-DMKW_AUTO_PROFILE', '-DMKW_WRAP_ROMFS_MOUNT']), '-DKINOKO_QUIET',
                 '-fno-exceptions', '-fno-rtti', '-fcheck-new', '-fno-strict-aliasing',
                 '-ffile-prefix-map=' + ROOT.as_posix() + '/=']
-FLAGS += {'': [], 'o3dstest': ['-DMKW_OLD3DS_TEST'], 'o3dsrelease': ['-DMKW_OLD3DS_TEST']}[VARIANT]
+FLAGS += {'': [], 'release': [], 'o3dstest': ['-DMKW_OLD3DS_TEST'], 'o3dsrelease': ['-DMKW_OLD3DS_TEST']}[VARIANT]
 FLAGS += ['-I' + p.as_posix() for p in [SHADER, ROOT / 'vendor/kinoko/include', ROOT / 'vendor/kinoko/source', ROOT / 'include',
                                         ROOT / 'vendor/cfl-mii/include', ROOT / 'vendor/citro3d/include', SDK / 'libctru/include', GEN]]
 

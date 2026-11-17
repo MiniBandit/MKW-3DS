@@ -4,8 +4,8 @@
     "bytes": 8716
   },
   "logo.png": {
-    "sha256": "12f21139f97ea8547c58dd69dd48936abc6f852bf8bbaf534fc0b1ea2c2a63fe",
-    "bytes": 2545421
+    "sha256": "9eff3fe9983dce0b560eda3c55d575287fc96a4957f32fd293530c3a35025e89",
+    "bytes": 515402
   },
   "banneraudio.wav": {
     "source": "Maintainer-supplied banneraudio.wav; replaces the superseded upstream CIA audio.",

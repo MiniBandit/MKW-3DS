@@ -37,9 +37,9 @@ struct UiSelection {
  // The retail unlocked engine-class page switches both 50cc/100cc entries
  // together between their restricted type and the combined kart/bike list.
  bool mixedEngineTypes=false;
- // Per-license port options, separate from retail RKSD. dynamicShadows is
- // unused now (see UiSettings); it only keeps the file layout.
- unsigned ledMode=0,ledBrightness=100;bool dynamicShadows=true;
+ // Per-license port options, separate from retail RKSD (byte 17, the old
+ // Dynamic Shadows flag, is written as 0 and ignored).
+ unsigned ledMode=0,ledBrightness=100;
  // Speedometer at the start of a race; SELECT still switches it during one.
  bool speedometer=false;
  // The race timer on the lower screen (License Settings: Timer):
@@ -154,6 +154,10 @@ public:
  UiAction input(UiInput);
  void advance(unsigned ticks);
  void toggleSetting(unsigned row);
+ // Settings: the preset rows (Performance, Purist, Retro, Fidelity, Custom), or with
+ // settingsCustom each option (Custom's page). enter() clears it.
+ bool settingsCustom=false;
+ void chooseSettingsPreset(unsigned row);
  void enter(UiPage);
  void raceStarted(){enter(UiPage::Race);}
  void finish(bool last=false){finalRace=last;enter(UiPage::Results);}

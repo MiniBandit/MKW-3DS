@@ -1,7 +1,9 @@
 # Supplied HOME artwork
 
 - `icon.png`: the supplied Mario icon, copied without modification.
-- `logo.png`: the supplied Mario Kart Wii logo, copied without modification.
+- `logo.png`: the supplied Mario Kart WiiDS logo (2000x718, converted losslessly
+  from the supplied WebP). The HOME banner, the title screen (`tools/title_logo.py`)
+  and the project README use it.
 - `banneraudio.wav`: the earlier banner sound, kept for manual builds. `tools/build.py` uses the start of the Disc Channel banner sound from your disc instead.
 - `manifest.json`: SHA-256 fingerprints and audio source/format details.
 

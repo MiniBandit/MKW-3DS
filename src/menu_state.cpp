@@ -91,7 +91,7 @@ unsigned MenuState::count()const{
  switch(page){
  case UiPage::License:return 4;
  case UiPage::Drift:case UiPage::VSMode:return 3;
- case UiPage::Settings:return 6;
+ case UiPage::Settings:return settingsCustom?6:SettingsPresetCount+1;
  case UiPage::LicenseSettings:return 6;
  case UiPage::VSRules:return 7;
  case UiPage::BattleRules:return 6;
@@ -201,25 +201,37 @@ void MenuState::confirmRaceMii(unsigned weight,unsigned character){
 }
 
 void MenuState::toggleSetting(unsigned row){
- // Old 3DS: every setting is fixed (Texture Quality Low, Dynamic Shadows,
- // Bloom Off, Opponent Detail Low, 800px Mode Off, Minimap 30fps).
+ // Old 3DS: every setting is fixed (Texture Quality Low, Bloom Off, Opponent
+ // Detail Low, 800px Mode Off, Minimap 30fps, CRT Off).
  if(old3dsSettings){unavailable=true;return;}
  switch(row){
  case 0:settings.textureQuality=settings.textureQuality?0:1;break;
- case 1:settings.dynamicShadows=!settings.dynamicShadows;break;
- case 2:settings.bloom=!settings.bloom;break;
- case 3:settings.opponentDetail=settings.opponentDetail?0:1;break;
- case 4:settings.wide800=!settings.wide800;break;
- case 5:settings.minimap60=!settings.minimap60;break;
+ case 1:settings.bloom=!settings.bloom;break;
+ case 2:settings.opponentDetail=settings.opponentDetail?0:1;break;
+ // The CRT look needs 800px: 800px Mode Off turns it off, CRT On turns 800px on.
+ case 3:settings.wide800=!settings.wide800;if(!settings.wide800)settings.crt=false;break;
+ case 4:settings.minimap60=!settings.minimap60;break;
+ case 5:settings.crt=!settings.crt;if(settings.crt)settings.wide800=true;break;
  default:break;
  }
+}
+void MenuState::chooseSettingsPreset(unsigned row){
+ if(row>=SettingsPresetCount){
+  // Custom: every option on its own page, from its first row.
+  enter(UiPage::Settings);settingsCustom=true;cursor=0;uiFocusReset(*this);return;
+ }
+ // Old 3DS keeps its fixed values, which are Performance's.
+ if(old3dsSettings){unavailable=row!=0;return;}
+ settings=settingsPreset(row);
 }
 void MenuState::advance(unsigned ticks){age+=ticks;focusAge+=ticks;uiFocusAdvance(*this,ticks);}
 
 void MenuState::enter(UiPage next){
  if((next==UiPage::VSRules||next==UiPage::BattleRules)&&!rulePage())rulesEntry=selection;
  normalize(selection);
- page=next;age=focusAge=0;unavailable=false;cursor=0;
+ page=next;age=focusAge=0;unavailable=false;cursor=0;settingsCustom=false;
+ // Settings opens on the preset these values are (Custom when none).
+ if(page==UiPage::Settings)cursor=settingsPresetOf(settings);
  switch(page){
  case UiPage::Title:{
   // Retail 806098c0..9990: any occupied license's completion bit56
@@ -276,7 +288,11 @@ UiAction MenuState::input(UiInput key){
   case UiPage::Intro:enter(UiPage::Title);break;
   case UiPage::License:titleLicense=cursor;enter(UiPage::Title);break;
   case UiPage::MainMenu:enter(UiPage::License);break;
-  case UiPage::Settings:enter(UiPage::License);cursor=auxiliarySlot();uiFocusReset(*this);break;
+  case UiPage::Settings:
+   // Custom's page goes back to the presets, with Custom (or the preset its
+   // values now make) chosen.
+   if(settingsCustom){enter(UiPage::Settings);uiFocusReset(*this);break;}
+   enter(UiPage::License);cursor=auxiliarySlot();uiFocusReset(*this);break;
   case UiPage::RecordsGeneral:case UiPage::RecordsFavorites:case UiPage::RecordsOther:enter(UiPage::LicenseSettings);break;
   case UiPage::EraseLicense:enter(UiPage::LicenseSettings);cursor=1;uiFocusReset(*this);break;
   case UiPage::LicenseSettings:enter(UiPage::MainMenu);cursor=7;uiFocusReset(*this);break;
@@ -321,8 +337,9 @@ UiAction MenuState::input(UiInput key){
   else selection.raceTimer=(selection.raceTimer+(key.left?2:1))%3;
   focusAge=0;return UiAction::None;
  }
- // Every Settings row is a two-way choice: left, right and A all switch it.
- if(page==UiPage::Settings&&(key.left||key.right)){toggleSetting(cursor);focusAge=0;return UiAction::None;}
+ // Custom's rows are two-way choices: left, right and A switch them. The
+ // preset rows take only A.
+ if(page==UiPage::Settings&&(key.left||key.right)){if(settingsCustom){toggleSetting(cursor);focusAge=0;}return UiAction::None;}
  if(rulePage()&&(key.left||key.right)&&cursor<ruleOkRow()){
   if(page==UiPage::BattleRules){
    if(cursor==4){unsigned i=0;while(i+1<std::size(UiBattleWinCounts)&&UiBattleWinCounts[i]!=selection.battleWins)++i;
@@ -379,7 +396,8 @@ UiAction MenuState::input(UiInput key){
  // a settings/help activation into a license choice or manual-drift selection.
  if(cursor==auxiliarySlot()){
   if(page==UiPage::MainMenu)enter(UiPage::LicenseSettings);
-  else if(page==UiPage::License)enter(UiPage::Settings);
+  // Old 3DS: every setting is fixed, so the page has nothing to change.
+  else if(page==UiPage::License){if(old3dsSettings)unavailable=true;else enter(UiPage::Settings);}
   else if(page==UiPage::Drift)enter(UiPage::DriftHelp);
   else if(page==UiPage::VSMode||page==UiPage::BattleMode){rulesReturn=page;enter(page==UiPage::BattleMode?UiPage::BattleRules:UiPage::VSRules);}
   else unavailable=true;
@@ -392,7 +410,7 @@ UiAction MenuState::input(UiInput key){
  case UiPage::License:selection.license=cursor;enter(UiPage::MainMenu);break;
  // The Wii's page held GameCube rumble, Wi-Fi and Channel installation;
  // this one holds the port's whole-game options instead.
- case UiPage::Settings:toggleSetting(cursor);break;
+ case UiPage::Settings:if(settingsCustom)toggleSetting(cursor);else chooseSettingsPreset(cursor);break;
  case UiPage::RecordsGeneral:enter(UiPage::RecordsFavorites);break;
  case UiPage::RecordsFavorites:enter(UiPage::RecordsOther);break;
  case UiPage::RecordsOther:enter(UiPage::RecordsGeneral);break;

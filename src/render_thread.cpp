@@ -67,7 +67,7 @@ enum : uint16_t {
     CmdBegin=1,CmdEnd,CmdProjection,CmdCourseLighting,CmdRetailFog,CmdRequestBloom,CmdApplyBloom,CmdBottom,
     CmdDraw,CmdDrawAtScreen,CmdMenuIcon,CmdEnvironmentUv,CmdUv1,CmdUvOffset,CmdClearEnvironment,
     CmdRigid,CmdSkin,CmdOverrides,CmdShadows,CmdSparks,CmdEffects,CmdSceneEffects,CmdCinema,CmdFade,CmdPausedTop,CmdSprite,CmdFontSprite,
-    CmdMaterialQuads,CmdText,CmdScreenDepth,CmdMenuModelLayer,CmdIntroWorldEnd,CmdRequestStadium,CmdCoinHudModel,CmdPlayerShadow,CmdSceneRegion,CmdShadowUnion,
+    CmdMaterialQuads,CmdText,CmdScreenDepth,CmdMenuModelLayer,CmdIntroWorldEnd,CmdRequestStadium,CmdCoinHudModel,CmdSceneRegion,
     CmdDiagPass, // diagnostic overlay: GPU pass boundary (mkw/diag.hpp)
     CmdRacerLight,
     CmdDepthProbe,
@@ -76,7 +76,6 @@ enum : uint16_t {
 // begun: C3D_FrameBegin already ran on the recording thread (stereo immediate frames).
 struct DiagPassCommand {static constexpr uint16_t Type=CmdDiagPass;uint8_t pass;};
 struct RacerLightCommand {static constexpr uint16_t Type=CmdRacerLight;bool on;uint8_t space;float direction[3];uint32_t color,ambient;};
-struct ShadowUnionCommand {static constexpr uint16_t Type=CmdShadowUnion;bool active;};
 struct SceneRegionCommand {static constexpr uint16_t Type=CmdSceneRegion;unsigned mask;};
 struct BeginCommand {static constexpr uint16_t Type=CmdBegin;C3D_Mtx view,projection;unsigned lightingTick;bool sync,begun,loading;};
 struct EndCommand {static constexpr uint16_t Type=CmdEnd;};
@@ -109,7 +108,6 @@ struct ClearEnvironmentCommand {static constexpr uint16_t Type=CmdClearEnvironme
 struct RigidCommand {static constexpr uint16_t Type=CmdRigid;const RigidPose* pose;};
 struct SkinCommand {static constexpr uint16_t Type=CmdSkin;const float* palette;unsigned bones,stride;};
 struct OverridesCommand {static constexpr uint16_t Type=CmdOverrides;const SubmeshOverride* overrides;unsigned count;};
-struct PlayerShadowCommand {static constexpr uint16_t Type=CmdPlayerShadow;const Renderer::ShadowCaster* casters;unsigned count;const Model* const* receivers;unsigned receiverCount;Vec3 origin,lightDirection;float scale;const Renderer::ShadowVolume* fallback;const Renderer::ShadowReceiver* objects;unsigned objectCount;bool actor;};
 struct ShadowsCommand {static constexpr uint16_t Type=CmdShadows;const Renderer::ShadowVolume* volumes;unsigned count;float darkness;};
 struct SparksCommand {static constexpr uint16_t Type=CmdSparks;const SparkSpec* specs;unsigned specCount;const Spark* sparks;unsigned count;const Texture* textures;};
 // The NW4R EF draw list is built while the frame records (FrameList::effects).
@@ -411,11 +409,10 @@ static bool diagLeaveOut(uint8_t skip,uint8_t region,uint16_t type,bool& bottom)
     if(skip==diag::PassBottomQuads){if(type==CmdBottom){bottom=true;return false;}return bottom&&type!=CmdEnd;}
     if(skip==diag::PassBloom)return type==CmdRequestBloom;
     if(skip==diag::PassShadowVolumes)return type==CmdShadows;
-    if(skip==diag::PassPlayerShadow&&type==CmdPlayerShadow)return true;
     if(region!=skip)return false;
     switch(type){
     case CmdDraw:case CmdDrawAtScreen:case CmdMenuIcon:case CmdMenuModelLayer:case CmdCoinHudModel:case CmdShadows:case CmdSparks:
-    case CmdEffects:case CmdSceneEffects:case CmdSprite:case CmdFontSprite:case CmdMaterialQuads:case CmdText:case CmdPlayerShadow:case CmdCinema:case CmdFade:
+    case CmdEffects:case CmdSceneEffects:case CmdSprite:case CmdFontSprite:case CmdMaterialQuads:case CmdText:case CmdCinema:case CmdFade:
         return true;
     default:return false;
     }
@@ -604,7 +601,6 @@ void Renderer::execute(FrameList& list){
             execFrame_=c.frame;execAdditive_=c.additive;
             drawCoinHudModelNow(*c.model,c.vertices,c.transform,c.firstColumn);break;
         }
-        case CmdShadowUnion:{shadowUnionNow(static_cast<const ShadowUnionCommand*>(body)->active);break;}
         case CmdEnvironmentUv:{const auto& c=*static_cast<const EnvironmentUvCommand*>(body);setEnvironmentUv(c.transform,c.uv,c.texture2,c.blend);break;}
         case CmdUv1:setUv1Transform(static_cast<const Uv1Command*>(body)->uv);break;
         case CmdUvOffset:{const auto& c=*static_cast<const UvOffsetCommand*>(body);setUvOffset(c.u,c.v);break;}
@@ -612,7 +608,6 @@ void Renderer::execute(FrameList& list){
         case CmdRigid:rigid_=static_cast<const RigidCommand*>(body)->pose;break;
         case CmdSkin:{const auto& c=*static_cast<const SkinCommand*>(body);skinPalette_=c.palette;skinBones_=c.bones;skinStride_=c.stride;break;}
         case CmdOverrides:{const auto& c=*static_cast<const OverridesCommand*>(body);overrides_=c.overrides;overrideCount_=c.overrides?c.count:0;break;}
-        case CmdPlayerShadow:{const auto& c=*static_cast<const PlayerShadowCommand*>(body);playerShadowNow(c.casters,c.count,c.receivers,c.receiverCount,c.origin,c.lightDirection,c.scale,c.fallback,c.objects,c.objectCount,c.actor);break;}
         case CmdShadows:{const auto& c=*static_cast<const ShadowsCommand*>(body);drawShadowVolumes(c.volumes,c.count,c.darkness);break;}
         case CmdSparks:{const auto& c=*static_cast<const SparksCommand*>(body);drawSparksNow(c.specs,c.specCount,c.sparks,c.count,c.textures);break;}
         case CmdSceneEffects:{const auto& c=*static_cast<const SceneEffectsCommand*>(body);sceneEffectListNow(*c.effects,*c.list,c.textures,*c.buffer);break;}
@@ -678,14 +673,14 @@ void Renderer::execute(FrameList& list){
             // pixels from the centre camera's position (stereo::perspectiveEye).
             const auto& c=*static_cast<const DepthProbeCommand*>(body);
             const float x=execStereo_.active()?c.x-.5f*execStereo_.parallax(c.depth):c.x;
-            if(!bottomWorldPass_&&!eye)if(auto* t=bloomFrame_?sceneTarget_:target_)
+            if(!bottomWorldPass_&&!eye)if(auto* t=bloomFrame_&&sceneTarget_?sceneTarget_:target_)
                 probeExec_={x,c.y,static_cast<const uint32_t*>(t->frameBuf.depthBuf),t->frameBuf.depthBuf!=nullptr&&!topDepthCleared_,unsigned(t->frameBuf.width)/8u};
             break;}
         }
         if((tally||grid)&&pass==0&&h.type!=CmdBegin){
             // Volumes and the player's shadow wherever recorded; bloom runs at
             // beginBottom or the eye's end; then the lower screen; else the marker.
-            const uint8_t at=h.type==CmdShadows?diag::PassShadowVolumes:h.type==CmdPlayerShadow?diag::PassPlayerShadow:
+            const uint8_t at=h.type==CmdShadows?diag::PassShadowVolumes:
                 (h.type==CmdBottom||h.type==CmdEnd)?diag::PassBloom:bottom?diag::PassBottom:diagRegion;
             passDraws[at]+=stats_.drawCalls-drawsBefore;passTriangles[at]+=stats_.triangles-trianglesBefore;
             const void* model=h.type==CmdDraw?static_cast<const DrawCommand*>(body)->model:nullptr;
@@ -866,6 +861,8 @@ void Renderer::requestBloom(const CourseBloom& settings,const float* clip){
     if(!recording()){requestBloomNow(settings,clip);return;}
     // Bloom's VRAM targets (unless reserved at load) and LINEAR vertices:
     // create them here, once, with the render thread idle (never for Bloom: Off).
+    // Targets made for the other screen mode (800px Mode changed) are remade.
+    if(bloomEnabled&&settings.enabled()&&sceneTex_.data&&bloomWide_!=bloomWideWanted())releaseBloom();
     if(bloomEnabled&&settings.enabled()&&!bloomVertices_&&!bloomFailed_){drain();initBloom();}
     auto& c=command<RequestBloomCommand>();c.settings=&settings;c.clipped=clip!=nullptr;
     if(clip)std::memcpy(c.clip,clip,sizeof c.clip);
@@ -1110,23 +1107,6 @@ void Renderer::clearEnvironmentUv(){
     if(!recording()){clearEnvironmentUvNow();return;}
     command<ClearEnvironmentCommand>();
 }
-void Renderer::drawPlayerShadow(const ShadowCaster* casters,unsigned count,const Model* const* receivers,unsigned receiverCount,Vec3 origin,Vec3 lightDirection,float scale,const ShadowVolume* fallback,const ShadowReceiver* objects,unsigned objectCount,bool actor){
-    if(!count||(!receiverCount&&!objectCount)||!playerShadowTarget_){if(fallback)drawShadowVolumes(fallback,1,.5f);return;}
-    if(!recording()){playerShadowNow(casters,count,receivers,receiverCount,origin,lightDirection,scale,fallback,objects,objectCount,actor);return;}
-    auto* parts=copy(casters,count);
-    for(unsigned i=0;i<count;++i)if(parts[i].palette){
-        const unsigned stride=parts[i].stride;
-        auto* rows=static_cast<float*>(data(parts[i].bones*12*sizeof(float)));
-        for(unsigned b=0;b<parts[i].bones;++b)std::memcpy(rows+b*12,parts[i].palette+b*stride,12*sizeof(float));
-        parts[i].palette=rows;parts[i].stride=12;
-    }
-    auto& c=command<PlayerShadowCommand>();c.casters=parts;c.count=count;
-    c.receivers=copy(receivers,receiverCount);c.receiverCount=receiverCount;c.origin=origin;c.lightDirection=lightDirection;c.scale=scale;c.fallback=fallback?copy(fallback,1):nullptr;
-    auto* receiving=copy(objects,objectCount);
-    for(unsigned i=0;i<objectCount;++i)if(receiving[i].palette)
-        receiving[i].palette=copy(receiving[i].palette,receiving[i].bones*12);
-    c.objects=receiving;c.objectCount=objectCount;c.actor=actor;
-}
 void Renderer::drawShadowVolumes(const ShadowVolume* volumes,unsigned count,float darkness){
     if(!count)return;
     if(!recording()){shadowVolumesNow(volumes,count,darkness);return;}
@@ -1264,7 +1244,4 @@ void Renderer::drawScreenText(const char* text,float x,float y,float size,uint32
 }
 }
 
-namespace mkw { void Renderer::setShadowUnion(bool active){
- if(!recording()){shadowUnionNow(active);return;}
- command<ShadowUnionCommand>().active=active;
-} }
+

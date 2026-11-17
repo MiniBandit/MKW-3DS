@@ -933,7 +933,20 @@ class Builder:
         stage.mkdir(parents=True, exist_ok=True)
         shutil.copy2(self.compile_dir / 'mkw-3ds.3dsx', root / 'build/mkw-3ds.3dsx')
         self.py('pause-controls', 'cook_pause_controls.py')
+        self.py('loading-picture', 'cook_loading_picture.py')
         self.py('pack-menu', 'pack_menu_assets.py')
+        # Course parts' vertex-cache triangle order, stored beside each part as
+        # <part>.cord (tools/course_cache_order.cpp: the same code the game runs
+        # at course load, which uses the file only when it matches the part).
+        order_tool = stage / ('course_cache_order.exe' if os.name == 'nt' else 'course_cache_order')
+        self.run('cache-order-host', [self.cxx, '-O2', '-std=c++17', '-ffp-contract=off', '-Iinclude', '-o', order_tool, 'tools/course_cache_order.cpp'])
+        models_dir = root / 'sd-card/3ds/mkw-3ds/models'
+        parts = []
+        for course in json.loads((models_dir / 'course-catalog.json').read_text())['courses']:
+            track_list = models_dir / (course['prefix'] + '.list')
+            if track_list.is_file():
+                parts += [models_dir / (name + '.gmdl') for name in track_list.read_text().split()]
+        self.run('cache-order', [order_tool, *parts])
         listing = json.loads(subprocess.run([self.python, 'tools/resource_manifest.py'], cwd=root, env=self.env,
                                             capture_output=True, text=True, check=True).stdout)
         from menu_asset_inputs import compiled_menu_textures
@@ -948,7 +961,9 @@ class Builder:
         self.py('pack-race', 'pack_race_assets.py', stage / 'runtime-files.json', stage / 'race-base.pak', '--exclude-menu', menu)
         self.py('pack-lod', 'pack_racer_lod.py', '--base', stage / 'race-base.pak', '--overlay', root / 'build/racer-lod', '--output', stage / 'race-lod.pak')
         self.py('pack-mii', 'pack_mii_racers.py', '--base', stage / 'race-lod.pak', '--overlay', root / 'build/mii-racers', '--output', stage / 'race-mii.pak')
-        self.py('pack-unlit', 'pack_unlit_banks.py', stage / 'race-mii.pak', stage / 'race.pak')
+        self.py('pack-unlit', 'pack_unlit_banks.py', stage / 'race-mii.pak', stage / 'race-unlit.pak')
+        # Animated racer parts: welded, cache-ordered index buffers (same picture).
+        self.py('pack-weld', 'pack_racer_weld.py', stage / 'race-unlit.pak', stage / 'race.pak', '--report', stage / 'race-weld.json')
 
         # Every file goes into a pack but the 3DSX; the game's fopen finds them
         # there (src/asset_pack.cpp openFile). Files neither pack holds yet:
@@ -1117,7 +1132,8 @@ class Builder:
         add('courses', self.courses, R('sd-card/3ds/mkw-3ds/models/course-catalog.json', 'include/mkw/course_catalog.hpp'))
         add('garage', self.garage, R('build/roster/models/garage.json', 'include/mkw/garage.hpp'))
         tool('objects', ['cook_course_objects.py', '--ids', *map(str, range(42)), '--jobs', J,
-                         '--mii-heads', 'assets/mii/course-portraits/assignments.json'], 'build/course-visuals-receipt.json')
+                         '--mii-heads', 'assets/mii/course-portraits/assignments.json'], 'build/course-visuals-receipt.json',
+             files=['tools/object_weld.py'])
         for name, args, out in [
             ('lighting', ['cook_course_lighting.py'], 'include/mkw/course_lighting.hpp'),
             ('bloom', ['cook_course_bloom.py'], 'include/mkw/course_bloom.hpp'),
