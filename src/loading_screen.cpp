@@ -2,6 +2,7 @@
 #include <mkw/loading_wheel_pixels.hpp>
 #include <mkw/renderer.hpp>
 #include <mkw/asset_pack.hpp>
+#include <mkw/stereo.hpp>
 #include <algorithm>
 #include <array>
 #include <cstring>
@@ -21,53 +22,87 @@ uint8_t* framebuffer=nullptr;unsigned width=320;
 bool shown=false;
 uint64_t started=0;
 unsigned scopes=0;
-// RaceLoadingPicture (one at a time).
+// RaceLoadingPicture (one at a time; tools/cook_loading_picture.py).
 struct PictureRect{uint16_t x,y,w,h;};
-std::vector<uint8_t> pictureFile;   // the cooked file; freed once the picture is up
-std::vector<uint8_t> periodPatches; // per period: its columns off, then on
-std::array<PictureRect,4> periodRects{};std::array<size_t,4> periodOffsets{};
-unsigned periodCount=0,pictureWidth=0;
+enum PictureLayer:unsigned{LogoLayer,TextLayer,PeriodLayer};
+std::array<PictureRect,3> pictureRects{};
+std::vector<uint8_t> pictureStill;   // background, logo and LOADING; freed once both buffers hold the picture
+std::vector<uint8_t> periodLoop;     // the periods' loop, grey + alpha per frame
+std::array<std::vector<uint8_t>,2> periodBase; // per eye: the picture under the periods' area
+unsigned pictureWidth=0,loopFrames=0,loopFps=60;
+size_t logoAt=0,textAt=0;
+std::array<int,2> eyeShift{};        // per eye: the logo's and LOADING's x shift (3D: out of the screen)
 Thread pictureThread=nullptr;std::atomic<bool> pictureStop{false};
 bool pictureStereo=false;
-std::array<uint8_t*,2> pictureShown{}; // the framebuffers on screen once faded in
+std::array<uint8_t*,2> pictureShown{}; // per eye: the buffer on screen
 constexpr unsigned PictureFadeFrames=10;
-constexpr uint64_t PeriodTicks=uint64_t(SYSCLOCK_ARM11)*2/5; // 0.4 s per period
 unsigned pictureEyes(){return pictureStereo?2u:1u;}
 // The buffer libctru shows after the next swap.
 uint8_t* topBack(unsigned eye){return gfxGetFramebuffer(GFX_TOP,eye?GFX_RIGHT:GFX_LEFT,nullptr,nullptr);}
 size_t pictureBytes(){return size_t(pictureWidth)*240*3;}
-void blitPeriod(unsigned i,bool on){
- const auto& r=periodRects[i];
- const uint8_t* patch=periodPatches.data()+periodOffsets[i]+(on?size_t(r.w)*r.h*3:0);
- for(unsigned eye=0;eye<pictureEyes();++eye){
-  uint8_t* fb=pictureShown[eye];if(!fb)continue;
-  // Framebuffer columns run bottom row first: screen rows y..y+h-1 are rows 240-y-h..239-y.
-  for(unsigned x=0;x<r.w;++x)std::memcpy(fb+3*((r.x+x)*240+(240-r.y-r.h)),patch+size_t(3)*x*r.h,size_t(3)*r.h);
-  GSPGPU_FlushDataCache(fb+3*r.x*240,3*r.w*240);
+// Framebuffer columns run bottom row first: screen rows y..y+h-1 are rows 240-y-h..239-y.
+uint8_t* fbColumn(uint8_t* fb,int x,const PictureRect& r){return fb+3*(size_t(x)*240+(240-r.y-r.h));}
+// A premultiplied layer (columns, bottom row first; Channels 4 = BGRA, 2 = grey
+// and alpha) over the framebuffer at its place plus `shift`, scaled by k/256.
+template<unsigned Channels> void blendLayer(uint8_t* fb,const PictureRect& r,int shift,const uint8_t* src,unsigned k){
+ for(unsigned cx=0;cx<r.w;++cx){
+  const int x=int(r.x)+int(cx)+shift;if(x<0||x>=int(pictureWidth))continue;
+  uint8_t* out=fbColumn(fb,x,r);const uint8_t* in=src+size_t(Channels)*cx*r.h;
+  for(unsigned i=0;i<r.h;++i,out+=3,in+=Channels){
+   const unsigned a=in[Channels-1];if(!a)continue;
+   const unsigned keep=255-a;
+   for(unsigned c=0;c<3;++c){const unsigned s=Channels==4?in[c]:in[0];out[c]=uint8_t(((s*k)>>8)+(out[c]*keep+127)/255);}
+  }
  }
 }
+const uint8_t* periodFrame(unsigned frame){const auto& r=pictureRects[PeriodLayer];return periodLoop.data()+size_t(frame)*r.w*r.h*2;}
+// The whole picture for one eye at brightness k/256, its periods at rest if asked.
+void composeStill(uint8_t* fb,unsigned eye,unsigned k,bool periods){
+ const uint8_t* background=pictureStill.data();const size_t bytes=pictureBytes();
+ if(k>=256)std::memcpy(fb,background,bytes);else for(size_t i=0;i<bytes;++i)fb[i]=uint8_t((background[i]*k)>>8);
+ blendLayer<4>(fb,pictureRects[LogoLayer],eyeShift[eye],pictureStill.data()+logoAt,k);
+ blendLayer<2>(fb,pictureRects[TextLayer],eyeShift[eye],pictureStill.data()+textAt,k);
+ if(periods)blendLayer<2>(fb,pictureRects[PeriodLayer],eyeShift[eye],periodFrame(0),k);
+}
+// The periods' area: keep what lies under it, or put that back and draw a loop frame.
+void savePeriodBase(uint8_t* fb,unsigned eye){
+ const auto& r=pictureRects[PeriodLayer];auto& base=periodBase[eye];
+ for(unsigned cx=0;cx<r.w;++cx){const int x=int(r.x)+int(cx)+eyeShift[eye];if(x<0||x>=int(pictureWidth))continue;
+  std::memcpy(base.data()+size_t(3)*cx*r.h,fbColumn(fb,x,r),size_t(3)*r.h);}
+}
+void drawPeriods(uint8_t* fb,unsigned eye,unsigned frame){
+ const auto& r=pictureRects[PeriodLayer];const auto& base=periodBase[eye];
+ for(unsigned cx=0;cx<r.w;++cx){const int x=int(r.x)+int(cx)+eyeShift[eye];if(x<0||x>=int(pictureWidth))continue;
+  std::memcpy(fbColumn(fb,x,r),base.data()+size_t(3)*cx*r.h,size_t(3)*r.h);}
+ blendLayer<2>(fb,r,eyeShift[eye],periodFrame(frame),256);
+ const int x0=std::max(0,int(r.x)+eyeShift[eye]),x1=std::min(int(pictureWidth),int(r.x)+int(r.w)+eyeShift[eye]);
+ if(x1>x0)GSPGPU_FlushDataCache(fb+size_t(3)*x0*240,size_t(3)*(x1-x0)*240);
+}
+// Shows the buffers just drawn at the next refresh, and waits for it.
+void presentPicture(){
+ for(unsigned eye=0;eye<pictureEyes();++eye)pictureShown[eye]=topBack(eye);
+ gfxScreenSwapBuffers(GFX_TOP,pictureStereo);gspWaitForVBlank();
+}
 void pictureTimer(void*){
- // Fade in from the black the menus left, one swap per refresh.
- const uint8_t* image=pictureFile.data()+8+8*periodCount;const size_t bytes=pictureBytes();
+ // Fade in from the black the menus left, one step per refresh.
  for(unsigned f=1;f<=PictureFadeFrames;++f){
-  const unsigned k=f*256/PictureFadeFrames;
-  for(unsigned eye=0;eye<pictureEyes();++eye){
-   uint8_t* fb=topBack(eye);
-   if(k>=256)std::memcpy(fb,image,bytes);else for(size_t i=0;i<bytes;++i)fb[i]=uint8_t((image[i]*k)>>8);
-   GSPGPU_FlushDataCache(fb,bytes);
-   if(f==PictureFadeFrames)pictureShown[eye]=fb;
-  }
-  gfxScreenSwapBuffers(GFX_TOP,pictureStereo);
-  // The swap takes effect at the next VBlank; only then is the other buffer free.
-  svcSleepThread(16666667);
+  for(unsigned eye=0;eye<pictureEyes();++eye){uint8_t* fb=topBack(eye);composeStill(fb,eye,f*256/PictureFadeFrames,true);GSPGPU_FlushDataCache(fb,pictureBytes());}
+  presentPicture();
  }
- pictureFile.clear();pictureFile.shrink_to_fit();
- // The periods count up, one per 0.4 s, then start again.
- const uint64_t start=svcGetSystemTick();unsigned lit=0;
+ // The other buffer gets the whole picture too; from then on only the
+ // periods' area is redrawn, into the hidden buffer, one loop frame per refresh.
+ for(unsigned eye=0;eye<pictureEyes();++eye){
+  uint8_t* fb=topBack(eye);composeStill(fb,eye,256,false);savePeriodBase(fb,eye);
+  blendLayer<2>(fb,pictureRects[PeriodLayer],eyeShift[eye],periodFrame(0),256);GSPGPU_FlushDataCache(fb,pictureBytes());
+ }
+ presentPicture();
+ pictureStill.clear();pictureStill.shrink_to_fit();
+ const uint64_t start=svcGetSystemTick();
  while(!pictureStop.load(std::memory_order_acquire)){
-  const unsigned want=unsigned((svcGetSystemTick()-start)/PeriodTicks%(periodCount+1));
-  if(want!=lit){for(unsigned i=0;i<periodCount;++i)if((i<want)!=(i<lit))blitPeriod(i,i<want);lit=want;}
-  svcSleepThread(16666667);
+  // The frame due at the next refresh, so the bounce keeps its tempo.
+  const unsigned frame=unsigned((svcGetSystemTick()-start)*loopFps/SYSCLOCK_ARM11+1)%loopFrames;
+  for(unsigned eye=0;eye<pictureEyes();++eye)drawPeriods(topBack(eye),eye,frame);
+  presentPicture();
  }
 }
 float angle(uint64_t start){return float(double(svcGetSystemTick()-start)/SYSCLOCK_ARM11*6.283185307);}
@@ -138,27 +173,32 @@ RaceLoadingPicture::RaceLoadingPicture(){
  // The display mode the menus left: 800px Mode shows 800 columns, 3D two eyes.
  const bool wide=gfxIsWide();
  const char* path=wide?"loading/race-800.bin":"loading/race-400.bin";
- const long size=pack::size(path);if(size<8)return;
- pictureFile.resize(size_t(size));
- auto fail=[](){pictureFile.clear();pictureFile.shrink_to_fit();periodPatches.clear();periodPatches.shrink_to_fit();};
- if(!pack::readInto(path,pictureFile.data(),pictureFile.size())||std::memcmp(pictureFile.data(),"MKLP",4)){fail();return;}
- uint16_t head[2];std::memcpy(head,pictureFile.data()+4,4);
- pictureWidth=head[0];periodCount=head[1];
- if(pictureWidth!=(wide?800u:400u)||periodCount>periodRects.size()){fail();return;}
- size_t at=8+8*periodCount+pictureBytes(),patches=0;
- for(unsigned i=0;i<periodCount;++i){
-  std::memcpy(&periodRects[i],pictureFile.data()+8+8*i,8);const auto& r=periodRects[i];
-  if(r.x+r.w>pictureWidth||r.y+r.h>240){fail();return;}
-  periodOffsets[i]=patches;patches+=size_t(r.w)*r.h*6;
- }
- if(at+patches!=pictureFile.size()){fail();return;}
- periodPatches.assign(pictureFile.begin()+at,pictureFile.end());
+ const long size=pack::size(path);
+ uint8_t head[36];if(size<36||!pack::readRange(path,0,head,sizeof head)||std::memcmp(head,"MKLQ",4))return;
+ uint16_t value[4];std::memcpy(value,head+4,8);std::memcpy(pictureRects.data(),head+12,24);
+ pictureWidth=value[0];loopFrames=value[1];loopFps=value[2];
+ if(pictureWidth!=(wide?800u:400u)||!loopFrames||!loopFps)return;
+ for(const auto& r:pictureRects)if(!r.w||!r.h||r.x+r.w>pictureWidth||r.y+r.h>240)return;
+ const auto& logo=pictureRects[LogoLayer];const auto& text=pictureRects[TextLayer];const auto& area=pictureRects[PeriodLayer];
+ logoAt=pictureBytes();textAt=logoAt+size_t(logo.w)*logo.h*4;
+ const size_t still=textAt+size_t(text.w)*text.h*2,loop=size_t(loopFrames)*area.w*area.h*2;
+ if(36+still+loop!=size_t(size))return;
+ pictureStill.resize(still);periodLoop.resize(loop);
+ for(auto& base:periodBase)base.assign(size_t(area.w)*area.h*3,0);
+ auto release=[](){pictureStill.clear();pictureStill.shrink_to_fit();periodLoop.clear();periodLoop.shrink_to_fit();
+  for(auto& base:periodBase){base.clear();base.shrink_to_fit();}};
+ if(!pack::readRange(path,36,pictureStill.data(),still)||!pack::readRange(path,36+still,periodLoop.data(),loop)){release();return;}
+ // 3D: the logo and LOADING... come out of the screen with the race HUD
+ // (as Renderer's screen quads: left eye -parallax/2, right eye +parallax/2).
+ pictureStereo=!wide&&gfxIs3D();eyeShift={};
+ if(pictureStereo){const float parallax=renderer_->stereoLayer(stereo::RaceHudLayer);
+  eyeShift[0]=int(std::lround(-.5f*parallax));eyeShift[1]=eyeShift[0]+int(std::lround(parallax));}
  // Nothing may draw the top screen while the timer thread owns it.
  renderer_->waitForGpu();
- pictureStereo=!wide&&gfxIs3D();pictureShown={};pictureStop.store(false);
+ pictureShown={};pictureStop.store(false);
  s32 priority=0x30;svcGetThreadPriority(&priority,CUR_THREAD_HANDLE);
  pictureThread=threadCreate(pictureTimer,nullptr,8*1024,std::max<int>(priority-1,0x18),-2,false);
- if(!pictureThread){fail();return;}
+ if(!pictureThread){release();return;}
  active_=true;
 }
 RaceLoadingPicture::~RaceLoadingPicture(){
@@ -167,31 +207,38 @@ RaceLoadingPicture::~RaceLoadingPicture(){
  threadJoin(pictureThread,U64_MAX);threadFree(pictureThread);pictureThread=nullptr;
  const size_t bytes=pictureBytes();
 #ifndef MKW_RELEASE
- // DIAG loading-shot.txt: the picture as shown (left eye) before its fade out,
- // as loading-shot-NN.ppm. The main thread may use the SD card; the timer can't.
+ // DIAG loading-shot.txt: the picture as shown before its fade out, as
+ // loading-shot-NN.ppm (3D: -NN-right.ppm too). The main thread may use the
+ // SD card; the timer thread can't.
  if(FILE* probe=std::fopen("sdmc:/3ds/MKWiiDS/loading-shot.txt","rb")){
-  std::fclose(probe);static unsigned shot=0;char path[64];
-  std::snprintf(path,sizeof path,"sdmc:/3ds/MKWiiDS/loading-shot-%02u.ppm",shot++);
-  if(const uint8_t* fb=pictureShown[0])if(FILE* f=std::fopen(path,"wb")){
-   std::fprintf(f,"P6\n%u 240\n255\n",pictureWidth);std::vector<uint8_t> row(size_t(pictureWidth)*3);
-   for(unsigned y=0;y<240;++y){for(unsigned x=0;x<pictureWidth;++x){const uint8_t* p=fb+3*(x*240+(239-y));row[3*x]=p[2];row[3*x+1]=p[1];row[3*x+2]=p[0];}std::fwrite(row.data(),1,row.size(),f);}
-   std::fclose(f);
+  std::fclose(probe);static unsigned shot=0;
+  for(unsigned eye=0;eye<pictureEyes();++eye){
+   char path[64];std::snprintf(path,sizeof path,"sdmc:/3ds/MKWiiDS/loading-shot-%02u%s.ppm",shot,eye?"-right":"");
+   if(const uint8_t* fb=pictureShown[eye])if(FILE* f=std::fopen(path,"wb")){
+    std::fprintf(f,"P6\n%u 240\n255\n",pictureWidth);std::vector<uint8_t> row(size_t(pictureWidth)*3);
+    for(unsigned y=0;y<240;++y){for(unsigned x=0;x<pictureWidth;++x){const uint8_t* p=fb+3*(x*240+(239-y));row[3*x]=p[2];row[3*x+1]=p[1];row[3*x+2]=p[0];}std::fwrite(row.data(),1,row.size(),f);}
+    std::fclose(f);
+   }
   }
+  ++shot;
  }
 #endif
- // Fade the picture on screen out in place, then leave both buffers black for
- // the race's first frames (drawn black under the loading cover).
+ // Fade out to black, one step per refresh (each drawn into the hidden buffer
+ // from the one on screen), then leave both buffers black for the race's
+ // first frames (drawn black under the loading cover).
  for(unsigned f=1;f<=PictureFadeFrames;++f){
   const unsigned left=PictureFadeFrames-f,scale=left*256/(left+1);
   for(unsigned eye=0;eye<pictureEyes();++eye){
-   uint8_t* fb=pictureShown[eye];if(!fb)continue;
-   if(!left)std::memset(fb,0,bytes);else for(size_t i=0;i<bytes;++i)fb[i]=uint8_t((fb[i]*scale)>>8);
-   GSPGPU_FlushDataCache(fb,bytes);
+   uint8_t* to=topBack(eye);const uint8_t* from=pictureShown[eye];
+   if(!left||!from)std::memset(to,0,bytes);else for(size_t i=0;i<bytes;++i)to[i]=uint8_t((from[i]*scale)>>8);
+   GSPGPU_FlushDataCache(to,bytes);
   }
-  svcSleepThread(16666667);
+  presentPicture();
  }
  for(unsigned eye=0;eye<pictureEyes();++eye){uint8_t* fb=topBack(eye);std::memset(fb,0,bytes);GSPGPU_FlushDataCache(fb,bytes);}
- pictureFile.clear();pictureFile.shrink_to_fit();periodPatches.clear();periodPatches.shrink_to_fit();pictureShown={};
+ pictureStill.clear();pictureStill.shrink_to_fit();periodLoop.clear();periodLoop.shrink_to_fit();
+ for(auto& base:periodBase){base.clear();base.shrink_to_fit();}
+ pictureShown={};
 }
 void drawLoadingWheel(Renderer& renderer,uint64_t waitStarted){
  if(!wheel||!wheel->ready||!waitStarted||svcGetSystemTick()-waitStarted<=SYSCLOCK_ARM11/2)return;
