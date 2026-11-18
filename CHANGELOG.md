@@ -4,7 +4,7 @@
 
 Needs a new build: the builder now copies the staff ghosts from your disc, and the menus have new labels.
 
-- **One CIA to install:** the builder makes a single `mkw-3ds.cia` with the game files inside (about 3 GB). Install it with FBI and start it once: its first start copies the game files to `sd:/3ds/mkw-3ds` (a few minutes, only once) so quick updates can find them. No folder to copy. For a small CIA plus a folder instead, build with `--sd-assets`.
+- **One CIA to install:** the builder makes a single `mkw-3ds.cia` with the game files inside (about 2.4 GB). Install it with FBI and start it once: its first start copies the game files to `sd:/3ds/mkw-3ds` (a few minutes, only once) so quick updates can find them. No folder to copy. For a small CIA plus a folder instead, build with `--sd-assets`.
 - **The builder reads RVZ disc images** (Dolphin's compressed format) directly; no need to convert to ISO.
 - **Smaller, faster-loading game files** (ethanseagull's packs): `race.pak` and `menu.pak` hold their files in the order the game reads them, LZ4-compressed (lossless), so `race.pak` drops from about 1.8 GB to 1 GB and one SD read covers several files. Every movie is compressed frame by frame.
 - **Movies at full rate:** the opening and both staff rolls play at 59.94 fps, as on the Wii.

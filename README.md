@@ -108,7 +108,7 @@ You can also generate your `.cia` file using [Docker Engine](https://docs.docker
 
 You need a 3DS with custom firmware ([3ds.hacks.guide](https://3ds.hacks.guide)).
 
-1. Copy `build/release/mkw-3ds.cia` (about 2.2 GB) to your SD card and install it with FBI, or send it with FBI's remote install. You can delete the copied CIA once it's installed.
+1. Copy `build/release/mkw-3ds.cia` (about 2.4 GB) to your SD card and install it with FBI, or send it with FBI's remote install. You can delete the copied CIA once it's installed.
 2. Start the game once. Its first start copies the game files to `sd:/3ds/mkw-3ds` (a few minutes, only once), so quick updates can find them. Your saves in that folder are kept.
 3. For sound, run DSP1 once to dump your sound firmware.
 

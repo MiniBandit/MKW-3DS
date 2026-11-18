@@ -36,7 +36,7 @@ BUILD
 2. Drag your disc image into the window and press Return.
 3. Wait a few hours. You get:
        build/release/mkw-3ds.cia        the game (small)
-       build/release/sd-card/3ds/mkw-3ds  its files (about 3 GB)
+       build/release/sd-card/3ds/mkw-3ds  its files (about 2.4 GB)
 
 If it stops partway, double-click it again; finished steps are skipped.
 If it fails, share build-cia-log.txt from this folder when asking for help.
@@ -45,7 +45,7 @@ If it fails, share build-cia-log.txt from this folder when asking for help.
 INSTALL
 -------
 Needs a 3DS with custom firmware (https://3ds.hacks.guide).
-1. Copy build/release/mkw-3ds.cia to your SD card (it is about 2.2 GB)
+1. Copy build/release/mkw-3ds.cia to your SD card (it is about 2.4 GB)
    and install it with FBI, or send it with FBI's remote install.
    Mario Kart Wii appears on the HOME Menu. You can delete the copied CIA
    once it is installed.
