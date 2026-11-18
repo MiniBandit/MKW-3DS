@@ -18,6 +18,8 @@ namespace {
 struct Entry {std::string path;uint64_t size;};
 constexpr const char* Marker="unpack.txt";
 constexpr const char* Content="content.txt";
+// Earlier versions' game folders are moved here before a copy (see below).
+constexpr const char* OldFiles="old-files";
 
 std::string join(const char* root,const std::string& relative){
     std::string out=root;
@@ -82,18 +84,56 @@ void notice(){
     while(aptMainLoop()){hidScanInput();if(hidKeysDown()&KEY_A)break;present();}
 }
 void restoreGraphics(){gfxExit();gfxInitDefault();}
+bool isDirectory(const std::string& path){struct stat st{};return stat(path.c_str(),&st)==0&&S_ISDIR(st.st_mode);}
+// The game folders the copy writes (Race, models, textures...), moved aside
+// whole first. A FAT folder never shrinks: 0.7.0's loose files left models/
+// and textures/ megabytes long, and the console reads a whole folder for
+// every file it looks up or creates there, so checking and copying into them
+// took long enough to look like a black-screen hang. A move is one rename;
+// the new files then go into fresh, small folders. Saves, ghosts and
+// settings are top-level files or other folders and stay. Returns how many
+// folders moved.
+unsigned moveOldFolders(const char* sd,const std::vector<Entry>& files){
+    std::vector<std::string> folders;
+    for(const auto& f:files){
+        const auto slash=f.path.find('/');if(slash==std::string::npos)continue;
+        const auto top=f.path.substr(0,slash);
+        bool seen=false;for(const auto& d:folders)seen|=d==top;
+        if(!seen)folders.push_back(top);
+    }
+    unsigned moved=0;bool made=false;
+    for(const auto& folder:folders){
+        const auto from=join(sd,folder);
+        if(!isDirectory(from))continue;
+        if(!made){mkdir(join(sd,OldFiles).c_str(),0777);made=true;}
+        // old-files/models, or models-2 ... when an earlier move left one.
+        for(unsigned n=1;n<100;++n){
+            const auto to=join(sd,std::string(OldFiles)+"/"+folder+(n>1?"-"+std::to_string(n):""));
+            if(isDirectory(to))continue;
+            if(rename(from.c_str(),to.c_str())==0)++moved;
+            break;
+        }
+    }
+    return moved;
+}
 }
 
 UnpackResult unpackGameFiles(const char* romfs,const char* sd,const char* content,const char* version){
     char found[80];readLine(join(sd,Content),found);
     if(!std::strcmp(found,content))return UnpackResult::NotNeeded;
+    // The screen first: everything below reads the SD card.
+    consoleInit(GFX_TOP,nullptr);
+    std::printf("\n  Mario Kart Wii 3DS v%s\n\n  Checking the SD card...",version);
+    present();
     std::vector<Entry> files;uint64_t total=0;
-    if(!list(romfs,"",files,total)||files.empty())return UnpackResult::Failed;
+    if(!list(romfs,"",files,total)||files.empty()){restoreGraphics();return UnpackResult::Failed;}
     mkdir("sdmc:/3ds",0777);mkdir(sd,0777);
     // Resuming the same content's copy keeps files already the right size;
-    // anything else (another version's files) is copied again.
+    // anything else (another version's files) is copied again, into fresh
+    // folders: the old ones move to old-files first.
     char marker[80];readLine(join(sd,Marker),marker);
     const bool resume=!std::strcmp(marker,content);
+    const unsigned moved=resume?0:moveOldFolders(sd,files);
     uint64_t needed=0,done=0;
     std::vector<bool> keep(files.size(),false);
     for(std::size_t i=0;i<files.size();++i){
@@ -104,19 +144,21 @@ UnpackResult unpackGameFiles(const char* romfs,const char* sd,const char* conten
         // Replacing a file frees its old size first.
         else needed+=files[i].size-(present&&uint64_t(st.st_size)<files[i].size?uint64_t(st.st_size):(present?files[i].size:0));
     }
-    consoleInit(GFX_TOP,nullptr);
+    consoleClear();
     std::printf("\n  Mario Kart Wii 3DS v%s\n\n",version);
     present();
     const uint64_t free=sdFree(),margin=64ull<<20;
     if(free!=~0ull&&needed+margin>free){
         std::printf("  First start: the game files are copied\n  to the SD card (sd:/3ds/mkw-3ds) so\n  quick updates can find them.\n\n");
         std::printf("  Not enough free space on the SD card:\n  this needs %.2f GB more, and %.2f GB\n  is free.\n\n",gb(needed+margin),gb(free));
+        if(moved)std::printf("  Older game files were moved to\n  sd:/3ds/mkw-3ds/old-files: deleting\n  that folder on a computer frees space.\n\n");
         std::printf("  The game runs from the CIA for now.\n  Free some space and start it again\n  before installing a quick update.");
         notice();restoreGraphics();return UnpackResult::NoSpace;
     }
     std::printf("  First start: copying the game files to\n  the SD card (sd:/3ds/mkw-3ds), once,\n  so quick updates can find them.\n\n");
     std::printf("  This takes a few minutes. Keep the\n  console on and the SD card in.\n\n");
     std::printf("  Your saves and ghosts are not touched.");
+    if(moved)std::printf("\x1b[18;3HOlder game files moved to\n  sd:/3ds/mkw-3ds/old-files: you can\n  delete that folder on a computer.");
     present();
     if(!resume&&!writeLine(join(sd,Marker),content)){
         std::printf("\x1b[17;3HCould not write to the SD card.");notice();restoreGraphics();return UnpackResult::Failed;
