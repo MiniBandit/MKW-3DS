@@ -14,6 +14,7 @@
 #include <cstring>
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace mkw {
@@ -60,9 +61,16 @@ bool writeLine(const std::string& path,const char* line){
     bool ok=std::fprintf(f,"%s\n",line)>0;if(std::fclose(f))ok=false;
     return ok;
 }
+// Each folder is made once per copy: asking the card again for every file
+// is one more slow round trip per file.
 void makeParents(const char* root,const std::string& relative){
-    for(std::size_t at=relative.find('/');at!=std::string::npos;at=relative.find('/',at+1))
-        mkdir(join(root,relative.substr(0,at)).c_str(),0777);
+    static std::vector<std::string> made;
+    for(std::size_t at=relative.find('/');at!=std::string::npos;at=relative.find('/',at+1)){
+        const auto folder=relative.substr(0,at);
+        bool done=false;for(const auto& m:made)done|=m==folder;
+        if(done)continue;
+        mkdir(join(root,folder).c_str(),0777);made.push_back(folder);
+    }
 }
 uint64_t sdFree(){
     FS_ArchiveResource r{};
@@ -134,12 +142,39 @@ unsigned moveOldFolders(const char* sd,const std::vector<Entry>& files){
     }
     return moved;
 }
+// Names and sizes of the files already on the SD card, read a folder at a
+// time (FSDIR_Read hands back 64 entries with their sizes per call). Asking
+// file by file (stat) opens and closes each one: about 1,900 of those took
+// minutes on hardware. Only the game's own folders are read.
+void listCard(FS_Archive card,const std::string& folder,const std::string& relative,bool recurse,
+              const std::vector<std::string>& gameFolders,std::unordered_map<std::string,uint64_t>& out){
+    Handle dir=0;
+    if(R_FAILED(FSUSER_OpenDirectory(&dir,card,fsMakePath(PATH_ASCII,folder.c_str()))))return;
+    FS_DirectoryEntry entries[64];
+    for(;;){
+        u32 read=0;
+        if(R_FAILED(FSDIR_Read(dir,&read,64,entries))||!read)break;
+        for(u32 i=0;i<read;++i){
+            char name[262];unsigned n=0;
+            for(;n<sizeof name-1&&entries[i].name[n];++n)name[n]=entries[i].name[n]<128?char(entries[i].name[n]):'?';
+            name[n]=0;
+            const std::string path=relative.empty()?std::string(name):relative+"/"+name;
+            if(entries[i].attributes&FS_ATTRIBUTE_DIRECTORY){
+                bool game=!relative.empty();
+                if(!game)for(const auto& g:gameFolders)game|=g==name;
+                if(recurse&&game)listCard(card,folder+"/"+name,path,true,gameFolders,out);
+            }else out[path]=entries[i].fileSize;
+        }
+    }
+    FSDIR_Close(dir);
+}
 }
 
 UnpackResult unpackGameFiles(const char* romfs,const char* sd,const char* content,const char* version){
     char found[80];readLine(join(sd,Content),found);
     if(!std::strcmp(found,content))return UnpackResult::NotNeeded;
     // The screen first: everything below reads the SD card.
+    uint64_t phaseTick=svcGetSystemTick();
     consoleInit(GFX_TOP,nullptr);
     std::printf("\n  Mario Kart Wii 3DS v%s\n\n  Checking the SD card...",version);
     present();
@@ -153,18 +188,30 @@ UnpackResult unpackGameFiles(const char* romfs,const char* sd,const char* conten
     const bool resume=!std::strcmp(marker,content);
     copyLogPath=join(sd,"first-start-copy.txt");
     if(FILE* f=std::fopen(copyLogPath.c_str(),resume?"a":"w"))std::fclose(f);
-    copyLog("v%s content %s: %u files, %.2f GB, %s",version,content,unsigned(files.size()),gb(total),resume?"resuming":"new copy");
+    copyLog("v%s content %s: %u files, %.2f GB, %s (listed in %.1f s)",version,content,unsigned(files.size()),gb(total),resume?"resuming":"new copy",secondsSince(phaseTick));
+    phaseTick=svcGetSystemTick();
     const unsigned moved=resume?0:moveOldFolders(sd,files);
-    copyLog("old game folders moved to old-files: %u",moved);
+    copyLog("old game folders moved to old-files: %u (%.1f s)",moved,secondsSince(phaseTick));
+    FS_Archive card=0;
+    if(R_FAILED(FSUSER_OpenArchive(&card,ARCHIVE_SDMC,fsMakePath(PATH_EMPTY,"")))){copyLog("FAIL SD archive");restoreGraphics();return UnpackResult::Failed;}
+    // "sdmc:/3ds/mkw-3ds" -> "/3ds/mkw-3ds" inside the SD archive.
+    const char* sdInArchive=std::strncmp(sd,"sdmc:",5)?sd:sd+5;
+    std::vector<std::string> gameFolders;
+    for(const auto& f:files){const auto slash=f.path.find('/');if(slash==std::string::npos)continue;
+        const auto top=f.path.substr(0,slash);bool seen=false;for(const auto& g:gameFolders)seen|=g==top;if(!seen)gameFolders.push_back(top);}
+    phaseTick=svcGetSystemTick();
+    std::unordered_map<std::string,uint64_t> onCard;
+    listCard(card,sdInArchive,"",true,gameFolders,onCard);
+    copyLog("files already on the card: %u (%.1f s)",unsigned(onCard.size()),secondsSince(phaseTick));
     uint64_t needed=0,done=0;
     std::vector<bool> keep(files.size(),false);
     for(std::size_t i=0;i<files.size();++i){
-        struct stat st{};
-        const bool present=stat(join(sd,files[i].path).c_str(),&st)==0;
-        keep[i]=resume&&present&&uint64_t(st.st_size)==files[i].size;
+        const auto found=onCard.find(files[i].path);
+        const bool present=found!=onCard.end();const uint64_t size=present?found->second:0;
+        keep[i]=resume&&present&&size==files[i].size;
         if(keep[i])done+=files[i].size;
         // Replacing a file frees its old size first.
-        else needed+=files[i].size-(present&&uint64_t(st.st_size)<files[i].size?uint64_t(st.st_size):(present?files[i].size:0));
+        else needed+=files[i].size-(present&&size<files[i].size?size:(present?files[i].size:0));
     }
     consoleClear();
     std::printf("\n  Mario Kart Wii 3DS v%s\n\n",version);
@@ -175,7 +222,7 @@ UnpackResult unpackGameFiles(const char* romfs,const char* sd,const char* conten
         std::printf("  Not enough free space on the SD card:\n  this needs %.2f GB more, and %.2f GB\n  is free.\n\n",gb(needed+margin),gb(free));
         if(moved)std::printf("  Older game files were moved to\n  sd:/3ds/mkw-3ds/old-files: deleting\n  that folder on a computer frees space.\n\n");
         std::printf("  The game runs from the CIA for now.\n  Free some space and start it again\n  before installing a quick update.");
-        notice();restoreGraphics();return UnpackResult::NoSpace;
+        FSUSER_CloseArchive(card);notice();restoreGraphics();return UnpackResult::NoSpace;
     }
     std::printf("  First start: copying the game files to\n  the SD card (sd:/3ds/mkw-3ds), once,\n  so quick updates can find them.\n\n");
     std::printf("  This takes a while, once. Keep the\n  console on and the SD card in.\n\n");
@@ -183,7 +230,7 @@ UnpackResult unpackGameFiles(const char* romfs,const char* sd,const char* conten
     if(moved)std::printf("\x1b[18;3HOlder game files moved to\n  sd:/3ds/mkw-3ds/old-files: you can\n  delete that folder on a computer.");
     present();
     if(!resume&&!writeLine(join(sd,Marker),content)){
-        std::printf("\x1b[17;3HCould not write to the SD card.");notice();restoreGraphics();return UnpackResult::Failed;
+        std::printf("\x1b[17;3HCould not write to the SD card.");FSUSER_CloseArchive(card);notice();restoreGraphics();return UnpackResult::Failed;
     }
     // Straight to the 3DS file system: the C library's buffered files can
     // pass large reads and writes on in small pieces, each paying the SD
@@ -192,12 +239,7 @@ UnpackResult unpackGameFiles(const char* romfs,const char* sd,const char* conten
     // (no cluster-by-cluster growth) and both move 1 MiB at a time.
     constexpr std::size_t Chunk=1024*1024;
     std::unique_ptr<unsigned char[]> buffer(new(std::nothrow) unsigned char[Chunk]);
-    FS_Archive card=0;
-    if(!buffer||R_FAILED(FSUSER_OpenArchive(&card,ARCHIVE_SDMC,fsMakePath(PATH_EMPTY,"")))){
-        copyLog("FAIL buffer or SD archive");restoreGraphics();return UnpackResult::Failed;
-    }
-    // "sdmc:/3ds/mkw-3ds" -> "/3ds/mkw-3ds" inside the SD archive.
-    const char* sdInArchive=std::strncmp(sd,"sdmc:",5)?sd:sd+5;
+    if(!buffer){FSUSER_CloseArchive(card);copyLog("FAIL buffer");restoreGraphics();return UnpackResult::Failed;}
     copyStartTick=svcGetSystemTick();copyStartDone=done;
     bar(done,total);
     uint64_t shown=done,logged=done;
