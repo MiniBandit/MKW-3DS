@@ -1,15 +1,16 @@
 New in 0.8.0:
 One CIA to install: nothing to copy.
-Online multiplayer: race up to
-  12 players. Host, or join with
-  the host's code. No server needed.
+Online multiplayer: host, or join
+  with the host's code.
 Time Trials: exact ghosts to race,
   watch and save.
-Smaller files, faster loading;
-  60 fps opening and credits.
-License Settings: Graphics, Race
-  Timer and a map that turns.
+Ethan's WiiDS work merged in: faster
+  menus, races and loading.
+Settings page (license screen):
+  textures, shadows, bloom, 800px.
+License Settings: Timer and a map
+  that turns with your kart.
 Sound: mono, stereo or surround.
 Controls: air dives, R tricks on
   every ramp, no A+R hop.
-Old 3DS: fewer races fail to load.
+Pause as on the Wii.

@@ -6,9 +6,8 @@ Needs a new build: the builder now copies the staff ghosts from your disc, and t
 
 - **One CIA to install:** the builder makes a single `mkw-3ds.cia` with the game files inside (about 3 GB). Install it with FBI and start it once: its first start copies the game files to `sd:/3ds/mkw-3ds` (a few minutes, only once) so quick updates can find them. No folder to copy. For a small CIA plus a folder instead, build with `--sd-assets`.
 - **The builder reads RVZ disc images** (Dolphin's compressed format) directly; no need to convert to ISO.
-- **Smaller, faster-loading game files:** `race.pak` and `menu.pak` are LZ4-compressed in 64 KiB pieces on SD sectors (`race.pak` 1.48 GB to 0.80 GB), and every movie is compressed frame by frame. Less to read from the SD card while loading, and a smaller CIA.
+- **Smaller, faster-loading game files** (ethanseagull's packs): `race.pak` and `menu.pak` hold their files in the order the game reads them, LZ4-compressed (lossless), so `race.pak` drops from about 1.8 GB to 1 GB and one SD read covers several files. Every movie is compressed frame by frame.
 - **Movies at full rate:** the opening and both staff rolls play at 59.94 fps, as on the Wii.
-- **Graphics: Balanced** (full detail without the dynamic shadow and bloom) is what Auto now picks on New 3DS, for a steadier frame rate. Quality still has both.
 - **Instant unpause on New 3DS:** the race stays loaded while paused when the pause menu fits beside it.
 - **Time Trial ghosts replay exactly:** a ghost's Mushrooms now fire on the same frame as on the Wii. Checked on a computer: 63 of the disc's 64 staff and expert staff ghosts finish on their exact time beside you (the Grumble Volcano staff ghost is the exception). Ghosts you saved before this version may drift where they used a Mushroom.
 - **Time Trials start as on the Wii:** no course preview, straight to the camera swinging round your kart.
@@ -16,6 +15,8 @@ Needs a new build: the builder now copies the staff ghosts from your disc, and t
 - **Blue Shells always launch forward**, whatever the stick or a CPU's throw says.
 - **Grumble Volcano:** the falling ground uses its own 100cc and 50cc timings in those classes.
 - The speedometer (SELECT) is remembered per license.
+
+- **ethanseagull's Mario Kart WiiDS work is merged in** (MIT, thanks Ethan): menus and races build each frame while the last one draws; the next race in a Grand Prix or VS set reuses the racers, items and effects already loaded; course textures keep more of the Wii's detail and go to video memory by priority; every opponent at full detail on New 3DS; CPUs drift by hand as on the Wii; GP, VS and Battle pause as on the Wii (Continue Game, Quit Game) with the race frozen behind; the course preview fades in and out; Wario's Gold Mine carts, Moonview Highway's rails, Cataquacks and Blue Shells at merges behave as on the Wii; the Old 3DS runs every course.
 
 - **Online multiplayer:** a new Online button on the main menu. Host a race or join one by typing the host's 16-digit code on a number pad, in menus made from the Wii game's own Wi-Fi screens: the Wi-Fi menu buttons, the friend code pad and the room's player cards with everyone's driver and license name. Up to 12 players race VS on the host's course. The consoles connect straight to each other, so there's no server to pay for or go down. After a race, the host picks the next course while everyone else waits in the lobby. Online races can't be paused, as on the Wii. A player who can't reach another directly gets their kart through the host. If a player goes quiet, their kart races on as a CPU until they come back.
 - **Online races agree:** every console decides its own item roulette, the items it throws and whether its own kart is hit, and tells the others, so everyone sees the same items and hits. The results use each console's own finishing time, so every screen shows the same order; a player who drops out is placed last.
@@ -26,24 +27,23 @@ Needs a new build: the builder now copies the staff ghosts from your disc, and t
 - **Time Trial ghosts** (ThePhilosophicalOne's retail-accuracy work, brought across from their pull request): your best run on each course is saved as a ghost (`sd:/3ds/mkw-3ds/ghosts`). Choose **Race This Ghost** or **Watch the Replay**, and browse with left/right between your ghost, ghosts you copy into that folder (a friend's, or a Wii or Dolphin save's) and the staff and expert staff ghosts. Ghosts are see-through, start with you, never draft or collide, and slow down and fade out after their finish. A run replays exactly as it was driven.
 - **Windows builder installs what it needs:** double-click `Build MKW CIA.bat` and it offers to install anything missing (Python, Git, Node.js, a C++ compiler with winget, and devkitPro with its own installer).
 - **Docker build** (sgrontflix's pull request): build the game with one command on any computer that has Docker.
-- Old 3DS: an opponent that runs out of memory loading in full detail is retried in low detail instead of failing the race.
 - **Retail race camera** (from ThePhilosophicalOne's pull request): the original game's chase camera, with its wall avoidance, the field of view widening on boosts, the lag when you're blown up, the half-pipe swing and the look-behind view (X or ZL); Bullet Bill and cannon views as before.
 - **Closer to the original game** (also from ThePhilosophicalOne's work): racers respawn on the original grid of places around the respawn point; CPUs far from every player skip most course objects, as on the Wii; objects only react to a kart that isn't already spinning or tumbling; Rainbow Road's star rings; the original stuck-recovery and moving-road rules.
 - The lap counter and Lakitu use the highest lap reached: reversing over the finish line no longer takes a lap off.
 - Wario's Gold Mine: the item boxes on the minecart line move at the carts' speeds.
 - The course preview skips on A only, from its second second, so a press carried over from the menus can't skip it.
-- **Graphics** in License Settings: Auto, Quality or Performance (Performance turns off the dynamic shadow, about 38% less drawing work on New 3DS, and draws the race's lower screen at 30 FPS while the top stays at 60).
-- **Race Timer** and **Map** in License Settings: hide the race time on the lower screen, and choose a map that turns with your kart (the new default) or stays fixed. The whole-course view (tap the lower screen) and Battle stay north up.
+- **Settings page** (ethanseagull's, the Wii's Settings button on the license screen): Texture Quality, Dynamic Shadows, Bloom, Opponent Detail, 800px Mode and Minimap 30/60 fps, with a live preview on the upper screen. It replaces the Graphics option. Old 3DS keeps the light settings.
+- **Timer** and **Map** in License Settings: the race time on the lower screen Off, Minimal or Full, and a map that turns with your kart (the new default) or stays fixed. The whole-course view (tap the lower screen) stays fixed.
 - **Sound** follows System Settings: mono, stereo or surround. In surround, sounds behind you come from behind.
 - Pressing A while already holding R no longer hops: R drifts when you press it with A held, and brakes otherwise.
-- New 3DS: frame jobs (the opponents' poses and course objects) run on another processor core beside the racing physics, instead of sharing its core.
 - Mirror: the lower-screen map lines up with the karts and items on it.
 - **Exhaust smoke:** a puff from each exhaust pipe when you press A, using the original game's own effect.
 - **Coconut Mall:** the big Pianta between each pair of escalators is back.
 - Circle Pad: a released pad resting slightly off centre no longer keeps steering.
 - Notification LED: Waluigi's second colour is purple.
 - Builder (Windows): a C++ compiler installed with winget, MSYS2, llvm-mingw or w64devkit is found even when it isn't on PATH; the menu movie step no longer fails when a virus scanner holds its files.
-- Install instructions: copy the `mkw-3ds` folder into your SD card's `3ds` folder (copying the `3ds` folder itself can replace your card's whole `3ds` folder on a Mac).
+- **Staff ghost unlocks:** beating a course's staff ghost time in Time Trials now counts, so the expert staff ghost appears and the unlocks that need them (Funky Kong among them) trigger (#132).
+- No more copying thousands of files to the SD card: the one-CIA install also ends Windows' "0x80070052" copy error (#128).
 
 Known issues:
 - The Wii's staff ghosts can drift from their run (the expert staff ghost goes off course on some tracks). Ghosts you record on the 3DS replay exactly.

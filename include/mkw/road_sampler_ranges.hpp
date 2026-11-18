@@ -11,12 +11,13 @@ inline constexpr Range R3[]={{48327,6,21},{48339,6,21},{48351,6,21},{48414,24,21
 inline constexpr Range R4[]={{222,2790,23}};
 inline constexpr Range R5[]={{4110,48,26}};
 inline constexpr Range R6[]={{46554,6,17},{46575,6,17},{46605,3,17},{46617,9,17}};
-inline constexpr Range R7[]={{4494,1188,4}};
-inline constexpr Range R8[]={{10488,192,1}};
-inline constexpr Range R9[]={{17772,24,20},{19290,12,20}};
-inline constexpr Range R10[]={{44793,12,6},{44841,12,6},{45165,1128,32}};
-inline constexpr Range R11[]={{5724,36,5}};
-inline constexpr Range R12[]={{480,192,7}};
+inline constexpr Range R7[]={{30234,12,20},{30258,3,20},{30267,3,20},{30276,21,20},{30306,12,20},{30321,24,20},{30357,6,20},{30375,21,20},{30402,9,20},{30414,12,20},{30429,6,20},{30441,24,20},{30471,12,20},{35529,264,17}};
+inline constexpr Range R8[]={{4494,1188,4}};
+inline constexpr Range R9[]={{10488,192,1}};
+inline constexpr Range R10[]={{17772,24,20},{19290,12,20}};
+inline constexpr Range R11[]={{44793,12,6},{44841,12,6},{45165,1128,32}};
+inline constexpr Range R12[]={{5724,36,5}};
+inline constexpr Range R13[]={{480,192,7}};
 inline constexpr Mesh Meshes[]={
 {"course_00_000.gmdl",24208,42741,27,R0,2 },
 {"course_03_000.gmdl",22148,41022,33,R1,96 },
@@ -25,11 +26,12 @@ inline constexpr Mesh Meshes[]={
 {"course_08_000.gmdl",27146,53388,24,R4,1 },
 {"course_10_000.gmdl",30452,62151,28,R5,1 },
 {"course_11_000.gmdl",30547,64638,24,R6,4 },
-{"course_24_000.gmdl",5764,10647,10,R7,1 },
-{"course_31_000.gmdl",8039,13392,15,R8,1 },
-{"course_32_000.gmdl",15153,26052,25,R9,2 },
-{"course_35_000.gmdl",25028,46437,26,R10,3 },
-{"course_39_000.gmdl",5128,9246,10,R11,1 },
-{"course_40_000.gmdl",3334,6018,7,R12,1 },
+{"course_17_000.gmdl",16358,38742,22,R7,14 },
+{"course_24_000.gmdl",5764,10647,10,R8,1 },
+{"course_31_000.gmdl",8039,13392,15,R9,1 },
+{"course_32_000.gmdl",15153,26052,25,R10,2 },
+{"course_35_000.gmdl",25028,46437,26,R11,3 },
+{"course_39_000.gmdl",5128,9246,10,R12,1 },
+{"course_40_000.gmdl",3334,6018,7,R13,1 },
 };
 }

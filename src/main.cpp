@@ -3017,6 +3017,18 @@ int main() {
                         if(timeTrial&&courseChoice<bestTimes.size()){
                             const auto& t=race->player(0).raceTimer();const uint32_t ms=uint32_t(t.min)*60000u+uint32_t(t.sec)*1000u+uint32_t(t.mil);
                             if(ms&&(!bestTimes[courseChoice]||ms<bestTimes[courseChoice])){bestTimes[courseChoice]=ms;licenseSaves[activeLicense].times=bestTimes;menu.licenseBestTimes[activeLicense]=bestTimes;raceSavePending=true;}
+                            // Beating the disc's staff (or expert staff) ghost time marks the course
+                            // in the license (RKPD +0x0c/+0x10): it lists the expert staff ghost and
+                            // counts toward the unlocks that need them, Funky Kong's among them (#132).
+                            if(!watchReplay&&!kQa){
+                                uint32_t staffMs=0,expertMs=0;
+                                for(const auto& entry:mkw::TimeTrialGhost::list(unsigned(Courses[courseChoice].id),courseChoice,[](unsigned,unsigned){return true;})){
+                                    const uint32_t time=mkw::rkgMilliseconds(entry.header.finish);
+                                    if(entry.kind==mkw::TimeTrialGhost::Staff&&(!staffMs||time<staffMs))staffMs=time;
+                                    if(entry.kind==mkw::TimeTrialGhost::Expert&&(!expertMs||time<expertMs))expertMs=time;
+                                }
+                                if(licenseSaves[activeLicense].timeTrialFinish(courseChoice,ms,staffMs,expertMs)){raceSavePending=true;LOGF("time trial: staff ghost beaten on course %u",courseChoice);}
+                            }
                             // The run becomes the course's ghost when it beats the saved one.
                             const unsigned course=unsigned(Courses[courseChoice].id);const uint32_t saved=mkw::TimeTrialGhost::savedTime(course);
                             if(recordGhost&&ms&&!ghostRun.full()&&(!saved||ms<saved)){
@@ -3921,7 +3933,9 @@ int main() {
                 mkw::fillBottomView(bottomView,raceGrid,*raceItems,intro.active(),physicsSteps,results.leaveFade());
                 // License Settings: Race Timer and Map.
                 bottomView.mapTurns=menu.selection.mapTurns;
+                // License Settings > Timer: Off, Minimal (digits only) or Full (with TIME).
                 if(!menu.selection.raceTimer)bottomView.timerVisible=false;
+                bottomView.timerLabel=menu.selection.raceTimer==2;
                 if(battleMode){
                     bottomView.battle=true;
                     bottomView.milliseconds=uint32_t(uint64_t(balloonBattle.durationTicks()-std::min(battleTicks,balloonBattle.durationTicks()))*1000/60);

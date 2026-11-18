@@ -9,7 +9,11 @@ from pathlib import Path
 from course_catalog import ROOT,courses
 sys.path.insert(0,str(ROOT/'vendor/gclib'))
 from unpack_szs import unpack
-from cook_model import cook
+from cook_model import cook,COURSE_TEXELS,LARGE_TEXELS
+# 2: ethanseagull's texel budgets (cook_model texel_budget) instead of a flat
+# 256 cap, the sky fog flag, and each visual's source resource in the receipt
+# (tools/cook_world_mipmaps.py reads it). An older receipt cooks again.
+COOK=2
 OUT=ROOT/'sd-card/3ds/mkw-3ds'
 def digest(p):return hashlib.sha256(p.read_bytes()).hexdigest()
 def write(p,data):p.parent.mkdir(parents=True,exist_ok=True);p.write_text(json.dumps(data,indent=2)+'\n')
@@ -52,12 +56,12 @@ def kmp_database(path):
 
 def import_one(c,force=False):
     source=ROOT/'data/extracted'/c['archive'];receipt_path=OUT/'models/courses'/f"{c['id']:02d}.json"
-    receipt={**c,'status':'failed','battle_modes_implemented':False,'runtime_validation':'pending','limitations':[]}
+    receipt={**c,'status':'failed','cook':COOK,'battle_modes_implemented':False,'runtime_validation':'pending','limitations':[]}
     try:
         source_hash=digest(source)
         if not force and receipt_path.exists():
             old=json.loads(receipt_path.read_text())
-            if old.get('status')=='imported' and old.get('archive_sha256')==source_hash and all((OUT/p).exists() for p in old.get('model_lists',[])):
+            if old.get('status')=='imported' and old.get('cook')==COOK and old.get('archive_sha256')==source_hash and all((OUT/p).exists() for p in old.get('model_lists',[])):
                 return old
         receipt.update(archive_sha256=source_hash,archive_bytes=source.stat().st_size)
         folder=ROOT/'assets/courses'/c['key'];unpack(source,folder)
@@ -87,19 +91,20 @@ def import_one(c,force=False):
                 exported.mkdir(parents=True,exist_ok=True)
                 # Retail course lighting state per submesh (GMDL v4); the course's
                 # lights and fog are cooked separately (tools/cook_course_lighting.py).
-                export_env={**os.environ,'MKW_FREEZE_NONLINEAR_UV':'1','MKW_RETAIL_LIGHTING':'1','MKW_RETAIL_SKY':'1' if label=='sky' else '0'}
+                export_env={**os.environ,'MKW_FREEZE_NONLINEAR_UV':'1','MKW_RETAIL_LIGHTING':'1','MKW_RETAIL_SKY':'1' if label=='sky' else '0','MKW_SKY_FOG':'1' if label=='sky' else '0'}
                 # Course/sky TEV rules (tools/export_brres.ts courseRule); the minimap keeps its fallbacks.
                 if label in ('course','sky'):export_env['MKW_COURSE_MATERIALS']='1'
                 with (exported/'export.log').open('w') as log:
                     subprocess.run(['node',str(ROOT/'build/export_brres.mjs'),str(folder/resource),str(exported)],env=export_env,stdout=log,stderr=subprocess.STDOUT,check=True)
-                cook(exported,OUT,prefix,256)
+                if label=='map':cook(exported,OUT,prefix,256)
+                else:cook(exported,OUT,prefix,course_geometry=label=='course',texel_budget=LARGE_TEXELS if label=='sky' else COURSE_TEXELS)
             model_list=f'models/{prefix}.list'
             if not (OUT/model_list).is_file():raise ValueError('Missing cooked model list '+model_list)
             parts=(OUT/model_list).read_text().split()
             if not parts:raise ValueError('Empty '+model_list)
             receipt['model_lists'].append(model_list)
             detail=json.loads((OUT/f'models/{prefix}-receipt.json').read_text())
-            receipt['visuals'].append({'kind':label,'list':model_list,'parts':detail['parts'],'textures':detail['textures'],'lighting':detail.get('lighting'),'limitations':detail['limitations']})
+            receipt['visuals'].append({'kind':label,'resource':resource,'list':model_list,'parts':detail['parts'],'textures':detail['textures'],'lighting':detail.get('lighting'),'limitations':detail['limitations']})
         # Placed objects: one mesh (+ DOBJ animation bank) per model of every
         # object archive (tools/cook_course_objects.py), listed per course in
         # models/course_NN_visuals.list. Arenas too (0.5.0): their objects and

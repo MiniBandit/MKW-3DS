@@ -82,6 +82,9 @@ def build(kind):
  name,sources=PROGRAMS[kind];OUT.mkdir(parents=True,exist_ok=True)
  program=OUT/(name+('.exe' if os.name=='nt' else ''))
  cxx=compiler();flags=['-std=c++2b','-O2','-I'+str(ROOT/'include')]
+ # The menu glyph atlas table (include/mkw/menu_glyph_atlas.hpp) is built at
+ # compile time and needs more steps than clang allows by default (GCC's limit is far higher).
+ if 'clang' in subprocess.run([cxx,'--version'],capture_output=True,text=True).stdout:flags.append('-fconstexpr-steps=200000000')
  digest=hashlib.sha256(' '.join([cxx,*flags]).encode())
  for source in sources:digest.update((ROOT/source).read_bytes())
  for header in sorted((ROOT/'include').rglob('*.h*')):

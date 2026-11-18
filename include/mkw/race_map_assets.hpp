@@ -41,27 +41,25 @@ inline constexpr std::array<RaceMapCourse,32> RaceMapCourses{{
     {"textures/race_map_30.t3x","textures/race_map_30_overview.t3x",-30220.126f,-38819.176f,43582.794f,108786.664f,512,1024,128,256,110.0000f,{21650.092f,-1130.542f},{24621.852f,-912.774f}}, // GCN DK Mountain
     {"textures/race_map_31.t3x","textures/race_map_31_overview.t3x",-35319.334f,-46410.941f,52961.361f,41869.754f,1024,1024,256,256,73.2799f,{-19109.975f,11250.000f},{-16396.470f,11250.000f}}, // N64 Bowser's Castle
 }};
-// The bottom-screen UI atlas (RGBA8, VRAM): pixel rectangles x,y,w,h.
+// The bottom-screen UI atlases (RGBA8, VRAM): pixel rectangles x,y,w,h.
 struct RaceMapRect {uint16_t x,y,w,h;};
-inline constexpr const char* RaceMapAtlasTexture="textures/race_bottom_ui.t3x";
-inline constexpr uint16_t RaceMapAtlasSize[2]={256,512};
-// st_*_32x32 by retail character id (Kinoko Character 0..23).
-inline constexpr std::array<RaceMapRect,24> RaceMapFaces{{{33,1,28,28},{63,1,28,28},{151,35,28,28},{61,65,28,28},{91,65,28,28},{121,65,28,28},{151,65,28,28},{181,65,28,28},{211,65,28,28},{1,95,28,28},{93,1,28,28},{123,1,28,28},{153,1,28,28},{183,1,28,28},{213,1,28,28},{1,35,28,28},{31,35,28,28},{61,35,28,28},{91,35,28,28},{121,35,28,28},{181,35,28,28},{211,35,28,28},{1,65,28,28},{31,65,28,28}}};
-inline constexpr std::array<RaceMapRect,24> RaceMapFaceShadows{{{31,95,28,28},{61,95,28,28},{151,125,28,28},{61,155,28,28},{91,155,28,28},{121,155,28,28},{151,155,28,28},{181,155,28,28},{211,155,28,28},{1,185,28,28},{91,95,28,28},{121,95,28,28},{151,95,28,28},{181,95,28,28},{211,95,28,28},{1,125,28,28},{31,125,28,28},{61,125,28,28},{91,125,28,28},{121,125,28,28},{181,125,28,28},{211,125,28,28},{1,155,28,28},{31,155,28,28}}};
-// Item window icons (tools/cook_race_items.py ICONS) by ItemKind; 19 = two Triple Mushrooms left (kinoko_2).
-inline constexpr std::array<RaceMapRect,21> RaceMapItems{{{227,215,20,20},{1,241,20,20},{1,263,20,20},{45,263,20,20},{67,263,20,20},{89,263,20,20},{111,263,20,20},{133,263,20,20},{155,263,20,20},{177,263,20,20},{23,241,20,20},{45,241,20,20},{67,241,20,20},{89,241,20,20},{111,241,20,20},{133,241,20,20},{155,241,20,20},{177,241,20,20},{199,241,20,20},{221,241,20,20},{23,263,20,20}}};
-inline constexpr std::array<RaceMapRect,10> RaceMapDigits{{{31,185,24,24},{57,185,24,24},{83,185,24,24},{109,185,24,24},{135,185,24,24},{161,185,24,24},{187,185,24,24},{213,185,24,24},{1,215,24,24},{27,215,24,24}}};
-inline constexpr RaceMapRect RaceMapColon{53,215,24,24},RaceMapDot{79,215,24,24};
-inline constexpr RaceMapRect RaceMapTimeLabel{105,215,120,20};
-inline constexpr RaceMapRect RaceMapSearchlight{1,1,30,32};
-inline constexpr RaceMapRect RaceMapFakeBox{161,285,16,16};
-inline constexpr RaceMapRect RaceMapWhite{109,324,4,4};
-inline constexpr RaceMapRect RaceMapRowPlayer{81,285,78,19},RaceMapRowOther{1,285,78,19};
-// 1st..12th (Race.bmg 0x515..0x520), result board font.
-inline constexpr std::array<RaceMapRect,12> RaceMapOrdinals{{{89,324,18,11},{160,306,22,11},{184,306,20,11},{206,306,20,11},{228,306,20,11},{1,324,20,11},{23,324,20,11},{45,324,20,11},{67,324,20,11},{131,306,27,11},{73,306,27,11},{102,306,27,11}}};
 // Mario Kart 7 bottom-screen map markers (/UI/race.szs).
 enum class Mk7Marker : uint8_t {Banana,Bobomb,GreenShell,RedShell,SpinyShell,BlastRed,BlastBlue,StartLine,Count};
-inline constexpr std::array<RaceMapRect,8> RaceMapMk7{{{179,285,16,16},{197,285,16,16},{1,306,16,16},{19,306,16,16},{37,306,16,16},{233,285,16,16},{215,285,16,16},{55,306,16,16}}};
+struct RaceMapAtlas {
+    const char* texture;uint16_t size[2];
+    std::array<RaceMapRect,24> faces;       // st_*_32x32 by retail character id (Kinoko Character 0..23), map icons
+    std::array<RaceMapRect,24> rowFaces;    // the same faces at the standings rows' size
+    std::array<RaceMapRect,21> items;       // item window icons by ItemKind, row size; 19 = two Triple Mushrooms left
+    std::array<RaceMapRect,10> digits;      // CtrlRaceTime
+    RaceMapRect colon,dot,timeLabel,searchlight,fakeBox,white,rowPlayer,rowOther;
+    std::array<RaceMapRect,12> ordinals;    // 1st..12th (Race.bmg 0x515..0x520), result board font, row size
+    std::array<RaceMapRect,10> scoreDigits; // battle scores in the ordinals' font and size
+    std::array<RaceMapRect,8> mk7;          // by Mk7Marker
+    // Standings row: box size and the ordinal, face and item x within it (icons are icon px square).
+    uint8_t rowW,rowH,ordinalX,faceX,itemX,icon;
+};
+// 256x256: the local outline on the map is drawn from the face itself.
+inline constexpr RaceMapAtlas RaceMapUi{"textures/race_bottom_ui_256.t3x",{256,256},{{{33,1,28,28},{63,1,28,28},{151,35,28,28},{61,65,28,28},{91,65,28,28},{121,65,28,28},{151,65,28,28},{181,65,28,28},{211,65,28,28},{1,95,28,28},{93,1,28,28},{123,1,28,28},{153,1,28,28},{183,1,28,28},{213,1,28,28},{1,35,28,28},{31,35,28,28},{61,35,28,28},{91,35,28,28},{121,35,28,28},{181,35,28,28},{211,35,28,28},{1,65,28,28},{31,65,28,28}}},{{{91,186,13,13},{106,186,13,13},{16,201,13,13},{91,201,13,13},{106,201,13,13},{121,201,13,13},{136,201,13,13},{151,201,13,13},{166,201,13,13},{181,201,13,13},{121,186,13,13},{136,186,13,13},{151,186,13,13},{166,186,13,13},{181,186,13,13},{196,186,13,13},{211,186,13,13},{226,186,13,13},{241,186,13,13},{1,201,13,13},{31,201,13,13},{46,201,13,13},{61,201,13,13},{76,201,13,13}}},{{{19,168,13,13},{34,168,13,13},{199,168,13,13},{229,168,13,13},{1,186,13,13},{16,186,13,13},{31,186,13,13},{46,186,13,13},{61,186,13,13},{76,186,13,13},{49,168,13,13},{64,168,13,13},{79,168,13,13},{94,168,13,13},{109,168,13,13},{124,168,13,13},{139,168,13,13},{154,168,13,13},{169,168,13,13},{184,168,13,13},{214,168,13,13}}},{{{31,95,21,21},{54,95,21,21},{77,95,21,21},{100,95,21,21},{123,95,21,21},{146,95,21,21},{169,95,21,21},{192,95,21,21},{215,95,21,21},{1,125,21,21}}},{24,125,21,21},{47,125,21,21},{1,148,105,18},{1,1,30,32},{108,148,16,16},{1,226,4,4},{131,125,59,19},{70,125,59,19},{{{161,216,14,8},{23,216,17,8},{42,216,15,8},{59,216,15,8},{76,216,15,8},{93,216,15,8},{110,216,15,8},{127,216,15,8},{144,216,15,8},{1,216,20,8},{196,201,20,8},{218,201,20,8}}},{{{177,216,6,8},{249,216,4,8},{185,216,6,8},{193,216,6,8},{201,216,6,8},{209,216,6,8},{217,216,6,8},{225,216,6,8},{233,216,6,8},{241,216,6,8}}},{{{126,148,16,16},{144,148,16,16},{198,148,16,16},{216,148,16,16},{234,148,16,16},{180,148,16,16},{162,148,16,16},{1,168,16,16}}},59,19,5,27,42,13};
 // CtrlRaceTime (Race_U game_image_number.brlyt): pane centre (layout units,
 // y up) relative to race_null, and drawn size. Digits: race_null and time_01 the
 // minutes, time_02..03 the seconds, time_04..06 the milliseconds (CtrlRaceTime_refresh

@@ -472,6 +472,11 @@ inline constexpr UiControlMotion UiControlMotions[]={
 {"PauseMenuBT","ButtonContinue",2.f,true},
 {"PauseMenuBT","ButtonQuit",3.f,true},
 {"PauseMenuBT","ButtonRestart",0.f,true},
+{"PauseMenuGhostWatch","ButtonBattleGhost",2.f,true},
+{"PauseMenuGhostWatch","ButtonChangeGhost",3.f,true},
+{"PauseMenuGhostWatch","ButtonContinue",0.f,true},
+{"PauseMenuGhostWatch","ButtonQuit",5.f,true},
+{"PauseMenuGhostWatch","ButtonRestart",1.f,true},
 {"PauseMenuGrandPrix","ButtonChangeCharacter",0.f,true},
 {"PauseMenuGrandPrix","ButtonChangeCourse",0.f,true},
 {"PauseMenuGrandPrix","ButtonContinue",0.f,true},
@@ -4812,6 +4817,15 @@ inline constexpr UiAnimationClip UiAnimationClips[]={
 {"PauseMenuBT","SelectIn","SelectStop","",92.f,1.f,false,true,170,8},
 {"PauseMenuBT","OK","OK","OKStop",31.f,1.f,false,false,50,3},
 {"PauseMenuBT","OK","OKStop","",10.f,1.f,false,true,53,3},
+{"PauseMenuGhostWatch","Loop","Loop","",199.f,1.f,false,true,149,1},
+{"PauseMenuGhostWatch","Select","Free","",100.f,1.f,false,true,150,3},
+{"PauseMenuGhostWatch","Select","FreeToSelect","Select",4.f,1.f,false,false,153,3},
+{"PauseMenuGhostWatch","Select","Select","",92.f,1.f,false,true,156,3},
+{"PauseMenuGhostWatch","Select","SelectToFree","Free",6.f,1.f,false,false,159,3},
+{"PauseMenuGhostWatch","SelectIn","SelectIn","SelectStop",31.f,1.f,false,false,162,8},
+{"PauseMenuGhostWatch","SelectIn","SelectStop","",92.f,1.f,false,true,170,8},
+{"PauseMenuGhostWatch","OK","OK","OKStop",31.f,1.f,false,false,50,3},
+{"PauseMenuGhostWatch","OK","OKStop","",10.f,1.f,false,true,53,3},
 };
 inline const UiAnimationClip* uiAnimationClip(const char* control,const char* group,const char* name){
  for(const auto& clip:UiAnimationClips)if(!std::strcmp(clip.control,control)&&!std::strcmp(clip.group,group)&&!std::strcmp(clip.name,name))return &clip;
