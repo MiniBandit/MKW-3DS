@@ -5,8 +5,11 @@
 #include <mkw/sd_unpack.hpp>
 #include <3ds.h>
 #include <dirent.h>
+#include <fcntl.h>
+#include <unistd.h>
 #include <sys/stat.h>
 #include <cerrno>
+#include <cstdarg>
 #include <cstdio>
 #include <cstring>
 #include <memory>
@@ -70,13 +73,28 @@ uint64_t sdFree(){
 // once it is presented: every message is presented as soon as it is printed.
 void present(){gfxFlushBuffers();gfxSwapBuffers();gspWaitForVBlank();}
 double gb(uint64_t bytes){return double(bytes)/(1024.0*1024.0*1024.0);}
+// Copy speed: bytes copied this start and when the copy began.
+uint64_t copyStartTick=0,copyStartDone=0;
+double secondsSince(uint64_t tick){return double(svcGetSystemTick()-tick)/double(SYSCLOCK_ARM11);}
 void bar(uint64_t done,uint64_t total){
     const unsigned width=30,filled=total?unsigned(done*width/total):width;
     char line[64];unsigned n=0;line[n++]='[';
     for(unsigned i=0;i<width;++i)line[n++]=i<filled?'#':'.';
     line[n++]=']';line[n]=0;
     std::printf("\x1b[14;3H%s %3u%%  \x1b[15;3H%.2f of %.2f GB   ",line,unsigned(total?done*100/total:100),gb(done),gb(total));
+    const double seconds=copyStartTick?secondsSince(copyStartTick):0;
+    const double rate=seconds>2?double(done-copyStartDone)/seconds:0;
+    if(rate>0)std::printf("\x1b[16;3H%.1f MB/s, about %u min left    ",rate/1048576.0,unsigned(double(total-done)/rate/60.0)+1);
     present();
+}
+// sd:/3ds/mkw-3ds/first-start-copy.txt: what the copy did and how fast,
+// for reports from consoles (written a line at a time, rarely).
+std::string copyLogPath;
+void copyLog(const char* format,...){
+    if(copyLogPath.empty())return;
+    FILE* f=std::fopen(copyLogPath.c_str(),"a");if(!f)return;
+    va_list args;va_start(args,format);std::vfprintf(f,format,args);va_end(args);
+    std::fputc('\n',f);std::fclose(f);
 }
 // Message, then wait for A (the game then starts from the CIA).
 void notice(){
@@ -133,7 +151,11 @@ UnpackResult unpackGameFiles(const char* romfs,const char* sd,const char* conten
     // folders: the old ones move to old-files first.
     char marker[80];readLine(join(sd,Marker),marker);
     const bool resume=!std::strcmp(marker,content);
+    copyLogPath=join(sd,"first-start-copy.txt");
+    if(FILE* f=std::fopen(copyLogPath.c_str(),resume?"a":"w"))std::fclose(f);
+    copyLog("v%s content %s: %u files, %.2f GB, %s",version,content,unsigned(files.size()),gb(total),resume?"resuming":"new copy");
     const unsigned moved=resume?0:moveOldFolders(sd,files);
+    copyLog("old game folders moved to old-files: %u",moved);
     uint64_t needed=0,done=0;
     std::vector<bool> keep(files.size(),false);
     for(std::size_t i=0;i<files.size();++i){
@@ -156,43 +178,71 @@ UnpackResult unpackGameFiles(const char* romfs,const char* sd,const char* conten
         notice();restoreGraphics();return UnpackResult::NoSpace;
     }
     std::printf("  First start: copying the game files to\n  the SD card (sd:/3ds/mkw-3ds), once,\n  so quick updates can find them.\n\n");
-    std::printf("  This takes a few minutes. Keep the\n  console on and the SD card in.\n\n");
+    std::printf("  This takes a while, once. Keep the\n  console on and the SD card in.\n\n");
     std::printf("  Your saves and ghosts are not touched.");
     if(moved)std::printf("\x1b[18;3HOlder game files moved to\n  sd:/3ds/mkw-3ds/old-files: you can\n  delete that folder on a computer.");
     present();
     if(!resume&&!writeLine(join(sd,Marker),content)){
         std::printf("\x1b[17;3HCould not write to the SD card.");notice();restoreGraphics();return UnpackResult::Failed;
     }
-    constexpr std::size_t Chunk=512*1024;
+    // Straight to the 3DS file system: the C library's buffered files can
+    // pass large reads and writes on in small pieces, each paying the SD
+    // card's whole delay (on hardware the first copy ran at about 33 KB/s).
+    // The RomFS is read unbuffered, each SD file gets its full size first
+    // (no cluster-by-cluster growth) and both move 1 MiB at a time.
+    constexpr std::size_t Chunk=1024*1024;
     std::unique_ptr<unsigned char[]> buffer(new(std::nothrow) unsigned char[Chunk]);
-    if(!buffer){restoreGraphics();return UnpackResult::Failed;}
+    FS_Archive card=0;
+    if(!buffer||R_FAILED(FSUSER_OpenArchive(&card,ARCHIVE_SDMC,fsMakePath(PATH_EMPTY,"")))){
+        copyLog("FAIL buffer or SD archive");restoreGraphics();return UnpackResult::Failed;
+    }
+    // "sdmc:/3ds/mkw-3ds" -> "/3ds/mkw-3ds" inside the SD archive.
+    const char* sdInArchive=std::strncmp(sd,"sdmc:",5)?sd:sd+5;
+    copyStartTick=svcGetSystemTick();copyStartDone=done;
     bar(done,total);
-    uint64_t shown=done;
+    uint64_t shown=done,logged=done;
+    auto fail=[&](const char* what,const std::string& path,long code){
+        copyLog("FAIL %s %s (%ld)",what,path.c_str(),code);
+        std::printf("\x1b[17;3HCould not copy %.60s\n  (%s, %ld).\n\n  The game runs from the CIA for now;\n  it tries the copy again next start.",path.c_str(),what,code);
+        FSUSER_CloseArchive(card);notice();restoreGraphics();return UnpackResult::Failed;
+    };
     for(std::size_t i=0;i<files.size();++i){
         if(keep[i])continue;
+        if(!aptMainLoop()){FSUSER_CloseArchive(card);copyLog("interrupted at %.2f GB",gb(done));restoreGraphics();return UnpackResult::Interrupted;}
         const auto& f=files[i];
+        const uint64_t fileTick=svcGetSystemTick();
         makeParents(sd,f.path);
-        FILE* in=std::fopen(join(romfs,f.path).c_str(),"rb");
-        FILE* out=in?std::fopen(join(sd,f.path).c_str(),"wb"):nullptr;
-        bool ok=in&&out;
-        while(ok){
-            const std::size_t n=std::fread(buffer.get(),1,Chunk,in);
-            if(n&&std::fwrite(buffer.get(),1,n,out)!=n)ok=false;
-            done+=n;
-            if(done-shown>=(8u<<20)){
-                bar(done,total);shown=done;
-                if(!aptMainLoop()){if(in)std::fclose(in);if(out)std::fclose(out);restoreGraphics();return UnpackResult::Interrupted;}
+        const int in=open(join(romfs,f.path).c_str(),O_RDONLY);
+        if(in<0)return fail("read",f.path,errno);
+        const std::string target=std::string(sdInArchive)+"/"+f.path;
+        Handle out=0;
+        Result rc=FSUSER_OpenFile(&out,card,fsMakePath(PATH_ASCII,target.c_str()),FS_OPEN_WRITE|FS_OPEN_CREATE,0);
+        if(R_SUCCEEDED(rc))rc=FSFILE_SetSize(out,f.size);
+        if(R_FAILED(rc)){close(in);if(out)FSFILE_Close(out);return fail("create",f.path,long(rc));}
+        uint64_t offset=0;bool ok=true;long code=0;
+        while(offset<f.size){
+            const ssize_t n=read(in,buffer.get(),Chunk);
+            if(n<=0){ok=false;code=errno;break;}
+            u32 written=0;
+            rc=FSFILE_Write(out,&written,offset,buffer.get(),u32(n),0);
+            if(R_FAILED(rc)||written!=u32(n)){ok=false;code=long(rc);break;}
+            offset+=uint64_t(n);done+=uint64_t(n);
+            if(done-shown>=(8u<<20)){bar(done,total);shown=done;}
+            if(done-logged>=(64u<<20)){
+                const double seconds=secondsSince(copyStartTick);
+                copyLog("%.2f GB at %.0f s, %.2f MB/s (%s)",gb(done),seconds,seconds>0?double(done-copyStartDone)/seconds/1048576.0:0.0,f.path.c_str());
+                logged=done;
             }
-            if(n<Chunk){if(std::ferror(in))ok=false;break;}
         }
-        const int error=errno;
-        if(in)std::fclose(in);
-        if(out&&std::fclose(out))ok=false;
-        if(!ok){
-            std::printf("\x1b[17;3HCould not copy %.60s\n  (error %d).\n\n  The game runs from the CIA for now;\n  it tries the copy again next start.",f.path.c_str(),error);
-            notice();restoreGraphics();return UnpackResult::Failed;
-        }
+        close(in);
+        rc=FSFILE_Close(out);
+        if(ok&&R_FAILED(rc)){ok=false;code=long(rc);}
+        if(!ok)return fail("write",f.path,code);
+        const double seconds=secondsSince(fileTick);
+        if(seconds>2)copyLog("slow file %s: %.1f MB in %.1f s",f.path.c_str(),double(f.size)/1048576.0,seconds);
     }
+    FSUSER_CloseArchive(card);
+    copyLog("copied in %.0f s",secondsSince(copyStartTick));
     // Last: the content stamp makes the copy count (src/main.cpp contentMatches).
     if(!writeLine(join(sd,Content),content)){
         std::printf("\x1b[17;3HCould not finish the copy.");notice();restoreGraphics();return UnpackResult::Failed;
