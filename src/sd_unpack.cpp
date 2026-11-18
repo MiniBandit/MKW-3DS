@@ -64,6 +64,9 @@ uint64_t sdFree(){
     if(R_FAILED(FSUSER_GetArchiveResource(&r,SYSTEM_MEDIATYPE_SD)))return ~0ull;
     return uint64_t(r.freeClusters)*r.clusterSize;
 }
+// The text console draws into the top framebuffer, which the LCD only shows
+// once it is presented: every message is presented as soon as it is printed.
+void present(){gfxFlushBuffers();gfxSwapBuffers();gspWaitForVBlank();}
 double gb(uint64_t bytes){return double(bytes)/(1024.0*1024.0*1024.0);}
 void bar(uint64_t done,uint64_t total){
     const unsigned width=30,filled=total?unsigned(done*width/total):width;
@@ -71,11 +74,12 @@ void bar(uint64_t done,uint64_t total){
     for(unsigned i=0;i<width;++i)line[n++]=i<filled?'#':'.';
     line[n++]=']';line[n]=0;
     std::printf("\x1b[14;3H%s %3u%%  \x1b[15;3H%.2f of %.2f GB   ",line,unsigned(total?done*100/total:100),gb(done),gb(total));
+    present();
 }
 // Message, then wait for A (the game then starts from the CIA).
 void notice(){
     std::printf("\n\n  Press A to start the game.");
-    while(aptMainLoop()){hidScanInput();if(hidKeysDown()&KEY_A)break;gspWaitForVBlank();}
+    while(aptMainLoop()){hidScanInput();if(hidKeysDown()&KEY_A)break;present();}
 }
 void restoreGraphics(){gfxExit();gfxInitDefault();}
 }
@@ -102,6 +106,7 @@ UnpackResult unpackGameFiles(const char* romfs,const char* sd,const char* conten
     }
     consoleInit(GFX_TOP,nullptr);
     std::printf("\n  Mario Kart Wii 3DS v%s\n\n",version);
+    present();
     const uint64_t free=sdFree(),margin=64ull<<20;
     if(free!=~0ull&&needed+margin>free){
         std::printf("  First start: the game files are copied\n  to the SD card (sd:/3ds/mkw-3ds) so\n  quick updates can find them.\n\n");
@@ -112,6 +117,7 @@ UnpackResult unpackGameFiles(const char* romfs,const char* sd,const char* conten
     std::printf("  First start: copying the game files to\n  the SD card (sd:/3ds/mkw-3ds), once,\n  so quick updates can find them.\n\n");
     std::printf("  This takes a few minutes. Keep the\n  console on and the SD card in.\n\n");
     std::printf("  Your saves and ghosts are not touched.");
+    present();
     if(!resume&&!writeLine(join(sd,Marker),content)){
         std::printf("\x1b[17;3HCould not write to the SD card.");notice();restoreGraphics();return UnpackResult::Failed;
     }
@@ -132,7 +138,7 @@ UnpackResult unpackGameFiles(const char* romfs,const char* sd,const char* conten
             if(n&&std::fwrite(buffer.get(),1,n,out)!=n)ok=false;
             done+=n;
             if(done-shown>=(8u<<20)){
-                bar(done,total);shown=done;gfxFlushBuffers();gfxSwapBuffers();
+                bar(done,total);shown=done;
                 if(!aptMainLoop()){if(in)std::fclose(in);if(out)std::fclose(out);restoreGraphics();return UnpackResult::Interrupted;}
             }
             if(n<Chunk){if(std::ferror(in))ok=false;break;}
@@ -150,7 +156,7 @@ UnpackResult unpackGameFiles(const char* romfs,const char* sd,const char* conten
         std::printf("\x1b[17;3HCould not finish the copy.");notice();restoreGraphics();return UnpackResult::Failed;
     }
     std::remove(join(sd,Marker).c_str());
-    bar(total,total);gfxFlushBuffers();gfxSwapBuffers();
+    bar(total,total);
     restoreGraphics();
     return UnpackResult::Copied;
 }

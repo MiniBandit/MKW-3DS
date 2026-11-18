@@ -381,7 +381,18 @@ static bool menuOnBottom(mkw::UiPage page){
 }
 // Runs a frame-local lambda as a JobWorker job.
 template<class F> void runJob(void* f){(*static_cast<F*>(f))();}
+// Startup trace: each step until the first menu frame appends a line to
+// sd:/3ds/mkw-3ds/boot.txt (rewritten every start), so a start that stops
+// on a black screen shows where. Release builds too: a few writes per start.
+static bool bootTraceOpen=true;
+static void bootStep(const char* step){
+    if(!bootTraceOpen)return;
+    static bool first=true;
+    if(FILE* f=fopen("sdmc:/3ds/mkw-3ds/boot.txt",first?"w":"a")){fprintf(f,"%s %s\n",MKW_VERSION,step);fclose(f);}
+    first=false;
+}
 static int startupFailure(const char* message){
+    bootStep(message);
     consoleInit(GFX_BOTTOM,nullptr);
     printf("MKW startup failed\n%s\n\n",message);
     printf("3DSX needs SD resources in:\n/3ds/mkw-3ds/\n\nAzahar: set the virtual SD root\nto the packaged build/playable\ndirectory.\n\nPress B or START to exit.\n");
@@ -424,7 +435,8 @@ static bool sdContentReady(){
         printf("  Help: %s\n",ProjectUrl);
     }
     printf("\n  Press any button to exit.");
-    while(aptMainLoop()){hidScanInput();if(hidKeysDown())break;gspWaitForVBlank();}
+    // The console only reaches the LCD when its framebuffer is presented.
+    while(aptMainLoop()){hidScanInput();if(hidKeysDown())break;gfxFlushBuffers();gfxSwapBuffers();gspWaitForVBlank();}
     gfxExit();return false;
 }
 // Source DrawXlu surfaces do not write depth. Submit them after opaque
@@ -451,8 +463,8 @@ int main() {
     gfxInitDefault();
     mkw::NotificationLed notificationLed;
     // Saves are writable SD data for both CIA and external-resource 3DSX.
-    mkdir("sdmc:/3ds",0777);mkdir(LicenseDirectory,0777);
-    if(kQa)mkdir(DATA,0777);
+    mkdir("sdmc:/3ds",0777);mkdir(LicenseDirectory,0777);mkdir(DATA,0777);
+    bootStep("start");
     if(kQa)if(FILE* f=fopen("sdmc:/3ds/mkw-3ds/runtime.log","w")){fputs("MKW ARM11 startup\n",f);fclose(f);}
     // Embedded assets are read in place; writable diagnostics stay on SD.
     struct AssetMount {
@@ -468,6 +480,7 @@ int main() {
     // are used only when they are the content this code expects (content.txt,
     // MKW_CONTENT). Otherwise the files the builder put on the SD card must match.
     const bool embedded=assets.mounted&&contentMatches("romfs:");
+    bootStep(!assets.mounted?"romfs: none":embedded?"romfs: game files match":"romfs: no matching game files (update CIA)");
 #ifndef MKW_EXTERNAL_ASSETS
     // One-CIA install (include/mkw/sd_unpack.hpp): the first start of a full
     // CIA installed on the SD card copies its game files to the card, once,
@@ -475,7 +488,10 @@ int main() {
     // itself keeps running from the CIA. Not for cartridge images or tests.
     FS_MediaType launchedFrom=MEDIATYPE_NAND;
     if(embedded&&!kQa&&R_SUCCEEDED(FSUSER_GetMediaType(&launchedFrom))&&launchedFrom==MEDIATYPE_SD){
+        bootStep("SD copy: checking");
         const auto unpacked=mkw::unpackGameFiles("romfs:/",DATA,MKW_CONTENT,MKW_VERSION);
+        bootStep(unpacked==mkw::UnpackResult::Copied?"SD copy: made":unpacked==mkw::UnpackResult::NotNeeded?"SD copy: present":
+                 unpacked==mkw::UnpackResult::NoSpace?"SD copy: not enough space":unpacked==mkw::UnpackResult::Failed?"SD copy: failed":"SD copy: interrupted");
         report(unpacked==mkw::UnpackResult::Copied?"SD copy: made":unpacked==mkw::UnpackResult::NotNeeded?"SD copy: present":
                unpacked==mkw::UnpackResult::NoSpace?"SD copy: not enough space":unpacked==mkw::UnpackResult::Failed?"SD copy: failed":"SD copy: interrupted");
         if(unpacked==mkw::UnpackResult::Interrupted){gfxExit();return 0;}
@@ -489,6 +505,7 @@ int main() {
 #ifndef MKW_EXTERNAL_ASSETS
     if(!embedded&&!sdContentReady())return 1;
 #endif
+    bootStep(embedded?"assets: CIA":"assets: SD card");
     if(chdir(assetRoot)!=0||!exists("Race/Common.szs")){
         report("FAIL asset directory or Race/Common.szs");
         return startupFailure("Game resources could not be found.");
@@ -507,6 +524,7 @@ int main() {
     auto* heap=K::EGG::ExpHeap::create(memory,arenaSize,K::DEFAULT_OPT);
     if(!heap){report("FAIL simulation heap create");return startupFailure("Simulation heap creation failed.");}
     heap->becomeCurrentHeap();K::EGG::SceneManager::SetRootHeap(heap);
+    bootStep("simulation heap");
     char line[256];LOGF("heap_reserved=%lu heap_free=%lu fpscr=%08x",(unsigned long)arenaSize,(unsigned long)heap->getAllocatableSize(),fpscr);
     K::EGG::Vector3f test(3,4,0);
     LOGF("math_length=%.9f bits=%08lx",test.length(),(unsigned long)K::f2u(test.length()));
@@ -554,11 +572,14 @@ int main() {
     // Persistent renderer state must not consume the ARM11 main stack.
     auto rendererStorage=std::make_unique<mkw::Renderer>();
     auto& renderer=*rendererStorage;
+    bootStep("renderer: starting");
     if(!renderer.init()){report("FAIL Citro3D initialization");return startupFailure("Citro3D initialization failed.");}
+    bootStep("renderer: ready");
     // The startup save read also needs an RGB8 lower LCD (the debug console
     // otherwise leaves RGB565 active until the first menu).
     if(!renderer.enableBottom()){renderer.shutdown();return startupFailure("Lower LCD initialization failed.");}
     mkw::initializeLoadingScreen(renderer);
+    bootStep("loading screen");
     // Stereo 3D (docs/STEREO_3D.md): New 3DS with a 3D screen only. QA can pin
     // the slider with stereo-slider.txt (0..1) for lockstep captures.
     if(renderer.stereoCapable()){
@@ -569,13 +590,16 @@ int main() {
     }else report("stereo unavailable (2D model)");
     // Second-core presentation jobs (racer posing); none run while the race steps.
     if(!mkw::jobWorker().start())report("job worker unavailable: presentation jobs run on core 0");
+    bootStep("job worker");
     // Race frames draw on the second core one frame behind their recording
     // (src/render_thread.cpp); menus draw immediately.
     if(!renderer.startRenderThread())report("render thread unavailable: race frames draw on core 0");
+    bootStep("render thread");
     mkw::MenuState menu;
     menu.titleRandom=std::uint32_t(svcGetSystemTick())|1u;
     menu.cpuRandom.state=std::uint32_t(svcGetSystemTick());
     mkw::LicenseLoad loaded;
+    bootStep("loading saves");
     {mkw::LoadingScope loading;loaded=mkw::loadLicenseSaves(LicenseDirectory,licenseSaves);
     for(unsigned slot=0;slot<4;++slot){
         auto& save=licenseSaves[slot];
@@ -981,7 +1005,11 @@ int main() {
             last=svcGetSystemTick();pending=0;hidScanInput();
             return result;
         };
+        bootStep("menus: starting");
+        unsigned bootFrames=0;
         while(aptMainLoop()){
+            // Boot trace: the menu loop's first frame, then one second of frames.
+            if(bootTraceOpen){++bootFrames;if(bootFrames==1)bootStep("menus: first frame");if(bootFrames==60){bootStep("menus: running");bootTraceOpen=false;}}
             // 800px Mode follows the Settings page live (never with bloom).
             renderer.wideSetting=menu.settings.wide800&&!menu.settings.bloom;
             if(selectionSave&&selectionSave->done()){
