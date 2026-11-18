@@ -49,7 +49,8 @@ for name in ('winningrun_demo','ending_demo'):
 # Time Trials staff ghosts (ghost1) and expert staff ghosts (ghost2), as on the disc.
 for kind in (1,2):
  for n in range(32):
-  name=f'Race/TimeAttack/ghost{kind}/ghost{kind}_comp_{n:02d}.rkg';source=ROOT/'data/extracted'/name
+  # tools/release/build_cia.py extracts them to build/staff-ghosts; a full disc extraction has them too.
+  name=f'Race/TimeAttack/ghost{kind}/ghost{kind}_comp_{n:02d}.rkg';source=next((r/name for r in (ROOT/'build/staff-ghosts',ROOT/'data/extracted') if (r/name).is_file()),ROOT/'data/extracted'/name)
   if not source.is_file():raise ValueError('Staff ghost missing from the extracted disc: '+name)
   files[source]=Path(name)
 staff=ROOT/'build/staff'

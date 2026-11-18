@@ -1232,18 +1232,16 @@ int main() {
             if(!revealed)revealed=menuRenderer.ready(visualResident)&&menuModels.ready(visual)&&menuIcons.ready(mkw::MenuVehicleIcons::driverFor(visual));
             menuProfile->mark(MenuStage::Textures);
             // The engine plays the title wave (W_BGM_TITLE) and every other menu sound;
-            // the THP opening keeps its own stream. The cooked title WAV remains the
-            // fallback when the sound archive is missing.
+            // the THP opening keeps its own stream (its original DSP ADPCM).
             const bool engineAudio=mkw::SoundSystem::instance().available();
             menuSound.frame(visual,revealed);
             // QA: sound engine health as profiler events (in memory; written at the end).
             if(menuProfile->enabled()&&engineAudio){static unsigned soundLog=0;if(++soundLog%300==0){const auto st=mkw::SoundSystem::instance().stats();
                 snprintf(line,sizeof line,"sound page=%u voices=%lu sounds=%lu dropped=%lu underruns=%lu missing=%lu failed=%lu audio_ms=%.3f peak_ms=%.3f waves=%lu linear_free=%lu",unsigned(visual.page),(unsigned long)st.voices,(unsigned long)st.sounds,(unsigned long)st.dropped,(unsigned long)st.underruns,(unsigned long)st.missing,(unsigned long)st.failed,st.audioMs,st.audioPeakMs,(unsigned long)mkw::SoundSystem::instance().residentWaveBytes(),(unsigned long)linearSpaceFree());menuProfile->event(line);}}
-            const int wantedAudio=!revealed?-1:visual.page==mkw::UiPage::Intro?0:visual.page==mkw::UiPage::Title&&!engineAudio?1:-1;
+            const int wantedAudio=!revealed?-1:visual.page==mkw::UiPage::Intro?0:-1;
             if(wantedAudio!=activeAudio){
                 menuAudio.close();activeAudio=wantedAudio;
-                if(activeAudio==0)menuAudio.open("movies/title.wav");
-                if(activeAudio==1){menuAudio.open(mkw::UiTitleMusicPath,true,mkw::UiTitleMusicLoopSample);menuAudio.setVolume(mkw::UiTitleMusicVolume);}
+                if(activeAudio==0)menuAudio.open("movies/title.adp");
                 last=svcGetSystemTick();pending=0;
             }
             menuProfile->mark(MenuStage::Audio);

@@ -55,7 +55,8 @@ def package(cci=False,version='0.1.0',output=None,update=False,sd_assets=False):
         art=out/'art-update';art.mkdir(parents=True,exist_ok=True)
         for f in ('icon.icn','banner.bnr'):(art/f).write_bytes((Path(__file__).parent/'art'/f).read_bytes())
     else:
-        icon,banner,sound=home_menu_art.make(art,SOURCE/'movies/title_bgm.wav')
+        # The title music WAV is a cook output kept out of the game files (the sound engine plays it).
+        icon,banner,sound=home_menu_art.make(art,ROOT/'sd-card/3ds/mkw-3ds/movies/title_bgm.wav')
         run(bannertool,'makebanner','-i',banner,'-a',sound,'-o',art/'banner.bnr')
         run(bannertool,'makesmdh','-s',TITLE,'-l',TITLE+' (unofficial port)','-p','mkw-3ds',
             '-i',icon,'-o',art/'icon.icn','-r','regionfree','-f','visible,allow3d,recordusage')
