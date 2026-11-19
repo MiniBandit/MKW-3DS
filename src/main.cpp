@@ -538,7 +538,8 @@ int main() {
     char line[256];LOGF("heap_reserved=%lu heap_free=%lu fpscr=%08x",(unsigned long)arenaSize,(unsigned long)heap->getAllocatableSize(),fpscr);
     K::EGG::Vector3f test(3,4,0);
     LOGF("math_length=%.9f bits=%08lx",test.length(),(unsigned long)K::f2u(test.length()));
-    if(kQa)setenv("KINOKO_FILESYSTEM_ROOT",assetRoot,1);
+    // Kinoko opens its archives relative to the asset folder (the current
+    // directory), so the packs serve them; an absolute root would bypass them.
     bool qaMode=false;if(kQa)for(const char* test:{"trace","smoke","controls","replay","effects","animation","roster","garage","garage_controls","menu","objects"}){char marker[64];snprintf(marker,sizeof marker,"sdmc:/3ds/mkw-3ds/%s-test.txt",test);qaMode|=exists(marker);}
     fullRace=!qaMode;
     GyroTrickDevice gyroTrick;
