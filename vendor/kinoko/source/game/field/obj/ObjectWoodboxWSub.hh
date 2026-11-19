@@ -7,6 +7,12 @@ namespace Kinoko::Field {
 class ObjectWoodboxWSub final : public ObjectWoodbox {
 public:
     ObjectWoodboxWSub(const System::MapdataGeoObj &params);
+
+    /// Port: ObjectDirector::reinitForRace. init() starts from the current
+    /// pose, which the course preview has moved.
+    void prepareReinit() override {
+        resetPoseToParams();
+    }
     ~ObjectWoodboxWSub() override;
 
     /// @addr{0x8077E3E4}

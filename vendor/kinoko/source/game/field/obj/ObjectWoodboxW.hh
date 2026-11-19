@@ -9,6 +9,12 @@ class ObjectWoodboxWSub;
 class ObjectWoodboxW final : public ObjectCollidable {
 public:
     ObjectWoodboxW(const System::MapdataGeoObj &params);
+
+    /// Port: ObjectDirector::reinitForRace. init() starts from the current
+    /// pose, which the course preview has moved.
+    void prepareReinit() override {
+        resetPoseToParams();
+    }
     ~ObjectWoodboxW() override;
 
     void init() override;

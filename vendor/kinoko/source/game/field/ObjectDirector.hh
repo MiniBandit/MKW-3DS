@@ -27,6 +27,13 @@ class ObjectDirector : EGG::Disposer {
 
 public:
     void init();
+    /// Port: retail rebuilds the race scene when the course preview ends, so
+    /// every object starts the race freshly built. Objects keep running during
+    /// our preview; this puts them back (rail as constructed, then init()).
+    void reinitForRace();
+    static bool ReinitSkipped(ObjectId id);
+    static bool (*s_reinitExtraSkip)(u16 id); ///< host test hook
+    static bool s_reinitAll; ///< host test hook: re-init every type
     void calc();
     void addObject(ObjectCollidable *obj);
     void addObjectNoImpl(ObjectBase *obj);
@@ -116,6 +123,7 @@ private:
     ObjectHitTable m_hitTableItem;
     ObjectHitTable m_hitTableItemObject;
     u8 m_itemOwner = 12; ///< Owner of the current source item callback,12=none.
+    u64 m_initRandom = 0; ///< Port: race RNG state at the first init (see reinitForRace).
 
     fixed_vector<ObjectBase *> m_objects;          ///< All objects live here
     fixed_vector<ObjectBase *> m_calcObjects;      ///< Objects needing calc() live here too.

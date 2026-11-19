@@ -76,6 +76,7 @@ ObjectWanwan::~ObjectWanwan() = default;
 
 /// @addr{0x806E4B9C}
 void ObjectWanwan::init() {
+    resetStates();
     setPos(m_initPos);
     m_chainAttachPos = m_initPos;
     m_vel.setZero();

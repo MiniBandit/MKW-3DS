@@ -11,6 +11,12 @@ public:
     ~ObjectFireRing() override;
 
     void init() override;
+
+    /// Port: ObjectDirector::reinitForRace. The radius pulse's phase is set
+    /// only by the constructor.
+    void prepareReinit() override {
+        m_phase = 0.0f;
+    }
     void calc() override;
 
     /// @addr{0x80768740}

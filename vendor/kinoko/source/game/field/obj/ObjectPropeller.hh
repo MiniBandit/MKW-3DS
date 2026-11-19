@@ -11,6 +11,11 @@ public:
     ~ObjectPropeller() override;
 
     void init() override;
+
+    /// Port: ObjectDirector::reinitForRace. The constructor starts the spin at 0.
+    void prepareReinit() override {
+        m_angle = 0.0f;
+    }
     void calc() override;
 
     /// @addr{0x80765BC0}

@@ -14,6 +14,13 @@ class ObjectDossun : public ObjectCollidable {
 
 public:
     ObjectDossun(const System::MapdataGeoObj &params);
+
+    /// Port: ObjectDirector::reinitForRace. init() starts from the current
+    /// pose, which the course preview has moved.
+    void prepareReinit() override {
+        resetPoseToParams();
+        m_touchingGround = false; // set only by the constructor
+    }
     ~ObjectDossun() override;
 
     void init() override;

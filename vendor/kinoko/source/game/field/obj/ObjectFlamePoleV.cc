@@ -27,6 +27,7 @@ ObjectFlamePoleV::~ObjectFlamePoleV() = default;
 
 /// @addr{0x806C3E90}
 void ObjectFlamePoleV::init() {
+    resetStates();
     constexpr EGG::Vector3f BIG_SCALE = EGG::Vector3f(13.0f, 14.0f, 13.0f);
     constexpr f32 RADIUS = 70.0f;
 

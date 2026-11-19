@@ -51,6 +51,7 @@ ObjectChoropu::~ObjectChoropu() = default;
 
 /// @addr{0x806B9BF8}
 void ObjectChoropu::init() {
+    resetStates();
     if (m_isStationary) {
         disableCollision();
 

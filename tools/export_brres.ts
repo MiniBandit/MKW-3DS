@@ -120,6 +120,9 @@ function textureMean(name:string,s0=0,s1=1,t0=0,t1=1){
 // (tools/gx_material.py folds them into the alpha equation).
 const constantTextures=new Map<string,{[map:number]:number}>();
 // Match authored GX colour equations, rather than guessing from material names.
+// The mean vertex alpha (0..1) of the shape lighting() is translating, for the
+// rules that weigh a term by the GX raster alpha (Moonview woods, Iwa_alfa, siba00).
+let shapeVertexAlpha=1;
 function lighting(material:any){
  const stages=material.gxMaterial.tevStages;
  const eq=(s:any,a:number[])=>s&&a.every((v,i)=>v===[s.colorInA,s.colorInB,s.colorInC,s.colorInD][i])&&s.colorOp===0&&s.colorBias===0&&s.colorClamp&&s.colorRegId===0&&s.colorScale<3;
@@ -168,7 +171,12 @@ function lighting(material:any){
    reflection={mode:25,constant:0,add:0,uv:[1,0,0,0,1,0]};return true;
   }
   const plain=(s:any)=>s.colorOp===0&&s.colorBias===0&&s.colorRegId===0&&(s.colorClamp||(s.colorInD===15&&s.colorScale===0));
-  const cs=stages.filter((s:any,i:number)=>i===0||!(plain(s)&&s.colorScale===0&&['0,15,15,15','15,15,15,0'].includes(args(s).join())));
+  // CPREV*RAS.a after the first stage (Moonview Iwa_alfa, siba00: a light-mask
+  // layer weighted by the vertex alpha): dropped, the layer rule below weighs
+  // the layer by the shape's mean vertex alpha instead.
+  const alphaWeighted=(s:any,i:number)=>i===1&&stages.length===3&&plain(s)&&s.colorScale===0&&args(s).join()==='15,0,11,15';
+  const layerAlpha=stages.some(alphaWeighted)?shapeVertexAlpha:1;
+  const cs=stages.filter((s:any,i:number)=>i===0||!((plain(s)&&s.colorScale===0&&['0,15,15,15','15,15,15,0'].includes(args(s).join()))||alphaWeighted(s,i)));
   const [s0,s1]=cs,a0=args(s0),a1=s1?args(s1):[],sc0=s0.colorScale,sc1=s1?.colorScale;
   const k=(s:any,arg:number)=>constantArg(s,arg);
   // D+lerp(0,x,y) in either operand order: the product x*y (plus D).
@@ -212,6 +220,14 @@ function lighting(material:any){
    use(s0,true);use(s1,false);constant={...a,a:1};scale=1;mode=0;
    reflection={mode:22,constant:0,add:pack(b),uv:[m[0],m[4],m[12],m[1],m[5],m[13]]};
    vertexColor=[1,1,1];unlit=true;bake=false;return true;
+  }
+  // Moonview woods: f*R*lerp(T1,T0,R.a), two textures blended by the vertex
+  // alpha. No PICA mode blends textures per vertex: the shape keeps its
+  // majority texture (by mean vertex alpha), times R, scaled.
+  if(cs.length===3&&cs.every(plain)&&args(cs[0]).join()==='15,8,11,15'&&cs[0].colorScale===0&&
+     args(cs[1]).join()==='8,15,11,0'&&cs[1].colorScale===0&&args(cs[2]).join()==='15,0,10,15'&&cs[2].colorScale<3){
+   use(shapeVertexAlpha>=.5?cs[0]:cs[1],true);mode=0;scale=cs[2].colorScale;
+   approximate('vertex-alpha texture blend: each shape keeps its majority texture');return true;
   }
   if(cs.length===3&&cs.every(plain)){
    const [p,q,r]=cs,ap=args(p),aq=args(q),ar=args(r),f=[1,2,4,.5][r.colorScale];
@@ -317,7 +333,7 @@ function lighting(material:any){
   const rasterFirst=product(a0,8,10)&&layerOf(s1,a1,0),layerFirst=product(a1,8,10,0)&&layerOf(s0,a0,15);
   if(rasterFirst||layerFirst){
    const layer:any=rasterFirst||layerFirst,weight=factor(sc1)*(layerFirst?factor(sc0):1),total=factor(sc1)*(rasterFirst?factor(sc0):1);
-   const w={r:(layer.x.r-layer.k.r)*weight,g:(layer.x.g-layer.k.g)*weight,b:(layer.x.b-layer.k.b)*weight};
+   const w={r:(layer.x.r-layer.k.r)*weight*layerAlpha,g:(layer.x.g-layer.k.g)*weight*layerAlpha,b:(layer.x.b-layer.k.b)*weight*layerAlpha};
    if(![.5,1,2,4].includes(total))return false;
    use(rasterFirst?s0:s1,true);use(rasterFirst?s1:s0,false);mode=2;
    if(total===.5){scale=0;raster={scale:[.5,.5,.5],offset:[0,0,0]};}else scale=Math.log2(total);
@@ -326,6 +342,7 @@ function lighting(material:any){
    if(!grey(w))why.push('layer colour averaged to grey');
    if(Math.max(w.r,w.g,w.b)>1||(layerFirst&&factor(sc0)*Math.max(layer.x.r,layer.x.g,layer.x.b)>1)||(rasterFirst&&sc0>0&&sc1===3))why.push('layer saturation not modelled');
    if(layer.k.r||layer.k.g||layer.k.b)why.push('layer offset omitted');
+   if(layerAlpha!==1)why.push('vertex-alpha layer weight held at the shape mean');
    if(why.length)approximate(why.join(', '));
    return true;
   }
@@ -1011,7 +1028,14 @@ for(const model of archive.mdl0){
   const layout=shape.loadedVertexLayout,loaded=shape.loadedVertexData;
   const view=new DataView(loaded.vertexBuffers[0]),stride=layout.vertexBufferStrides[0];
   const indices=new Uint16Array(loaded.indexData);
+  // Mean vertex alpha of this shape (see shapeVertexAlpha).
+  {
+   const off=layout.vertexAttributeOffsets[GX.Attr.CLR0],count=Math.floor(loaded.vertexBuffers[0].byteLength/stride);
+   let sum=0;if(off!==undefined)for(let v=0;v<count;v++)sum+=view.getUint8(v*stride+off+3);
+   shapeVertexAlpha=off===undefined||!count?1:sum/count/255;
+  }
   const light=lighting(material);
+  shapeVertexAlpha=1;
   const retail=retailEnabled?retailLighting(material,!!light.vertexColor,!menuLighting&&!backdropLighting&&(process.env.MKW_RETAIL_SKY!=='1'||process.env.MKW_SKY_FOG==='1')):null;
   if(retail&&(racerLighting||backdropLighting)){
    retail.word|=1<<21;

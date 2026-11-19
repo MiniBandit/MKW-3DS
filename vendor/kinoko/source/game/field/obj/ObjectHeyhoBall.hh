@@ -13,6 +13,16 @@ public:
 
     void init() override;
 
+    /// Port: ObjectDirector::reinitForRace. A ball that exploded in the preview
+    /// has no collision unit, which init() resizes; a fresh scene registers it
+    /// at load. The explosion also leaves its scale.
+    void prepareReinit() override {
+        resetPoseToParams();
+        if (!getUnit()) {
+            loadAABB(0.0f);
+        }
+    }
+
     /// @addr{0x806D0780}
     void calc() override {
         StateManager::calc();

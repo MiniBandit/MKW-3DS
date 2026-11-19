@@ -11,7 +11,7 @@ namespace Kinoko::Field {
 
 /// @addr{0x80770384}
 ObjectKoopaBall::ObjectKoopaBall(const System::MapdataGeoObj &params)
-    : ObjectCollidable(params), m_vel(EGG::Vector3f::zero) {}
+    : ObjectCollidable(params), m_vel(EGG::Vector3f::zero), m_bombCoreDrawMdl(nullptr) {}
 
 /// @addr{0x80771F70}
 ObjectKoopaBall::~ObjectKoopaBall() {
@@ -41,14 +41,19 @@ void ObjectKoopaBall::init() {
     m_angSpeed = INITIAL_ANGULAR_SPEED;
     m_vel.y = INITIAL_Y_VEL;
 
-    m_bombCoreDrawMdl = EGG::egg_new<Render::DrawMdl>();
+    // Port: init() runs again at the course preview's end (retail rebuilds the
+    // scene there), when the scene heap no longer allows allocation: build the
+    // draw model once and only restart its animation after that.
+    if (!m_bombCoreDrawMdl) {
+        m_bombCoreDrawMdl = EGG::egg_new<Render::DrawMdl>();
 
-    auto *resMgr = System::ResourceManager::Instance();
-    const void *file = resMgr->getFile("bombCore.brres", nullptr, System::ArchiveId::Core);
-    ASSERT(file);
-    Abstract::g3d::ResFile resFile = Abstract::g3d::ResFile(file);
+        auto *resMgr = System::ResourceManager::Instance();
+        const void *file = resMgr->getFile("bombCore.brres", nullptr, System::ArchiveId::Core);
+        ASSERT(file);
+        Abstract::g3d::ResFile resFile = Abstract::g3d::ResFile(file);
 
-    m_bombCoreDrawMdl->linkAnims(0, &resFile, "bombCore", Render::AnmType::Chr);
+        m_bombCoreDrawMdl->linkAnims(0, &resFile, "bombCore", Render::AnmType::Chr);
+    }
     auto *anmMgr = m_bombCoreDrawMdl->anmMgr();
     anmMgr->playAnim(0.0f, 1.0f, 0);
     m_animFramecount = anmMgr->activeAnim(Render::AnmType::Chr)->frameCount();

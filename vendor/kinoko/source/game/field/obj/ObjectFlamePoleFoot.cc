@@ -32,6 +32,7 @@ ObjectFlamePoleFoot::~ObjectFlamePoleFoot() {
 
 /// @addr{0x8067EC94}
 void ObjectFlamePoleFoot::init() {
+    resetStates();
     constexpr f32 NORMALIZATION = static_cast<f32>(CYCLE_FRAMES) * (7.0f - 1.0f);
 
     m_nextStateId = 0;

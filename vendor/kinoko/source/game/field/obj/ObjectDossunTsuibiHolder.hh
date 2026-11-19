@@ -12,6 +12,15 @@ class ObjectDossunTsuibi;
 class ObjectDossunTsuibiHolder final : public ObjectCollidable {
 public:
     ObjectDossunTsuibiHolder(const System::MapdataGeoObj &params);
+
+    /// Port: ObjectDirector::reinitForRace. init() starts from the current
+    /// pose, which the course preview has moved.
+    void prepareReinit() override {
+        resetPoseToParams();
+        // Set only by the constructor.
+        m_stillTimer = static_cast<u32>(m_mapObj->setting(2));
+        m_facingBackwards = false;
+    }
     ~ObjectDossunTsuibiHolder() override;
 
     void init() override;

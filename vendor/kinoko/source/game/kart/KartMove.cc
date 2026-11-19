@@ -236,6 +236,9 @@ void KartMove::init(bool b1, bool b2) {
     m_respawnPostLandTimer = 0;
     m_respawnTimer = 0;
     m_bumpTimer = 0;
+    m_wheelieBumpTimer = 0;
+    m_wheelieBumpPhase = 0;
+    m_wheelieBumpYaw = 0.0f;
     m_drivingDirection = DrivingDirection::Forwards;
     m_padType.makeAllZero();
     m_flags.makeAllZero();
@@ -247,6 +250,7 @@ void KartMove::init(bool b1, bool b2) {
 /// @addr{0x8058348C}
 void KartMove::clear() {
     auto &status = KartObjectProxy::status();
+    status.resetBit(eStatus::WheelieBump); // USA 0x8057cc28
 
     if (status.onBit(eStatus::OverZipper)) {
         status.setBit(eStatus::ActionMidZipper);
@@ -407,6 +411,39 @@ bool KartMove::calcPart1() {
     return true;
 }
 
+/// USA 0x80573708 (from the kart-kart contact 0x8056ba34): bit 66, timer and
+/// yaw back to 0; the phase runs on (only init zeroes it).
+void KartMove::startWheelieBump() {
+    KartObjectProxy::status().setBit(eStatus::WheelieBump);
+    m_wheelieBumpTimer = 0;
+    m_wheelieBumpYaw = 0.0f;
+    ++s_wheelieBumps;
+}
+
+/// USA 0x80573780: 25 frames (param +692) of yaw wobble while on the ground
+/// and not in an action: amplitude min(1, speedRatioCapped / 0.4), 0.1 x the
+/// sine of a phase advanced 5000 a frame, added to angVel2.y.
+void KartMove::calcWheelieBump() {
+    auto &status = KartObjectProxy::status();
+    if (status.offBit(eStatus::WheelieBump)) {
+        return;
+    }
+    if (++m_wheelieBumpTimer > 25) {
+        status.resetBit(eStatus::WheelieBump);
+        return;
+    }
+    if (status.offBit(eStatus::TouchingGround) || status.onBit(eStatus::InAction)) {
+        return;
+    }
+    const f32 amp = std::min(1.0f, m_speedRatioCapped / 0.4f);
+    m_wheelieBumpPhase = static_cast<u16>(m_wheelieBumpPhase + 5000);
+    const f32 s = EGG::Mathf::SinFIdx(static_cast<f32>(m_wheelieBumpPhase) * 0.00390625f);
+    m_wheelieBumpYaw = amp * (0.1f * s);
+    EGG::Vector3f angVel2 = dynamics()->angVel2();
+    angVel2.y += m_wheelieBumpYaw;
+    dynamics()->setAngVel2(angVel2);
+}
+
 bool KartMove::calcPart1A() {
     auto &status = KartObjectProxy::status();
 
@@ -424,6 +461,7 @@ bool KartMove::calcPart1A() {
     calcRespawnBoost();
     calcSpecialFloor();
     m_jump->calc();
+    calcWheelieBump();
 
     m_bumpTimer = std::max(m_bumpTimer - 1, 0);
 
@@ -1803,6 +1841,10 @@ void KartMove::calcAcceleration() {
 
     f32 local_c8 = 1.0f;
     speedLimit *= calcWallCollisionSpeedFactor(local_c8);
+    // USA 0x805756a4: a wheelie bump holds the speed limit at 0.4x.
+    if (status.onBit(eStatus::WheelieBump)) {
+        speedLimit *= 0.4f;
+    }
 
     if (m_softSpeedLimit <= speedLimit) {
         m_softSpeedLimit = speedLimit;
@@ -3169,6 +3211,9 @@ void KartMoveBike::calcWheelie() {
             angVel0.x *= 0.9f;
             dynamics()->setAngVel0(angVel0);
         }
+    } else if (status.onBit(eStatus::WheelieBump)) {
+        // USA 0x80581d84: the front wheel comes down slowly during the wobble.
+        m_wheelieRot -= 0.002f;
     } else if (0.0f < m_wheelieRot) {
         m_wheelieRotDec -= 0.001f;
         m_wheelieRotDec = std::max(-0.03f, m_wheelieRotDec);

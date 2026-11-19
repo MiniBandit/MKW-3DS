@@ -147,18 +147,28 @@ void ObjectPenguinS::calcRail() {
     const auto &curPoint = m_railInterpolator->curPoint();
     u16 setting = curPoint.setting[0];
 
-    if (setting == 0 && m_state == State::SliderSlow) {
+    // USA 0x8076260c: setting 0 stands up from SliderSlow or Spin, setting 1
+    // slides from Walk, Dive or Spin, setting 2 dives from Walk (walk rate back
+    // to 1). Old Sherbet Land routes are authored 2 -> 1 -> 0, so accepting 1
+    // only from Walk left every baby penguin in Dive, walking forever.
+    const bool spinning = m_state == State::Spin;
+    if (setting == 0 && (m_state == State::SliderSlow || spinning)) {
         auto *anmMgr = m_drawMdl->anmMgr();
         anmMgr->playAnim(0.0f, 1.0f, 3);
         m_state = State::StandUp;
         m_anmTimer = anmMgr->activeAnim(Render::AnmType::Chr)->frameCount();
-    } else if (setting == 1 && m_state == State::Walk) {
+        if (spinning) m_spinTicks = 0;
+    } else if (setting == 1 &&
+            (m_state == State::Walk || m_state == State::Dive || spinning)) {
         auto *anmMgr = m_drawMdl->anmMgr();
         anmMgr->playAnim(0.0f, 1.0f, 1);
         m_state = State::Slider;
         m_anmTimer = anmMgr->activeAnim(Render::AnmType::Chr)->frameCount();
+        if (spinning) m_spinTicks = 0;
+        cueSound(0x348, SoundCall::Start); // 840: retail plays it as the dive starts.
     } else if (setting == 2 && m_state == State::Walk) {
         m_state = State::Dive;
+        m_walkRate = 1.0f;
     }
 
     m_railInterpolator->setCurrVel(static_cast<f32>(curPoint.setting[1]));

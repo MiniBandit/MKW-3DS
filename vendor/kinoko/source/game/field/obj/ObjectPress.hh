@@ -9,6 +9,13 @@ namespace Kinoko::Field {
 class ObjectPress : public ObjectCollidable {
 public:
     ObjectPress(const System::MapdataGeoObj &params);
+
+    /// Port: ObjectDirector::reinitForRace. init() starts from the current
+    /// pose, which the course preview has moved.
+    void prepareReinit() override {
+        resetPoseToParams();
+        m_loweringVelocity = 0.0f; // set only by the constructor
+    }
     ~ObjectPress() override;
 
     void init() override;
@@ -72,6 +79,12 @@ class ObjectPressSenko final : public ObjectPress {
 public:
     ObjectPressSenko(const System::MapdataGeoObj &params);
     ~ObjectPressSenko() override;
+
+    /// Port: ObjectDirector::reinitForRace.
+    void prepareReinit() override {
+        ObjectPress::prepareReinit();
+        m_startingWindup = false; // set only by the constructor
+    }
 
     /// @addr{0x8076EA28}
     [[nodiscard]] ObjectId id() const override {

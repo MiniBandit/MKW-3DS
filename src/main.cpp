@@ -2139,7 +2139,10 @@ int main() {
             }
             return hit;
         };
-        introClearance.build(intro.previewFrames(),query,&visibleScenery);
+        introClearance.build(intro.previewFrames(),query,&visibleScenery,kQa&&exists("sdmc:/3ds/MKWiiDS/intro-smooth.txt"));
+#ifndef MKW_RELEASE
+        {const auto& notes=introClearance.notes();size_t at=0;while(at<notes.size()){const size_t end=notes.find('\n',at);LOGF("%s",notes.substr(at,end-at).c_str());at=end==std::string::npos?notes.size():end+1;}}
+#endif
         LOGF("intro clearance preplanned=%u unresolved=%u, scenery %.1f ms, path %.1f ms",introClearance.frames(),introClearance.residual(),
             double(sceneryBuilt-planStart)*1000.0/SYSCLOCK_ARM11,double(svcGetSystemTick()-sceneryBuilt)*1000.0/SYSCLOCK_ARM11);
     };
@@ -2167,6 +2170,12 @@ int main() {
         intro.stop();introClearance.clear();
         if(introRetire)flowUi.retireIntro(renderer);else{renderer.waitForGpu();flowUi.unloadIntro();}
         K::System::RaceManager::Instance()->setIntroHeld(false);
+        // Retail rebuilds the race scene at this cut (GameScene::reinit, USA
+        // 0x8051733C -> ObjDirector::init 0x808167A0), so course objects start
+        // the race freshly built whether the preview was watched or skipped
+        // (Moonview traffic). Ours ran through the preview: put them back.
+        // DIAG off-file no-intro-reinit.txt: objects run on from the preview (old).
+        if(fullRace&&!timeTrial&&!(kQa&&exists("sdmc:/3ds/MKWiiDS/no-intro-reinit.txt")))K::Field::ObjectDirector::Instance()->reinitForRace();
         reportIterations=4;
         static char label[64];snprintf(label,sizeof label,"intro end (%s, %.2f ms in endIntro)",introRetire?"retire":"drain",double(svcGetSystemTick()-start)*1000.0/SYSCLOCK_ARM11);reportLabel=label;
     };
@@ -3130,6 +3139,11 @@ int main() {
     // steps ("state digest"). Same seed, same inputs: two builds whose Kinoko
     // is exact print the same lines (the multi-kart gate for physics changes).
     const bool stateDigest=kQa&&exists("sdmc:/3ds/MKWiiDS/state-digest.txt");
+    // DIAG (intro-path.txt): every course-preview step's authored and presented
+    // camera to intro-path.csv; intro-every.txt sets the preview capture interval.
+    FILE* introPathLog=kQa&&exists("sdmc:/3ds/MKWiiDS/intro-path.txt")?fopen("sdmc:/3ds/MKWiiDS/intro-path.csv","a"):nullptr;
+    unsigned introEvery=90;
+    if(kQa)if(FILE* f=fopen("sdmc:/3ds/MKWiiDS/intro-every.txt","r")){unsigned n=0;if(fscanf(f,"%u",&n)==1&&n)introEvery=n;fclose(f);}
     unsigned long long digestHash=1469598103934665603ull;unsigned digestSteps=0;
     mkw::AnimationBudget animationBudget;
     // The presented camera of the current step: drawn each frame and handed to the NW4R
@@ -3164,7 +3178,19 @@ int main() {
         {const auto now=mkw::diag::iterationBegin();
          static int lastStage=-1;const auto* raceManager=K::System::RaceManager::Instance();
          const int stage=raceManager&&menu.page==mkw::UiPage::Race?int(raceManager->stage()):-1;
-         if(stage!=lastStage&&stage==int(K::System::RaceManager::Stage::Race)&&lastStage==int(K::System::RaceManager::Stage::Countdown)){reportIterations=4;reportLabel="race start (GO)";}
+         if(stage!=lastStage&&stage==int(K::System::RaceManager::Stage::Race)&&lastStage==int(K::System::RaceManager::Stage::Countdown)){reportIterations=4;reportLabel="race start (GO)";
+#ifndef MKW_RELEASE
+            // DIAG: every course object's pose at GO (FNV-1a over position and
+            // matrix): a watched and a skipped preview must print the same.
+            if(auto* objects=K::Field::ObjectDirector::Instance()){uint32_t hash=2166136261u;unsigned count=0,cars=0;uint32_t carHash=2166136261u;
+                auto mix=[](uint32_t& h,const void* p,size_t n){const auto* b=static_cast<const uint8_t*>(p);for(size_t i=0;i<n;++i){h^=b[i];h*=16777619u;}};
+                for(const auto* obj:objects->objects()){const auto& m=obj->transform();float v[15]={obj->pos().x,obj->pos().y,obj->pos().z};
+                    for(int r=0;r<3;++r)for(int c=0;c<4;++c)v[3+r*4+c]=m[r,c];
+                    mix(hash,v,sizeof v);++count;
+                    const auto id=obj->id();if(id==K::Field::ObjectId::CarBody||id==K::Field::ObjectId::KartTruck||id==K::Field::ObjectId::KBombCar||id==K::Field::ObjectId::KBombCar1){mix(carHash,v,sizeof v);++cars;}}
+                LOGF("objects at GO: %u hash %08lx, traffic %u hash %08lx",count,(unsigned long)hash,cars,(unsigned long)carHash);}
+#endif
+         }
          lastStage=stage;
          if(reportIterations){char text[400];mkw::diag::describeIteration(text,sizeof text,reportLabel,now);report(text);--reportIterations;reportLabel="  next";}}
         // The report above is an SD write (logs reach RAM only once the race
@@ -3378,9 +3404,12 @@ int main() {
             driftHeld=(held&KEY_R)&&(held&KEY_A)&&(driftHeld||(down&KEY_R));
             unsigned buttons=(held&KEY_A?1:0)|(held&(KEY_B|KEY_R)?2:0)|(held&KEY_L?4:0)|(driftHeld?8:0);
             if(fullRace)buttons&=~4u; // Inventory owns L in races; retain stock mushrooms in trace/QA.
+            // A trick is a one-frame pulse, as the Wii's shake (every staff ghost's
+            // Up runs one frame; KartJump keeps it 14 frames for a ramp). Held, it
+            // restarted a wheelie the frame a bump cancelled it.
             auto trick=K::System::Trick::None;
-            if(held&(KEY_DUP|KEY_ZR))trick=K::System::Trick::Up;else if(held&KEY_DDOWN)trick=K::System::Trick::Down;
-            else if(held&KEY_DLEFT)trick=K::System::Trick::Left;else if(held&KEY_DRIGHT)trick=K::System::Trick::Right;
+            if(down&(KEY_DUP|KEY_ZR))trick=K::System::Trick::Up;else if(down&KEY_DDOWN)trick=K::System::Trick::Down;
+            else if(down&KEY_DLEFT)trick=K::System::Trick::Left;else if(down&KEY_DRIGHT)trick=K::System::Trick::Right;
             // POW dodge on R as well: while a POW targets the player, or early in its
             // spin, an R press is the Wii's shake (trick Up, KartMove::calcPow), like
             // D-pad Up and ZR.
@@ -3412,7 +3441,7 @@ int main() {
             }();
             if(trick==K::System::Trick::None){
                 if(rampTrick){trick=padTrick();buttons=(buttons&~10u)|(held&KEY_B?2u:0u);}
-                else if(!qaMode&&(held&KEY_Y))trick=padTrick();
+                else if(!qaMode&&(down&KEY_Y))trick=padTrick();
             }
             if(powDodgeWindow&&(down&KEY_R))trick=K::System::Trick::Up;
             lookBehind=fullRace&&!qaMode&&!replay&&!raceGrid.finished()&&bool(held&(KEY_X|KEY_ZL));
@@ -3631,7 +3660,10 @@ int main() {
                     if(event==mkw::DemoSection::Event::Leave)raceSound.previewLeave();
                     else if(event==mkw::DemoSection::Event::EnterRace)endIntro(); // PreviewEnd: the race section's audio starts
                 }
-                if(intro.active()&&!raceWarmupFrames){intro.step();++introTick;}
+                if(intro.active()&&!raceWarmupFrames){intro.step();++introTick;
+                    if(introPathLog){const auto e=intro.eye(),t=intro.target(),o=introClearance.offset(intro.frame()),to=introClearance.targetOffset(intro.frame());
+                        fprintf(introPathLog,"%u,%u,%d,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.3f,%.2f\n",unsigned(Courses[courseChoice].id),introTick,intro.shot(),
+                            e.x,e.y,e.z,t.x,t.y,t.z,e.x+o.x,e.y+o.y,e.z+o.z,t.x+to.x,t.y+to.y,t.z+to.z,intro.fov(),introClearance.rawPush(intro.frame()));fflush(introPathLog);}}
                 if(fullRace){
                     if(kQa&&blueTestEvery){raceItems->qaBlueTrace=true;raceItems->qaNearestItemPoints=blueTestOld;}
                     {MKW_SIM_SCOPE(PortItemsAfter);{MKW_SIM_SCOPE(ItGrid);raceGrid.afterStep();}raceItems->afterStepNative(raceGrid.itemCount());}
@@ -4405,7 +4437,7 @@ int main() {
                 // QA captures: present exactly on each capture tick (the remaining
                 // accumulator runs next iteration), so builds compare frame for frame.
                 mkw::simprof::add(mkw::simprof::PostTick,postTickStart);
-                if(autoplay&&!benchmark&&intro.active()&&introTick%90==0)break;
+                if(autoplay&&!benchmark&&intro.active()&&introTick%introEvery==0)break;
                 if(raceCapture){const bool live=menu.simulates()&&!intro.active();if(live&&!captureLive){++captureRace;captureBase=physicsSteps;raceCaptured=~0u;}captureLive=live;}
                 if(raceCapture&&captureLive&&(physicsSteps-captureBase)%raceCaptureEvery==0)break;
             }
@@ -4673,6 +4705,11 @@ int main() {
             {static unsigned skinStep=~0u;
                 if(physicsSteps/600!=skinStep){skinStep=physicsSteps/600;
                     LOGF("lit skin draws step=%u rigid=%lu cofactor=%lu",physicsSteps,(unsigned long)renderer.rigidSkinDraws,(unsigned long)renderer.cofactorSkinDraws);
+                    LOGF("wheelie bumps step=%u total=%lu",physicsSteps,(unsigned long)K::Kart::KartMove::s_wheelieBumps);
+                    // Baby penguins by state (walk, dive, slide, slow slide, stand up).
+                    if(auto* objects=K::Field::ObjectDirector::Instance()){unsigned states[6]{};bool any=false;
+                        for(const auto* obj:objects->objects())if(obj->id()==K::Field::ObjectId::PenguinS){any=true;++states[std::min(5,int(static_cast<const K::Field::ObjectPenguinS*>(obj)->state()))];}
+                        if(any)LOGF("penguins step=%u walk=%u dive=%u slide=%u slow=%u stand=%u spin=%u",physicsSteps,states[0],states[1],states[2],states[3],states[4],states[5]);}
                     LOGF("texture cache step=%u clears=%lu kept=%lu shared depth=%d",physicsSteps,(unsigned long)C3D_TexCacheClears,(unsigned long)C3D_TexCacheKept,int(renderer.sharedDepth()));
                     LOGF("box precull step=%u draws=%lu triangles kept=%lu of %lu lists=%lu unculled=%lu",physicsSteps,renderer.facingDraws,renderer.facingKept,renderer.facingTotal,renderer.facingBuilt,renderer.facingFull);
                     static uint64_t courseTicks=0;static unsigned long courseFrames=0;
@@ -4756,7 +4793,7 @@ int main() {
         if(frames==2)report("graphics second frame submitted");
         if(garageTest&&frames%fixtureFrames==0){rollingChoices+=fixtureRolling;animationPass&=fixtureRolling;}
         // QA (menu autoplay): sample the course preview for review.
-        if(autoplay&&!benchmark&&intro.active()&&introTick/90!=introCaptured){introCaptured=introTick/90;
+        if(autoplay&&!benchmark&&intro.active()&&introTick/introEvery!=introCaptured){introCaptured=introTick/introEvery;
             std::vector<uint8_t> pixels(400*240*3);char path[64];snprintf(path,sizeof path,"sdmc:/3ds/MKWiiDS/intro-%02u-%04u.ppm",unsigned(Courses[courseChoice].id),introTick);
             if(renderer.captureTop(pixels.data()))if(FILE* f=fopen(path,"wb")){fprintf(f,"P6\n400 240\n255\n");fwrite(pixels.data(),1,pixels.size(),f);fclose(f);}
             saveRightEye(renderer,path);

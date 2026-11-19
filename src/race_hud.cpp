@@ -188,21 +188,20 @@ bool outerOnly(void* context,std::size_t submesh){return submesh==static_cast<Bo
 bool innerOnly(void* context,std::size_t submesh){return submesh==static_cast<BoxMaterial*>(context)->layout->inner;}
 bool questionOnly(void* context,std::size_t submesh){return submesh==static_cast<BoxMaterial*>(context)->layout->question;}
 C3D_Mtx questionBillboard(const Renderer& renderer,const C3D_Mtx& model){
-    // Both original BRRES files mark hatenaPlane as NW4R ROT, not a rigid
-    // child of the spinning cube. Keep its roll, scale and center, but face
-    // the camera plane so its reverse side never mirrors the question mark.
+    // Both original BRRES files mark hatenaPlane as an NW4R billboard, not a
+    // rigid child of the spinning cube. In a single-screen race the Wii keeps
+    // the question mark upright and facing the camera while the cube tumbles
+    // (only split screen lets it turn with the cube), so take no roll from the
+    // cube: the camera's right and up, the cube's scale and center.
     C3D_Mtx result=renderer.cameraFacing({model.r[0].w,model.r[1].w,model.r[2].w},1.f);
     const Vec3 right{result.r[0].x,result.r[1].x,result.r[2].x};
     const Vec3 up{result.r[0].y,result.r[1].y,result.r[2].y};
     const Vec3 back{result.r[0].z,result.r[1].z,result.r[2].z};
     const Vec3 modelUp{model.r[0].y,model.r[1].y,model.r[2].y};
-    float rollX=dot(modelUp,right),rollY=dot(modelUp,up);
-    const float length=std::hypot(rollX,rollY);
-    if(length>1e-6f){rollX/=length;rollY/=length;}else{rollX=0;rollY=1;}
     const float sx=std::sqrt(model.r[0].x*model.r[0].x+model.r[1].x*model.r[1].x+model.r[2].x*model.r[2].x);
     const float sy=std::sqrt(dot(modelUp,modelUp));
     const float sz=std::sqrt(model.r[0].z*model.r[0].z+model.r[1].z*model.r[1].z+model.r[2].z*model.r[2].z);
-    const Vec3 x=(right*rollY-up*rollX)*sx,y=(right*rollX+up*rollY)*sy,z=back*sz;
+    const Vec3 x=right*sx,y=up*sy,z=back*sz;
     result.r[0].x=x.x;result.r[1].x=x.y;result.r[2].x=x.z;
     result.r[0].y=y.x;result.r[1].y=y.y;result.r[2].y=y.z;
     result.r[0].z=z.x;result.r[1].z=z.y;result.r[2].z=z.z;
@@ -1096,10 +1095,13 @@ void RaceHud::drawOverlay(Renderer& renderer,const RaceItems& items,unsigned sta
         r.w*=1.1f;r.h*=1.1f;
         r.y+=dy-15.f;return r;
     };
-    gold(impl_->extras[HudLap],HudExtras[HudLap],lifted(HudLapLabel,-lapLift));gold(impl_->extras[HudSlash],HudExtras[HudSlash],lifted(HudLapSlash,-lapLift));
+    // game_image_lap.brlyt: the current digit is the parent pane race_null, so
+    // it draws first; slash, total and LAP are its children, drawn over it.
     lap=std::clamp(lap,1u,3u);
     gold(impl_->digits[lap],HudDigits[lap],lifted(HudLapCurrent,-lapLift));
+    gold(impl_->extras[HudSlash],HudExtras[HudSlash],lifted(HudLapSlash,-lapLift));
     gold(impl_->digits[3],HudDigits[3],lifted(HudLapTotal,-lapLift));
+    gold(impl_->extras[HudLap],HudExtras[HudLap],lifted(HudLapLabel,-lapLift));
     }
     // Speedometer (not in the original): the player's speed in the game's own
     // units, which Wii speedometer mods label km/h. Bottom right, the one free

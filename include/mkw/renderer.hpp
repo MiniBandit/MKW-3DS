@@ -103,6 +103,9 @@ public:
     // textures at most the levels their source has. Off (DIAG): no-mip-cap.txt.
     uint8_t mipCap=0xff;
     static inline bool mipCapOn=true;
+    // Castle mortar textures (DS Peach Gardens, Mario Circuit) sample levels 0
+    // and 1; DIAG mortar-cap0.txt: level 0 only (console A/B of the two caps).
+    static inline bool mortarCap0=false;
     // Course-object textures (obj*) sample level 0 only, as TPO: their world
     // mips blurred signs and the Mushroom Gorge mushrooms; console GPU cost
     // within noise (Nov 14). Off (DIAG): no-object-mip-cap.txt.

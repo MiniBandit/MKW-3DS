@@ -15,6 +15,11 @@ public:
 
     void calc() override;
 
+    /// Port: ObjectDirector::reinitForRace. The water's cycle restarts with the race.
+    void prepareReinit() override {
+        m_frame = 0;
+    }
+
     /// @addr{0x8082C888}
     [[nodiscard]] u32 loadFlags() const override {
         return 1;

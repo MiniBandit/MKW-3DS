@@ -247,6 +247,15 @@ bool KartCollide::checkKartCollision(KartObject *self, KartObject *other) {
         applyKartBump(-1.0f, other, self, selfDir, normal);
     }
 
+    // USA 0x8056ba34..0x8056bab0: a bike in a wheelie starts the bump wobble
+    // (bit 66), before the wheelie is cancelled below.
+    if (self->isBike() && selfStatus.onBit(eStatus::Wheelie)) {
+        move()->startWheelieBump();
+    }
+    if (other->isBike() && otherStatus.onBit(eStatus::Wheelie)) {
+        other->move()->startWheelieBump();
+    }
+
     // Retail RMCU 8056bab4..8056be64: only mushroom state26 against a
     // non-mushroom kart can transfer balloons/coins. Star/Mega/Bullet above
     // are damage contacts. Use the actual hull contact, not a radius guess.

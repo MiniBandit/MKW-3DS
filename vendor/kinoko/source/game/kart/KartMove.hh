@@ -20,6 +20,9 @@ namespace Kinoko::Kart {
 /// @nosubgrouping
 class KartMove : protected KartObjectProxy {
 public:
+    /// USA 0x80573708: a bike bumped during a wheelie starts the wobble.
+    void startWheelieBump();
+    static inline u32 s_wheelieBumps = 0; ///< Port DIAG: wobbles started.
     enum class ePadType {
         BoostPanel = 0,
         BoostRamp = 1,
@@ -62,6 +65,7 @@ public:
     // mkw-3ds: calcPart1 in two halves (KartObjectManager::s_pass0Split); calcPart1A
     // returns false when the step ended there (respawn), and then calcPart1B is skipped.
     bool calcPart1A();
+    void calcWheelieBump();
     void calcPart1B();
     void beginBattleProtection();
     void loseAllBalloons();
@@ -692,6 +696,10 @@ protected:
     s16 m_respawnPostLandTimer; ///< Counts up to 4 if not accelerating after respawn landing.
     s16 m_respawnTimer;
     s16 m_bumpTimer;                     ///< Set when a @ref Reaction::SmallBump collision occurs.
+    // Retail KartMove +572/+574/+576: the wheelie-bump wobble (bit 66).
+    s16 m_wheelieBumpTimer = 0;
+    u16 m_wheelieBumpPhase = 0;
+    f32 m_wheelieBumpYaw = 0.0f;
     DrivingDirection m_drivingDirection; ///< Current state of driver's direction.
     s16 m_backwardsAllowCounter;         ///< Tracks the 15f delay before reversing.
     PadType m_padType;

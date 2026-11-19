@@ -50,6 +50,15 @@ protected:
         }
     }
 
+    /// Port: back to the constructor's state, for init() run again at the
+    /// course preview's end (retail rebuilds the scene there). A no-op on the
+    /// first init, which follows the constructor.
+    void resetStates() {
+        m_currentStateId = 0;
+        m_nextStateId = -1;
+        m_currentFrame = 0;
+    }
+
     virtual ~StateManager() {
         EGG::egg_free(m_entryIds.data());
     }

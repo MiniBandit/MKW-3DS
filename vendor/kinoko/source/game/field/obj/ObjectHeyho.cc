@@ -31,6 +31,7 @@ ObjectHeyho::~ObjectHeyho() = default;
 
 /// @addr{0x806CEB90}
 void ObjectHeyho::init() {
+    resetStates();
     ASSERT(m_railInterpolator);
     m_railInterpolator->init(0.0f, m_railInterpolator->pointCount() / 2);
     setPos(m_railInterpolator->curPos());

@@ -12,6 +12,15 @@ public:
     ~ObjectKuribo() override;
 
     void init() override;
+
+    /// Port: ObjectDirector::reinitForRace. init() keeps the height and the
+    /// facing (m_origin) the preview left, and the tilt eases from m_rot. The
+    /// constructor leaves m_rot/m_floorNrm unset: zero, as a fresh heap gives.
+    void prepareReinit() override {
+        resetPoseToParams();
+        m_rot = EGG::Vector3f::zero;
+        m_floorNrm = EGG::Vector3f::zero;
+    }
     void calc() override;
 
     /// @addr{0x806DD2C8}

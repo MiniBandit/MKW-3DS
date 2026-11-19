@@ -20,6 +20,7 @@ ObjectPoihanaBase::~ObjectPoihanaBase() = default;
 
 /// @addr{0x80747248}
 void ObjectPoihanaBase::init() {
+    resetStates();
     m_workMat = EGG::Matrix34f::ident;
     m_accel.setZero();
     m_extVel.setZero();
@@ -40,6 +41,7 @@ ObjectPoihana::~ObjectPoihana() = default;
 
 /// @addr{0x80748958}
 void ObjectPoihana::init() {
+    resetStates();
     ObjectPoihanaBase::init();
 
     m_initPos = curPos();

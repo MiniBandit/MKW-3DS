@@ -69,6 +69,7 @@ enum class eStatus {
     GroundDirs = 61, ///< Retail state bit 61: calcDirs updated the facing this frame (AI::isDriftingOnGround).
     Trickable = 62,
     Star = 63, ///< Retail item invincibility and 105-unit speed floor.
+    WheelieBump = 66, ///< Retail bit 66: bumped in a wheelie, 25-frame wobble (USA 0x80573708).
 
     WheelieRot = 68,
     SkipWheelCalc = 69,

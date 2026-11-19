@@ -29,6 +29,12 @@ def name_words(name):return {w.lower() for w in re.findall(r'[A-Z]+(?![a-z])|[A-
 # own detail.
 COURSE_TEXELS=256*256
 LARGE_TEXELS=512*512
+# Course atlases that keep their source size (the large budget): Maple
+# Treeway's sign/net strip th_base and th_house (256x1024). Squashed to 256x256
+# the signs blurred, and the alpha-tested net lost its coverage in the
+# box-filtered mips (gone at a distance); at the source size the world-mip cook
+# keeps the Wii's own levels, whose coverage holds.
+LARGE_SOURCES={('course_11','th_base'),('course_11','th_house')}
 def budget_size(width,height,texels):
  size=[min(1024,max(8,1<<(n-1).bit_length())) for n in (width,height)]
  while size[0]*size[1]>texels and max(size)>256:size[0 if size[0]>=size[1] else 1]//=2
@@ -112,7 +118,7 @@ def cook(source,out,prefix,max_texture=256,preserve_vertices=False,reuse_texture
   else:
    im=decode_image(io.BytesIO(raw),io.BytesIO(pal),ImageFormat(t['format']),PaletteFormat(t['paletteFormat'] or 0),len(pal)//2,t['width'],t['height']).convert('RGBA')
   if texel_budget:
-   large=index in shadows or 'road' in t['name'].lower() or 'michi' in t['name'].lower()
+   large=index in shadows or 'road' in t['name'].lower() or 'michi' in t['name'].lower() or (prefix,t['name']) in LARGE_SOURCES
    size=budget_size(*im.size,max(texel_budget,LARGE_TEXELS) if large else texel_budget)
   else:
    im.thumbnail((max_texture,max_texture),Image.Resampling.LANCZOS);size=tuple(max(8,1<<(n-1).bit_length()) for n in im.size)

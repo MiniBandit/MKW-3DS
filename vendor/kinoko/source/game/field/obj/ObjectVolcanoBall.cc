@@ -14,6 +14,7 @@ ObjectVolcanoBall::~ObjectVolcanoBall() = default;
 
 /// @addr{0x806E2C4C}
 void ObjectVolcanoBall::init() {
+    resetStates();
     m_extinguished = false; // Retail +0xf9 resets on reuse.
     m_railInterpolator->init(0.0f, 0);
     setPos(m_railInterpolator->curPos());

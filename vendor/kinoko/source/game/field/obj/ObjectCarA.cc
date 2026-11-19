@@ -19,6 +19,7 @@ ObjectCarA::~ObjectCarA() = default;
 
 /// @addr{0x806B7CE0}
 void ObjectCarA::init() {
+    resetStates();
     constexpr f32 RADIUS = 400.0f;
 
     m_railInterpolator->init(0, 0);

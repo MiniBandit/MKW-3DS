@@ -127,6 +127,7 @@ ObjectCarTGE::~ObjectCarTGE() {
 
 /// @addr{0x806D6B14}
 void ObjectCarTGE::init() {
+    resetStates();
     constexpr f32 HIT_ANGLE_TRUCK = 20.0f;
     constexpr f32 HIT_ANGLE_NORMAL = 40.0f;
 
@@ -156,6 +157,9 @@ void ObjectCarTGE::init() {
     }
 
     m_squashed.fill(false);
+    // Port: the constructor's zero (the eased heading/up), for a second init.
+    m_up = EGG::Vector3f::zero;
+    m_tangent = EGG::Vector3f::zero;
     setPos(m_railInterpolator->curPos());
     m_currSpeed = m_railInterpolator->speed();
     m_scaledTangentDir = m_railInterpolator->curTangentDir() * m_currSpeed;

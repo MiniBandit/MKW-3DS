@@ -10,6 +10,12 @@ class ObjectItemboxPress;
 class ObjectItemboxBlock final : public ObjectCollidable {
 public:
     explicit ObjectItemboxBlock(const System::MapdataGeoObj &params) : ObjectCollidable(params) {}
+
+    /// Port: ObjectDirector::reinitForRace. init() starts from the current
+    /// pose, which the course preview has moved.
+    void prepareReinit() override {
+        resetPoseToParams();
+    }
     void init() override;
     void calc() override;
     void start();
@@ -41,6 +47,12 @@ private:
 class ObjectItemboxLine final : public ObjectCollidable {
 public:
     ObjectItemboxLine(const System::MapdataGeoObj &params);
+
+    /// Port: ObjectDirector::reinitForRace. init() starts from the current
+    /// pose, which the course preview has moved.
+    void prepareReinit() override {
+        resetPoseToParams();
+    }
     ~ObjectItemboxLine() override;
 
     void init() override;

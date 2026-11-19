@@ -8,6 +8,12 @@ namespace Kinoko::Field {
 class ObjectDossunc final : public ObjectCollidable {
 public:
     ObjectDossunc(const System::MapdataGeoObj &params);
+
+    /// Port: ObjectDirector::reinitForRace. init() starts from the current
+    /// pose, which the course preview has moved.
+    void prepareReinit() override {
+        resetPoseToParams();
+    }
     ~ObjectDossunc() override;
 
     /// @addr{0x80764A38}

@@ -6,11 +6,16 @@ The PICA200 sometimes picks a coarser mip level for whole patches of a
 surface (console only; Azahar picks correctly). Where the levels differ
 visibly the patches show, worst on roads: their edge lines bleed inward in
 coarse levels. So:
-  - road textures (TEX0 name contains "road", not an indirect map) sample
-    level 0 only, unless their original level 1 was retouched rather than
+  - road textures (TEX0 name contains "road" or "michi", the cook's road
+    rule; not an indirect map) sample level 0 only, unless their original level 1 was retouched rather than
     just reduced from level 0 (Rainbow Road's distance art; Coconut Mall's
     and Funky Stadium's roads, which sparkle at level 0): those keep the
     levels they have;
+  - high-contrast mortar textures (MORTAR) sample levels 0 and 1 only: their
+    patches flickered on DS Peach Gardens' and Mario Circuit's castle walls.
+    Their cap counts in the levels as loaded and holds whatever shape the
+    cook gave them (ANY_SHAPE; ga_wall01 is cooked from 128x1024 to
+    128x512); DIAG mortar-cap0.txt samples level 0 only, for the console A/B;
   - every other course texture samples at most the levels its TEX0 has; the
     world-mipmap cook builds chains down to 8 px.
 Entries are numbers only (course id, texture index, level cap, TEX0 size).
@@ -30,6 +35,11 @@ from cook_water_mipmaps import textures, levels
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / 'include/mkw/course_mip_caps.hpp'
 RETOUCHED = 12  # mean |level 1 - box(level 0)| per channel above this: retouched, not a plain reduction
+ROAD_WORDS = ('road', 'michi')  # cook_model.py's road rule
+MORTAR = {('course_00', 't_renga_C06k'), ('course_00', 't_renga_W13k'),
+          ('course_22', 'ga_wall01'), ('course_22', 'ng_renga'), ('course_22', 'ng_wall02')}
+MORTAR_CAP = 1
+ANY_SHAPE = 0x80  # maxLevel flag: the cap counts in the levels as loaded, any shape
 
 
 def log2(n):
@@ -38,7 +48,7 @@ def log2(n):
 
 def main():
     source = Path(sys.argv[1])
-    rows, roads, kept = [], 0, []
+    rows, roads, kept, mortar = [], 0, [], []
     for c in sorted(courses(), key=lambda c: c['id']):
         brres = source / 'assets/courses' / c['key'] / 'course_model.brres'
         model = source / 'build/course-exports' / c['prefix'] / 'model.json'
@@ -53,7 +63,11 @@ def main():
                 continue
             cap = images - 1
             lower = t['name'].lower()
-            if 'road' in lower and 'indirect' not in lower:
+            if (c['prefix'], t['name']) in MORTAR:
+                rows.append((c['id'], index, min(cap, MORTAR_CAP) | ANY_SHAPE, (log2(w) - 3) | (log2(h) - 3) << 4))
+                mortar.append(f"{c['prefix']}_{index:03d}")
+                continue
+            if any(word in lower for word in ROAD_WORDS) and 'indirect' not in lower:
                 retouched = False
                 if images > 1:
                     first, second = levels(w, h, fmt, images, data, 2)
@@ -72,9 +86,11 @@ def main():
         '#include <cstdint>\n\n'
         'namespace mkw::courseMipCaps {\n'
         '// size: log2(TEX0 width)-3 | (log2(TEX0 height)-3)<<4. Sorted by course, index.\n'
+        '// maxLevel 0x80: the low bits count in the levels as loaded, whatever the shape.\n'
         'struct Entry { std::uint8_t course, index, maxLevel, size; };\n'
         'inline constexpr Entry entries[] = {\n' + body + '\n};\n}\n', newline='\n')
-    print(f'{len(rows)} textures, {roads} roads at level 0, retouched road levels kept: {", ".join(kept) or "none"} -> {OUT}')
+    print(f'{len(rows)} textures, {roads} roads at level 0, retouched road levels kept: {", ".join(kept) or "none"}, '
+          f'mortar at {MORTAR_CAP}: {", ".join(mortar) or "none"} -> {OUT}')
 
 
 if __name__ == '__main__':

@@ -264,6 +264,10 @@ uint8_t courseMipCap(const char* name,const C3D_Tex& tex){
     const auto* e=std::lower_bound(std::begin(table),std::end(table),std::pair<unsigned,unsigned>{course,index},
         [](const courseMipCaps::Entry& a,const std::pair<unsigned,unsigned>& k){return a.course<k.first||(a.course==k.first&&a.index<k.second);});
     if(e==std::end(table)||e->course!=course||e->index!=index)return 0xff;
+    if(e->maxLevel&0x80){ // mortar: levels as loaded, any shape
+        const unsigned cap=Texture::mortarCap0?0:e->maxLevel&0x7f;
+        return cap<tex.maxLevel?uint8_t(cap):0xff;
+    }
     const int shift=int(e->size&15)+3-__builtin_ctz(tex.width);
     if(shift<0||int(e->size>>4)+3-__builtin_ctz(tex.height)!=shift)return 0xff;
     const unsigned cap=e->maxLevel>shift?e->maxLevel-shift:0;
@@ -838,6 +842,7 @@ void Renderer::readSwitches(){
 #ifndef MKW_RELEASE
     Texture::mipCapOn=!exists("sdmc:/3ds/MKWiiDS/no-mip-cap.txt");
     Texture::objectMipCap=!exists("sdmc:/3ds/MKWiiDS/no-object-mip-cap.txt");
+    Texture::mortarCap0=exists("sdmc:/3ds/MKWiiDS/mortar-cap0.txt");
     stateCacheVerify=exists("sdmc:/3ds/MKWiiDS/state-cache-verify.txt");
     drawTiming=exists("sdmc:/3ds/MKWiiDS/draw-timing.txt");
     cmdHash=exists("sdmc:/3ds/MKWiiDS/cmd-hash.txt");
