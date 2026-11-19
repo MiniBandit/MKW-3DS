@@ -489,7 +489,10 @@ int main() {
     // so a quick update (which replaces the CIA) still finds them. The game
     // itself keeps running from the CIA. Not for cartridge images or tests.
     FS_MediaType launchedFrom=MEDIATYPE_NAND;
-    if(embedded&&!kQa&&R_SUCCEEDED(FSUSER_GetMediaType(&launchedFrom))&&launchedFrom==MEDIATYPE_SD){
+    // Testing (Azahar reports another launch medium): force-sd-copy.txt in the
+    // game folder runs the copy anyway. Harmless on a console.
+    const bool forceCopy=exists("sdmc:/3ds/mkw-3ds/force-sd-copy.txt");
+    if(embedded&&!kQa&&(forceCopy||(R_SUCCEEDED(FSUSER_GetMediaType(&launchedFrom))&&launchedFrom==MEDIATYPE_SD))){
         bootStep("SD copy: checking");
         const auto unpacked=mkw::unpackGameFiles("romfs:/",DATA,MKW_CONTENT,MKW_VERSION);
         bootStep(unpacked==mkw::UnpackResult::Copied?"SD copy: made":unpacked==mkw::UnpackResult::NotNeeded?"SD copy: present":

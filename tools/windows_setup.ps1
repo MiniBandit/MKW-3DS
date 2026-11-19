@@ -157,7 +157,10 @@ if ($needsWinget -and -not $winget) {
     exit 1
 }
 
-if ($missing -contains 'Python') { Install-WithWinget 'Python.Python.3.13' 'Python 3.13' @('--scope', 'user'); $python = Find-Python }
+# Windows on ARM: x64 Python (run through Windows' x64 emulation), so the
+# builder's packages (unicorn, numpy) and pinned x64 tools all match (#129).
+$pythonArch = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { @('--architecture', 'x64') } else { @() }
+if ($missing -contains 'Python') { Install-WithWinget 'Python.Python.3.13' 'Python 3.13' (@('--scope', 'user') + $pythonArch); $python = Find-Python }
 if ($missing -contains 'Git') { Install-WithWinget 'Git.Git' 'Git' @() }
 if ($missing -contains 'Node.js') { Install-WithWinget 'OpenJS.NodeJS.LTS' 'Node.js LTS' @() }
 if ($missing -contains 'C++ compiler' -and -not (Test-Compiler $python)) { Install-WithWinget 'MartinStorsjo.LLVM-MinGW.UCRT' 'a C++ compiler (LLVM-MinGW)' @() }

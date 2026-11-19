@@ -158,7 +158,16 @@ bool RacerVisuals::load(){
         auto r=std::make_unique<Impl::Racer>();const auto& player=config.players[i];
         r->ghost=player.type==K::System::RaceConfig::Player::Type::Ghost;
         std::string failure;
-        if(!r->load(unsigned(player.character),unsigned(player.vehicle),config.teams?RaceTeam(player.team):RaceTeam::None,&failure,diag::unlitBanks&&!diag::liveOpponents,diag::liveOpponents)){
+        bool loaded=r->load(unsigned(player.character),unsigned(player.vehicle),config.teams?RaceTeam(player.team):RaceTeam::None,&failure,diag::unlitBanks&&!diag::liveOpponents,diag::liveOpponents);
+        // An opponent that runs out of memory loading in full detail is loaded
+        // as its low-detail models alone (about a tenth of the memory) instead
+        // of the race failing to load ("Load Failed: Opponent Graphics", #121).
+        if(!loaded){
+            if(auto* log=std::fopen("sdmc:/3ds/mkw-3ds/opponent-load-error.txt","w")){std::fprintf(log,"slot=%u full detail failed: %s; retrying low detail\n",i,failure.c_str());std::fclose(log);}
+            const bool ghost=r->ghost;r.reset();r=std::make_unique<Impl::Racer>();r->ghost=ghost;r->lowOnly=true;
+            loaded=r->load(unsigned(player.character),unsigned(player.vehicle),config.teams?RaceTeam(player.team):RaceTeam::None,&failure,false,false,true);
+        }
+        if(!loaded){
             if(auto* log=std::fopen("sdmc:/3ds/mkw-3ds/opponent-load-error.txt","w")){
                 // Free heap and the largest LINEAR block (a free total says nothing about fragmentation).
                 const struct mallinfo m=mallinfo();const size_t heapTotal=envGetHeapSize();
@@ -277,7 +286,7 @@ void RacerVisuals::Impl::prepareRacer(unsigned i){
     out.lod=1;out.lowDriver=false;out.additive=0;out.wheels=0;out.wheelVisible={};out.extras=0;
     auto* r=racers[i].get();if(!r)return;
     r->headShown=false;
-    if(!r->body||!r->driver||!r->animation)return;
+    if(!r->lowOnly&&(!r->body||!r->driver||!r->animation))return;
     const auto& items=*frame.items;const unsigned tick=frame.tick;const auto& view=frame.view;
     if(items.hud(i+1).bullet)return;
     // A racer whose generous envelope (1,000 units, scaled) is
@@ -292,6 +301,7 @@ void RacerVisuals::Impl::prepareRacer(unsigned i){
     const float lodScale=std::max(.01f,r->vehicle.maxScale());
     const bool stagedLod=quality.racerLod||frame.stereoLod;
     out.lod=r->lod.update(dot(position-camera,position-camera)/(lodScale*lodScale),frame.fov,frame.fullDetail||!stagedLod||!r->driverLod||!r->bodyLod||!r->bodyLodRear||(VehicleLodLayout[r->choice->vehicle].handle&&(!r->handleLod||!r->handleLodRear)));
+    if(r->lowOnly)out.lod=std::max(out.lod,2u);
     // Opponent Detail Full: the Wii's rule, the driver alone (wiiLowDriver).
     out.lowDriver=!stagedLod&&!frame.fullDetail&&diag::wiiDriverLod&&r->driverLod&&wiiLowDriver(dot(position-camera,position-camera));
     // Reduced detail: parts too small to see are neither posed nor drawn.

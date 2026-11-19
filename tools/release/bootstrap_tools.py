@@ -16,6 +16,9 @@ def platform_key():
     machine=platform.machine().lower()
     machine={'amd64':'x86_64','x64':'x86_64','aarch64':'arm64'}.get(machine,machine)
     key=f'{system}-{machine}'
+    # Windows on ARM (Snapdragon) runs x64 programs through its built-in
+    # emulation: use the pinned x64 tools (#129).
+    if key=='windows-arm64':key='windows-x86_64'
     if key not in LOCK['makerom']['platforms']:raise SystemExit(f'No pinned CIA tools for {key}')
     return key
 
