@@ -120,7 +120,10 @@ bool isDirectory(const std::string& path){struct stat st{};return stat(path.c_st
 // settings are top-level files or other folders and stay. Returns how many
 // folders moved.
 unsigned moveOldFolders(const char* sd,const std::vector<Entry>& files){
-    std::vector<std::string> folders;
+    // Since 0.8.0 the game files are all inside the packs, so the folders
+    // 0.7.0 and earlier filled with loose game files are named here too.
+    // Saves, ghosts and settings are never in them.
+    std::vector<std::string> folders={"Race","audio","models","movies","textures","mii"};
     for(const auto& f:files){
         const auto slash=f.path.find('/');if(slash==std::string::npos)continue;
         const auto top=f.path.substr(0,slash);

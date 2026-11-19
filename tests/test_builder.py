@@ -94,7 +94,7 @@ class SharedExtractionTests(unittest.TestCase):
 
 
 class DependencyPreflightTests(unittest.TestCase):
-    def test_missing_unicorn_is_reported_before_conversion(self):
+    def test_missing_package_is_reported_before_conversion(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             sdk = root / 'sdk'
@@ -110,10 +110,10 @@ class DependencyPreflightTests(unittest.TestCase):
                 mock.patch('devkitpro.root', return_value=sdk),
                 mock.patch('devkitpro.tool', return_value=tex3ds),
                 mock.patch('importlib.util.find_spec',
-                           side_effect=lambda name: None if name == 'unicorn' else object()),
+                           side_effect=lambda name: None if name == 'Crypto' else object()),
                 mock.patch.object(build_cia, 'run') as run,
             ):
-                with self.assertRaisesRegex(SystemExit, 'Missing Python packages unicorn'):
+                with self.assertRaisesRegex(SystemExit, 'Missing Python packages Crypto'):
                     build_cia.stage_tools()
                 run.assert_not_called()
 

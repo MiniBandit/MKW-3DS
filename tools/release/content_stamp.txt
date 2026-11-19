@@ -6,4 +6,4 @@
 # recipe records the cook/package tools reviewed for these assets.
 stamp 9b5376332059cc9738f4bc2038f4d358
 windows_legacy 9b5376332059cc9738f4bc2038f4d358
-recipe 7bb6e9d5b596298e5d8c7eb0e0db04ce
+recipe 71d2f11bbaeb854f37a31a529e2b55aa

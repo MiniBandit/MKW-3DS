@@ -19,21 +19,23 @@ def catalog():
   h.append('{'+','.join([json.dumps(c['name']),'Kinoko::Course::'+c['enum'],json.dumps(c['archive']),json.dumps('models/'+c['prefix']+'.list'),json.dumps('models/'+sky+'.list'),json.dumps(c['cup']),'true','true' if c['id']<32 else 'false'])+'},')
  h+=['};','inline constexpr unsigned CourseCount=sizeof(Courses)/sizeof(Courses[0]);','}'];output('course_catalog.hpp','\n'.join(h))
 def audio():
- import unicorn as u
- from unicorn.ppc_const import UC_PPC_REG_1,UC_PPC_REG_3,UC_PPC_REG_4,UC_PPC_REG_LR,UC_PPC_REG_MSR
+ # The game's own track remap functions, run in a tiny PowerPC interpreter
+ # (tools/ppc_mini.py): unicorn's PowerPC mode crashed natively on Windows
+ # (#130). Verified equal to unicorn on all 24x2x32 inputs.
+ from ppc_mini import Cpu
  d=relocated(ROOT/'build/itembox-retail.rel')
  read=lambda a,f:struct.unpack_from('>'+f,d,a-BASE)
  ranges=[[[list(read(read(table+4*c,'I')[0]+t*4,'HH')) for t in range(29)] for table in (0x808d7298,0x808d7358)] for c in range(24)]
- cpu=u.Uc(u.UC_ARCH_PPC,u.UC_MODE_32|u.UC_MODE_BIG_ENDIAN);cpu.mem_map(0x80500000,0x500000);cpu.mem_write(BASE,bytes(d));cpu.mem_map(0x81000000,0x10000);cpu.reg_write(UC_PPC_REG_1,0x81008000);cpu.reg_write(UC_PPC_REG_MSR,0x2000)
+ cpu=Cpu();cpu.map(BASE,bytes(d));cpu.map(0x81000000,bytearray(0x10000))
  remap=[]
  for c in range(24):
   by_local=[]
   for local in range(2):
    row=[]
    for t in range(32):
-    cpu.mem_write(0x81000000,struct.pack('>I',t));cpu.reg_write(UC_PPC_REG_3,0x81000000);cpu.reg_write(UC_PPC_REG_4,local);cpu.reg_write(UC_PPC_REG_LR,0x81001000)
-    cpu.emu_start(read(0x808ab560+c*4,'I')[0],0x81001000,count=1000)
-    row.append(struct.unpack('>i',cpu.mem_read(0x81000000,4))[0])
+    cpu.write32(0x81000000,t);cpu.r[3]=0x81000000;cpu.r[4]=local;cpu.lr=0x81001000;cpu.r[1]=0x81008000
+    cpu.run(read(0x808ab560+c*4,'I')[0],0x81001000,1000)
+    row.append(struct.unpack('>i',struct.pack('>I',cpu.read32(0x81000000)))[0])
    by_local.append(row)
   remap.append(by_local)
  from nw4r_audio import Rsar
