@@ -414,8 +414,10 @@ static void readContent(const char* root,char (&found)[80]){
 // (tools/release/build_cia.py writes content.txt; build.py compiles MKW_CONTENT).
 static bool contentMatches(const char* root){
     char found[80];readContent(root,found);
-    char common[64];snprintf(common,sizeof common,"%s/Race/Common.szs",root);
-    return !strcmp(found,MKW_CONTENT)&&exists(common);
+    // Since 0.8.0 every game file is inside the packs; race.pak stands for them
+    // (Race/Common.szs is found only once the packs are open).
+    char pack[64];snprintf(pack,sizeof pack,"%s/race.pak",root);
+    return !strcmp(found,MKW_CONTENT)&&exists(pack);
 }
 // A quick update (code only) needs the game files the player's own builder
 // made; otherwise say what to do instead of failing on a missing file later.
