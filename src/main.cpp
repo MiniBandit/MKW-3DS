@@ -2139,10 +2139,7 @@ int main() {
             }
             return hit;
         };
-        introClearance.build(intro.previewFrames(),query,&visibleScenery,kQa&&exists("sdmc:/3ds/MKWiiDS/intro-smooth.txt"));
-#ifndef MKW_RELEASE
-        {const auto& notes=introClearance.notes();size_t at=0;while(at<notes.size()){const size_t end=notes.find('\n',at);LOGF("%s",notes.substr(at,end-at).c_str());at=end==std::string::npos?notes.size():end+1;}}
-#endif
+        introClearance.build(intro.previewFrames(),query,&visibleScenery);
         LOGF("intro clearance preplanned=%u unresolved=%u, scenery %.1f ms, path %.1f ms",introClearance.frames(),introClearance.residual(),
             double(sceneryBuilt-planStart)*1000.0/SYSCLOCK_ARM11,double(svcGetSystemTick()-sceneryBuilt)*1000.0/SYSCLOCK_ARM11);
     };
@@ -3663,7 +3660,7 @@ int main() {
                 if(intro.active()&&!raceWarmupFrames){intro.step();++introTick;
                     if(introPathLog){const auto e=intro.eye(),t=intro.target(),o=introClearance.offset(intro.frame()),to=introClearance.targetOffset(intro.frame());
                         fprintf(introPathLog,"%u,%u,%d,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.2f,%.3f,%.2f\n",unsigned(Courses[courseChoice].id),introTick,intro.shot(),
-                            e.x,e.y,e.z,t.x,t.y,t.z,e.x+o.x,e.y+o.y,e.z+o.z,t.x+to.x,t.y+to.y,t.z+to.z,intro.fov(),introClearance.rawPush(intro.frame()));fflush(introPathLog);}}
+                            e.x,e.y,e.z,t.x,t.y,t.z,e.x+o.x,e.y+o.y,e.z+o.z,t.x+to.x,t.y+to.y,t.z+to.z,intro.fov(),0.f);fflush(introPathLog);}}
                 if(fullRace){
                     if(kQa&&blueTestEvery){raceItems->qaBlueTrace=true;raceItems->qaNearestItemPoints=blueTestOld;}
                     {MKW_SIM_SCOPE(PortItemsAfter);{MKW_SIM_SCOPE(ItGrid);raceGrid.afterStep();}raceItems->afterStepNative(raceGrid.itemCount());}
