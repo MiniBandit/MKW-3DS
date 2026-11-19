@@ -506,7 +506,12 @@ int main() {
     if(!embedded&&!sdContentReady())return 1;
 #endif
     bootStep(embedded?"assets: CIA":"assets: SD card");
-    if(chdir(assetRoot)!=0||!exists("Race/Common.szs")){
+    const bool rooted=chdir(assetRoot)==0;
+    // From here fopen also finds the files inside the packs (asset_pack.hpp):
+    // the package keeps only the program and its stamp loose.
+    if(rooted)mkw::pack::open();
+    bootStep("packs open");
+    if(!rooted||!exists("Race/Common.szs")){
         report("FAIL asset directory or Race/Common.szs");
         return startupFailure("Game resources could not be found.");
     }

@@ -77,15 +77,60 @@ sys.path.insert(0,str(ROOT/'tools'))
 import host_tools
 pakpack=paks/('pakpack.exe' if sys.platform=='win32' else 'pakpack')
 subprocess.run([host_tools.compiler(),'-x','c','-O2','-pthread','-o',str(pakpack),str(ROOT/'tools/pakpack.c')],cwd=ROOT,check=True)
-for index,name in enumerate(('menu','race')):
+# Every other game file goes into a pack too, as in ethanseagull's package:
+# movies and sound into stream.pak (stored, each on a 512-byte SD sector, so
+# streamed reads stay whole sectors), the Mii resources into menu.pak, the rest
+# into race.pak. The game's fopen looks in the packs first (asset_pack.cpp
+# openFile). On a 3DS each file created on the SD card costs most of a second,
+# so the first start's copy of about 1,900 loose files took tens of minutes;
+# now it copies a handful of large files.
+Loose=('mkw-3ds.3dsx','menu.pak','race.pak')
+def mpk1_names(path):
+ with path.open('rb') as f:
+  magic,count,size=struct.unpack('<4sII',f.read(12))
+  if magic!=b'MPK1':raise ValueError('Not an MPK1 archive: '+path.name)
+  rows=[struct.unpack('<III',f.read(12)) for _ in range(count)];names=f.read(size)
+  return {names[r[0]:names.index(0,r[0])].decode() for r in rows}
+# A file a pack already holds stays the pack's: the game has always read the
+# pack first (pack::read, then openFile), so its loose copy was never used.
+already=mpk1_names(out/'menu.pak')|mpk1_names(out/'race.pak')
+loose={'menu':[],'race':[],'stream':[]}
+for name in sorted(manifest):
+ if name in Loose or '/' not in name:continue
+ if name in already:(out/name).unlink();del manifest[name];continue
+ pack='stream' if name.startswith(('movies/','audio/')) else 'menu' if name.startswith('mii/') else 'race'
+ loose[pack].append(name)
+for index,name in enumerate(('menu','race','stream')):
  source=out/f'{name}.pak';packed=paks/f'{name}-mpk2.pak'
- order=subprocess.run([sys.executable,str(ROOT/'tools/pak_order.py'),str(source),str(index),str(ROOT/f'tools/pak-order/{name}.txt')],
-                      cwd=ROOT,check=True,capture_output=True,text=True).stdout
- (paks/f'{name}-order.txt').write_text(order)
+ (paks/f'{name}-loose.txt').write_text(''.join(f'{n}={out/n}\n' for n in loose[name]))
+ if name=='stream':
+  (paks/'stream-order.txt').write_text('')
+  args=['--stored','--align','512','-']
+ else:
+  order=subprocess.run([sys.executable,str(ROOT/'tools/pak_order.py'),str(source),str(index),str(ROOT/f'tools/pak-order/{name}.txt')],
+                       cwd=ROOT,check=True,capture_output=True,text=True).stdout
+  (paks/f'{name}-order.txt').write_text(order)
+  args=[str(source)]
  packed.unlink(missing_ok=True)
- subprocess.run([str(pakpack),'--threads','6',str(source),str(paks/f'{name}-order.txt'),str(packed)],cwd=ROOT,check=True)
+ subprocess.run([str(pakpack),'--threads','6',*args,str(paks/f'{name}-order.txt'),str(packed),'@'+str(paks/f'{name}-loose.txt')],cwd=ROOT,check=True)
  shutil.copyfile(packed,source);packed.unlink()
  manifest[f'{name}.pak']=hashlib.sha256(source.read_bytes()).hexdigest()
+ for n in loose[name]:(out/n).unlink();del manifest[n]
+# Folders the packed files left empty.
+for folder in sorted((p for p in out.rglob('*') if p.is_dir()),key=lambda p:len(p.parts),reverse=True):
+ if not any(folder.iterdir()):folder.rmdir()
+# After packing, every file the sources name must still be found: in one of
+# the three MPK2 packs or loose.
+def mpk2_names(path):
+ with path.open('rb') as f:
+  magic,count,size=struct.unpack('<4sII',f.read(12))
+  if magic!=b'MPK2':raise ValueError('Not an MPK2 archive: '+path.name)
+  rows=[struct.unpack('<IIII',f.read(16)) for _ in range(count)];names=f.read(size)
+  return {names[r[0]:names.index(0,r[0])].decode() for r in rows}
+packed_names=set().union(*(mpk2_names(out/f'{n}.pak') for n in ('menu','race','stream')))
+lost=sorted(n for n in referenced if (n in in_paks or (ROOT/'build/paks').exists()) and n not in packed_names and not (out/n).is_file() and n not in absent)
+if lost:raise ValueError('Packed package lost files the game names: '+', '.join(lost[:10]))
+print(f'{len(packed_names)} files in menu.pak, race.pak and stream.pak; loose: {sorted(manifest)}',file=sys.stderr)
 (out/'CONTROLS.txt').write_text(controls);manifest['CONTROLS.txt']=hashlib.sha256((out/'CONTROLS.txt').read_bytes()).hexdigest()
 (out/'manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
 # This directory is generated package staging. Keep it as strict as the ZIP,
