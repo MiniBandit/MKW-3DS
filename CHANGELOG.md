@@ -43,7 +43,9 @@ Needs a new build: the builder now copies the staff ghosts from your disc, and t
 - Notification LED: Waluigi's second colour is purple.
 - Builder (Windows): a C++ compiler installed with winget, MSYS2, llvm-mingw or w64devkit is found even when it isn't on PATH; the menu movie step no longer fails when a virus scanner holds its files.
 - **Staff ghost unlocks:** beating a course's staff ghost time in Time Trials now counts, so the expert staff ghost appears and the unlocks that need them (Funky Kong among them) trigger (#132).
-- No more copying thousands of files to the SD card: the one-CIA install also ends Windows' "0x80070052" copy error (#128).
+- **Every game file is packed** (as in ethanseagull's package): the game folder on the SD card is three packs (`menu.pak`, `race.pak`, `stream.pak`) and the program. The first start copies those few big files instead of about 1,900 small ones, which on a 3DS took tens of minutes. The copy screen shows its speed and the minutes left; 0.7.0's old game folders move to `sd:/3ds/mkw-3ds/old-files` (delete it on a computer to free about 2.7 GB). This also ends Windows' "0x80070052" copy error (#128).
+- Old 3DS and New 3DS: an opponent that runs out of memory loading in full detail is loaded in low detail instead of the race failing ("Load Failed: Opponent Graphics", #121).
+- **Builder:** Windows on ARM laptops (Snapdragon) can build, using the x64 tools through Windows' own emulation (#129). The step that crashed on some Windows PCs at "runtime voice tables" no longer needs the unicorn package (#130).
 
 Known issues:
 - The Wii's staff ghosts can drift from their run (the expert staff ghost goes off course on some tracks). Ghosts you record on the 3DS replay exactly.
