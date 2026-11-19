@@ -1,8 +1,9 @@
 # Converted assets of 0.8.0 (staff ghosts, Online and ghost menu labels, the online menu pages, exhaust smoke,
-# and ethanseagull's merged cooks: texel-budget courses, ordered LZ4 packs, ADPCM movie audio).
+# and ethanseagull's merged cooks: texel-budget courses, ordered LZ4 packs, ADPCM movie audio,
+# every file packed: menu.pak, race.pak, stream.pak).
 # Every older build has to be rebuilt.
 # windows_legacy: no older Windows recipe is accepted for these files.
 # recipe records the cook/package tools reviewed for these assets.
-stamp 8386376c4ce9c45ad8aae457ee5d4968
-windows_legacy 8386376c4ce9c45ad8aae457ee5d4968
-recipe 06bd3436e71b5d597af501b3bcb63853
+stamp 9b5376332059cc9738f4bc2038f4d358
+windows_legacy 9b5376332059cc9738f4bc2038f4d358
+recipe 7bb6e9d5b596298e5d8c7eb0e0db04ce
