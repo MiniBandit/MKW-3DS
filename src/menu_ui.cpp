@@ -1589,11 +1589,8 @@ void layoutMenuScreens(const MenuState& state,const std::vector<UiQuad>& source,
    placeMenuQuad(q,rect,true,bottom);break;
   }
   case UiMenuRole::Statistics:
-   // Uniform scale: the authored row (track + bar) is about 2:1 with its
-   // label room, and a free 132x20 fit stretched it ~2.6x to the right.
-   // x 21: the bar starts just right of the label (left-anchored at 22), as
-   // in common_w099_machine_ability (text x -60, graph x -49.33).
-   placeMenuQuad(q,{21,37.f+22.f*i,132,20},false,top,true);break;
+   // A free 132x20 fit: the bars stretch to fill the row.
+   placeMenuQuad(q,{14,37.f+22.f*i,132,20},false,top);break;
   case UiMenuRole::Name:
    if(g.page==UiPage::Character)placeMenuQuad(q,{120,180,160,22},false,top);
    else if(g.page==UiPage::Vehicle)placeMenuQuad(q,{180,180,180,23},false,top);
