@@ -10,8 +10,30 @@
 #include <atomic>
 #include <cmath>
 #include <memory>
+#include <new>
+#include <cstdio>
+#include <cstdarg>
+#include <malloc.h>
 namespace mkw {
 namespace {
+// A byte buffer whose allocation may fail without abort(): a failed new in a
+// release build exits to the HOME Menu with no crash dump.
+struct Bytes{
+ std::unique_ptr<uint8_t[]> p;
+ uint8_t* data() const {return p.get();}
+ bool alloc(size_t n){p.reset(new(std::nothrow) uint8_t[n]);return bool(p);}
+ void clear(){p.reset();}
+};
+#ifndef MKW_RELEASE
+// DIAG: the loading picture's steps in runtime.log (main thread only: the timer
+// thread must not touch the SD card).
+void pictureLog(const char* format,...){
+ FILE* f=std::fopen("sdmc:/3ds/MKWiiDS/runtime.log","a");if(!f)return;
+ va_list args;va_start(args,format);std::vfprintf(f,format,args);va_end(args);std::fputc('\n',f);std::fclose(f);
+}
+#else
+void pictureLog(const char*,...){}
+#endif
 constexpr unsigned Size=32,Visible=24;
 Renderer* renderer_=nullptr;
 std::unique_ptr<Texture> wheel;
@@ -26,9 +48,10 @@ unsigned scopes=0;
 struct PictureRect{uint16_t x,y,w,h;};
 enum PictureLayer:unsigned{LogoLayer,TextLayer,PeriodLayer};
 std::array<PictureRect,3> pictureRects{};
-std::vector<uint8_t> pictureStill;   // background, logo and LOADING; freed once both buffers hold the picture
-std::vector<uint8_t> periodLoop;     // the periods' loop, grey + alpha per frame
-std::array<std::vector<uint8_t>,2> periodBase; // per eye: the picture under the periods' area
+Bytes pictureStill;   // background, logo and LOADING; freed once both buffers hold the picture
+Bytes periodLoop;     // the periods' loop, grey + alpha per frame
+std::array<Bytes,2> periodBase; // per eye: the picture under the periods' area
+std::atomic<unsigned> picturePresents{0}; // DIAG: refreshes the timer thread presented
 unsigned pictureWidth=0,loopFrames=0,loopFps=60;
 size_t logoAt=0,textAt=0;
 std::array<int,2> eyeShift{};        // per eye: the logo's and LOADING's x shift (3D: out of the screen)
@@ -82,6 +105,7 @@ void drawPeriods(uint8_t* fb,unsigned eye,unsigned frame){
 void presentPicture(){
  for(unsigned eye=0;eye<pictureEyes();++eye)pictureShown[eye]=topBack(eye);
  gfxScreenSwapBuffers(GFX_TOP,pictureStereo);gspWaitForVBlank();
+ picturePresents.fetch_add(1,std::memory_order_relaxed);
 }
 void pictureTimer(void*){
  // Fade in from the black the menus left, one step per refresh.
@@ -96,7 +120,7 @@ void pictureTimer(void*){
   blendLayer<2>(fb,pictureRects[PeriodLayer],eyeShift[eye],periodFrame(0),256);GSPGPU_FlushDataCache(fb,pictureBytes());
  }
  presentPicture();
- pictureStill.clear();pictureStill.shrink_to_fit();
+ pictureStill.clear();
  const uint64_t start=svcGetSystemTick();
  while(!pictureStop.load(std::memory_order_acquire)){
   // The frame due at the next refresh, so the bounce keeps its tempo.
@@ -170,6 +194,10 @@ LoadingScope::~LoadingScope(){
 unsigned loadingScopes(){return scopes;}
 RaceLoadingPicture::RaceLoadingPicture(){
  if(!renderer_||pictureThread)return;
+#ifndef MKW_RELEASE
+ // DIAG no-loading-picture.txt: races load behind the black screen, as before 1.2.0.
+ if(FILE* off=std::fopen("sdmc:/3ds/MKWiiDS/no-loading-picture.txt","rb")){std::fclose(off);pictureLog("loading picture: off (no-loading-picture.txt)");return;}
+#endif
  // The display mode the menus left: 800px Mode shows 800 columns, 3D two eyes.
  const bool wide=gfxIsWide();
  const char* path=wide?"loading/race-800.bin":"loading/race-400.bin";
@@ -182,12 +210,16 @@ RaceLoadingPicture::RaceLoadingPicture(){
  const auto& logo=pictureRects[LogoLayer];const auto& text=pictureRects[TextLayer];const auto& area=pictureRects[PeriodLayer];
  logoAt=pictureBytes();textAt=logoAt+size_t(logo.w)*logo.h*4;
  const size_t still=textAt+size_t(text.w)*text.h*2,loop=size_t(loopFrames)*area.w*area.h*2;
- if(36+still+loop!=size_t(size))return;
- pictureStill.resize(still);periodLoop.resize(loop);
- for(auto& base:periodBase)base.assign(size_t(area.w)*area.h*3,0);
- auto release=[](){pictureStill.clear();pictureStill.shrink_to_fit();periodLoop.clear();periodLoop.shrink_to_fit();
-  for(auto& base:periodBase){base.clear();base.shrink_to_fit();}};
- if(!pack::readRange(path,36,pictureStill.data(),still)||!pack::readRange(path,36+still,periodLoop.data(),loop)){release();return;}
+ if(36+still+loop!=size_t(size)){pictureLog("loading picture: %s size %ld does not match its header",path,size);return;}
+ auto release=[](){pictureStill.clear();periodLoop.clear();for(auto& base:periodBase)base.clear();};
+ const size_t baseBytes=size_t(area.w)*area.h*3;
+ const struct mallinfo heap=mallinfo();
+ pictureLog("loading picture: %s still %u KB loop %u KB, heap used %lu KB free %lu KB unclaimed %lu KB",path,unsigned(still/1024),unsigned(loop/1024),
+  (unsigned long)heap.uordblks/1024,(unsigned long)heap.fordblks/1024,(unsigned long)(envGetHeapSize()>size_t(heap.arena)?envGetHeapSize()-size_t(heap.arena):0)/1024);
+ bool ok=pictureStill.alloc(still)&&periodLoop.alloc(loop);
+ for(auto& base:periodBase)if(ok){ok=base.alloc(baseBytes);if(ok)std::memset(base.data(),0,baseBytes);}
+ if(!ok){pictureLog("loading picture: FAIL no memory for its %u KB, skipped",unsigned((still+loop+2*baseBytes)/1024));release();return;}
+ if(!pack::readRange(path,36,pictureStill.data(),still)||!pack::readRange(path,36+still,periodLoop.data(),loop)){pictureLog("loading picture: FAIL read %s",path);release();return;}
  // 3D: the logo and LOADING... come out of the screen with the race HUD
  // (as Renderer's screen quads: left eye -parallax/2, right eye +parallax/2).
  pictureStereo=!wide&&gfxIs3D();eyeShift={};
@@ -195,16 +227,18 @@ RaceLoadingPicture::RaceLoadingPicture(){
   eyeShift[0]=int(std::lround(-.5f*parallax));eyeShift[1]=eyeShift[0]+int(std::lround(parallax));}
  // Nothing may draw the top screen while the timer thread owns it.
  renderer_->waitForGpu();
- pictureShown={};pictureStop.store(false);
+ pictureShown={};pictureStop.store(false);picturePresents.store(0);
  s32 priority=0x30;svcGetThreadPriority(&priority,CUR_THREAD_HANDLE);
  pictureThread=threadCreate(pictureTimer,nullptr,8*1024,std::max<int>(priority-1,0x18),-2,false);
- if(!pictureThread){release();return;}
+ if(!pictureThread){pictureLog("loading picture: FAIL thread not created");release();return;}
+ pictureLog("loading picture: shown (%s, %s, thread priority %ld)",wide?"800px":"400px",pictureStereo?"3D":"2D",long(std::max<int>(priority-1,0x18)));
  active_=true;
 }
 RaceLoadingPicture::~RaceLoadingPicture(){
  if(!active_)return;
  pictureStop.store(true,std::memory_order_release);
  threadJoin(pictureThread,U64_MAX);threadFree(pictureThread);pictureThread=nullptr;
+ pictureLog("loading picture: load done after %u refreshes",picturePresents.load());
  const size_t bytes=pictureBytes();
 #ifndef MKW_RELEASE
  // DIAG loading-shot.txt: the picture as shown before its fade out, as
@@ -236,9 +270,10 @@ RaceLoadingPicture::~RaceLoadingPicture(){
   presentPicture();
  }
  for(unsigned eye=0;eye<pictureEyes();++eye){uint8_t* fb=topBack(eye);std::memset(fb,0,bytes);GSPGPU_FlushDataCache(fb,bytes);}
- pictureStill.clear();pictureStill.shrink_to_fit();periodLoop.clear();periodLoop.shrink_to_fit();
- for(auto& base:periodBase){base.clear();base.shrink_to_fit();}
+ pictureStill.clear();periodLoop.clear();
+ for(auto& base:periodBase)base.clear();
  pictureShown={};
+ pictureLog("loading picture: closed");
 }
 void drawLoadingWheel(Renderer& renderer,uint64_t waitStarted){
  if(!wheel||!wheel->ready||!waitStarted||svcGetSystemTick()-waitStarted<=SYSCLOCK_ARM11/2)return;
