@@ -502,15 +502,20 @@ int main() {
         if(unpacked==mkw::UnpackResult::Interrupted){gfxExit();return 0;}
     }
 #endif
-    const char* assetRoot=embedded?"romfs:/":DATA;
-    report(embedded?"assets: embedded RomFS":"assets: external SD package");
+    // Once the first-start copy has put the same files on the SD card, read
+    // them there: faster than the CIA's RomFS, which the console decrypts on
+    // every read (measured in pull request #40; ethanseagull's build always
+    // reads the SD card). A missing or other copy leaves the CIA's files.
+    const bool fromCard=!embedded||contentMatches(DATA);
+    const char* assetRoot=fromCard?DATA:"romfs:/";
+    report(fromCard?"assets: SD card":"assets: embedded RomFS");
     if(mkw::net::session().configureFile())report(mkw::net::session().host()?"LAN: host (lan.txt)":"LAN: join (lan.txt)");
     else if(*mkw::net::session().reason())report(mkw::net::session().reason());
     report("version " MKW_VERSION);
 #ifndef MKW_EXTERNAL_ASSETS
     if(!embedded&&!sdContentReady())return 1;
 #endif
-    bootStep(embedded?"assets: CIA":"assets: SD card");
+    bootStep(fromCard?"assets: SD card":"assets: CIA");
     const bool rooted=chdir(assetRoot)==0;
     // From here fopen also finds the files inside the packs (asset_pack.hpp):
     // the package keeps only the program and its stamp loose.
