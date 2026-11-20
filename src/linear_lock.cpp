@@ -215,6 +215,7 @@ FILE* __wrap_fopen(const char* path,const char* mode){
 //    lie in a live VRAM block.
 #include <cstdarg>
 #include <citro3d.h>
+#include <mkw/present_pacing.hpp>
 namespace mkw::gpuGuard {
 namespace {
 struct Block {uintptr_t at;size_t size;u32 thread;void* caller;};
@@ -332,5 +333,47 @@ extern "C" Result __real_GX_DisplayTransfer(u32* inadr,u32 indim,u32* outadr,u32
 extern "C" Result __wrap_GX_DisplayTransfer(u32* inadr,u32 indim,u32* outadr,u32 outdim,u32 flags){
  mkw::gpuGuard::checkTransfer(inadr,indim,outadr,outdim);
  return __real_GX_DisplayTransfer(inadr,indim,outadr,outdim,flags);
+}
+// DIAG: present pacing counters (mkw/present_pacing.hpp). citro3d swaps in its
+// GX queue callback and counts VBlanks in its VBlank0 callback, both on
+// libctru's GSP event thread, so these run in order on one thread.
+extern "C" void __real_gfxScreenSwapBuffers(gfxScreen_t scr,bool hasStereo);
+extern "C" void __wrap_gfxScreenSwapBuffers(gfxScreen_t scr,bool hasStereo){
+ auto& c=mkw::presentPacing::counters;constexpr auto Relaxed=std::memory_order_relaxed;
+ // A present still pending now is replaced: GSP never shows it.
+ const bool replaced=gspIsPresentPending(scr==GFX_TOP?GSP_SCREEN_TOP:GSP_SCREEN_BOTTOM);
+ if(scr==GFX_TOP){
+  c.topPresents.fetch_add(1,Relaxed);if(replaced)c.topReplaced.fetch_add(1,Relaxed);
+  // Shown at the next VBlank: latency from the frame's main-loop VBlank.
+  if(const uint32_t start=c.frameStart.exchange(0,Relaxed)){
+   const uint32_t latency=C3D_FrameCounter(0)+1-start;
+   c.latency[latency<1?0:latency>=mkw::presentPacing::LatencyBins?mkw::presentPacing::LatencyBins-1:latency-1].fetch_add(1,Relaxed);
+  }
+  if(const uint64_t at=c.vblankTick.load(Relaxed)){
+   const unsigned ms=unsigned((svcGetSystemTick()-at)*1000/SYSCLOCK_ARM11);
+   c.phase[ms<mkw::presentPacing::PhaseBins?ms:mkw::presentPacing::PhaseBins-1].fetch_add(1,Relaxed);
+  }
+ }else{c.bottomPresents.fetch_add(1,Relaxed);if(replaced)c.bottomReplaced.fetch_add(1,Relaxed);}
+ __real_gfxScreenSwapBuffers(scr,hasStereo);
+}
+namespace {
+std::atomic<ThreadFunc> c3dVBlank0{nullptr};std::atomic<void*> c3dVBlank0Data{nullptr};
+void pacingVBlank0(void*){
+ auto& c=mkw::presentPacing::counters;
+ c.vblankTick.store(svcGetSystemTick(),std::memory_order_relaxed);c.vblanks.fetch_add(1,std::memory_order_relaxed);
+ const uint32_t presents=c.topPresents.load(std::memory_order_relaxed);
+ if(presents==c.lastPresents)c.repeats.fetch_add(1,std::memory_order_relaxed);
+ c.lastPresents=presents;
+ if(const ThreadFunc cb=c3dVBlank0.load(std::memory_order_acquire))cb(c3dVBlank0Data.load(std::memory_order_relaxed));
+}
+}
+extern "C" void __real_gspSetEventCallback(GSPGPU_Event id,ThreadFunc cb,void* data,bool oneShot);
+extern "C" void __wrap_gspSetEventCallback(GSPGPU_Event id,ThreadFunc cb,void* data,bool oneShot){
+ // citro3d's frame counter stays chained behind the VBlank count.
+ if(id==GSPGPU_EVENT_VBlank0&&!oneShot){
+  c3dVBlank0Data.store(data,std::memory_order_relaxed);c3dVBlank0.store(cb,std::memory_order_release);
+  __real_gspSetEventCallback(id,pacingVBlank0,nullptr,false);return;
+ }
+ __real_gspSetEventCallback(id,cb,data,oneShot);
 }
 #endif

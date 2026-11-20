@@ -59,6 +59,7 @@
 #include <mkw/staff_entry.hpp>
 #include <mkw/gp_telemetry.hpp>
 #include <mkw/trick_presentation.hpp>
+#include <mkw/present_pacing.hpp>
 #include <mkw/race_items.hpp>
 #include <mkw/star_power.hpp>
 #include <mkw/job_worker.hpp>
@@ -720,6 +721,13 @@ int main() {
     // unwelded (no-object-weld.txt's copies) on the next, and so on.
     const bool objectWeldAlternate=benchmark&&exists("sdmc:/3ds/MKWiiDS/object-weld-alternate.txt");
     unsigned objectWeldRace=0;
+    // present-pacing-alternate.txt: present pacing on for the first race load,
+    // off (no-present-pacing.txt) for the next, and so on.
+    const bool presentPacingAlternate=benchmark&&exists("sdmc:/3ds/MKWiiDS/present-pacing-alternate.txt");
+    unsigned presentPacingRace=0;
+    // present-catchup-alternate.txt: the same for the catch-up (present-catchup.txt).
+    const bool presentCatchUpAlternate=benchmark&&exists("sdmc:/3ds/MKWiiDS/present-catchup-alternate.txt");
+    unsigned presentCatchUpRace=0;
     // GPU pass leave-out (mkw/diag.hpp): unattended runs, or gpu-passes.txt.
     // no-gpu-passes.txt: no leave-out frames, so every racing frame draws every pass (cross-build comparisons).
     mkw::diag::passState.enabled=kQa&&(autoplay||exists("sdmc:/3ds/MKWiiDS/gpu-passes.txt"))&&!exists("sdmc:/3ds/MKWiiDS/no-gpu-passes.txt");
@@ -766,6 +774,15 @@ int main() {
     // render thread uses them: without it their second set of per-frame
     // buffers would only hold LINEAR.
     renderer.pipelineFrames=secondCore&&!exists("sdmc:/3ds/MKWiiDS/no-pipeline.txt");
+    // A pipelined frame's screen transfers and swap wait until the previous
+    // frame is on screen, so no present replaces one not yet shown
+    // (mkw/present_pacing.hpp; A/B: no-present-pacing.txt).
+    mkw::presentPacing::on=!exists("sdmc:/3ds/MKWiiDS/no-present-pacing.txt");
+    if(!mkw::presentPacing::on)LOGF("present pacing off");
+    // Optional: after a second of frames shown a refresh late, drop one
+    // present to get back (present-catchup.txt; off by default).
+    mkw::presentPacing::catchUp=exists("sdmc:/3ds/MKWiiDS/present-catchup.txt");
+    if(mkw::presentPacing::catchUp)LOGF("present catch-up on");
     // Menus record their frames for the render thread, as races do, so the
     // next frame is built while the GPU draws this one (A/B: no-menu-pipeline.txt).
     const bool menuDeferred=!exists("sdmc:/3ds/MKWiiDS/no-menu-pipeline.txt");
@@ -889,6 +906,17 @@ int main() {
     auto alternateUnitOne=[&](){
         if(racerWeldAlternate){const unsigned state=racerWeldRace++%3;mkw::racerWeldOff=state!=0;mkw::racerWeldKeepOrder=state==2;
             LOGF("racer weld %s (alternate race %u)",state==0?"on":state==1?"off":"stored order",racerWeldRace);}
+        if(presentPacingAlternate){
+            mkw::presentPacing::on=presentPacingRace++%2==0;
+            LOGF("present pacing %s (alternate race %u)",mkw::presentPacing::on?"on":"off",presentPacingRace);
+        }
+        if(presentCatchUpAlternate){
+            mkw::presentPacing::catchUp=presentCatchUpRace++%2==0;
+            LOGF("present catch-up %s (alternate race %u)",mkw::presentPacing::catchUp?"on":"off",presentCatchUpRace);
+        }
+        // Set with citro3d idle: the race load (or boot) has waited for the GPU.
+        C3D_FramePresentDefer(mkw::presentPacing::on);
+        C3D_FramePresentCatchUp(mkw::presentPacing::on&&mkw::presentPacing::catchUp);
         if(objectWeldAlternate){
             mkw::objectWeldOff=objectWeldRace++%2!=0;
             LOGF("object weld %s (alternate race %u)",mkw::objectWeldOff?"off":"on",objectWeldRace);
@@ -3343,7 +3371,7 @@ int main() {
             }
         }else if(down&KEY_START)break;
         auto now=svcGetSystemTick();double delta=double(now-previous)/SYSCLOCK_ARM11;previous=now;
-        const u32 refresh=C3D_FrameCounter(0),refreshes=refresh-lastRefresh;lastRefresh=refresh;
+        const u32 refresh=C3D_FrameCounter(0),refreshes=refresh-lastRefresh;lastRefresh=refresh;renderer.frameVblank=refresh;
         // Races: whole refreshes, at most six (the clock's 0.1 s cap). Elsewhere, or
         // should the refresh count ever stall, the clock.
         accumulator+=fullRace&&refreshes?double(std::min<u32>(refreshes,6)):std::min(delta,0.1)*60.0;

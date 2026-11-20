@@ -1262,11 +1262,11 @@ void Renderer::beginNow(const C3D_Mtx& view,const C3D_Mtx& projection,bool sync,
         if(execPipelined_){
             // The GPU may still draw the previous frame: its time and this
             // frame's writes wait for previousFrameDone().
-            previousFrameDone_=false;frameEndTick_=0;stats_.hookMs=0;swapFrameBuffers();
+            previousFrameDone_=false;frameEndTick_=0;stats_.hookMs=stats_.presentWaitMs=0;swapFrameBuffers();
         }else{
             // Every queued command list has completed: the GPU reads nothing of earlier frames.
             stats_.previousGpuMs=C3D_GetDrawingTime();
-            stats_.hookMs=stats_.gpuGapMs=0;queueStartTick_=0;
+            stats_.hookMs=stats_.gpuGapMs=stats_.presentWaitMs=0;queueStartTick_=0;
         }
         renderMetrics={};
     }
@@ -1278,6 +1278,8 @@ void Renderer::beginNow(const C3D_Mtx& view,const C3D_Mtx& projection,bool sync,
     // other, and link the screen to this frame's target.
     const bool wide=wideTarget_&&target_==wideTarget_;
     if(wide!=wideShown_||stereo!=stereoShown_){
+        // A deferred frame reaches the screen in the mode it was drawn for.
+        C3D_FrameWaitPrevious();
         if(!wide&&wideShown_)gfxSetWide(false);
         if(!stereo&&stereoShown_)gfxSet3D(false);
         if(stereo&&!stereoShown_)gfxSet3D(true);
@@ -4193,7 +4195,7 @@ void Renderer::endNow(){
 #ifndef MKW_RELEASE
     diag::renderTrace.step.store(2,std::memory_order_relaxed);
 #endif
-    stats_.commandUsage=C3D_GetCmdBufUsage();C3D_FrameEnd(GX_CMDLIST_FLUSH);
+    stats_.commandUsage=C3D_GetCmdBufUsage();C3D_FramePresentStart(execStartVblank_);C3D_FrameEnd(GX_CMDLIST_FLUSH);
 #ifndef MKW_RELEASE
     diag::renderTrace.step.store(0,std::memory_order_relaxed);
 #endif
@@ -4262,7 +4264,8 @@ bool Renderer::captureBottom(uint8_t* rgb){
 }
 bool Renderer::presentedMatches(const uint8_t* rgb,unsigned eye){
     if(!stereoShown_||eye>1||!presented_[eye]||!rgb)return false;
-    drain();
+    // Not drain(): the last frame's screen transfer may still be deferred (C3D_FramePresentDefer).
+    waitForGpu();
     // BGR8 columns from the bottom of the screen up, as the transfer writes them.
     GSPGPU_InvalidateDataCache(const_cast<uint8_t*>(presented_[eye]),240*400*3);
     for(int y=0;y<240;++y)for(int x=0;x<400;++x){

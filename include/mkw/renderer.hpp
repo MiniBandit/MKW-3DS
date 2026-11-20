@@ -702,6 +702,12 @@ public:
     // long the GPU sat idle between the previous frame and this one (the
     // hook, the replay and any lateness of this frame's commands).
     float hookMs=0,gpuGapMs=0;
+    // Pipelined frames: the wait for the previous frame's present to reach the
+    // screen before this frame's GPU work (mkw/present_pacing.hpp).
+    float presentWaitMs=0;
+    // Set by the main loop before begin(): its VBlank count (C3D_FrameCounter)
+    // for this frame's tick.
+    uint32_t frameVblank=0;
     // Menus/QA synchronize here. Racing waits for VBlank before polling input.
     bool loadingFrame=false; // first race renders complete under the loading cover
     bool frameSync=true;
@@ -828,7 +834,7 @@ private:
     // Recording (src/render_thread.cpp).
     struct FrameList;
     // pixels (DIAG): screen area of 2D quads (sprites, text, fades), clipped to the screen.
-    struct Stats {uint32_t triangles=0,drawCalls=0,culledTriangles=0,culledSubmeshes=0;uint64_t pixels=0;float previousGpuMs=0,beginWaitMs=0,commandUsage=0,renderMs=0,hookMs=0,gpuGapMs=0;RenderMetrics metrics{};
+    struct Stats {uint32_t triangles=0,drawCalls=0,culledTriangles=0,culledSubmeshes=0;uint64_t pixels=0;float previousGpuMs=0,beginWaitMs=0,commandUsage=0,renderMs=0,hookMs=0,gpuGapMs=0,presentWaitMs=0;RenderMetrics metrics{};
         uint64_t setupTicks=0,callTicks=0,resetTicks=0,drawNowTicks=0;uint32_t setups=0,stateHits=0;};
     bool recording() const;
     // The 3D slider's position (0..1), or its QA override.
@@ -861,6 +867,8 @@ private:
     // (C3D_FramePipelineHook) and the per-frame buffers the GPU may still read.
     FrameList* pipelineList_=nullptr;
     bool execPipelined_=false,previousFrameDone_=false,endingFrame_=false;
+    // The executing frame's main-loop VBlank count (C3D_FramePresentStart).
+    uint32_t execStartVblank_=0;
     uint64_t frameEndTick_=0;
     // When the last pipelined frame's commands were queued (after its FrameEnd).
     uint64_t queueStartTick_=0;

@@ -33,6 +33,7 @@
 #include "mkw/retail_lighting.hpp"
 #include "mkw/skin_positions.hpp"
 #include "mkw/job_worker.hpp"
+#include "mkw/present_pacing.hpp"
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -171,6 +172,8 @@ struct Renderer::FrameList {
     std::unique_ptr<ef::DrawList> effects=std::make_unique<ef::DrawList>();
     std::vector<std::unique_ptr<ef::DrawList>> sceneEffects;unsigned sceneEffectsUsed=0;
     unsigned frame=0;
+    // The main loop's VBlank count (C3D_FrameCounter) when this frame's tick began.
+    uint32_t startVblank=0;
     // Recorded at begin(): both eyes are drawn when active.
     // wide: an 800px frame (2D with Settings' 800px on; never with bloom).
     stereo::Frame stereo{};bool wide=false,dualIntro=false,bottomCovered=false,topCovered=false,bottomKept=false,bottomFlat=false;
@@ -477,6 +480,7 @@ void Renderer::execute(FrameList& list){
     Texture::stereoSmall=Texture::stereoSmallAllowed&&execStereo_.active()&&!renderQuality().halfLargeTextures;
     const unsigned eyes=execStereo_.active()?2:1;
     execDualScreenIntro_=list.dualIntro&&bottomTarget_;
+    execStartVblank_=list.startVblank;
     execBottomCovered_=list.bottomCovered;execTopCovered_=list.topCovered;execBottomKept_=list.bottomKept;execBottomFlat_=list.bottomFlat;
     const unsigned passes=eyes+unsigned(execDualScreenIntro_);
     // Per-pass draws and triangles (diagnostic): profiled frames that leave nothing out.
@@ -736,6 +740,9 @@ void Renderer::previousFrameDone(){
     runWrites(list);
     stats_.hookMs+=float((svcGetSystemTick()-writesStart)*1000.0/SYSCLOCK_ARM11);
     readDepthProbe();
+#ifndef MKW_RELEASE
+    presentPacing::counters.frameStart.store(list.startVblank,std::memory_order_relaxed);
+#endif
     if(endingFrame_)notePresented();
 }
 void Renderer::retireShared(std::shared_ptr<void> object){
@@ -918,7 +925,7 @@ void Renderer::beginRecorded(){
     releaseRetired();
     auto& c=command<BeginCommand>();c.view=mainView_;c.projection=mainProjection_;c.lightingTick=animationFrame;c.loading=loadingFrame;c.sync=frameSync;c.begun=false;
     recording_->stereo=frameStereo_;recording_->wide=frameWide_;recording_->dualIntro=frameDualScreenIntro_;
-    recording_->topCovered=topCovered;recording_->bottomKept=bottomKept;
+    recording_->topCovered=topCovered;recording_->bottomKept=bottomKept;recording_->startVblank=frameVblank;
     recording_->diagSkip=diag::passState.skip;recording_->diagProbe=diag::passState.probe;recording_->diagActive=diag::passState.active;recording_->diagGrid=diag::drawGrid.load(std::memory_order_relaxed);
     writeTarget_.store(recording_,std::memory_order_release);
 }
@@ -951,7 +958,7 @@ void Renderer::end(){
     if(!recording()){
         immediateOpen_=false;endNow();gpuIdle_=false;
         triangles=stats_.triangles;drawCalls=stats_.drawCalls;culledTriangles=stats_.culledTriangles;culledSubmeshes=stats_.culledSubmeshes;
-        previousGpuMs=stats_.previousGpuMs;beginWaitMs=stats_.beginWaitMs;commandUsage=stats_.commandUsage;renderThreadMs=0;hookMs=gpuGapMs=0;takeDrawTimes(stats_);
+        previousGpuMs=stats_.previousGpuMs;beginWaitMs=stats_.beginWaitMs;commandUsage=stats_.commandUsage;renderThreadMs=0;hookMs=gpuGapMs=presentWaitMs=0;takeDrawTimes(stats_);
         return;
     }
     command<EndCommand>();
@@ -959,7 +966,7 @@ void Renderer::end(){
     // The last frame the render thread finished (one frame behind).
     LightLock_Lock(&publishLock_);const Stats s=published_;LightLock_Unlock(&publishLock_);
     triangles=s.triangles;drawCalls=s.drawCalls;culledTriangles=s.culledTriangles;culledSubmeshes=s.culledSubmeshes;
-    previousGpuMs=s.previousGpuMs;beginWaitMs=s.beginWaitMs;commandUsage=s.commandUsage;renderThreadMs=s.renderMs;hookMs=s.hookMs;gpuGapMs=s.gpuGapMs;takeDrawTimes(s);
+    previousGpuMs=s.previousGpuMs;beginWaitMs=s.beginWaitMs;commandUsage=s.commandUsage;renderThreadMs=s.renderMs;hookMs=s.hookMs;gpuGapMs=s.gpuGapMs;presentWaitMs=s.presentWaitMs;takeDrawTimes(s);
     renderMetrics.flushCalls+=s.metrics.flushCalls;renderMetrics.flushBytes+=s.metrics.flushBytes;
     renderMetrics.skinnedVertices+=s.metrics.skinnedVertices;
     renderMetrics.contactDraws=s.metrics.contactDraws;renderMetrics.contactTriangles=s.metrics.contactTriangles;
@@ -975,7 +982,7 @@ void Renderer::endLocal(){
 #endif
     localReplay_=false;gpuIdle_=false;
     triangles=stats_.triangles;drawCalls=stats_.drawCalls;culledTriangles=stats_.culledTriangles;culledSubmeshes=stats_.culledSubmeshes;
-    previousGpuMs=stats_.previousGpuMs;beginWaitMs=stats_.beginWaitMs;commandUsage=stats_.commandUsage;renderThreadMs=0;hookMs=gpuGapMs=0;takeDrawTimes(stats_);
+    previousGpuMs=stats_.previousGpuMs;beginWaitMs=stats_.beginWaitMs;commandUsage=stats_.commandUsage;renderThreadMs=0;hookMs=gpuGapMs=presentWaitMs=0;takeDrawTimes(stats_);
 }
 void Renderer::beginBottom(){
     // The target exists only between a race's load and its release (main thread).

@@ -41,6 +41,23 @@ static void* frameEndCbData;
 
 static void C3Di_RenderTargetDestroy(C3D_RenderTarget* target);
 
+// Deferred presentation (C3D_FramePresentDefer). A pipelined frame's queue
+// holds only its drawing; its screen transfers and swap wait here until the
+// next wait for the queue (normally the next pipelined frame's FrameEnd),
+// and then until the previous present has been shown, so a frame is never
+// replaced before GSP shows it and never written into the shown buffer.
+typedef struct { u32* colorBuf; u32 dim; gfxScreen_t screen; gfx3dSide_t side; u32 flags; } DeferredTransfer;
+static bool presentDefer;
+static DeferredTransfer deferred[3];
+static unsigned deferredCount;
+// Catch-up (C3D_FramePresentCatchUp): the VBlank count at which the frame
+// being ended began (C3D_FramePresentStart), the deferred frame's, the run of
+// deferred presents that had to wait for the previous one, and how many
+// presents were dropped to catch up.
+static bool presentCatchUp;
+static u32 presentStart, deferredStart, presentWaitRun, presentDrops;
+static void C3Di_PresentDeferred(void);
+
 static bool framerateLimit(int id)
 {
 	framerateCounter[id] -= framerate;
@@ -123,7 +140,7 @@ static void C3Di_RunQueue(gxCmdQueue_s* queue)
 	gxCmdQueueRun(queue);
 }
 
-static bool C3Di_WaitAndClearQueue(s64 timeout)
+static bool C3Di_WaitQueue(s64 timeout)
 {
 	gxCmdQueue_s* queue = &C3Di_GetContext()->gxQueue;
 	if (!gxCmdQueueWait(queue, timeout))
@@ -141,6 +158,90 @@ static bool C3Di_WaitAndClearQueue(s64 timeout)
 	gxCmdQueueStop(queue);
 	gxCmdQueueClear(queue);
 	return true;
+}
+
+// Every wait for the GPU also shows a deferred frame: whoever waits sees the
+// queue idle and the last frame on its way to the screen.
+static bool C3Di_WaitAndClearQueue(s64 timeout)
+{
+	if (!C3Di_WaitQueue(timeout))
+		return false;
+	C3Di_PresentDeferred();
+	return true;
+}
+
+static void C3Di_PresentDeferred(void)
+{
+	unsigned i;
+	bool top = false, bottom = false;
+	if (!deferredCount) return;
+	for (i = 0; i < deferredCount; i ++)
+	{
+		if (deferred[i].screen == GFX_TOP) top = true;
+		else bottom = true;
+	}
+	const bool pending = (top && gspIsPresentPending(GSP_SCREEN_TOP)) || (bottom && gspIsPresentPending(GSP_SCREEN_BOTTOM));
+	// A frame that began at VBlank s is normally shown at s+2. Once one frame
+	// reached the screen late, each later present waits for the one before
+	// and lands just after a VBlank: every frame then shows at s+3 (or s+4)
+	// and stays there. After a second of that, this frame is dropped (never
+	// written, so nothing tears): the next one shows a refresh earlier.
+	if (pending && presentCatchUp && deferredStart && frameCounter[0] - deferredStart >= 1)
+	{
+		if (++presentWaitRun >= 60)
+		{
+			presentWaitRun = 0;
+			presentDrops ++;
+			deferredCount = 0;
+			return;
+		}
+	} else
+		presentWaitRun = 0;
+	// The back buffer is the one on screen until the previous present has
+	// been taken (at most one refresh; the bound covers HOME and sleep).
+	u64 start = svcGetSystemTick();
+	while (((top && gspIsPresentPending(GSP_SCREEN_TOP)) || (bottom && gspIsPresentPending(GSP_SCREEN_BOTTOM)))
+		&& svcGetSystemTick() - start < SYSCLOCK_ARM11 / 25)
+		svcSleepThread(100000);
+	isTopStereo = false;
+	for (i = 0; i < deferredCount; i ++)
+	{
+		const DeferredTransfer* d = &deferred[i];
+		GX_DisplayTransfer(d->colorBuf, d->dim, (u32*)gfxGetFramebuffer(d->screen, d->side, NULL, NULL), d->dim, d->flags);
+		if (d->screen == GFX_TOP)
+		{
+			needSwapTop = true;
+			if (d->side == GFX_RIGHT)
+				isTopStereo = true;
+		}
+		else
+			needSwapBot = true;
+	}
+	deferredCount = 0;
+	C3Di_RunQueue(&C3Di_GetContext()->gxQueue);
+	C3Di_WaitQueue(-1);
+}
+
+void C3D_FramePresentDefer(bool on)
+{
+	// Read at FrameEnd; a frame already deferred is shown at the next wait.
+	presentDefer = on;
+}
+
+void C3D_FramePresentCatchUp(bool on)
+{
+	presentCatchUp = on;
+	presentWaitRun = 0;
+}
+
+void C3D_FramePresentStart(u32 vblank)
+{
+	presentStart = vblank;
+}
+
+u32 C3D_FramePresentDrops(void)
+{
+	return presentDrops;
 }
 
 void C3Di_RenderQueueEnableVBlank(void)
@@ -401,22 +502,38 @@ void C3D_FrameEnd(u8 flags)
 
 	// A pipelined frame reaches the queue once the previous one has finished
 	// and been swapped: its transfers below then target the free framebuffers.
+	const bool defer = pipelined && presentDefer;
 	if (pipelined)
 	{
 		C3Di_PipelineSubmit();
 		pipelined = false;
 	}
+	// After the submit: it showed the previous frame, judged by that frame's start.
+	if (defer)
+		deferredStart = presentStart;
 	lastHalf = frameHalf;
 
 	int i;
 	C3D_RenderTarget* target;
-	isTopStereo = false;
+	if (!defer)
+		isTopStereo = false;
 	for (i = 2; i >= 0; i --)
 	{
 		target = linkedTarget[i];
 		if (!target || !target->used)
 			continue;
 		target->used = false;
+		if (defer)
+		{
+			// Shown by the next wait for the queue (C3Di_PresentDeferred).
+			DeferredTransfer* d = &deferred[deferredCount++];
+			d->colorBuf = (u32*)target->frameBuf.colorBuf;
+			d->dim = GX_BUFFER_DIM((u32)target->frameBuf.width, (u32)target->frameBuf.height);
+			d->screen = target->screen;
+			d->side = target->side;
+			d->flags = target->transferFlags;
+			continue;
+		}
 		C3D_FrameBufTransfer(&target->frameBuf, target->screen, target->side, target->transferFlags);
 		if (target->screen == GFX_TOP)
 		{

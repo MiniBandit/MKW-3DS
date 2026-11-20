@@ -265,6 +265,41 @@ frames' words as `cmd-dump-<tick>-<frame>.bin`. Compare runs of one build
 only. With race captures, `capture-no-drop.txt` waits for the render thread
 instead of dropping frames, so two runs draw the same frames.
 
+### Present pacing
+
+A pipelined race frame's screen transfers and swap run when the next frame is
+submitted, once the previous present has reached the screen
+(`C3D_FramePresentDefer`, `include/mkw/present_pacing.hpp`), so a frame that
+finishes just after a VBlank is never replaced by the next one before it is
+shown; the GPU itself never waits. `no-present-pacing.txt` (release builds
+too) turns it off. With `benchmark.txt`, `present-pacing-alternate.txt` turns
+it on for the first race load and off for the next, and so on (`runtime.log`:
+`present pacing on/off`); pair the courses in `benchmark-course.txt` (`13 13 8 8`).
+Once one present has to wait for the one before, later frames stay a
+refresh (or two) later than shipped 1.2.1. Optional catch-up
+(`C3D_FramePresentCatchUp`, `present-catchup.txt`, off by default) drops one
+frame's present after a second of that; on the console each drop showed as a
+repeat and a skip, 0.5-5 a minute. `present-catchup-alternate.txt` alternates
+it per race like the switch above.
+
+Every DIAG counts each top and lower-screen present, each present replaced
+before GSP showed it, and each VBlank at which the top screen kept its picture
+(link-time wraps of `gfxScreenSwapBuffers` and citro3d's VBlank0 callback):
+- `perf-present.csv`, one row per race: `present_pacing`, `catch_up`,
+  `caught_up` (presents dropped by catch-up), `vblanks`,
+  `top_presents`, `top_replaced`, `bottom_replaced`, `repeated_vblanks`,
+  `present_wait_ms` (mean, max; 0 since the wait moved into citro3d), `latency_1`..`latency_5plus` (top presents by
+  VBlanks from the frame's loop start to the VBlank that shows it) and
+  `swap_0ms`..`swap_17msplus` (when the frame's GPU work ended, after the last
+  VBlank);
+- `perf-race-NNN-present.csv`: every frame that replaced a present or kept a
+  picture (race time, frame, interval, simulation, GPU and wait ms);
+- the seconds CSV's `replaced_presents`, `repeated_vblanks`,
+  `present_wait_ms`, `present_wait_max_ms`.
+
+The loop's `late_frames` and `rendered` miss these: the loop and the GPU can
+both hold 60 while the screen repeats a picture and skips the next.
+
 ## Repacked packs
 
 `tools/pakpack.c` (build: `gcc -O2 -o pakpack tools/pakpack.c`) rewrites an
