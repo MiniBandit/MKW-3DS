@@ -1455,9 +1455,19 @@ int main() {
         }
         if(!net.opened())return false;
         // Test builds: qa-online.txt "join <code>" types the host's code.
-        if(kQa&&*qaOnlineCode&&menu.page==mkw::UiPage::OnlineCode&&!menu.codeEntry[0]&&!menu.codeForPlayer){
+        // Test builds: qa-online.txt "join nearby" joins the race found on this Wi-Fi.
+        if(kQa&&!std::strcmp(qaOnlineCode,"nearby")&&menu.page==mkw::UiPage::OnlineCode&&menu.onlineNearby&&!menu.codeForPlayer){
+            menu.onlineNearbyRequest=true;const auto from=menu;menu.enter(mkw::UiPage::OnlineLobby);transition.reset();transition.begin(from,menu);
+        }
+        if(kQa&&*qaOnlineCode&&std::strcmp(qaOnlineCode,"nearby")&&menu.page==mkw::UiPage::OnlineCode&&!menu.codeEntry[0]&&!menu.codeForPlayer){
             unsigned n=0;for(const char* c=qaOnlineCode;*c&&n<16;++c)if(*c>='0'&&*c<='9')menu.codeEntry[n++]=*c;menu.codeEntry[n]=0;
             menu.onlineCodeRequest=true;const auto from=menu;menu.enter(mkw::UiPage::OnlineLobby);transition.reset();transition.begin(from,menu);
+        }
+        // Y on the number pad: the race on this Wi-Fi.
+        if(menu.onlineNearbyRequest){
+            menu.onlineNearbyRequest=false;
+            if(net.joinNearby())LOGF("online: joining the race on this Wi-Fi");
+            else{menu.onlineFailed=true;std::snprintf(menu.onlineStatus,sizeof menu.onlineStatus,"That race has closed. Press B to go back.");}
         }
         if(menu.onlineCodeRequest){
             menu.onlineCodeRequest=false;
@@ -1471,6 +1481,9 @@ int main() {
         const unsigned garage=driver<24?driver*mkw::VehiclesPerDriver+vehicle:unsigned(mkw::GarageChoices.size())+mkw::miiGarageOffset(selectedMiiBody.retailCharacter)+vehicle;
         const unsigned cc=menu.selection.vsClass;
         net.lobbyStep(garage,menu.selection.automatic,menu.selection.course,std::min(cc,2u),cc==3);
+        {unsigned nearbyCount=0;const uint16_t* nearbyName=nullptr;
+         menu.onlineNearby=!menu.onlineHost&&net.nearby(nearbyCount,nearbyName);
+         if(menu.onlineNearby){menu.nearbyCount=nearbyCount;std::copy(nearbyName,nearbyName+mkw::net::NameLength,menu.nearbyName.begin());}}
         // What the lobby page shows.
         char step[64];
         while(net.takeEvent(step,sizeof step)){
@@ -3837,7 +3850,10 @@ int main() {
                     controller->setInputsRawStick(0,7,7,K::System::Trick::None);
                 else controller->setInputsRawStick(buttons,(selectedMirror?-stick:stick)+7,stickY+7,raceTrick);
                 // Online: this console's inputs for the other consoles (race loop below).
-                lanButtons=uint16_t(buttons);lanStick=int8_t(selectedMirror?-stick:stick);lanTrick=uint8_t(raceTrick);
+                lanButtons=uint16_t(buttons);lanStick=int8_t(selectedMirror?-stick:stick);
+                // A trick is one tick's input (ethanseagull's 1.2): held in the Frames for 8 ticks so
+                // a lost or bunched packet can't drop it. KartJump only latches it, so repeats are harmless.
+                {static uint8_t hold=0;if(raceTrick!=K::System::Trick::None){lanTrick=uint8_t(raceTrick);hold=8;}else if(hold)--hold;else lanTrick=0;}
                 if(fullRace){
                     // After the goal retail hands the player to its AI
                     // (AIEngine PostRaceDriving, USA 0x80728C28): the CPU

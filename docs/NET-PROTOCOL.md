@@ -20,7 +20,7 @@ Addresses inside packets are IPv4 in network byte order (as `sin_addr`).
 | 12 | 4 | sequence | increases with each packet a sender sends |
 
 Ignore packets with the wrong magic or version, and (except Hello, Lobby,
-Refuse and Ping) packets whose session doesn't match.
+Refuse, Ping, Seek and Beacon) packets whose session doesn't match.
 
 ## Finding each other
 
@@ -30,6 +30,11 @@ its **connection code**, typed on a number pad like a Wii friend code: the 48
 bits (address << 16 | port) as 15 decimal digits, then a Luhn check digit (so
 any single mistyped digit or swapped neighbours are caught), grouped 4-4-4-4.
 See `net_code.hpp`.
+
+**Same network, no code.** A joiner that has no host yet broadcasts Seek; a
+host with an open lobby and the same build answers with Beacon (its license
+name and head count). The joiner offers that race, and joining it means
+sending Hello to the Beacon's sender address, as if its code had been typed.
 
 The host prefers port 41750. A joiner sends Hello to the host's code; the host
 answers with Lobby. If the host's router drops the Hello, the host types the
@@ -48,6 +53,8 @@ joiner's code (Add a Player) and sends Ping to it every half second, which opens
 | 7 | Refuse | host → a joiner it can't take | `u32 id, char message[44]` |
 | 8 | Ping | all → all in the lobby, every 30 frames | `u32 id` |
 | 9 | Events | all → all, while the sender has race events not everyone has acknowledged | `u8 count, u8 0, u16 round, u16 oldest, RaceEvent[count]` (count ≤ 8) |
+| 11 | Seek | joiner without a host → its network's broadcast address and 255.255.255.255, port 41750, every 30 frames | `u32 id, char build[16]` |
+| 12 | Beacon | host with a lobby → a Seek's sender | `u8 count, u8 started, u16 0, char build[16], u16 name[10]` |
 
 **LobbyPlayer** (34 bytes): `u32 id, u32 address, u16 port, u16 garage, u8 autoDrift, u8 0, u16 name[10]`.
 Slot = position in the list; the host is slot 0 with address 0.

@@ -15,7 +15,8 @@ Up to 12 players, VS races on the course the host chooses.
 1. Choose **Online** on the main menu, then **Host a Race** or **Join a Race**.
 2. Choose your driver, vehicle and drift. The host then chooses the course.
 3. **Joining:** type the host's 16-digit code on the number pad (B deletes a
-   digit) and choose **OK**.
+   digit) and choose **OK**. **On the same Wi-Fi as the host**, no code is
+   needed: the number pad shows the host's race in green; press **Y**.
 4. The **lobby** shows everyone who is in, with their driver and license name,
    and your own code, e.g. `1396-3797-6834-8383`.
    - **Host:** send your code to the other players (Discord, a message...),

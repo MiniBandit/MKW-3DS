@@ -99,6 +99,8 @@ public:
  // joining player's code (else a joiner types the host's).
  char codeEntry[17]{};bool codeWrong=false,codeForPlayer=false;
  bool onlineStartRequest=false,onlineCodeRequest=false,onlineLeaveRequest=false;
+ // A race on this Wi-Fi (main fills it in while the number pad shows): Y joins it, no code.
+ bool onlineNearby=false,onlineNearbyRequest=false;unsigned nearbyCount=0;std::array<std::uint16_t,10> nearbyName{};
  static constexpr const char* OnlineKeys[12]={"1","2","3","4","5","6","7","8","9","Delete","0","OK"};
  unsigned unlockCondition=~0u,unlockBit=~0u;
  bool unlockNextRequested=false;

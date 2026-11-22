@@ -342,6 +342,11 @@ UiAction MenuState::input(UiInput key){
   }
   return UiAction::None;
  }
+ // Y on the number pad joins the race on this Wi-Fi, no code needed.
+ if(key.switchType&&page==UiPage::OnlineCode){
+  if(codeForPlayer||!onlineNearby)return UiAction::None;
+  onlineNearbyRequest=true;enter(UiPage::OnlineLobby);return UiAction::None;
+ }
  // Y on a ghost's row watches its replay; A races it.
  if(key.switchType&&page==UiPage::Ghost){
   if(cursor>=3||!choiceVisible(cursor))return UiAction::None;

@@ -1392,9 +1392,11 @@ static void composeMenuImpl(const MenuState& s,const UiRaceView& race,std::vecto
   if(s.cursor==0){
    c.screenWords("Choose the course, then send your code",200,84,18,0xffffffffu,false);
    c.screenWords("to the other players. Up to 12 can race.",200,108,18,0xffffffffu,false);
+   c.screenWords("Players on your Wi-Fi need no code.",200,128,14,0xc0c0c0ffu,false);
   }else{
    c.screenWords("Type the code the host sends you",200,84,18,0xffffffffu,false);
    c.screenWords("and race on the host's course.",200,108,18,0xffffffffu,false);
+   c.screenWords("On the host's Wi-Fi? No code: press Y.",200,128,14,0xc0c0c0ffu,false);
   }
   c.screenWords("Everyone needs the same version of the game.",200,150,14,0xc0c0c0ffu,false);
   c.chrome("Online");break;
@@ -1406,6 +1408,15 @@ static void composeMenuImpl(const MenuState& s,const UiRaceView& race,std::vecto
   c.screenWords(s.codeForPlayer?"Type the joining player's code.":"Type the host's code.",200,64,20,0xffffffffu,false);
   c.screenCode(s.codeEntry,200,98,28,false,typed,true);
   if(s.codeWrong)c.screenWords("That code isn't right. Check it and try again.",200,148,16,0xff6060ffu,false);
+  else if(s.onlineNearby&&!s.codeForPlayer){
+   // A race on this Wi-Fi: the host's license name (letters the font has) and Y.
+   char line[64],name[11]{};unsigned n=0;
+   for(auto ch:s.nearbyName){if(!ch)break;name[n++]=ch<128?char(ch):'?';}
+   if(n)std::snprintf(line,sizeof line,"%s's race is on this Wi-Fi (%u in).",name,s.nearbyCount);
+   else std::snprintf(line,sizeof line,"A race is on this Wi-Fi (%u in).",s.nearbyCount);
+   c.screenWords(line,200,140,16,0x80ff80ffu,false);
+   c.screenWords("Press Y to join it. No code needed.",200,160,16,0x80ff80ffu,false);
+  }
   else c.screenWords(s.codeForPlayer?"Only needed when a player can't get in.":"The host's code is shown in their lobby.",200,148,16,0xc0c0c0ffu,false);
   c.chrome("Enter Code");break;
  }

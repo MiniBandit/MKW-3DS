@@ -18,7 +18,7 @@ constexpr uint16_t DefaultPort=41750;
 constexpr unsigned MaxPlayers=12;
 // A player's license name: up to 10 UTF-16 characters, 0 after the end.
 constexpr unsigned NameLength=10;
-enum class Type:uint8_t {Hello=1,Lobby=2,Ready=3,Go=4,Frame=5,Bye=6,Refuse=7,Ping=8,Events=9,Probe=10};
+enum class Type:uint8_t {Hello=1,Lobby=2,Ready=3,Go=4,Frame=5,Bye=6,Refuse=7,Ping=8,Events=9,Probe=10,Seek=11,Beacon=12};
 
 #pragma pack(push,1)
 // sender: the player's slot in the lobby (0 is the host), 255 before it has one.
@@ -68,9 +68,14 @@ struct RaceEvent {uint16_t seq;uint8_t kind,a,b,c,d,e;uint16_t id,reserved;float
 constexpr unsigned EventsPerPacket=8;
 struct Events {Header h;uint8_t count,reserved;uint16_t round,oldest;RaceEvent events[EventsPerPacket];};
 struct Bye {Header h;};
+// Same Wi-Fi, no code: a joiner broadcasts Seek to DefaultPort on its network;
+// a host with an open lobby answers with Beacon (its license name and head count).
+struct Seek {Header h;uint32_t id;char build[16];};
+struct Beacon {Header h;uint8_t count,started;uint16_t reserved;char build[16];uint16_t name[NameLength];};
 // Host -> a console it can't take, with the reason for display.
 struct Refuse {Header h;uint32_t id;char message[44];};
 #pragma pack(pop)
+static_assert(sizeof(Seek)==36&&sizeof(Beacon)==56);
 static_assert(sizeof(Header)==16&&sizeof(Hello)==76&&sizeof(LobbyPlayer)==34&&sizeof(Lobby)==448&&sizeof(Frame)==124&&sizeof(Refuse)==64&&sizeof(RaceEvent)==36&&sizeof(Events)==310&&sizeof(Ready)==24&&sizeof(Go)==32);
 
 // Finishing keys: lower finishes ahead. A finisher's key is its race time in
@@ -120,6 +125,10 @@ public:
     // router lets that player in. False when the code is mistyped.
     bool addCode(const char* text);
     bool hostKnown() const{return hostKnown_;}
+    // Joiner, before it has a host: a race on this Wi-Fi heard in the last
+    // few seconds (its host's name and head count), and joining it.
+    bool nearby(unsigned& count,const uint16_t*& name) const{count=nearby_.count;name=nearby_.name;return nearby_.address&&nearby_.age<NearbyFor;}
+    bool joinNearby();
     // Each frame on the connection screen: the local player's choices
     // (the host's course, class and mirror are the race's).
     void lobbyStep(unsigned garage,bool autoDrift,unsigned course,unsigned engineClass,bool mirror);
@@ -197,6 +206,10 @@ private:
     void sendLobby();
     int find(uint32_t address,uint16_t port) const;
     uint16_t reachMask() const;
+    struct Nearby {uint32_t address=0;uint16_t port=0;uint8_t count=0;uint16_t name[NameLength]{};unsigned age=0;};
+    static constexpr unsigned NearbyFor=180;
+    Nearby nearby_{};uint32_t broadcast_=0;bool nearHost_=false;
+    void seekStep();
     Mode mode_=Mode::None;bool fromFile_=false,lanOnly_=false;
     int socket_=-1;uint32_t* socBuffer_=nullptr;uint16_t localPort_=0;
     uint32_t id_=0,session_=0,sequence_=0,polls_=0;

@@ -27,7 +27,7 @@ constexpr unsigned HelloEvery=20,LobbyEvery=30,PingEvery=30,ReadyEvery=6,GoEvery
 // news reaches everyone first (milliseconds).
 constexpr int32_t StartLead=500;
 constexpr unsigned HeardWithin=180,LobbyTimeout=300,ReadyTimeout=30*60,AskHostAfter=600;
-constexpr unsigned LostAfter=300,EventsEvery=4;
+constexpr unsigned LostAfter=300,EventsEvery=4,SeekEvery=30;
 constexpr uint32_t StunCookie=0x2112A442;
 // Public STUN servers: they only tell a console the address the internet sees.
 // sd:/3ds/mkw-3ds/stun.txt ("host port" per line) replaces them, for testing.
@@ -106,7 +106,7 @@ void Session::configureOnline(Mode mode){
     if(mode_!=mode&&socket_>=0)close();
     mode_=mode;lanOnly_=false;
     // A new lobby: forget the last host's code and the players invited before.
-    hostKnown_=false;invitedCount_=0;
+    hostKnown_=false;invitedCount_=0;nearby_={};nearHost_=false;
     // The host keeps the usual port when it can: home routers often keep it too.
     localPort_=mode==Mode::Host?DefaultPort:0;
 }
@@ -128,6 +128,9 @@ bool Session::open(){
     if(!bindTo(localPort_)&&(lanOnly_||!bindTo(0))){close();reason_="the network port is in use";return false;}
     sockaddr_in bound{};socklen_t length=sizeof bound;
     if(getsockname(socket_,reinterpret_cast<sockaddr*>(&bound),&length)==0&&bound.sin_port)localPort_=ntohs(bound.sin_port);
+    // This network's broadcast address, for finding races on the same Wi-Fi.
+    {int on=1;setsockopt(socket_,SOL_SOCKET,SO_BROADCAST,&on,sizeof on);
+     in_addr ip{},mask{},all{};broadcast_=SOCU_GetIPInfo(&ip,&mask,&all)==0?(all.s_addr?all.s_addr:(ip.s_addr|~mask.s_addr)):0;}
     id_=(uint32_t(svcGetSystemTick()*2654435761u)^uint32_t(gethostid()))|1u;slot_=mode_==Mode::Host?0:255;
     session_=mode_==Mode::Host?(uint32_t(svcGetSystemTick())|1u):0;
     char ip[16];const uint32_t local=uint32_t(gethostid());
@@ -266,7 +269,9 @@ void Session::lobbyStep(unsigned garage,bool autoDrift,unsigned course,unsigned 
         if(polls_%PingEvery==0){Ping ping{header(Type::Ping),id_};for(unsigned i=0;i<invitedCount_;++i)sendTo(invited_[i],invitedPort_[i],&ping,sizeof ping);}
         return;
     }
-    if(!hostKnown_||!stunDone_)return;
+    if(!hostKnown_){seekStep();return;}
+    // A host found on this Wi-Fi needs no internet address.
+    if(!stunDone_&&!nearHost_)return;
     if(slot_==255||!started_){
         if(polls_%HelloEvery==0){
             Hello hello{};hello.h=header(Type::Hello);hello.id=id_;hello.garage=uint16_t(garage);hello.autoDrift=autoDrift;
@@ -281,6 +286,25 @@ void Session::lobbyStep(unsigned garage,bool autoDrift,unsigned course,unsigned 
     if(slot_!=255&&polls_%PingEvery==0){Ping ping{header(Type::Ping),id_};sendAll(&ping,sizeof ping);}
     const unsigned heard=heardCount();
     if(slot_!=255&&count_>2&&heard!=heardBefore_){heardBefore_=heard;note("> Linked directly to %u of %u players",heard,count_-1);}
+}
+
+void Session::seekStep(){
+    if(mode_!=Mode::Join||socket_<0)return;
+    ++nearby_.age;
+    if(polls_%SeekEvery)return;
+    Seek seek{};seek.h=header(Type::Seek);seek.id=id_;copyBuild(seek.build);
+    if(broadcast_)sendTo(broadcast_,DefaultPort,&seek,sizeof seek);
+    sendTo(INADDR_BROADCAST,DefaultPort,&seek,sizeof seek);
+#ifndef MKW_RELEASE
+    // Test builds: two emulators on one computer.
+    sendTo(htonl(INADDR_LOOPBACK),DefaultPort,&seek,sizeof seek);
+#endif
+}
+bool Session::joinNearby(){
+    if(mode_!=Mode::Join||hostKnown_||!nearby_.address||nearby_.age>=NearbyFor)return false;
+    hostAddress_=nearby_.address;hostPort_=nearby_.port;hostKnown_=true;nearHost_=true;
+    char ip[16];note("> Calling the host at %s:%u",dotted(hostAddress_,ip),unsigned(hostPort_));
+    return true;
 }
 
 bool Session::canStart() const{return mode_==Mode::Host&&count_>=2&&!started_;}
@@ -460,6 +484,23 @@ void Session::receive(const uint8_t* data,size_t size,uint32_t address,uint16_t 
             for(unsigned s=0;s<MaxPlayers;++s){hasFrame_[s]=false;left_[s]=false;silent_[s]=0;queueCount_[s]=0;}
             note("> The host started the race: %u players",count_);
         }
+        return;
+    }
+    // Same Wi-Fi: a joiner looking for races, and a host's answer.
+    if(h.type==Type::Seek){
+        if(mode_!=Mode::Host||socket_<0||size<sizeof(Seek))return;
+        Seek seek;std::memcpy(&seek,data,sizeof seek);if(seek.id==id_||!sameBuild(seek.build))return;
+        if(!count_){count_=1;slot_=0;}
+        Beacon beacon{};beacon.h=header(Type::Beacon);beacon.count=uint8_t(count_);beacon.started=started_;copyBuild(beacon.build);
+        std::memcpy(beacon.name,name_,sizeof beacon.name);sendTo(address,port,&beacon,sizeof beacon);
+        return;
+    }
+    if(h.type==Type::Beacon){
+        if(mode_!=Mode::Join||hostKnown_||size<sizeof(Beacon))return;
+        Beacon beacon;std::memcpy(&beacon,data,sizeof beacon);if(!sameBuild(beacon.build)||beacon.started)return;
+        // Two races on one Wi-Fi: keep showing the one already shown while it answers.
+        if(nearby_.address&&nearby_.age<60&&(nearby_.address!=address||nearby_.port!=port))return;
+        nearby_.address=address;nearby_.port=port;nearby_.count=beacon.count;nearby_.age=0;std::memcpy(nearby_.name,beacon.name,sizeof nearby_.name);
         return;
     }
     if(h.type==Type::Ping){
