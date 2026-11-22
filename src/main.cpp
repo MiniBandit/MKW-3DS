@@ -1502,7 +1502,7 @@ int main() {
         std::snprintf(menu.onlineCode,sizeof menu.onlineCode,"%s",net.code());
         menu.onlineFailed=net.failed();menu.onlineCanStart=net.canStart();
         // The host closed its lobby (Bye): nothing more will come from it.
-        if(!net.host()&&net.lobbyCount()&&net.left(0)&&!net.started()){menu.onlineFailed=true;std::snprintf(menu.onlineStatus,sizeof menu.onlineStatus,"The host left the lobby. Press B to go back.");}
+        if(!net.host()&&((net.lobbyCount()&&net.left(0))||net.hostGone())&&!net.started()){menu.onlineFailed=true;std::snprintf(menu.onlineStatus,sizeof menu.onlineStatus,"The host left the lobby. Press B to go back.");}
         const unsigned count=std::min(net.lobbyCount(),12u);
         if(count){
             menu.onlineCount=count;

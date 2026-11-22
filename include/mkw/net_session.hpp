@@ -185,6 +185,8 @@ public:
     // Half the quickest recent round trip, in ticks: the delay of a Frame that met no queue.
     float quickestDelayTicks(unsigned slot) const{return slot<MaxPlayers&&minRttMs_[slot]>0?minRttMs_[slot]*.5f*60.f/1000.f:delayTicks(slot);}
     bool left(unsigned slot) const{return left_[slot];}
+    // Joiner: the host said goodbye (and has not sent a lobby since).
+    bool hostGone() const{return hostGone_;}
     // Human-readable steps for the connection screen, oldest first.
     bool takeEvent(char* out,size_t size);
     // Before each race: keeps the players, clears the last race.
@@ -208,7 +210,7 @@ private:
     uint16_t reachMask() const;
     struct Nearby {uint32_t address=0;uint16_t port=0;uint8_t count=0;uint16_t name[NameLength]{};unsigned age=0;};
     static constexpr unsigned NearbyFor=180;
-    Nearby nearby_{};uint32_t broadcast_=0;bool nearHost_=false;
+    Nearby nearby_{};uint32_t broadcast_=0;bool nearHost_=false,hostGone_=false;unsigned waitPolls_=0,byeCount_=0;
     void seekStep();
     Mode mode_=Mode::None;bool fromFile_=false,lanOnly_=false;
     int socket_=-1;uint32_t* socBuffer_=nullptr;uint16_t localPort_=0;

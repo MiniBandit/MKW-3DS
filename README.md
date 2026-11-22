@@ -48,6 +48,10 @@ unchanged. The `.toolchain` folder is excluded from Git.
 
 **macOS:** double-click `Build MKW CIA.command`, drag your disc image into the
 window and press Return.
+If macOS says you don't have the access privileges to open it, the file lost
+its permission to run (some unzip tools and single-file downloads drop it).
+Open Terminal, type `bash ` (with the space), drag `Build MKW CIA.command` into
+the window and press Return; this runs it the same way.
 
 **Windows:** double-click `Build MKW CIA.bat`. If Python, Git, Node.js, a C++
 compiler or devkitPro is missing, it lists them and installs them when you press

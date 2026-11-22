@@ -106,7 +106,7 @@ void Session::configureOnline(Mode mode){
     if(mode_!=mode&&socket_>=0)close();
     mode_=mode;lanOnly_=false;
     // A new lobby: forget the last host's code and the players invited before.
-    hostKnown_=false;invitedCount_=0;nearby_={};nearHost_=false;
+    hostKnown_=false;invitedCount_=0;nearby_={};nearHost_=false;hostGone_=false;waitPolls_=0;
     // The host keeps the usual port when it can: home routers often keep it too.
     localPort_=mode==Mode::Host?DefaultPort:0;
 }
@@ -159,7 +159,10 @@ bool Session::open(){
 }
 
 void Session::close(){
-    if(socket_>=0&&count_>1){Bye bye{header(Type::Bye)};sendAll(&bye,sizeof bye);}
+    // Everyone in the lobby, and a host's players from the last race who have not called again yet.
+    const unsigned told=std::max(count_,mode_==Mode::Host?byeCount_:0u);
+    if(socket_>=0&&told>1){Bye bye{header(Type::Bye)};for(unsigned s=0;s<told&&s<MaxPlayers;++s)if(s!=slot_)sendTo(players_[s].address,players_[s].port,&bye,sizeof bye);}
+    byeCount_=0;
     if(socket_>=0){::close(socket_);socket_=-1;}
     if(socBuffer_){socExit();std::free(socBuffer_);socBuffer_=nullptr;}
     count_=0;slot_=255;started_=false;
@@ -279,7 +282,9 @@ void Session::lobbyStep(unsigned garage,bool autoDrift,unsigned course,unsigned 
             std::memcpy(hello.name,name_,sizeof hello.name);
             sendTo(hostAddress_,hostPort_,&hello,sizeof hello);
         }
-        if(slot_==255&&!announcedWait_&&polls_>=AskHostAfter&&*code_){
+        // Only the first time in: back from a race, the host is choosing the next course.
+        if(slot_==255)++waitPolls_;
+        if(slot_==255&&!announcedWait_&&!lastRound_&&!nearHost_&&waitPolls_>=AskHostAfter&&*code_){
             announcedWait_=true;note("> No answer yet. Ask the host to choose Add a Player");note("  and type your code.");
         }
     }
@@ -477,7 +482,7 @@ void Session::receive(const uint8_t* data,size_t size,uint32_t address,uint16_t 
         if(mine==255){if(lobby.started&&!announcedWait_){announcedWait_=true;note("> A race started without you. Wait for the next.");}return;}
         const bool first=slot_==255;
         count_=count;slot_=mine;session_=lobby.h.session;round_=lobby.round;course_=lobby.course;engineClass_=lobby.engineClass;mirror_=lobby.mirror!=0;
-        direct_[0]=0;silent_[0]=0;
+        direct_[0]=0;silent_[0]=0;hostGone_=false;
         if(first)note("> In the lobby as player %u",slot_+1);
         if(lobby.started){
             started_=true;lastRound_=round_;goSeen_=false;bestRtt_=0x7fffffff;clockAhead_=0;resetEvents();
@@ -503,6 +508,8 @@ void Session::receive(const uint8_t* data,size_t size,uint32_t address,uint16_t 
         nearby_.address=address;nearby_.port=port;nearby_.count=beacon.count;nearby_.age=0;std::memcpy(nearby_.name,beacon.name,sizeof nearby_.name);
         return;
     }
+    // The host closing while this console waits between races (no lobby to number it by).
+    if(h.type==Type::Bye&&mode_==Mode::Join&&slot_==255&&hostKnown_&&address==hostAddress_&&port==hostPort_){if(!hostGone_)note("> The host left");hostGone_=true;return;}
     if(h.type==Type::Ping){
         // Also arrives before this console has a lobby: it opens the route.
         const int s=find(address,port);if(s>=0)direct_[s]=0;
@@ -576,7 +583,7 @@ void Session::receive(const uint8_t* data,size_t size,uint32_t address,uint16_t 
         }
         relay();break;
     }
-    case Type::Bye:if(!left_[s])note("> Player %u left",s+1);left_[s]=true;relay();break;
+    case Type::Bye:if(!left_[s])note("> Player %u left",s+1);left_[s]=true;if(s==0&&mode_==Mode::Join)hostGone_=true;relay();break;
     default:break;
     }
 }
@@ -596,11 +603,12 @@ void Session::qaBeacon(const char* text){
 }
 
 void Session::newRound(){
-    goSeen_=false;goRepeats_=0;readyPolls_=0;ready_={};bestRtt_=0x7fffffff;clockAhead_=0;announcedWait_=false;failed_=false;resetEvents();
+    goSeen_=false;goRepeats_=0;readyPolls_=0;ready_={};bestRtt_=0x7fffffff;clockAhead_=0;announcedWait_=false;failed_=false;waitPolls_=0;resetEvents();
     for(unsigned s=0;s<MaxPlayers;++s){hasFrame_[s]=false;left_[s]=false;silent_[s]=0;queueCount_[s]=0;}
     if(mode_==Mode::Host){
         // Joiners call again from their own menus; the lobby fills up anew.
         if(started_){++round_;started_=false;}
+        byeCount_=std::max(byeCount_,count_);
         if(count_>1)count_=1;
         if(!round_)round_=1;
     }else{started_=false;slot_=255;count_=0;}
