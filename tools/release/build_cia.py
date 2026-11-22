@@ -173,6 +173,11 @@ COOK_STEPS=[
  ('Mii menu, team and metadata',['{py}','tools/finish_mii_racers.py','{disc}','build/mii-racers','--jobs','{jobs}'],['build/mii-racers/models/mii-complete.json','include/mkw/mii_garage.hpp']),
  ('Mii award bodies',['{py}','tools/cook_mii_awards.py','build/mii-racers'],['build/mii-racers/models/mii-awards.json','include/mkw/mii_award_materials.hpp']),
  ('Mii voice tables',['{py}','tools/cook_mii_voice.py','build/itembox-retail.rel'],['include/mkw/mii_voice.hpp']),
+ # The top screen while a race loads (ethanseagull's 1.2.0 picture), its sources
+ # made from the disc's opening movie and race font, then cooked; before the
+ # menu archive, which packs it.
+ ('race loading sources',['{py}','tools/make_loading_sources.py'],['assets/loading-screen/background.png','assets/loading-screen/loading.png']),
+ ('race loading picture',['{py}','tools/cook_loading_picture.py'],[SD+'/loading/race-400.bin',SD+'/loading/race-800.bin']),
  # The menu archive indexes the menu files; the race archives are packed with
  # the finished game (tools/package_sd.py), which their file map lists.
  ('menu archive',['{py}','tools/pack_menu_assets.py'],[SD+'/menu.pak']),
