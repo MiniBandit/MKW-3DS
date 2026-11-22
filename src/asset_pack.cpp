@@ -406,7 +406,9 @@ std::FILE* openFile(const char* path){
 #ifndef MKW_RELEASE
 void traceMark(const char* name){auto& all=archives();LightLock_Lock(&all.lock);if(all.trace){std::fprintf(all.trace,"#%s\n",name);std::fflush(all.trace);}LightLock_Unlock(&all.lock);}
 #endif
-void open(){auto& all=archives();LightLock_Lock(&all.lock);all.rooted=true;const Entry* e=nullptr;lookup(all,"",&e);LightLock_Unlock(&all.lock);}
+// The packs are relative to the asset folder: nothing is looked up in them before
+// open() (a lookup at boot, from another folder, would find none and never retry).
+void open(){auto& all=archives();LightLock_Lock(&all.lock);if(!all.rooted)all.tried=false;all.rooted=true;const Entry* e=nullptr;lookup(all,"",&e);LightLock_Unlock(&all.lock);}
 void close(){
  auto& all=archives();LightLock_Lock(&all.lock);
  stopPrefetch(all);
@@ -418,8 +420,8 @@ void close(){
 #endif
  all.sectorReads=all.readAhead=all.prefetch=true;all.tried=false;LightLock_Unlock(&all.lock);
 }
-bool contains(const char* path){auto& all=archives();LightLock_Lock(&all.lock);const Entry* e=nullptr;const bool found=lookup(all,path,&e);LightLock_Unlock(&all.lock);return found;}
-long size(const char* path){auto& all=archives();LightLock_Lock(&all.lock);const Entry* e=nullptr;const long result=lookup(all,path,&e)?long(e->size):-1;LightLock_Unlock(&all.lock);return result;}
+bool contains(const char* path){auto& all=archives();LightLock_Lock(&all.lock);const Entry* e=nullptr;const bool found=all.rooted&&lookup(all,path,&e);LightLock_Unlock(&all.lock);return found;}
+long size(const char* path){auto& all=archives();LightLock_Lock(&all.lock);const Entry* e=nullptr;const long result=all.rooted&&lookup(all,path,&e)?long(e->size):-1;LightLock_Unlock(&all.lock);return result;}
 bool readInto(const char* path,void* destination,size_t bytes){
  auto& all=archives();LightLock_Lock(&all.lock);
  const Entry* e=nullptr;Archive* a=lookup(all,path,&e);

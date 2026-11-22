@@ -763,6 +763,8 @@ int main() {
                  unpacked==mkw::UnpackResult::NoSpace?"SD copy: not enough space":unpacked==mkw::UnpackResult::Failed?"SD copy: failed":"SD copy: interrupted";
         bootStep(result);report(result);
         if(unpacked==mkw::UnpackResult::Interrupted){gfxExit();return 0;}
+        // The copy wrote the packs and content.txt: list the game folder again.
+        if(bootListed){bootNames.clear();listBootFolder();}
     }
 #endif
     // Once the first-start copy has put the same files on the SD card, read
