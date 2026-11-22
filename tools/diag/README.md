@@ -51,10 +51,15 @@ to the HOME Menu (about 100 minutes).
   listed under `"stuck"` in the result file; leave those rows out of
   comparisons.
 - `benchmark-course.txt` (a course number, 0–31) races every race of the
-  set on that course instead, for a short single-course A/B. With it,
+  set on that course instead, for a short single-course A/B; several
+  numbers (`8 8 5 5`) make the set cycle through them in order. With it,
   `unit1-alternate.txt` turns `no-unit1-vram.txt`'s change on for the first
   race load and off for the next, and so on (`runtime.log`: `unit1 vram
-  on/off`); every load then places the course textures again. The set still
+  on/off`); every load then places the course textures again.
+  `object-weld-alternate.txt` does the same for `no-object-weld.txt`:
+  welded course objects on the first race load, unwelded on the next
+  (`runtime.log`: `object weld on/off`, `course objects weld ... unwelded
+  meshes=… banks=…`). The set still
   counts 32 races: end the script with `quit` after the last race you want.
 - The benchmark forces VS rules to Courses: In Order, Races: 32, which can be
   saved to your license. Delete both files afterwards, or the DIAG title
@@ -180,6 +185,16 @@ accessory matrices together with its chassis matrix instead of on their first
 read (the same values). `no-pose-share.txt` evaluates an animation bank's pose
 again for each model it is applied to (race items pose a lit and an unlit
 copy) instead of reusing the pose its other model already holds.
+`no-racer-weld.txt` loads the animated racer parts (drivers, animated bodies)
+with their old identity indices instead of the welded, vertex-cache-ordered ones
+`tools/pack_racer_weld.py` wrote (the same pack: every model with as many
+indices as vertices gets identity indices, which is what those models held).
+With `benchmark-course.txt`, `racer-weld-alternate.txt` cycles the race loads:
+welded and cache-ordered (as shipped), identity indices (as before), then
+identity indices with the player's equal corners sharing an index at load
+(welded, stored order; opponents always share theirs), and so on
+(`runtime.log`: `racer weld on/off/stored order`); set reuse is off then, so
+every race loads its racers again.
 `no-gpu-pose.txt` poses race items (Bob-omb, Blue Shell, Blooper, POW, Bullet Bill)
 and Lakitu's non-rigid parts on the CPU each frame again instead of skinning them on
 the GPU from one palette (the hook-writes CSV's `driver pose cpu` rows). Every DIAG
@@ -250,6 +265,41 @@ frames' words as `cmd-dump-<tick>-<frame>.bin`. Compare runs of one build
 only. With race captures, `capture-no-drop.txt` waits for the render thread
 instead of dropping frames, so two runs draw the same frames.
 
+### Present pacing
+
+A pipelined race frame's screen transfers and swap run when the next frame is
+submitted, once the previous present has reached the screen
+(`C3D_FramePresentDefer`, `include/mkw/present_pacing.hpp`), so a frame that
+finishes just after a VBlank is never replaced by the next one before it is
+shown; the GPU itself never waits. `no-present-pacing.txt` (release builds
+too) turns it off. With `benchmark.txt`, `present-pacing-alternate.txt` turns
+it on for the first race load and off for the next, and so on (`runtime.log`:
+`present pacing on/off`); pair the courses in `benchmark-course.txt` (`13 13 8 8`).
+Once one present has to wait for the one before, later frames stay a
+refresh (or two) later than shipped 1.2.1. Optional catch-up
+(`C3D_FramePresentCatchUp`, `present-catchup.txt`, off by default) drops one
+frame's present after a second of that; on the console each drop showed as a
+repeat and a skip, 0.5-5 a minute. `present-catchup-alternate.txt` alternates
+it per race like the switch above.
+
+Every DIAG counts each top and lower-screen present, each present replaced
+before GSP showed it, and each VBlank at which the top screen kept its picture
+(link-time wraps of `gfxScreenSwapBuffers` and citro3d's VBlank0 callback):
+- `perf-present.csv`, one row per race: `present_pacing`, `catch_up`,
+  `caught_up` (presents dropped by catch-up), `vblanks`,
+  `top_presents`, `top_replaced`, `bottom_replaced`, `repeated_vblanks`,
+  `present_wait_ms` (mean, max; 0 since the wait moved into citro3d), `latency_1`..`latency_5plus` (top presents by
+  VBlanks from the frame's loop start to the VBlank that shows it) and
+  `swap_0ms`..`swap_17msplus` (when the frame's GPU work ended, after the last
+  VBlank);
+- `perf-race-NNN-present.csv`: every frame that replaced a present or kept a
+  picture (race time, frame, interval, simulation, GPU and wait ms);
+- the seconds CSV's `replaced_presents`, `repeated_vblanks`,
+  `present_wait_ms`, `present_wait_max_ms`.
+
+The loop's `late_frames` and `rendered` miss these: the loop and the GPU can
+both hold 60 while the screen repeats a picture and skips the next.
+
 ## Repacked packs
 
 `tools/pakpack.c` (build: `gcc -O2 -o pakpack tools/pakpack.c`) rewrites an
@@ -286,6 +336,22 @@ by default they are freed before the course textures move to VRAM.
 bloom's targets exist (Bloom: On, stadium-screen courses). By default it uses
 the scene target's depth buffer (384 KB less VRAM), which is cleared again
 after the scene; runtime.log `texture cache ... shared depth=1`.
+`no-object-weld.txt` loads the course objects' unwelded meshes and banks
+(`models/<name>_pv.gmdl/.dobj`, kept in race.pak beside the welded ones by
+`tools/cook_course_objects.py` `KEEP_UNWELDED`): one vertex per triangle
+corner. By default identical corners are welded so the post-transform vertex
+cache reuses them (`tools/object_weld.py`; same triangles in the same order,
+same picture).
+`no-course-reorder.txt` draws the course in its spatial culling order;
+by default the triangles inside each order-safe 128-triangle culling block
+are reordered for the post-transform vertex cache (Tipsify; rare equal-depth
+pixels can flip). The order is cooked into `models/<part>.cord`
+(`tools/course_cache_order.cpp`) and used when it matches the part, else
+computed at load (`runtime.log`: `course cache order on (cooked)` or
+`(computed)`); `no-cooked-order.txt` always computes it at load. With
+`benchmark-course.txt`, `course-reorder-alternate.txt` turns it off on every
+second course load, and `course-reorder-control.txt` does the load work but
+draws the old order (a timing control).
 `no-texture-share.txt` loads every course object model's textures as cooked;
 by default a texture identical to one an earlier object model of the course
 loaded (size, format, sampler state, every byte) uses that copy (Daisy
@@ -356,7 +422,7 @@ again; by default it has none there (300 KB more VRAM for the course textures),
 and the intro's 3D lower view uses the top LCD's depth buffer once the upper
 screen is drawn, cleared first (`runtime.log`: `bottom screen … vram_free=…`).
 The Settings page's options are in `settings.dat`, not in the license:
-Dynamic Shadows for benchmarks is set there (or on the Settings page).
+(Dynamic Shadows was removed on Nov 17; byte 9 stays 0.)
 
 ## Ghost sync check
 

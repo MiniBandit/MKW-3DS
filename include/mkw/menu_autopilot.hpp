@@ -25,6 +25,7 @@ namespace mkw {
 //               wN   wait N presented frames
 //               next / quit  wait for the end-of-race menu, choose that option
 //                            (after a set's final race, skip on to the last end)
+//   P                save the last presented menu frame (menu-shot-NN.ppm)
 //   end              finish successfully
 // A file containing tokens replaces the default VS script.
 class MenuAutopilot {
@@ -65,6 +66,7 @@ public:
  // Why the last forced finish was asked for: "stalled" or "out of time".
  const char* stuckReason()const{return stuckReason_;}
  // The main loop finishes player 0 when this returns true (once per stuck race).
+ bool takeShot(){const bool r=shot_;shot_=false;return r;}
  bool takeForceFinish(){const bool r=forceRequest_;forceRequest_=false;return r;}
  // Menu context: one UiInput per presented frame. idle=no transition active.
  UiInput menu(const MenuState& state,bool idle){
@@ -75,6 +77,8 @@ public:
   if((*token)[0]=='w'){if(++wait_>=unsigned(std::atoi(token->c_str()+1))){wait_=0;++cursor_;}return key;}
   if(!token->compare(0,5,"race:")||!token->compare(0,5,"auto:")||!token->compare(0,4,"cpu:")||*token=="skip"){if(++raceWait_>1800)fail("race did not start");return key;}
   if(*token=="end"){done_=true;return key;}
+  // P: save the last presented frame (menu-shot-NN.ppm, top and bottom).
+  if(*token=="P"){shot_=true;++cursor_;return key;}
   // T:x,y taps the lower screen at pixel x,y: four frames down, then lifted.
   if(!token->compare(0,2,"T:")&&touchFrames_){if(++touchFrames_>5){touchFrames_=0;++cursor_;}return key;}
   if(!idle||state.page==UiPage::Race)return key;
@@ -168,6 +172,7 @@ private:
  std::vector<std::string> tokens_;
  size_t cursor_=0;unsigned wait_=0,gap_=0,menuFrames_=0,raceWait_=0,raceStart_=0,races_=0,bestAt_=0,forcedAt_=0;
  float best_=0.f,touchX_=0,touchY_=0;unsigned touchFrames_=0;
+ bool shot_=false;
  bool active_=false,done_=false,failed_=false,racing_=false,route_=false,leaving_=false,forced_=false,forceRequest_=false;
  const char* failure_="";const char* stuckReason_="";
  std::string stuck_;

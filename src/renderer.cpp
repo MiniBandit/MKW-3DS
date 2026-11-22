@@ -7,6 +7,7 @@
 #include "mkw/renderer.hpp"
 #include "mkw/sim_profile.hpp"
 #include "mkw/diag.hpp"
+#include "mkw/vertex_cache_order.hpp"
 #include <mkw/normal_matrix.hpp>
 #include "mkw/castle_regions.hpp"
 #include "mkw/stadium_screen.hpp"
@@ -283,6 +284,10 @@ uint8_t courseMipCap(const char* name,const C3D_Tex& tex){
     const auto* e=std::lower_bound(std::begin(table),std::end(table),std::pair<unsigned,unsigned>{course,index},
         [](const courseMipCaps::Entry& a,const std::pair<unsigned,unsigned>& k){return a.course<k.first||(a.course==k.first&&a.index<k.second);});
     if(e==std::end(table)||e->course!=course||e->index!=index)return 0xff;
+    if(e->maxLevel&0x80){ // mortar: levels as loaded, any shape
+        const unsigned cap=Texture::mortarCap0?0:e->maxLevel&0x7f;
+        return cap<tex.maxLevel?uint8_t(cap):0xff;
+    }
     const int shift=int(e->size&15)+3-__builtin_ctz(tex.width);
     if(shift<0||int(e->size>>4)+3-__builtin_ctz(tex.height)!=shift)return 0xff;
     const unsigned cap=e->maxLevel>shift?e->maxLevel-shift:0;
@@ -420,8 +425,45 @@ void Model::enableStaticCulling(bool contact){
 }
 // Triangle order can't show: unblended, depth-tested and depth-written (the
 // depth state drawNow derives from the same flags).
-static bool orderSafe(const Submesh& s){
-    return !(s.flags&2)&&(!(s.flags&(1u<<31))||((s.flags&(1u<<23))&&(s.flags&(1u<<24))));
+static bool orderSafe(const Submesh& s){return cacheorder::orderSafe(s.flags);}
+Model::CacheOrderStats Model::enableCacheOrder(bool install,const char* cooked){
+    CacheOrderStats stats;
+    if(cacheIndices){linearFree(cacheIndices);cacheIndices=nullptr;}
+    std::vector<uint32_t> flags(submeshes.size());for(size_t i=0;i<submeshes.size();++i)flags[i]=submeshes[i].flags;
+    cacheorder::BlockStats block;
+    if(contactIndices&&contactCoarseVisibility.size()==submeshes.size()){
+        cacheIndices=static_cast<uint16_t*>(linearAlloc(indexCount*sizeof(uint16_t)));
+        // Optional: allocation failure draws contactIndices as before.
+        if(cacheIndices){
+            // CORD v1: magic, version, index count, hash of the contact order it was made from, then the indices.
+            if(install&&cooked)if(FILE* f=std::fopen(cooked,"rb")){
+                uint32_t h[4]{};
+                if(std::fread(h,sizeof h,1,f)==1&&!std::memcmp(h,"CORD",4)&&h[1]==1&&h[2]==indexCount){
+                    if(h[3]==cacheorder::hashIndices(contactIndices,indexCount))stats.cooked=std::fread(cacheIndices,sizeof(uint16_t),indexCount,f)==indexCount;
+                    else stats.stale=true;
+                }else stats.stale=true;
+                std::fclose(f);
+            }
+            if(!stats.cooked){
+                std::memcpy(cacheIndices,contactIndices,indexCount*sizeof(uint16_t));
+                cacheorder::reorderBlocks(cacheIndices,flags.data(),flags.size(),contactCoarseVisibility,block);
+            }
+            flushGpuData(cacheIndices,indexCount*sizeof(uint16_t));
+            if(!install){linearFree(cacheIndices);cacheIndices=nullptr;}
+        }
+    }
+    // The castle's checkpoint regions (enableCastleRegions) are reordered at load.
+    for(unsigned z=0;z<2;++z)if(regionIndices[z]&&regionVisibility[z].size()==submeshes.size()){
+        if(!install){
+            uint32_t used=0;for(const auto& v:regionVisibility[z])for(const auto& b:v.blocks)used=std::max(used,b.indices.first+b.indices.count);
+            std::vector<uint16_t> copy(regionIndices[z],regionIndices[z]+used);cacheorder::reorderBlocks(copy.data(),flags.data(),flags.size(),regionVisibility[z],block);flushGpuData(regionIndices[z],used*sizeof(uint16_t));
+            continue;
+        }
+        const uint32_t used=cacheorder::reorderBlocks(regionIndices[z],flags.data(),flags.size(),regionVisibility[z],block);
+        if(used)flushGpuData(regionIndices[z],used*sizeof(uint16_t));
+    }
+    stats.indices=block.indices;stats.before=block.before;stats.after=block.after;stats.kept=block.kept;
+    return stats;
 }
 bool Model::enableCastleRegions(bool spatial){
     if(vertexCount!=38077||indexCount!=71049||submeshes.size()!=24)return false;
@@ -595,7 +637,7 @@ void Model::freezeLighting(const float* palette,unsigned stride){
     }
     flushGpuData(vertices,vertexCount*sizeof(Vertex));
 }
-Model::~Model() { if(staticEnvironment2)linearFree(staticEnvironment2); for(auto* p:regionIndices)if(p)linearFree(p);if(contactIndices)linearFree(contactIndices);if(vertices)linearFree(vertices);if(indices)linearFree(indices);if(skinBoneIndices)linearFree(skinBoneIndices); }
+Model::~Model() { if(cacheIndices)linearFree(cacheIndices); if(staticEnvironment2)linearFree(staticEnvironment2); for(auto* p:regionIndices)if(p)linearFree(p);if(contactIndices)linearFree(contactIndices);if(vertices)linearFree(vertices);if(indices)linearFree(indices);if(skinBoneIndices)linearFree(skinBoneIndices); }
 bool Model::load(const char* path,bool dynamicLighting,bool liveDiffuse) {
     // Menu models come from the open menu.pak (one seek+read). Others stream
     // large payloads straight into LINEAR memory; a 32 KiB stdio buffer
@@ -679,6 +721,7 @@ return false;}
     vertices=static_cast<Vertex*>(linearAlloc(vertexCount*sizeof(Vertex)));
     indices=static_cast<uint16_t*>(linearAlloc(indexCount*sizeof(uint16_t)));
     if(!vertices||!indices||!f.read(vertices,vertexCount*sizeof(Vertex))||!f.read(indices,indexCount*sizeof(uint16_t)))return false;
+    if(racerWeldOff&&vertexCount==indexCount)for(uint32_t i=0;i<indexCount;++i)indices[i]=uint16_t(i);
     if(std::any_of(submeshes.begin(),submeshes.end(),[](const Submesh& s){return s.menuReflection==11;})){
         uint32_t header[2];
         if(!f.read(header,sizeof header)||std::memcmp(header,"WIN2",4)||!header[1]||header[1]>32)return false;
@@ -819,6 +862,7 @@ void Renderer::readSwitches(){
 #ifndef MKW_RELEASE
     Texture::mipCapOn=!exists("sdmc:/3ds/mkw-3ds/no-mip-cap.txt");
     Texture::objectMipCap=!exists("sdmc:/3ds/mkw-3ds/no-object-mip-cap.txt");
+    Texture::mortarCap0=exists("sdmc:/3ds/mkw-3ds/mortar-cap0.txt");
     stateCacheVerify=exists("sdmc:/3ds/mkw-3ds/state-cache-verify.txt");
     drawTiming=exists("sdmc:/3ds/mkw-3ds/draw-timing.txt");
     cmdHash=exists("sdmc:/3ds/mkw-3ds/cmd-hash.txt");
@@ -874,10 +918,7 @@ bool Renderer::init(){
     projectedWaterLoc_=shaderInstanceGetUniformLocation(program_.vertexShader,"projectedWater");
     playerShadowProjectLoc_=shaderInstanceGetUniformLocation(program_.vertexShader,"playerShadowProject");
     shadowCaptureLoc_=shaderInstanceGetUniformLocation(program_.vertexShader,"shadowCapture");
-    shadowReceiverFadeLoc_=shaderInstanceGetUniformLocation(program_.vertexShader,"shadowReceiverFade");
-    shadowDepthLoc_=shaderInstanceGetUniformLocation(program_.vertexShader,"shadowDepth");
-    shadowFloorLoc_=shaderInstanceGetUniformLocation(program_.vertexShader,"shadowFloor");
-    if(staticLightingLoc_<0||projectedWaterLoc_<0||playerShadowProjectLoc_<0||shadowCaptureLoc_<0||shadowDepthLoc_<0||shadowFloorLoc_<0||shadowReceiverFadeLoc_<0)return fail();
+    if(staticLightingLoc_<0||projectedWaterLoc_<0||playerShadowProjectLoc_<0||shadowCaptureLoc_<0)return fail();
     static const char* uvRows[]={"uvRow0","uvRow1","uvRow2","uvRow3"};
     for(int i=0;i<4;++i)uvRowLoc_[i]=shaderInstanceGetUniformLocation(program_.vertexShader,uvRows[i]);
     tintLoc_=shaderInstanceGetUniformLocation(program_.vertexShader,"tint");
@@ -1008,7 +1049,8 @@ void Renderer::releaseBottom(){
 bool Renderer::reserveBloom(){
     if(!deviceReady_)return false;
     if(!bloomEnabled)return true; // Bloom: Off leaves its VRAM to the course.
-    if(sceneTarget_)return true;
+    if(sceneTex_.data&&bloomWide_==bloomWideWanted())return true;
+    if(sceneTex_.data)releaseBloom(); // made for the other mode (800px Mode changed)
     drain();
     return initBloomTargets();
 }
@@ -1201,14 +1243,11 @@ void Renderer::shutdown(){
     retailShutdown();
     if(white_.data)C3D_TexDelete(&white_);
     white_={};
+    freeCrt();
     if(programReady_)shaderProgramFree(&program_);
     programReady_=false;program_={};
     if(shader_)DVLB_Free(shader_);
     shader_=nullptr;
-    if(playerShadowTarget_)C3D_RenderTargetDelete(playerShadowTarget_);
-    playerShadowTarget_=nullptr;if(playerShadowTex_.data)C3D_TexDelete(&playerShadowTex_);playerShadowTex_={};
-    if(playerShadowClipTex_.data)C3D_TexDelete(&playerShadowClipTex_);playerShadowClipTex_={};
-    playerContactTex_.reset();
     if(bottomTarget_)C3D_RenderTargetDelete(bottomTarget_);
     bottomTarget_=nullptr;
     freeBloom();freeStadiumScreen();
@@ -1243,11 +1282,11 @@ void Renderer::beginNow(const C3D_Mtx& view,const C3D_Mtx& projection,bool sync,
         if(execPipelined_){
             // The GPU may still draw the previous frame: its time and this
             // frame's writes wait for previousFrameDone().
-            previousFrameDone_=false;frameEndTick_=0;stats_.hookMs=0;swapFrameBuffers();
+            previousFrameDone_=false;frameEndTick_=0;stats_.hookMs=stats_.presentWaitMs=0;swapFrameBuffers();
         }else{
             // Every queued command list has completed: the GPU reads nothing of earlier frames.
             stats_.previousGpuMs=C3D_GetDrawingTime();
-            stats_.hookMs=stats_.gpuGapMs=0;queueStartTick_=0;
+            stats_.hookMs=stats_.gpuGapMs=stats_.presentWaitMs=0;queueStartTick_=0;
         }
         renderMetrics={};
     }
@@ -1259,6 +1298,8 @@ void Renderer::beginNow(const C3D_Mtx& view,const C3D_Mtx& projection,bool sync,
     // other, and link the screen to this frame's target.
     const bool wide=wideTarget_&&target_==wideTarget_;
     if(wide!=wideShown_||stereo!=stereoShown_){
+        // A deferred frame reaches the screen in the mode it was drawn for.
+        C3D_FrameWaitPrevious();
         if(!wide&&wideShown_)gfxSetWide(false);
         if(!stereo&&stereoShown_)gfxSet3D(false);
         if(stereo&&!stereoShown_)gfxSet3D(true);
@@ -1346,7 +1387,7 @@ void Renderer::decideStadiumFrame(){
     if(!eye_&&!bottomWorldPass_)bloomCount_=0;
 }
 void Renderer::beginFrame(){
-    execSceneRegion_=3;
+    execSceneRegion_=3;crtDrawn_=crtBottomDrawn_=false;
     // The right eye repeats the left eye's buffer offsets: its sprites, text,
     // overlays, sparks and effect vertices reuse the data the left eye wrote.
     screenWidth_=bottomWorldPass_?320.f:400.f;screenParallax_=0;
@@ -1359,7 +1400,9 @@ void Renderer::beginFrame(){
     overlayCount_=0;
     // The local SDK permits unbinding all units, including inherited samplers.
     for(int unit=0;unit<3;++unit)C3D_TexBind(unit,nullptr);
-    bloomFrame_=!bottomWorldPass_&&bloomRequested_&&initBloom(true);bloomRequested_=false;
+    // Targets made for the other mode (800px Mode just changed) skip bloom
+    // until requestBloom remakes them.
+    bloomFrame_=!bottomWorldPass_&&bloomRequested_&&initBloom(true)&&bloomWide_==(topScale==2);bloomRequested_=false;
     // stadiumClearSkip: decided before the left LCD's clear (below otherwise).
     const bool stadiumEarly=stadiumClearSkip;
     if(stadiumEarly)decideStadiumFrame();
@@ -1368,7 +1411,7 @@ void Renderer::beginFrame(){
         // A merged bloom composite writes every LCD pixel (applyBloomNow).
         // Both eyes replay the frame's bloom request.
         // So does a menu backdrop drawn opaque over the whole LCD (setFrameCover).
-        const auto lcd=(bloomFrame_&&bloomMerge)||execTopCovered_?C3D_CLEAR_DEPTH:C3D_CLEAR_ALL;
+        const auto lcd=(bloomFrame_&&bloomMerge&&!bloomWide_)||execTopCovered_?C3D_CLEAR_DEPTH:C3D_CLEAR_ALL;
         // A shared depth buffer holds the scene first: the left LCD's depth is
         // cleared after it (topDepthAfterSceneNow). Stadium capture frames draw
         // on the LCD like any other (captureStadiumScreenNow copies the crop).
@@ -1382,7 +1425,11 @@ void Renderer::beginFrame(){
             C3D_RenderTargetClear(bottomTarget_,bottomTarget_->frameBuf.depthBuf?C3D_CLEAR_ALL:C3D_CLEAR_COLOR,0x071326FF,0);
     }
     if(!stadiumEarly)decideStadiumFrame();
-    if(bloomFrame_){
+    if(bloomFrame_&&bloomWide_){
+        // 800px bloom: the scene goes to the LCD as in any frame (never 3D).
+        for(auto* t:bloomTarget_)C3D_RenderTargetClear(t,C3D_CLEAR_COLOR,0,0);
+        C3D_FrameDrawOn(topTarget());
+    }else if(bloomFrame_){
         if(!eye_){
             // Memory fills run in queue order, ahead of this frame's command list.
             C3D_RenderTargetClear(sceneTarget_,C3D_CLEAR_ALL,0x071326FF,0);
@@ -1761,7 +1808,7 @@ void Renderer::drawNow(const Model& model,const Vertex* vertices,const C3D_Mtx& 
         // Same triangles in another order: only where order can't show, i.e.
         // unblended with depth test and write (see the depth state below).
         const bool spatial=spatialOrder&&orderSafe(s);
-        const auto* subIndices=spatial?model.contactIndices:drawIndices;
+        const auto* subIndices=spatial?(model.cacheIndices?model.cacheIndices:model.contactIndices):drawIndices;
         const auto* parts=rigid_&&rigid_->parts&&i<rigid_->parts->size()?&(*rigid_->parts)[i]:nullptr;
         // A bit per part (the first 64) whose posed bounds reach the view; a
         // submesh with none skips its material setup too.
@@ -2783,9 +2830,9 @@ void Renderer::shadowVolumesNow(const ShadowVolume* volumes,unsigned count,float
         if(perVolume){++volumeRectFrames;volumeRectsDrawn+=rectCount;volumeRectSaved+=uint64_t(area-sum);}
     }
     // No volume's own rectangle on screen: no pixel holds a count.
-    if(perVolume){if(rectCount)shadeRectsNow(1.f-float(shade)/255.f,shadowUnion_?4:0,rects,rectCount);}
+    if(perVolume){if(rectCount)shadeRectsNow(1.f-float(shade)/255.f,0,rects,rectCount);}
     else if(!bounded||stereoRect||(rect[2]>rect[0]&&rect[3]>rect[1]))
-        screenFadeNow(1.f-float(shade)/255.f,false,false,shadowUnion_?4:0,bounded?rect:nullptr);
+        screenFadeNow(1.f-float(shade)/255.f,false,false,0,bounded?rect:nullptr);
     // The fullscreen shade temporarily binds an orthographic projection.
     // Consecutive volume groups must return to this eye's perspective.
     uploadProjection(projectionLoc_,projection_);
@@ -3217,22 +3264,6 @@ void Renderer::cinemaBarsNow(float topHeight,float bottomHeight,float opacity){
     auto* buf=C3D_GetBufInfo();BufInfo_Init(buf);BufInfo_Add(buf,vertices,sizeof(Vertex),4,0x3210);
     C3D_DrawArrays(GPU_TRIANGLES,0,12);stats_.triangles+=4;++stats_.drawCalls;
 }
-void Renderer::shadowUnionNow(bool active){
-    flushSprites();resetMaterialUniforms();clearEnvironmentUvNow();
-    C3D_StencilTest(true,GPU_ALWAYS,0,0xff,0xff);
-    C3D_StencilOp(GPU_STENCIL_KEEP,GPU_STENCIL_KEEP,GPU_STENCIL_ZERO);
-    auto* attr=C3D_GetAttrInfo();AttrInfo_Init(attr);
-    AttrInfo_AddLoader(attr,0,GPU_FLOAT,3);AttrInfo_AddLoader(attr,1,GPU_FLOAT,3);
-    AttrInfo_AddLoader(attr,2,GPU_FLOAT,4);AttrInfo_AddLoader(attr,3,GPU_UNSIGNED_BYTE,4);
-    screenFadeNow(active?0.f:1.f,false,false,active?1:2);
-    shadowUnion_=active;
-    C3D_StencilTest(false,GPU_ALWAYS,0,0xff,0);
-    C3D_StencilOp(GPU_STENCIL_KEEP,GPU_STENCIL_KEEP,GPU_STENCIL_KEEP);
-    uploadProjection(projectionLoc_,projection_);sceneDepthMap(projection_);
-    C3D_DepthTest(true,GPU_GEQUAL,GPU_WRITE_ALL);
-    C3D_AlphaBlend(GPU_BLEND_ADD,GPU_BLEND_ADD,GPU_SRC_ALPHA,GPU_ONE_MINUS_SRC_ALPHA,GPU_ONE,GPU_ONE_MINUS_SRC_ALPHA);
-    spriteStateReady_=false;
-}
 void Renderer::countPixels(float x0,float y0,float x1,float y1){
     if(x0>x1)std::swap(x0,x1);if(y0>y1)std::swap(y0,y1);
     const float w=std::min(x1,screenWidth_)-std::max(x0,0.f),h=std::min(y1,240.f)-std::max(y0,0.f);
@@ -3540,7 +3571,7 @@ void Renderer::textNow(const char* text,float x,float y,float size,uint32_t rgba
 bool Renderer::configureStadiumScreen(bool enabled){
     if(enabled&&stadiumTex_[0].data)return true;
     waitForGpu();
-    if(!enabled){freeStadiumScreen();if(releaseIdleBloom&&!bloomEnabled&&(sceneTarget_||bloomVertices_))freeBloom();return true;}
+    if(!enabled){freeStadiumScreen();if(releaseIdleBloom&&!bloomEnabled&&(sceneTex_.data||bloomVertices_))freeBloom();return true;}
     // The captures are copies of the finished scene (captureStadiumScreenNow):
     // no scene scratch. With the 800px block the textures hold 512 rows for
     // 800px frames' crop; their height is set per capture.
@@ -3646,6 +3677,8 @@ void Renderer::drawPauseControls(){
     drawScreenSpriteRegion(pauseControls_,0,8,400,128,0,0,400.f/pauseControls_.gpu.width,128.f/pauseControls_.gpu.height);
 }
 void Renderer::drawPausedTopNow(){
+    // The kept image already holds the CRT look: don't apply it twice.
+    crtDrawn_=true;
     flushSprites();
     bloomPass(topTarget(),400,240);
     C3D_TexEnvBufUpdate(C3D_Both,0);
@@ -3673,12 +3706,27 @@ void Renderer::requestBloomNow(const CourseBloom& settings,const float* clip){
 void Renderer::releaseBloom(){
     // A menu's failed allocation must not keep the next race from trying.
     bloomFailed_=false;
-    if(!deviceReady_||(!sceneTarget_&&!bloomVertices_))return;
+    if(!deviceReady_||(!sceneTex_.data&&!bloomVertices_))return;
     waitForGpu();freeBloom();
 }
 bool Renderer::initBloomTargets(bool inFrame){
-    if(sceneTarget_)return true;
+    if(sceneTex_.data)return true;
     if(bloomFailed_)return false;
+    bloomWide_=bloomWideWanted();
+    if(bloomWide_){
+        // 800px: the scene is drawn on the LCD and copied here for the glow's
+        // taps (applyBloomNow), so no scene target or depth: the same 1 MB a
+        // 400px scene texture and its depth take. LINEAR if VRAM is short
+        // (only the taps sample it, at the near texture's size).
+        bool ok=C3D_TexInitVRAM(&sceneTex_,256,1024,GPU_RGBA8)||C3D_TexInit(&sceneTex_,256,1024,GPU_RGBA8);
+        for(unsigned i=0;ok&&i<std::size(bloomTex_);++i){
+            const unsigned width=i>=2?BloomFarWidth:BloomNearWidth,height=i>=2?BloomFarHeight:BloomNearHeight;
+            ok=C3D_TexInitVRAM(&bloomTex_[i],height,width,GPU_RGBA8)&&(bloomTarget_[i]=C3D_RenderTargetCreateFromTex(&bloomTex_[i],GPU_TEXFACE_2D,0,-1))!=nullptr;
+        }
+        if(!ok){freeBloom();bloomFailed_=true;return false;}
+        for(auto* t:{&sceneTex_,&bloomTex_[0],&bloomTex_[1],&bloomTex_[2],&bloomTex_[3]}){C3D_TexSetFilter(t,GPU_LINEAR,GPU_LINEAR);C3D_TexSetWrap(t,GPU_CLAMP_TO_EDGE,GPU_CLAMP_TO_EDGE);}
+        return true;
+    }
     // Portrait targets: full 64x128 near and 32x64 far bloom textures.
     // The scene still occupies its native 240x400 region in 256x512.
     // A shared depth buffer takes the top LCD depth's bank (opposite its
@@ -3822,7 +3870,7 @@ void Renderer::applyBloomNow(){
     topDepthAfterSceneNow();
     // The commands depend only on these (and on the vertex slots holding the
     // recorded quads): immediate mono frames, no clip rectangle.
-    const bool listed=bloomList&&!execPipelined_&&!execStereo_.active()&&!execDualScreenIntro_&&!bloomClipped_&&!bottomPass_;
+    const bool listed=bloomList&&!execPipelined_&&!execStereo_.active()&&!execDualScreenIntro_&&!bloomClipped_&&!bottomPass_&&!bloomWide_;
     if(!listed){bloomListValid_=false;bloomPasses();return;}
     BloomListKey key{bloomSettings_,sceneTex_.data,{bloomTex_[0].data,bloomTex_[1].data,bloomTex_[2].data,bloomTex_[3].data},topTarget(),
                      bloomVertices_,bloomCount_,renderQuality().bloomBlurRounds,bloomMerge};
@@ -3876,6 +3924,18 @@ void Renderer::bloomPasses(){
     // Retail DrawPathBloom captures GX IA8 before thresholding (USA
     // 8021cdd0), then colours that intensity mask with the full scene.
     // GX copy intensity is .257 R + .504 G + .098 B + 16/255.
+    // 800px: the finished scene's 100 tile rows go from the LCD's 240-wide
+    // block into the 256-wide texture's last 800 rows (where a 1024-row
+    // target's window rows 0..799 lie), as the stadium crop copies.
+    // The scene is twice as wide in texels: the taps spread twice as far.
+    const unsigned sceneWidth=bloomWide_?800:400;const float tapX=bloomWide_?2.f:1.f;
+    if(bloomWide_){
+        constexpr unsigned Tile=8*8*4,line=240/8*Tile,rows=800/8,textureLine=256/8*Tile;
+        // The scene's commands go to the GPU flushed first (see captureStadiumScreenNow).
+        C3D_FrameSplit(GX_CMDLIST_FLUSH);
+        C3D_SyncTextureCopy(static_cast<u32*>(target_->frameBuf.colorBuf),GX_BUFFER_DIM(line>>4,0),
+            reinterpret_cast<u32*>(static_cast<uint8_t*>(sceneTex_.data)+size_t(1024-800)/8*textureLine),GX_BUFFER_DIM(line>>4,(textureLine-line)>>4),line*rows,8);
+    }
     // Reuse the near target before its blur pass; no extra texture allocation.
     bloomPass(bloomTarget_[1],BloomNearWidth,BloomNearHeight);
     auto* e0=env();
@@ -3893,7 +3953,7 @@ void Renderer::bloomPasses(){
     auto* e4=C3D_GetTexEnv(4);C3D_TexEnvColor(e4,0x40404040u);
     C3D_TexEnvSrc(e4,C3D_Both,GPU_PREVIOUS,GPU_CONSTANT);C3D_TexEnvFunc(e4,C3D_Both,GPU_MODULATE);
     constexpr float taps[4][2]={{-1,-1},{1,-1},{-1,1},{1,1}};
-    for(unsigned i=0;i<4;++i){blend(i>0);bloomQuad(sceneTex_,400,240,BloomNearWidth,BloomNearHeight,taps[i][0],taps[i][1]);}
+    for(unsigned i=0;i<4;++i){blend(i>0);bloomQuad(sceneTex_,sceneWidth,240,BloomNearWidth,BloomNearHeight,taps[i][0]*tapX,taps[i][1]);}
     bloomPass(bloomTarget_[0],BloomNearWidth,BloomNearHeight);
     e0=env();C3D_TexEnvColor(e0,pica(bloomThresholdColor(settings)));
     C3D_TexEnvSrc(e0,C3D_Both,GPU_TEXTURE0,GPU_CONSTANT);C3D_TexEnvFunc(e0,C3D_Both,GPU_SUBTRACT);
@@ -3912,7 +3972,7 @@ void Renderer::bloomPasses(){
         C3D_SetScissor(GPU_SCISSOR_NORMAL,unsigned(std::clamp(int(BloomNearHeight)-y1,0,int(BloomNearHeight))),unsigned(std::clamp(int(BloomNearWidth)-x1,0,int(BloomNearWidth))),
             unsigned(std::clamp(int(BloomNearHeight)-y0,0,int(BloomNearHeight))),unsigned(std::clamp(int(BloomNearWidth)-x0,0,int(BloomNearWidth))));
     }
-    bloomQuad(bloomTex_[1],BloomNearWidth,BloomNearHeight,BloomNearWidth,BloomNearHeight,0,0,400,240,&sceneTex_);
+    bloomQuad(bloomTex_[1],BloomNearWidth,BloomNearHeight,BloomNearWidth,BloomNearHeight,0,0,sceneWidth,240,&sceneTex_);
     if(bloomClipped_)C3D_SetScissor(GPU_SCISSOR_DISABLE,0,0,0,0);
     C3D_TexBind(1,nullptr);
     // EGG keeps a near band (8 taps) and a far band (8 + 16 taps). Reduced
@@ -3998,9 +4058,10 @@ void Renderer::bloomPasses(){
     // the scene is unit 0.
     // A clipped request copies the scene whole, then adds the glow only
     // inside its rectangle: the merged pass would have to write every pixel.
-    const bool merge=bloomMerge&&!bloomClipped_;
+    // 800px: the scene is already on the LCD; only the glow is added.
+    const bool merge=bloomMerge&&!bloomClipped_&&!bloomWide_;
     const GPU_TEVSRC near=merge?GPU_TEXTURE1:GPU_TEXTURE0,far=merge?GPU_TEXTURE2:GPU_TEXTURE1;
-    if(!merge){
+    if(!merge&&!bloomWide_){
         e0=env();C3D_TexEnvSrc(e0,C3D_Both,GPU_TEXTURE0);C3D_TexEnvFunc(e0,C3D_Both,GPU_REPLACE);
         blend(false);bloomQuad(sceneTex_,400,240,400,240,0,0);
     }
@@ -4031,9 +4092,10 @@ void Renderer::bloomPasses(){
         C3D_TexBind(1,&bloomTex_[2]);
         C3D_AlphaBlend(GPU_BLEND_ADD,GPU_BLEND_ADD,GPU_ONE_MINUS_DST_COLOR,GPU_ONE,GPU_ONE_MINUS_DST_ALPHA,GPU_ONE);
         if(bloomClipped_){
-            const float x=bloomClip_[0],y=bloomClip_[1],w=bloomClip_[2],h=bloomClip_[3];
-            C3D_SetScissor(GPU_SCISSOR_NORMAL,unsigned(std::clamp(std::floor(240.f-y-h),0.f,240.f)),unsigned(std::clamp(std::floor(400.f-x-w),0.f,400.f)),
-                unsigned(std::clamp(std::ceil(240.f-y),0.f,240.f)),unsigned(std::clamp(std::ceil(400.f-x),0.f,400.f)));
+            // Layout pixels; 800px frames' LCD rows are twice as many.
+            const float x=bloomClip_[0],y=bloomClip_[1],w=bloomClip_[2],h=bloomClip_[3],s=float(topScale),rows=400.f*s;
+            C3D_SetScissor(GPU_SCISSOR_NORMAL,unsigned(std::clamp(std::floor(240.f-y-h),0.f,240.f)),unsigned(std::clamp(std::floor((400.f-x-w)*s),0.f,rows)),
+                unsigned(std::clamp(std::ceil(240.f-y),0.f,240.f)),unsigned(std::clamp(std::ceil((400.f-x)*s),0.f,rows)));
         }
         bloomQuad(bloomTex_[1],BloomNearWidth,BloomNearHeight,400,240,0,0,BloomFarWidth,BloomFarHeight,&bloomTex_[2]);
         if(bloomClipped_)C3D_SetScissor(GPU_SCISSOR_DISABLE,0,0,0,0);
@@ -4044,10 +4106,71 @@ void Renderer::bloomPasses(){
     uploadProjection(projectionLoc_,projection_);
     spriteStateReady_=false;
 }
+void Renderer::freeCrt(){
+    if(crtTex_.data||crtVertices_)waitForGpu();
+    if(crtTex_.data)C3D_TexDelete(&crtTex_);
+    crtTex_={};linearFree(crtVertices_);crtVertices_=nullptr;linearFree(crtIndices_);crtIndices_=nullptr;
+}
+void Renderer::crtNow(){
+    // The screen is finished (bloom, HUD, last sprites); 800px frames only. The
+    // top runs before the lower screen begins, the lower one at the frame's end
+    // when this frame drew it (a kept lower picture already has its pass).
+    const bool lower=bottomPass_;
+    if(!crt.on||topScale!=2||execLoadingFrame_||(lower?crtBottomDrawn_||execBottomKept_:crtDrawn_))return;
+    (lower?crtBottomDrawn_:crtDrawn_)=true;
+    constexpr unsigned Columns=12,Rows=8,Vertices=(Columns+1)*(Rows+1),Indices=Columns*Rows*6;
+    if(!crtVertices_){
+        // Built once (the GPU has never read them yet), kept until shutdown:
+        // the top grid (400 wide), then the lower one (320 wide).
+        crtVertices_=static_cast<Vertex*>(linearAlloc(2*Vertices*sizeof(Vertex)));
+        crtIndices_=static_cast<uint16_t*>(linearAlloc(Indices*sizeof(uint16_t)));
+        if(!crtVertices_||!crtIndices_||!C3D_TexInit(&crtTex_,8,8,GPU_RGBA8)){freeCrt();crt.on=false;return;}
+        C3D_TexSetFilter(&crtTex_,GPU_NEAREST,GPU_NEAREST);C3D_TexSetWrap(&crtTex_,GPU_REPEAT,GPU_REPEAT);
+        // The blend doubles source x destination, so texel 128 leaves a pixel
+        // unchanged. Texture s runs down the screen's rows: texel column x is
+        // row x mod 8 (8x8 Morton tile; the pattern ignores y and flips).
+        auto level=[](float f){return uint32_t(std::clamp(f*127.5f+0.5f,0.f,255.f));};
+        const uint32_t bright=level(crt.bright)*0x01010101u,dark=level(crt.dark)*0x01010101u;
+        auto* texels=static_cast<uint32_t*>(crtTex_.data);
+        for(unsigned y=0;y<8;++y)for(unsigned x=0;x<8;++x){
+            const unsigned at=(x&1)|((y&1)<<1)|((x&2)<<1)|((y&2)<<2)|((x&4)<<2)|((y&4)<<3);
+            texels[at]=(x&1)?dark:bright;
+        }
+        C3D_TexFlush(&crtTex_);
+        // A 12x8 grid carries the vignette in its vertex colours (no second
+        // texture): 1 at the centre, 1 - vignette in the corners.
+        const float k=std::clamp(crt.vignette,0.f,1.f);
+        for(unsigned screen=0;screen<2;++screen){
+            const float width=screen?320.f:400.f;
+            for(unsigned j=0;j<=Rows;++j)for(unsigned i=0;i<=Columns;++i){
+                const float x=width*float(i)/Columns,y=240.f*float(j)/Rows;
+                const float dx=(x-width*.5f)/(width*.5f),dy=(y-120.f)/120.f,r=(dx*dx+dy*dy)*0.5f;
+                const uint8_t c=uint8_t(std::clamp((1.f-k*r*r)*255.f+0.5f,0.f,255.f));
+                crtVertices_[screen*Vertices+j*(Columns+1)+i]={{x,y,0},{0,0,1},{y/8.f,0},{0,0},{c,c,c,255}};
+            }
+        }
+        unsigned n=0;
+        for(unsigned j=0;j<Rows;++j)for(unsigned i=0;i<Columns;++i){
+            const uint16_t a=uint16_t(j*(Columns+1)+i),b=uint16_t(a+1),c=uint16_t(a+Columns+1),d=uint16_t(c+1);
+            const uint16_t quad[6]={a,b,d,a,d,c};for(uint16_t q:quad)crtIndices_[n++]=q;
+        }
+        flushGpuData(crtVertices_,2*Vertices*sizeof(Vertex));flushGpuData(crtIndices_,Indices*sizeof(uint16_t));
+    }
+    spriteState();
+    C3D_TexBind(0,&crtTex_);
+    C3D_AlphaBlend(GPU_BLEND_ADD,GPU_BLEND_ADD,GPU_DST_COLOR,GPU_SRC_COLOR,GPU_ZERO,GPU_ONE);
+    auto* buf=C3D_GetBufInfo();BufInfo_Init(buf);BufInfo_Add(buf,crtVertices_+(lower?Vertices:0),sizeof(Vertex),4,0x3210);
+    C3D_DrawElements(GPU_TRIANGLES,int(Indices),C3D_UNSIGNED_SHORT,crtIndices_);
+    countPixels(0,0,lower?320:400,240);stats_.triangles+=Indices/3;++stats_.drawCalls;
+    C3D_AlphaBlend(GPU_BLEND_ADD,GPU_BLEND_ADD,GPU_SRC_ALPHA,GPU_ONE_MINUS_SRC_ALPHA,GPU_ONE,GPU_ONE_MINUS_SRC_ALPHA);
+    C3D_TexBind(0,nullptr);
+    spriteStateReady_=false;
+}
 void Renderer::endEyeNow(){
     if(stadiumFrame_)captureStadiumScreenNow();
     if(bloomFrame_)applyBloomNow();
     flushSprites();
+    crtNow();
     if(bottomPass_){
         // The bottom screen's quads were written in this pass (it runs once).
         if(spriteCount_)flushGpuData(spriteBase_,unsigned(spriteCount_)*6*sizeof(Vertex));
@@ -4059,6 +4182,7 @@ void Renderer::beginBottomNow(){
     // The top screen is complete: its bloom composite and last sprite run first.
     if(bloomFrame_)applyBloomNow();
     flushSprites();
+    crtNow();
     topSpriteCount_=spriteCount_;
     spriteBase_=text_+kTextVertexLimit;spriteCapacity_=kBottomSpriteCapacity;
     spriteCount_=0;spriteRunFirst_=0;spriteRunTexture_=nullptr;spriteStateReady_=false;
@@ -4091,7 +4215,7 @@ void Renderer::endNow(){
 #ifndef MKW_RELEASE
     diag::renderTrace.step.store(2,std::memory_order_relaxed);
 #endif
-    stats_.commandUsage=C3D_GetCmdBufUsage();C3D_FrameEnd(GX_CMDLIST_FLUSH);
+    stats_.commandUsage=C3D_GetCmdBufUsage();C3D_FramePresentStart(execStartVblank_);C3D_FrameEnd(GX_CMDLIST_FLUSH);
 #ifndef MKW_RELEASE
     diag::renderTrace.step.store(0,std::memory_order_relaxed);
 #endif
@@ -4109,23 +4233,25 @@ void Renderer::notePresented(){
     if(execStereo_.active())for(unsigned eye=0;eye<2;++eye)presented_[eye]=gfxGetFramebuffer(GFX_TOP,eye?GFX_RIGHT:GFX_LEFT,nullptr,nullptr);
     if(bottomPass_||bottomWorldPass_)presentedBottom_=gfxGetFramebuffer(GFX_BOTTOM,GFX_LEFT,nullptr,nullptr);
 }
-bool Renderer::captureTop(uint8_t* rgb,unsigned eye){
+bool Renderer::captureTop(uint8_t* rgb,unsigned eye,bool wide){
     if(!ready_||!rgb||(eye&&!stereoShown_))return false;
     drain();
     C3D_RenderTarget* target=eye?targetRight_:target_;
-    u32* linear=static_cast<u32*>(linearAlloc(240*400*4));
+    wide=wide&&!eye&&target==wideTarget_;
+    const int W=wide?800:400;
+    u32* linear=static_cast<u32*>(linearAlloc(240*W*4));
     if(!linear)return false;
     // Same orientation as the screen transfer, untiled RGBA8 output. Outside a
     // frame this waits for the queued frame before the copy.
-    C3D_SyncDisplayTransfer(static_cast<u32*>(target->frameBuf.colorBuf),GX_BUFFER_DIM(240,400),linear,GX_BUFFER_DIM(240,400),
+    C3D_SyncDisplayTransfer(static_cast<u32*>(target->frameBuf.colorBuf),GX_BUFFER_DIM(240,W),linear,GX_BUFFER_DIM(240,W),
         GX_TRANSFER_FLIP_VERT(0)|GX_TRANSFER_OUT_TILED(0)|GX_TRANSFER_RAW_COPY(0)|GX_TRANSFER_IN_FORMAT(GX_TRANSFER_FMT_RGBA8)|
         GX_TRANSFER_OUT_FORMAT(GX_TRANSFER_FMT_RGBA8)|GX_TRANSFER_SCALING(GX_TRANSFER_SCALE_NO));
-    GSPGPU_InvalidateDataCache(linear,240*400*4);
+    GSPGPU_InvalidateDataCache(linear,240*W*4);
     // Framebuffer column x holds 240 pixels from the bottom of the screen up.
     const uint8_t* bytes=reinterpret_cast<const uint8_t*>(linear);
-    for(int y=0;y<240;++y)for(int x=0;x<400;++x){
+    for(int y=0;y<240;++y)for(int x=0;x<W;++x){
         const uint8_t* p=bytes+4*(x*240+(239-y));
-        uint8_t* o=rgb+3*(y*400+x);
+        uint8_t* o=rgb+3*(y*W+x);
         o[0]=p[3];o[1]=p[2];o[2]=p[1];
     }
     linearFree(linear);
@@ -4158,7 +4284,8 @@ bool Renderer::captureBottom(uint8_t* rgb){
 }
 bool Renderer::presentedMatches(const uint8_t* rgb,unsigned eye){
     if(!stereoShown_||eye>1||!presented_[eye]||!rgb)return false;
-    drain();
+    // Not drain(): the last frame's screen transfer may still be deferred (C3D_FramePresentDefer).
+    waitForGpu();
     // BGR8 columns from the bottom of the screen up, as the transfer writes them.
     GSPGPU_InvalidateDataCache(const_cast<uint8_t*>(presented_[eye]),240*400*3);
     for(int y=0;y<240;++y)for(int x=0;x<400;++x){

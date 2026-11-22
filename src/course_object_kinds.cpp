@@ -35,6 +35,7 @@
 #include <game/field/obj/ObjectHeyho.hh>
 #include <game/field/obj/ObjectHwanwan.hh>
 #include <game/field/obj/ObjectRock.hh>
+#include <game/field/obj/ObjectPylon.hh>
 #include <game/field/obj/ObjectHeyhoBall.hh>
 #include <game/field/obj/ObjectItemboxPress.hh>
 #include <game/field/RailManager.hh>
@@ -160,6 +161,8 @@ void drawGeneric(ObjectDraw& d,Visual& v){
         !static_cast<const K::Field::ObjectWoodbox*>(v.object)->shown())return;
     if(v.object&&v.object->id()==ObjectId::DKRockGC&&
         !static_cast<const K::Field::ObjectRock*>(v.object)->visible())return;
+    if(v.object&&v.object->id()==ObjectId::Pylon&&
+        !static_cast<const K::Field::ObjectPylon*>(v.object)->shown())return;
     if(v.object&&(v.object->id()==ObjectId::FlamePoleV||v.object->id()==ObjectId::FlamePoleVBig)&&
         !static_cast<const K::Field::ObjectFlamePoleV*>(v.object)->modelVisible())return;
     const C3D_Mtx m=v.kinetic&&v.object?liveMatrix(*v.object):v.placement;

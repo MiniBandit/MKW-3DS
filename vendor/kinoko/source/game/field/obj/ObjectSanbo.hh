@@ -8,6 +8,13 @@ namespace Kinoko::Field {
 class ObjectSanbo final : public ObjectCollidable {
 public:
     ObjectSanbo(const System::MapdataGeoObj &params);
+
+    /// Port: ObjectDirector::reinitForRace. init() starts from the current
+    /// pose, which the course preview has moved.
+    void prepareReinit() override {
+        resetPoseToParams();
+        m_yVel = 0.0f; // set only by the constructor
+    }
     ~ObjectSanbo() override;
 
     void init() override;

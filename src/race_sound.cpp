@@ -594,7 +594,9 @@ void RaceSound::step(const Frame& f, RaceAudioFrame* actors) {
  // (fn_1_1EF700), then at each course-preview shot change (fn_1_9D214).
  if (state_ == 2) {
   if (!introLoaded_ && !planPending_ && sys.sceneReady()) { introLoaded_ = true; triggers_.intro(); }
-  if (introShot_ >= 0 && f.introShot > introShot_) triggers_.intro();
+  // introShot is the KMP camera index, not a count: chains run out of order
+  // (DK Mountain 14 -> 12 -> 13, Rainbow Road 3 -> 2 -> 4), so any change is a shot.
+  if (introShot_ >= 0 && f.introShot >= 0 && f.introShot != introShot_) { triggers_.intro(); trace("intro cue shot", unsigned(f.introShot)); }
  }
  introShot_ = f.introShot;
  // KartActor::ApplyKCLSoundTrigger (807021a0): the local racer's sound zone.

@@ -22,6 +22,7 @@ public:
     ~ObjectFireSnake() override;
 
     void init() override;
+    void prepareReinit() override;
     void calc() override;
     Kart::Reaction onCollision(Kart::KartObject *kart, Kart::Reaction reactionOnKart,
             Kart::Reaction reactionOnObj, EGG::Vector3f &hitDepth) override;

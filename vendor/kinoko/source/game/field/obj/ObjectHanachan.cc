@@ -257,6 +257,7 @@ ObjectHanachan::~ObjectHanachan() = default;
 
 /// @addr{0x806C9630}
 void ObjectHanachan::init() {
+    resetStates();
     m_animationFrames = {};
     m_damageWaveFrame = -1;
     for (auto *part : m_parts) {
@@ -288,6 +289,18 @@ void ObjectHanachan::init() {
     reinterpret_cast<ObjectHanachanBody *>(m_parts.back())->m_lastSegment = true;
 
     initChain();
+}
+
+/// Port: ObjectDirector::reinitForRace, before init(). calcBody steers the head
+/// from its previous forward axis, so the head goes back to the constructor's
+/// pose (init() only sets its position); the segments' collision speed restarts.
+void ObjectHanachan::prepareReinit() {
+    constexpr f32 SCALE = 3.0f;
+    headPart()->resetPose(EGG::Vector3f::zero, EGG::Vector3f::ez,
+            EGG::Vector3f(SCALE, SCALE, SCALE));
+    for (auto *part : bodyParts()) {
+        reinterpret_cast<ObjectHanachanBody *>(part)->m_lastPos = EGG::Vector3f::zero;
+    }
 }
 
 /// @addr{0x806C9BC0}

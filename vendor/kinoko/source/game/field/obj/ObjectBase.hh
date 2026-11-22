@@ -78,6 +78,35 @@ public:
         return m_boxColUnit;
     }
 
+    /// Port: run by ObjectDirector::reinitForRace before init() at the course
+    /// preview's end (never on the first init): put back whatever the
+    /// constructor set and init() does not.
+    virtual void prepareReinit() {}
+
+    /// Port: the pose a constructor leaves (ObjectBase's, then setScale).
+    void resetPose(const EGG::Vector3f &pos, const EGG::Vector3f &rot,
+            const EGG::Vector3f &scale) {
+        m_pos = pos;
+        m_scale = scale;
+        m_rot = rot;
+        m_rotLock = true;
+        m_transform = EGG::Matrix34f::ident;
+        m_flags.makeAllZero();
+        m_flags.setBit(eFlags::Position, eFlags::Rotation, eFlags::Scale);
+    }
+
+    /// Port: the pose the MapdataGeoObj constructor leaves.
+    void resetPoseToParams() {
+        resetPose(m_mapObj->pos(), m_mapObj->rot() * DEG2RAD, m_mapObj->scale());
+    }
+
+    /// Port: see ObjectDirector::reinitForRace.
+    void resetRailForReinit() {
+        if (m_railInterpolator) {
+            m_railInterpolator->resetToConstructed();
+        }
+    }
+
     [[nodiscard]] const RailInterpolator *railInterpolator() const {
         return m_railInterpolator;
     }

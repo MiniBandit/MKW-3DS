@@ -14,6 +14,14 @@ public:
 
     ~Random() = default;
 
+    /// Port: the generator's state, saved and put back by ObjectDirector::reinitForRace.
+    [[nodiscard]] u64 state() const {
+        return m_x;
+    }
+    void setState(u64 x) {
+        m_x = x;
+    }
+
     void next() {
         m_x = A * m_x + C;
     }

@@ -8,6 +8,12 @@ namespace Kinoko::Field {
 class ObjectPylon final : public ObjectCollidable {
 public:
     ObjectPylon(const System::MapdataGeoObj &params);
+
+    /// Port: ObjectDirector::reinitForRace. init() starts from the current
+    /// pose, which the course preview has moved.
+    void prepareReinit() override {
+        resetPoseToParams();
+    }
     ~ObjectPylon() override;
 
     void init() override;
@@ -16,6 +22,12 @@ public:
     /// @addr{0x8082E4F8}
     [[nodiscard]] u32 loadFlags() const override {
         return 1;
+    }
+
+    /// Port: the model is hidden while the cone waits to come back (it is left
+    /// at the end of the Hiding shrink, 1/10 scale, until ComeBack).
+    [[nodiscard]] bool shown() const {
+        return m_state != State::Hide;
     }
 
     Kart::Reaction onCollision(Kart::KartObject *kartObj, Kart::Reaction reactionOnKart,

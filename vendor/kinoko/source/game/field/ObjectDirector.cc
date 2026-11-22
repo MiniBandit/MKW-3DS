@@ -32,7 +32,80 @@ namespace Kinoko::Field {
 
 /// @addr{0x8082A2B4}
 void ObjectDirector::init() {
+    m_initRandom = System::RaceManager::Instance()->random().state();
     for (auto *&obj : m_objects) {
+        obj->init();
+        obj->calcModel();
+    }
+
+    ObjectDrivableDirector::Instance()->init();
+}
+
+/// Object types whose re-init is proven to return them to the freshly built
+/// state: kinoko-host/reinit_all.sh (KINOKO_REINIT_TEST, every course's staff
+/// ghost, a held preview of 1 to 3000 frames, 420 frames compared bit for bit:
+/// every object's pose and the race RNG), plus the VS-only Bob-omb cars (0xde,
+/// 0xf3: ObjectCarTGE, as the verified Moonview cars). That is every type the
+/// staff-ghost scenes build; a type outside it keeps running from the preview.
+bool ObjectDirector::ReinitSkipped(ObjectId id) {
+    static constexpr u16 EXACT[] = {
+            0x0, 0x2, 0x3, 0x5, 0x6, 0x7, 0x8, 0x9, 0xa, 0xb, 0xc, 0xd,
+            0xe, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x17, 0x65, 0x66, 0x6f, 0x70,
+            0x71, 0x72, 0x76, 0xc9, 0xca, 0xcc, 0xcd, 0xce, 0xcf, 0xd0, 0xd1, 0xd2,
+            0xd3, 0xd4, 0xd5, 0xd6, 0xd7, 0xd8, 0xd9, 0xda, 0xdb, 0xdd, 0xde, 0xe2,
+            0xe3, 0xe4, 0xe5, 0xe7, 0xe8, 0xe9, 0xea, 0xec, 0xed, 0xee, 0xf2, 0xf3,
+            0x12e, 0x12f, 0x130, 0x134, 0x138, 0x13d, 0x13e, 0x140, 0x142, 0x144, 0x145, 0x146,
+            0x147, 0x148, 0x149, 0x14a, 0x14c, 0x14d, 0x14e, 0x14f, 0x151, 0x158, 0x159, 0x15a,
+            0x15b, 0x15c, 0x15d, 0x160, 0x162, 0x164, 0x165, 0x167, 0x168, 0x169, 0x16b, 0x16c,
+            0x16e, 0x171, 0x172, 0x175, 0x176, 0x177, 0x178, 0x17a, 0x17c, 0x17d, 0x17f, 0x181,
+            0x183, 0x184, 0x185, 0x18b, 0x18c, 0x18e, 0x18f, 0x191, 0x192, 0x193, 0x194, 0x195,
+            0x196, 0x197, 0x198, 0x199, 0x19a, 0x19b, 0x19c, 0x19d, 0x19f, 0x1a0, 0x1a1, 0x1a2,
+            0x1a4, 0x1a5, 0x1a6, 0x1a7, 0x1a8, 0x1aa, 0x200, 0x203, 0x212, 0x214, 0x215, 0x216,
+            0x259, 0x25f, 0x260, 0x261, 0x2bd, 0x2be, 0x2bf, 0x2c2, 0x2c3, 0x2c8, 0x2ca, 0x2cb,
+            0x2cc, 0x2ce, 0x2cf, 0x2d0, 0x2d1, 0x2d2, 0x2d3, 0x2d5, 0x2d9, 0x2da, 0x2df, 0x2e0,
+            0x2e1, 0x2e2, 0x2e3, 0x2e4, 0x2e7, 0x2e8, 0x2e9, 0x2ea, 0x2eb, 0x2ec, 0x2ed, 0x2ee,
+            0x2f1, 0x2f3,
+    };
+    const u16 raw = static_cast<u16>(id);
+    if (s_reinitExtraSkip && s_reinitExtraSkip(raw)) {
+        return true;
+    }
+    if (s_reinitAll) {
+        return false;
+    }
+    for (u16 exact : EXACT) {
+        if (exact == raw) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool (*ObjectDirector::s_reinitExtraSkip)(u16 id) = nullptr;
+bool ObjectDirector::s_reinitAll = false;
+
+void ObjectDirector::reinitForRace() {
+    // Retail's rebuilt scene starts its RaceManager from the seed again and replays the
+    // same construction draws, so the race RNG is where the first init found it. Objects
+    // draw from it in init() and while running (bats, seagulls, Goombas, Chain Chomps,
+    // fire snakes, Boos), and calcEngines advances it every preview frame.
+    System::RaceManager::Instance()->random().setState(m_initRandom);
+    // Cones add themselves to the managed list in init(); the others do so when built.
+    size_t kept = 0;
+    for (size_t i = 0; i < m_managedObjects.size(); ++i) {
+        if (m_managedObjects[i]->id() != ObjectId::Pylon) {
+            m_managedObjects[kept++] = m_managedObjects[i];
+        }
+    }
+    while (m_managedObjects.size() > kept) {
+        m_managedObjects.pop_back();
+    }
+    for (auto *&obj : m_objects) {
+        if (ReinitSkipped(obj->id())) {
+            continue;
+        }
+        obj->prepareReinit();
+        obj->resetRailForReinit();
         obj->init();
         obj->calcModel();
     }

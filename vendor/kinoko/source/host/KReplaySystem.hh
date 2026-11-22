@@ -33,6 +33,7 @@ private:
     KReplaySystem(KReplaySystem &&) = delete;
 
     bool calcEnd() const;
+    bool runReinitTest(int previewFrames);
     void reportFail(const std::string &msg) const;
 
     bool success() const;

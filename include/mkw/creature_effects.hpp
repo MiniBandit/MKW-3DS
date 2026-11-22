@@ -485,7 +485,10 @@ public:
             frame.y=vec(pose.base(1));frame.z=vec(pose.base(2));
             frame.scale=p.effectScale(); // Source large-penguin scalar2.5.
             const bool small=p.id()==K::Field::ObjectId::PenguinS;
-            const bool active[2]={p.spinning(),small&&p.state()==3};
+            // Slide spray (USA 0x80762204): created when the dive clip has 18
+            // frames left, kept through the slowing slide.
+            const bool sliding=small&&(p.state()==3||(p.state()==2&&static_cast<const K::Field::ObjectPenguinS&>(p).anmTimer()<=18));
+            const bool active[2]={p.spinning(),sliding};
             const int spec[2]={small?spinSmall_:spinMedium_,slider_};
             for(unsigned n=0;n<2;++n){
                 const unsigned slot=FirstSlot+i*SlotsPerPenguin+n;

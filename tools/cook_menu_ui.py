@@ -531,24 +531,23 @@ def main(jobs=1):
  tpl('logo',ROOT/'assets/menu-ui/Title_U/title/timg/tt_title_screen_title_rogo_r_only.tpl')
  # Original title art spans exactly 832x456 once the title logo pane has
  # settled. Keep the source's two image sizes and edge-to-edge composition.
- title=Image.new('RGBA',(832,456),(255,255,255,255))
- title.alpha_composite(decode_tpl(ROOT/'assets/menu-ui/Title/title/timg/tt_title_screen_mario2.tpl'),(0,140))
- title.alpha_composite(decode_tpl(ROOT/'assets/menu-ui/Title_U/title/timg/tt_title_screen_title_rogo_r_only.tpl'),(0,0))
- save('title_scene',title.crop((112,0,720,456)));panel_records['title_scene']=[-304,-228,304,228]
- blur=Image.new('RGBA',(832,456),(255,255,255,255))
- for archive,name,y in [('Title','tt_title_screen_mario2_bokeboke.tpl',140),('Title_U','tt_title_screen_title_rogo_bokeboke.tpl',0)]:
-  p=ROOT/'assets/menu-ui'/archive/'title/timg'/name;source(p);blur.alpha_composite(decode_tpl(p),(0,y))
- save('title_blur_scene',blur.crop((112,0,720,456)));panel_records['title_blur_scene']=[-304,-228,304,228]
  # Retail TitleImage: default mario_luiji, then five unlocked alternatives.
- for index,(archive,art) in enumerate([('Title_U','mario0'),('Title','mario'),('Title','mario2'),('Title','peachi'),('Title','luigi'),('Title','koopa')]):
+ scenes={False:[],True:[]}
+ for archive,art in [('Title_U','mario0'),('Title','mario'),('Title','mario2'),('Title','peachi'),('Title','luigi'),('Title','koopa')]:
   for blurred in (False,True):
    suffix='_bokeboke' if blurred else ''
    logo='tt_title_screen_title_rogo_bokeboke.tpl' if blurred else 'tt_title_screen_title_rogo_r_only.tpl'
    scene=Image.new('RGBA',(832,456),'white')
    for image,y in [(ROOT/'assets/menu-ui'/archive/'title/timg'/f'tt_title_screen_{art}{suffix}.tpl',140),(ROOT/'assets/menu-ui/Title_U/title/timg'/logo,0)]:
     source(image);scene.alpha_composite(decode_tpl(image),(0,y))
+   scenes[blurred].append(scene)
+ for blurred in (False,True):
+  for index,scene in enumerate(scenes[blurred]):
    key=f'title_{"blur_scene" if blurred else "scene"}_{index}'
    save(key,scene.crop((112,0,720,456)));panel_records[key]=[-304,-228,304,228]
+ # The plain title_scene / title_blur_scene are the mario2 art (index 2).
+ save('title_scene',scenes[False][2].crop((112,0,720,456)));panel_records['title_scene']=[-304,-228,304,228]
+ save('title_blur_scene',scenes[True][2].crop((112,0,720,456)));panel_records['title_blur_scene']=[-304,-228,304,228]
  tpl('locked_choice',UI/'button/timg/tt_hatena_64x64.tpl')
  drivers=['mario','luigi','peach','yoshi','baby_mario','baby_peach','kinopio','noko','wario','waluigi','donky','koopa','baby_daisy','baby_luigi','catherine','daisy','didy','karon','hone_koopa','funky','teresa','roseta','kinopico','koopa_jr','mii_suit_a','mii_suit_b']
  for i,n in enumerate(drivers):tpl('driver_'+str(i),UI/'button/timg'/f'tt_{n}_64x64.tpl')

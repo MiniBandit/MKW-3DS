@@ -19,10 +19,10 @@ int main(){
  for(unsigned i=0;i<4;++i){auto& s=saves[i];s.occupied=true;s.settings.license=i;s.nativeMii[0]=3;s.nativeMii[4]=i+1;s.miiId=licenseMiiId(s.nativeMii);assert(writeLicenseSave(root,i,s));}
  assert(loadLicenseSaves(root,saves)==LicenseLoad::Loaded);
  const auto retail=bytes(file);
- for(unsigned i=0;i<4;++i){auto& s=saves[i];s.settings.ledMode=i;s.settings.dynamicShadows=i%2;s.settings.ledBrightness=50+10*i;s.settings.raceTimer=i%3;s.settings.mapTurns=i!=2;s.settings.speedometer=i==3;assert(writeLicenseSave(root,i,s));}
+ for(unsigned i=0;i<4;++i){auto& s=saves[i];s.settings.ledMode=i;s.settings.ledBrightness=50+10*i;s.settings.raceTimer=i%3;s.settings.mapTurns=i!=2;s.settings.speedometer=i==3;assert(writeLicenseSave(root,i,s));}
  assert(bytes(file)==retail); // Port settings must not alter any retail/ghost byte.
  std::array<LicenseSave,4> loaded;assert(loadLicenseSaves(root,loaded)==LicenseLoad::Loaded);
- for(unsigned i=0;i<4;++i){assert(loaded[i].settings.ledMode==i);assert(loaded[i].settings.ledBrightness==50+10*i);assert(loaded[i].settings.dynamicShadows==bool(i%2));
+ for(unsigned i=0;i<4;++i){assert(loaded[i].settings.ledMode==i);assert(loaded[i].settings.ledBrightness==50+10*i);
   assert(loaded[i].settings.raceTimer==i%3&&loaded[i].settings.mapTurns==(i!=2)&&loaded[i].settings.speedometer==(i==3));}
  {// MKWO0001, 24 bytes: byte 19 holds the speedometer (bit 0), the timer (bits 1-2) and a fixed map (bit 3).
   const auto data=bytes(std::filesystem::path(root)/"license-options-2.dat");
@@ -38,7 +38,7 @@ int main(){
  }
  // Legacy saves and corrupt optional files retain safe defaults, not a damaged license.
  for(auto suffix:{"",".bak"})std::filesystem::remove(std::filesystem::path(root)/(std::string("license-options-0.dat")+suffix));
- assert(loadLicenseSave(root,0,loaded[0])==LicenseLoad::Loaded);assert(loaded[0].settings.ledMode==0&&loaded[0].settings.dynamicShadows&&loaded[0].settings.ledBrightness==100);
+ assert(loadLicenseSave(root,0,loaded[0])==LicenseLoad::Loaded);assert(loaded[0].settings.ledMode==0&&loaded[0].settings.ledBrightness==100);
  {std::ofstream f(std::filesystem::path(root)/"license-options-0.dat");f<<"bad";}
  assert(loadLicenseSave(root,0,loaded[0])==LicenseLoad::Loaded&&loaded[0].settings.ledMode==0);
  LicenseSave empty;empty.settings.license=1;assert(writeLicenseSave(root,1,empty));

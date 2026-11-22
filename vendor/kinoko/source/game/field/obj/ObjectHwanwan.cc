@@ -15,6 +15,7 @@ ObjectHwanwan::~ObjectHwanwan() = default;
 
 /// @addr{0x806E9724}
 void ObjectHwanwan::init() {
+    resetStates();
     m_workPos = m_initPos + EGG::Vector3f::ey * DIAMETER;
     m_extVel.setZero();
     m_bounceVel.setZero();

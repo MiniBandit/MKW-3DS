@@ -34,17 +34,14 @@ struct UiSelection {
  unsigned battleCpu=1,battleVehicles=2,battleCourses=0,battleItems=0,battleWins=2;
  RaceTeam humanTeam=RaceTeam::Red;
  unsigned license=0,battleStage=0;bool teams=false,coinRunners=false;
- // Time Trials ghost page: 0 Race This Ghost, 1 Watch the Replay, 2 Solo;
- // ghostIndex: which of the course's ghosts (MenuState::ghosts).
- unsigned ghostChoice=2,ghostIndex=0;
  // Main menu Online: a VS race against other consoles (peer to peer).
  bool online=false;
  // The retail unlocked engine-class page switches both 50cc/100cc entries
  // together between their restricted type and the combined kart/bike list.
  bool mixedEngineTypes=false;
- // Per-license port options, separate from retail RKSD. dynamicShadows is
- // unused now (see UiSettings); it only keeps the file layout.
- unsigned ledMode=0,ledBrightness=100;bool dynamicShadows=true;
+ // Per-license port options, separate from retail RKSD (byte 17, the old
+ // Dynamic Shadows flag, is written as 0 and ignored).
+ unsigned ledMode=0,ledBrightness=100;
  // Speedometer at the start of a race; SELECT still switches it during one.
  bool speedometer=false;
  // The race timer on the lower screen (License Settings: Timer):
@@ -89,11 +86,6 @@ public:
  int previewCourse=-1;
  LicenseRecords licenseRecords{};
  std::array<CourseBestTimes,4> licenseBestTimes{};
- // The Time Trials ghosts for ghostsCourse, filled in by the race runtime
- // (TimeTrialGhost::list): kind 0 the player's best, 1 another ghost
- // (a friend's, a Wii's), 2 the staff ghost, 3 the expert staff ghost.
- struct Ghost {uint8_t kind=0;uint32_t ms=0;char name[24]{};};
- std::vector<Ghost> ghosts;unsigned ghostsCourse=~0u;
  // Online (main menu): Host a Race or Join a Race, the host's code on the
  // number pad, then the lobby. main fills in the lobby from the network each
  // frame and acts on the requests.
@@ -182,6 +174,10 @@ public:
  UiAction input(UiInput);
  void advance(unsigned ticks);
  void toggleSetting(unsigned row);
+ // Settings: the preset rows (Performance, Purist, Retro, Fidelity, Custom), or with
+ // settingsCustom each option (Custom's page). enter() clears it.
+ bool settingsCustom=false;
+ void chooseSettingsPreset(unsigned row);
  void enter(UiPage);
  void raceStarted(){enter(UiPage::Race);}
  void finish(bool last=false){finalRace=last;enter(UiPage::Results);}

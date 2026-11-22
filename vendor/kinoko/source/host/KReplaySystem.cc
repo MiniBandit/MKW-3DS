@@ -6,7 +6,13 @@
 #include <abstract/File.hh>
 #include <egg/core/Heap.hh>
 
+#include <game/field/ObjectDirector.hh>
 #include <game/system/RaceManager.hh>
+
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <vector>
 
 #include <iomanip>
 
@@ -36,11 +42,169 @@ void KReplaySystem::calc() {
 /// @details A run consists of replaying a ghost.
 /// @return Whether the run was successful or not.
 bool KReplaySystem::run() {
+    // Port check (KINOKO_REINIT_TEST=N): a course preview of N held frames,
+    // then ObjectDirector::init() at the cut, must leave every object exactly
+    // where a freshly built scene puts it (retail rebuilds the scene there).
+    if (const char *env = std::getenv("KINOKO_REINIT_TEST")) {
+        return runReinitTest(std::atoi(env));
+    }
+
     while (!calcEnd()) {
         calc();
     }
 
     return success();
+}
+
+// KINOKO_REINIT_SKIP="0x191,0xe3": extra object types left out of the re-init.
+static std::vector<u16> s_extraSkip;
+static bool ExtraSkip(u16 id) {
+    for (u16 s : s_extraSkip) {
+        if (s == id) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool KReplaySystem::runReinitTest(int previewFrames) {
+    if (const char *skip = std::getenv("KINOKO_REINIT_SKIP")) {
+        for (const char *p = skip; *p;) {
+            char *end = nullptr;
+            s_extraSkip.push_back(static_cast<u16>(std::strtoul(p, &end, 0)));
+            p = *end ? end + 1 : end;
+        }
+        Field::ObjectDirector::s_reinitExtraSkip = ExtraSkip;
+    }
+    if (std::getenv("KINOKO_REINIT_ALL")) {
+        Field::ObjectDirector::s_reinitAll = true;
+    }
+    constexpr int FRAMES = 420; // the 172 intro frames, the 240 countdown, a few more
+    auto snapshot = [](std::vector<f32> &out) {
+        out.clear();
+        for (const auto *obj : Field::ObjectDirector::Instance()->objects()) {
+            const auto &p = obj->pos();
+            const auto &s = obj->scale();
+            const auto &m = obj->transform();
+            out.insert(out.end(), {p.x, p.y, p.z, s.x, s.y, s.z});
+            for (int r = 0; r < 3; ++r) {
+                for (int c = 0; c < 4; ++c) {
+                    out.push_back(m[r, c]);
+                }
+            }
+        }
+        // The race RNG last (as raw bits): it must follow the fresh scene's too.
+        const u64 rng = System::RaceManager::Instance()->random().state();
+        f32 words[2];
+        std::memcpy(words, &rng, sizeof rng);
+        out.insert(out.end(), {words[0], words[1]});
+    };
+    constexpr size_t PER_OBJECT = 18;
+    std::vector<std::vector<f32>> fresh(FRAMES), rerun(FRAMES);
+    std::vector<u32> ids;
+    std::vector<const char *> names;
+    for (const auto *obj : Field::ObjectDirector::Instance()->objects()) {
+        ids.push_back(static_cast<u32>(obj->id()));
+        const auto &flowTable = Field::ObjectDirector::Instance()->flowTable();
+        const auto *set = flowTable.set(flowTable.slot(obj->id()));
+        names.push_back(set ? set->name : nullptr);
+    }
+    if (std::getenv("KINOKO_REINIT_IDS")) {
+        for (u32 id : ids) {
+            std::printf("0x%x ", id);
+        }
+        std::printf("\n");
+    }
+    // Two processes, no in-process scene restart: KINOKO_REINIT_FRESH names a
+    // file; the first run (file absent) records the fresh scene into it, the
+    // second runs the preview + re-init and compares against it.
+    const char *freshPath = std::getenv("KINOKO_REINIT_FRESH");
+    if (!freshPath) {
+        std::printf("set KINOKO_REINIT_FRESH\n");
+        return false;
+    }
+    if (FILE *in = std::fopen(freshPath, "rb")) {
+        for (auto &frame : fresh) {
+            u32 n = 0;
+            if (std::fread(&n, sizeof n, 1, in) != 1) {
+                std::fclose(in);
+                std::printf("fresh file short\n");
+                return false;
+            }
+            frame.resize(n);
+            if (n && std::fread(frame.data(), sizeof(f32), n, in) != n) {
+                std::fclose(in);
+                std::printf("fresh file short\n");
+                return false;
+            }
+        }
+        std::fclose(in);
+    } else {
+        FILE *out = std::fopen(freshPath, "wb");
+        for (int f = 0; f < FRAMES; ++f) {
+            calc();
+            snapshot(fresh[f]);
+            const u32 n = static_cast<u32>(fresh[f].size());
+            std::fwrite(&n, sizeof n, 1, out);
+            std::fwrite(fresh[f].data(), sizeof(f32), n, out);
+        }
+        std::fclose(out);
+        std::printf("fresh recorded\n");
+        return true;
+    }
+
+    System::RaceManager::Instance()->setIntroHeld(true);
+    for (int f = 0; f < previewFrames; ++f) {
+        calc();
+    }
+    Field::ObjectDirector::Instance()->reinitForRace();
+    System::RaceManager::Instance()->setIntroHeld(false);
+    for (int f = 0; f < FRAMES; ++f) {
+        calc();
+        snapshot(rerun[f]);
+    }
+
+    std::vector<int> firstBad(ids.size(), -1);
+    size_t bad = 0;
+    for (int f = 0; f < FRAMES; ++f) {
+        if (fresh[f].size() == rerun[f].size() &&
+                std::memcmp(&fresh[f][fresh[f].size() - 2], &rerun[f][rerun[f].size() - 2],
+                        2 * sizeof(f32)) != 0) {
+            std::printf("race RNG differs from frame %d\n", f);
+            ++bad;
+            break;
+        }
+    }
+    for (int f = 0; f < FRAMES; ++f) {
+        if (fresh[f].size() != rerun[f].size()) {
+            std::printf("object count differs at frame %d\n", f);
+            return false;
+        }
+        for (size_t o = 0; o < ids.size(); ++o) {
+            if (firstBad[o] >= 0 ||
+                    Field::ObjectDirector::ReinitSkipped(static_cast<Field::ObjectId>(ids[o]))) {
+                continue;
+            }
+            if (std::memcmp(&fresh[f][o * PER_OBJECT], &rerun[f][o * PER_OBJECT],
+                        PER_OBJECT * sizeof(f32)) != 0) {
+                firstBad[o] = f;
+                ++bad;
+            }
+        }
+    }
+    for (size_t o = 0; o < ids.size(); ++o) {
+        if (firstBad[o] >= 0) {
+            const f32 *a = &fresh[firstBad[o]][o * PER_OBJECT];
+            const f32 *b = &rerun[firstBad[o]][o * PER_OBJECT];
+            std::printf("object %zu id 0x%x (%s) differs from frame %d: pos %.3f %.3f %.3f vs %.3f %.3f "
+                        "%.3f, scale %.3f vs %.3f, rot00 %.4f vs %.4f\n",
+                    o, ids[o], names[o] ? names[o] : "?", firstBad[o], a[0], a[1], a[2], b[0], b[1], b[2], a[3], b[3], a[6],
+                    b[6]);
+        }
+    }
+    std::printf("reinit test: %zu objects, %zu differ (preview %d frames)\n", ids.size(), bad,
+            previewFrames);
+    return bad == 0;
 }
 
 /// @brief Parses non-generic command line options.

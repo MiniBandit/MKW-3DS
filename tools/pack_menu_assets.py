@@ -53,6 +53,8 @@ def main():
         files.update(r['path'] for r in json.loads(names_manifest.read_text())['glyphs'])
     # The pause controls diagram, when its photos were cooked (cook_pause_controls.py).
     files.update('textures/' + t.name for t in ASSETS.glob('textures/pause_controls_*.t3x'))
+    # The race loading picture, when its art was cooked (cook_loading_picture.py).
+    files.update('loading/' + t.name for t in ASSETS.glob('loading/race-*.bin'))
     for key, record in manifest['sprites'].items():
         if key in used or key in atlases:
             files.add(record['path'])

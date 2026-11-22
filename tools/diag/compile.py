@@ -69,12 +69,12 @@ env = dict(os.environ)
 env['PATH'] = os.pathsep.join([str(SDK / 'devkitARM/bin'), str(SDK / 'tools/bin'), env['PATH']])
 
 ARCH = ['-march=armv6k', '-mtune=mpcore', '-mfloat-abi=hard', '-mtp=soft']
-RELEASE_VARIANT = VARIANT == 'o3dsrelease'
+RELEASE_VARIANT = VARIANT in ('o3dsrelease', 'release')
 FLAGS = ARCH + ['-O2', '-g', '-mword-relocations', '-ffunction-sections', '-fdata-sections', '-ffp-contract=off',
                 '-std=gnu++23', '-D__3DS__', '-DREVOLUTION', *(['-DMKW_RELEASE'] if RELEASE_VARIANT else ['-DMKW_AUTO_PROFILE', '-DMKW_WRAP_ROMFS_MOUNT']), '-DKINOKO_QUIET',
                 '-fno-exceptions', '-fno-rtti', '-fcheck-new', '-fno-strict-aliasing',
                 '-ffile-prefix-map=' + ROOT.as_posix() + '/=']
-FLAGS += {'': [], 'o3dstest': ['-DMKW_OLD3DS_TEST'], 'o3dsrelease': ['-DMKW_OLD3DS_TEST']}[VARIANT]
+FLAGS += {'': [], 'release': [], 'o3dstest': ['-DMKW_OLD3DS_TEST'], 'o3dsrelease': ['-DMKW_OLD3DS_TEST']}[VARIANT]
 FLAGS += ['-I' + p.as_posix() for p in [SHADER, ROOT / 'vendor/kinoko/include', ROOT / 'vendor/kinoko/source', ROOT / 'include',
                                         ROOT / 'vendor/cfl-mii/include', ROOT / 'vendor/citro3d/include', SDK / 'libctru/include', GEN]]
 
@@ -155,9 +155,11 @@ def main():
                 'vramAlloc', 'vramAllocAt', 'vramMemAlign', 'vramMemAlignAt', 'vramRealloc', 'vramGetSize', 'vramFree', 'vramSpaceFree',
                 'romfsMountFromTitle',  # DIAG: logs the Mii resource fallback (cfl-fallback-test.txt)
                 'GX_DisplayTransfer',  # DIAG: checks each screen transfer (gpu-guard.log)
-                'C3D_TexBind']  # DIAG: 4-bit VRAM textures on units 1 and 2 (gpu-guard.log)
+                'C3D_TexBind',  # DIAG: 4-bit VRAM textures on units 1 and 2 (gpu-guard.log)
+                'gfxScreenSwapBuffers', 'gspSetEventCallback']  # DIAG: present pacing counters (mkw/present_pacing.hpp)
     if RELEASE_VARIANT:
         wrappers.remove('romfsMountFromTitle');wrappers.remove('GX_DisplayTransfer');wrappers.remove('C3D_TexBind')
+        wrappers.remove('gfxScreenSwapBuffers');wrappers.remove('gspSetEventCallback')
     subprocess.run([str(CXX), *ARCH, '-flto=auto', *(['-fprofile-generate'] if PGO == 'generate' else []), '-specs=3dsx.specs', '-Wl,--gc-sections', '-Wl,-Map=' + str(OUT / (NAME + '.map')),
                     *['-Wl,--wrap=' + w for w in wrappers], '@' + str(rsp), str(WORK / 'libCFL.a'), str(WORK / 'libcitro3d.a'),
                     '-L' + str(SDK / 'libctru/lib'), '-lctru', '-lm', '-o', str(OUT / (NAME + '.elf'))], env=env, check=True)

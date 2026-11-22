@@ -12,6 +12,12 @@ class ObjectItemboxBlock;
 class ObjectItemboxPress final : public ObjectCollidable {
 public:
     ObjectItemboxPress(const System::MapdataGeoObj &params);
+
+    /// Port: ObjectDirector::reinitForRace. init() starts from the current
+    /// pose, which the course preview has moved.
+    void prepareReinit() override {
+        resetPoseToParams();
+    }
     ~ObjectItemboxPress() override;
 
     /// @addr{0x8076DA88}

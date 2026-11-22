@@ -26,6 +26,7 @@ ObjectKuribo::~ObjectKuribo() = default;
 
 /// @addr{0x806DB40C}
 void ObjectKuribo::init() {
+    resetStates();
     calcTransform();
     m_origin = transform().base(2);
 

@@ -22,7 +22,11 @@ inline constexpr float itemShadowScale(ItemKind kind){
     }
 }
 inline HeldItemVisual releasedItemVisual(const ItemActor& actor){
-    const auto up=actor.explosion?Vec3{0,1,0}:normalized(actor.up,{0,1,0});
+    // Red and Blue guidance tracks the floor's up in guidance.up (collision
+    // uses it too); actor.up keeps the thrower's lean from the throw, which
+    // drew a shell thrown in a drift or bike lean on its side the whole way.
+    const bool guided=actor.kind==ItemKind::RedShell||actor.kind==ItemKind::BlueShell;
+    const auto up=actor.explosion?Vec3{0,1,0}:normalized(guided?actor.guidance.up:actor.up,{0,1,0});
     Vec3 facing{std::sin(actor.yaw),0,std::cos(actor.yaw)};
     auto right=normalized(cross(up,facing),{1,0,0});facing=normalized(cross(right,up),{0,0,1});
     // Damage-ejected shells keep their spawn orientation. Obj::UpdateModel-

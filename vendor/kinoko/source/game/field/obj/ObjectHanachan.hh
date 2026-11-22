@@ -134,6 +134,11 @@ public:
 
     void calcCollisionTransform() override;
 
+    /// Port: ObjectDirector::reinitForRace (the pose: ObjectHanachan::prepareReinit).
+    void prepareReinit() override {
+        m_lastPos = EGG::Vector3f::zero;
+    }
+
 private:
     EGG::Vector3f m_lastPos;
 };
@@ -174,6 +179,7 @@ public:
     ~ObjectHanachan() override;
 
     void init() override;
+    void prepareReinit() override;
 
     /// @addr{0x806C9860}
     void calc() override {

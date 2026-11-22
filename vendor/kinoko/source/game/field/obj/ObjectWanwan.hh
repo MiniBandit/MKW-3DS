@@ -38,6 +38,16 @@ public:
     ~ObjectWanwan() override;
 
     void init() override;
+
+    /// Port: ObjectDirector::reinitForRace. The constructor's pose (scale 2),
+    /// pitch, chain attach matrix and stake height (an attack raises it 30,
+    /// the return lowers it), which init() leaves as they are.
+    void prepareReinit() override {
+        resetPose(m_mapObj->pos(), m_mapObj->rot() * DEG2RAD, EGG::Vector3f(SCALE, SCALE, SCALE));
+        m_pitch = 0.0f;
+        m_chainAttachMat = EGG::Matrix34f::ident;
+        m_anchor = m_mapObj->pos() + EGG::Vector3f(0.0f, 20.0f, 0.0f); // ANCHOR_OFFSET
+    }
     void calc() override;
 
     /// @addr{0x806E94BC}

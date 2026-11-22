@@ -38,6 +38,7 @@ ObjectFireSnake::~ObjectFireSnake() = default;
 
 /// @addr{0x806C13B0}
 void ObjectFireSnake::init() {
+    resetStates();
     m_nextStateId = 0;
     enterDespawned();
 
@@ -46,6 +47,22 @@ void ObjectFireSnake::init() {
     calcTransform();
     m_initRot = transform().base(0);
     m_bounceDir = transform().base(0);
+}
+
+/// Port: ObjectDirector::reinitForRace, before init(). init() takes the bounce
+/// axis from the current transform; the trail and the two kids keep the
+/// preview's matrices. Back to what the constructor left.
+void ObjectFireSnake::prepareReinit() {
+    resetPoseToParams();
+    for (u32 i = 0; i < 2; ++i) {
+        f32 kidScale = (0.75f - 0.25f * static_cast<f32>(i)) * scale().y;
+        m_kids[i]->resetPose(m_mapObj->pos(), m_mapObj->rot() * DEG2RAD,
+                EGG::Vector3f(kidScale, kidScale, kidScale));
+        // The kids come before the snake in the object list: their own
+        // calcModel (the first init's matrix) has already run.
+        m_kids[i]->calcModel();
+    }
+    m_prevTransforms.fill(EGG::Matrix34f::ident);
 }
 
 /// @addr{0x806C14E4}

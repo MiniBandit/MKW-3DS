@@ -474,7 +474,7 @@ public:
   // is preloaded once: the full list ran past the 128-glyph cap, so Settings
   // never loaded "F", "R" or "p" and drew "Opponent Detail: educed".
   const bool preload=!fixed&&transition&&transition->preload;
-  if(preload)value=onlinePage(layout.page)?OnlineAlphabet:"0123456789% Change Miis Erase License LED: Off Items + Events Drifts Brightness Texture Quality High Low Dynamic Shadows On Bloom Opponent Detail Full 800px Mode Minimap 30fps Speedometer Timer Minimal Map: Turns with Kart Fixed";
+  if(preload)value=onlinePage(layout.page)?OnlineAlphabet:"0123456789% Change Miis Erase License LED: Off Items + Events Drifts Brightness Texture Quality High Low Dynamic Shadows On Bloom Opponent Detail Full 800px Mode Minimap 30fps Performance Purist Retro Fidelity Custom (Current) CRT, Map Speedometer Timer Minimal Map: Turns with Kart Fixed";
   bool seen[256]{};
   unsigned indices[128]{},count=0;float widths[128]{},total=0;
   for(const unsigned char* ch=reinterpret_cast<const unsigned char*>(value);*ch&&count<128;++ch){
@@ -497,9 +497,9 @@ public:
  // A native-font glyph run in top-screen pixels: align -1 ends at x, 0
  // centres on x, 1 starts at x. The pause controls diagram's labels.
  void screenText(const char* value,float x,float centerY,float height,int align,uint32_t tint=0xffffffff,bool outline=false){
-  unsigned indices[32]{},count=0;float widths[32]{},total=0;
+  unsigned indices[96]{},count=0;float widths[96]{},total=0;
   const float cell=UiFontCells[0][1];
-  for(const unsigned char* ch=reinterpret_cast<const unsigned char*>(value);*ch&&count<32;++ch){
+  for(const unsigned char* ch=reinterpret_cast<const unsigned char*>(value);*ch&&count<96;++ch){
    const auto index=glyphSprite(unsigned(*ch));if(index>=std::size(UiSprites))continue;
    indices[count]=index;widths[count]=UiSprites[index].w*height/cell;total+=widths[count++];
   }
@@ -803,43 +803,6 @@ public:
    x+=advance;
   }
  }
- // The ghost page's upper screen: which ghost (left/right browse), its time.
- void ghostInfo(){
-  group(UiMenuRole::TimeTrialRecord);
-  const float slide=transition?uiTimeTrialRecordSlide(*transition):0.f;
-  auto draw=[&](unsigned index,float x,float y,float w,float h,uint32_t tint=0xffffffffu){
-   const auto first=out.size();quad(index,(x+slide-200.f)/XScale,(y-120.f)/YScale,w/XScale,h/YScale,1,tint,{},true);
-   if(out.size()>first)out.back().menu.preserveAspect=true;
-  };
-  // Runtime text in the native-font name glyphs (one texture each).
-  auto words=[&](const char* value,float y,float h,uint32_t tint){
-   if(transition&&transition->preload)value="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 <>/:.'!?-";
-   unsigned indices[96]{},count=0;float widths[96]{},total=0;
-   for(const unsigned char* ch=reinterpret_cast<const unsigned char*>(value);*ch&&count<96;++ch){
-    char key[32];std::snprintf(key,sizeof key,"name_glyph_%04x",unsigned(*ch));
-    const auto index=lookup().find(key);if(index>=std::size(UiSprites))continue;
-    indices[count]=index;const auto& g=UiSprites[index];widths[count]=h*g.w/g.h;total+=widths[count++];
-   }
-   const float fit=std::min(1.f,360.f/std::max(total,1.f));float x=200.f-total*fit*.5f;
-   for(unsigned i=0;i<count;++i){draw(indices[i],x,y,widths[i]*fit,h*fit,tint);x+=widths[i]*fit;}
-  };
-  const auto& list=state.ghosts;const unsigned at=list.empty()?0:state.selection.ghostIndex%unsigned(list.size());
-  if(list.empty()){words("No ghosts for this course yet",96,22,0xffffffffu);words("Race Solo to save your best run",128,16,0xc0c0c0ffu);return;}
-  const auto& g=list[at];
-  const char* kinds[]={"Your Best Ghost",g.name[0]?g.name:"Ghost","Staff Ghost","Expert Staff Ghost"};
-  words(kinds[std::min<unsigned>(g.kind,3)],80,22,0xffffffffu);
-  char time[24];std::snprintf(time,sizeof time,"%02u:%02u.%03u",unsigned(g.ms/60000),unsigned(g.ms/1000%60),unsigned(g.ms%1000));
-  constexpr float h=30.f,advance=23.f;const float width=advance*float(std::strlen(time)-1)+h;
-  float x=200.f-width*.5f;
-  for(const char* p=time;*p;++p){
-   const unsigned n=*p>='0'&&*p<='9'?unsigned(*p-'0'):*p==':'?10u:*p=='.'?11u:12u;
-   char key[40];std::snprintf(key,sizeof key,"menu_record_digit_%u",n);
-   const auto i=lookup().find(key);const auto first=out.size();draw(i,x,116,h,h);
-   if(out.size()>first){auto& q=out.back();q.u0=float(n%8*26+1)/256.f;q.v0=float(n/8*26+1)/64.f;q.u1=q.u0+24.f/256.f;q.v1=q.v0+24.f/64.f;q.tint=0xffe040ffu;}
-   x+=advance;
-  }
-  if(list.size()>1){char page[24];std::snprintf(page,sizeof page,"< %u/%u >",at+1,unsigned(list.size()));words(page,156,16,0xc0c0c0ffu);}
- }
  // Runtime text in the game font, centred on cx (0 left-aligns at x=-cx), on the
  // upper screen (400 wide) or straight onto the lower one (320 wide).
  void screenWords(const char* value,float cx,float y,float h,uint32_t tint,bool lower,float maxWidth=360.f){
@@ -1117,12 +1080,30 @@ static void composeMenuImpl(const MenuState& s,const UiRaceView& race,std::vecto
   // port's whole-game options. A, left and right switch the chosen row.
   const char* variants[]={"Rumble","Network","ChannelInstall","ChannelInstall","ChannelInstall","ChannelInstall"};
   const auto& o=s.settings;char captions[6][40];
+  if(!s.settingsCustom){
+   // Three presets and Custom (its own page of every option). The values'
+   // preset (or Custom) is marked.
+   const unsigned current=settingsPresetOf(o);
+   for(unsigned i=0;i<=SettingsPresetCount;++i)
+    std::snprintf(captions[i],sizeof captions[i],i==current?"%s (Current)":"%s",i<SettingsPresetCount?SettingsPresetNames[i]:"Custom");
+   for(unsigned i=0;i<=SettingsPresetCount;++i){auto p=control("OptionTopButton",variants[i],i);c.group(UiMenuRole::Choice,i,p,"settings_button_free");c.button("settings_button",i,p,captions[i]);}
+   // Above the sample window (the lower band covers the space under it):
+   // what the highlighted row sets.
+   const UiSettings shown=s.cursor<SettingsPresetCount?settingsPreset(s.cursor):o;
+   char line[96];
+   std::snprintf(line,sizeof line,"%s%s%s, %s textures, %s opponents%s",shown.wide800?"800px":"400px",shown.bloom?", Bloom":"",shown.crt?", CRT":"",
+                 shown.textureQuality?"Low":"High",shown.opponentDetail?"Low":"Full",shown.minimap60?", Map 60fps":"");
+   c.group(UiMenuRole::Content);
+   c.screenText(line,200,39,12,0);
+   c.chrome("Settings");
+   break;
+  }
   std::snprintf(captions[0],sizeof captions[0],"Texture Quality: %s",o.textureQuality?"Low":"High");
-  std::snprintf(captions[1],sizeof captions[1],"Dynamic Shadows: %s",o.dynamicShadows?"On":"Off");
-  std::snprintf(captions[2],sizeof captions[2],"Bloom: %s",o.bloom?"On":"Off");
-  std::snprintf(captions[3],sizeof captions[3],"Opponent Detail: %s",o.opponentDetail?"Low":"Full");
-  std::snprintf(captions[4],sizeof captions[4],"800px Mode: %s",o.wide800?"On":"Off");
-  std::snprintf(captions[5],sizeof captions[5],"Minimap: %s",o.minimap60?"60fps":"30fps");
+  std::snprintf(captions[1],sizeof captions[1],"Bloom: %s",o.bloom?"On":"Off");
+  std::snprintf(captions[2],sizeof captions[2],"Opponent Detail: %s",o.opponentDetail?"Low":"Full");
+  std::snprintf(captions[3],sizeof captions[3],"800px Mode: %s",o.wide800?"On":"Off");
+  std::snprintf(captions[4],sizeof captions[4],"Minimap: %s",o.minimap60?"60fps":"30fps");
+  std::snprintf(captions[5],sizeof captions[5],"CRT: %s",o.crt?"On":"Off");
   for(unsigned i=0;i<6;++i){auto p=control("OptionTopButton",variants[i],i);c.group(UiMenuRole::Choice,i,p,"settings_button_free");c.button("settings_button",i,p,captions[i]);}
   c.chrome("Settings");
   // The upper screen is only a live sample of the chosen row at its
@@ -1383,16 +1364,25 @@ static void composeMenuImpl(const MenuState& s,const UiRaceView& race,std::vecto
   c.chrome(pick?"Cups":"Stages");break;
  }
  case UiPage::Ghost:{
-  // Retail's TimeAttackGhostList choices (Run, Watch, Alone) for the ghost
-  // shown on the upper screen; left/right browse the course's ghosts.
-  c.ghostInfo();
-  const char* names[]={"Race This Ghost","Watch the Replay","Solo Time Trials"};
-  const char* variants[]={"Run","Watch","Alone"};
-  for(unsigned i=0;i<3;++i){
-   auto pose=control("TimeAttackGhostList",variants[i],i);pose.y=50.f-50.f*float(i);
-   c.group(UiMenuRole::Choice,i,pose,"ghost_free");c.button("ghost",i,pose,names[i]);
+  // The disc's staff ghosts for this course (the expert one once the staff
+  // ghost is beaten), the license's own ghost, then solo. Y watches a ghost's replay.
+  c.timeTrialBest();
+  const unsigned course=std::min(s.selection.course,31u);
+  for(unsigned slot=0;slot<4;++slot){
+   if(!s.choiceVisible(slot)&&!(transition&&transition->preload))continue;
+   // Each row's own focus slot: the time labels (glyphText) take the pose
+   // as given, so slot 0 here gave every label the Staff row's OK press.
+   auto p=control("TimeAttackGhostList","Alone",slot);p.y=0;
+   c.group(UiMenuRole::Choice,slot,p,"ghost_free");
+   if(slot==3){c.button("ghost",slot,p,"Solo Time Trials");continue;}
+   c.button("ghost",slot,p);
+   const unsigned ms=slot==2?s.ownGhostTime(course):s.staffGhostTimes[course][slot];char label[40];
+   std::snprintf(label,sizeof label,"%s %u:%02u.%03u",slot==2?"Your Ghost":slot?"Expert Staff Ghost":"Staff Ghost",ms/60000,ms/1000%60,ms%1000);
+   const auto key=c.buttonState("ghost",slot);c.glyphText(label,key.c_str(),p);
   }
-  c.chrome("Time Trials");break;
+  // The preload composes the hint at any cursor, so its glyphs are resident
+  // before the page shows (on Solo Time Trials, moving up drew them in late).
+  c.chrome("Time Trials",s.cursor<3||preload?"A: Race this ghost   Y: Watch replay":"",true);break;
  }
  // Online: retail Wi-Fi menu buttons, the friend-code number pad and the
  // room's member cards, with the words written in the game font at runtime.
@@ -1635,13 +1625,20 @@ MenuRect menuChoiceRect(const UiQuad& q,const MenuState& state){
  case UiPage::BattleStage:return {12,34.f+35.f*i,296,30};
  case UiPage::VSRules:return {0,32.f+27.f*i,304,25};
  case UiPage::BattleRules:return {0,42.f+29.f*i,304,27};
- case UiPage::Settings:return {12,33.f+29.f*i,296,26}; // six rows above Back
+ // Custom's six rows above Back, or the five preset rows, spaced wider.
+ case UiPage::Settings:return state.settingsCustom?MenuRect{12,33.f+29.f*i,296,26}:MenuRect{12,33.f+34.f*i,296,28};
  // Seven rows (Speedometer, Timer, Map): the last ends at 208, above the Back bar.
  case UiPage::LicenseSettings:return {12,LicenseRowTop+LicenseRowPitch*i,296,LicenseRowH};
  case UiPage::TeamConfirm:return {52,95,216,48};
  case UiPage::Confirm:return {72,83,176,80};
  case UiPage::EraseLicense:return {35,65.f+75.f*i,250,52};
- case UiPage::Ghost:return {12,51.f+44.f*i,296,36};
+ case UiPage::Ghost:{
+  MenuState choices=state;choices.page=UiPage::Ghost;
+  const unsigned n=std::max(choices.visibleChoiceCount(),1u),k=choices.visibleChoiceIndex(i);
+  // Four entries (both staff ghosts, your ghost, solo) fit with less room each.
+  const float h=n>3?44.f:54.f,step=n>3?47.f:58.f;
+  return {25,124.f-(h+step*float(n-1))*.5f+step*float(k),270,h};
+ }
  // Sizes as onlineCell.
  case UiPage::OnlineMenu:return {16,52.f+80.f*i,288,58};
  case UiPage::OnlineCode:return {38.f+82.f*(i%3),34.f+44.f*(i/3),78,36};
@@ -1717,6 +1714,7 @@ void layoutMenuScreens(const MenuState& state,const std::vector<UiQuad>& source,
    placeMenuQuad(q,rect,true,bottom);break;
   }
   case UiMenuRole::Statistics:
+   // A free 132x20 fit: the bars stretch to fill the row.
    placeMenuQuad(q,{14,37.f+22.f*i,132,20},false,top);break;
   case UiMenuRole::Name:
    if(g.page==UiPage::Character)placeMenuQuad(q,{120,180,160,22},false,top);

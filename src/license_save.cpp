@@ -53,11 +53,11 @@ void loadOptions(const char* root,unsigned slot,LicenseSave& r){
  if(!r.occupied)return;
  Options b{};const auto file=optionsPath(root,slot);
  if(!(readOptions(file,b)||readOptions(file+".bak",b))||!std::equal(r.miiId.begin(),r.miiId.end(),b.begin()+8))return;
- r.settings.ledMode=b[16];r.settings.dynamicShadows=b[17]!=0;r.settings.ledBrightness=b[18];r.settings.speedometer=(b[19]&1)!=0;r.settings.raceTimer=TimerFile[(b[19]>>1)&3];r.settings.mapTurns=!(b[19]&8);
+ r.settings.ledMode=b[16];r.settings.ledBrightness=b[18];r.settings.speedometer=(b[19]&1)!=0;r.settings.raceTimer=TimerFile[(b[19]>>1)&3];r.settings.mapTurns=!(b[19]&8);
 }
 bool writeOptions(const char* root,unsigned slot,const LicenseSave& r,const unsigned char* identity){
  Options b{},old{};std::memcpy(b.data(),"MKWO0001",8);std::copy_n(identity,8,b.begin()+8);
- b[16]=r.occupied?r.settings.ledMode:0;b[17]=r.occupied?r.settings.dynamicShadows:true;b[18]=r.occupied?r.settings.ledBrightness:100;b[19]=r.occupied?(r.settings.speedometer?1:0)|(r.settings.mapTurns?0:8)|unsigned(TimerFile[std::min(r.settings.raceTimer,2u)]<<1):0;
+ b[16]=r.occupied?r.settings.ledMode:0;b[17]=0;b[18]=r.occupied?r.settings.ledBrightness:100;b[19]=r.occupied?(r.settings.speedometer?1:0)|(r.settings.mapTurns?0:8)|unsigned(TimerFile[std::min(r.settings.raceTimer,2u)]<<1):0;
  put32(b.data()+20,optionsCrc(b));const auto file=optionsPath(root,slot),tmp=file+".tmp",bak=file+".bak";
  if(readOptions(file,old)&&b==old)return true;
  FILE* f=std::fopen(tmp.c_str(),"wb");if(!f)return false;

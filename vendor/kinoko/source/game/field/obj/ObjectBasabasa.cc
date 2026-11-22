@@ -22,6 +22,7 @@ ObjectBasabasaDummy::~ObjectBasabasaDummy() = default;
 
 /// @addr{0x806B5E80}
 void ObjectBasabasaDummy::init() {
+    resetStates();
     m_railInterpolator->init(0.0f, 0);
     setPos(m_railInterpolator->curPos());
 

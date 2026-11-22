@@ -17,6 +17,7 @@ ObjectHeyhoBall::~ObjectHeyhoBall() = default;
 
 /// @addr{0x806D05F0}
 void ObjectHeyhoBall::init() {
+    resetStates();
     m_nextStateId = 0;
     m_shipPos.setZero();
     m_workingPos = pos();

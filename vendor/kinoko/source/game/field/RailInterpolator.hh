@@ -24,6 +24,12 @@ public:
     virtual ~RailInterpolator();
 
     virtual void init(f32 t, u32 idx) = 0;
+    /// Port: the state the constructor leaves (m_currVel 0, then init(0, 0)),
+    /// before an object's init() runs again at the course preview's end.
+    void resetToConstructed() {
+        m_currVel = 0.0f;
+        init(0.0f, 0);
+    }
     virtual Status calc() = 0;
     virtual void setCurrVel(f32 speed) = 0;
 

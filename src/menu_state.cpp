@@ -101,7 +101,7 @@ unsigned MenuState::count()const{
  switch(page){
  case UiPage::License:return 4;
  case UiPage::Drift:case UiPage::VSMode:return 3;
- case UiPage::Settings:return 6;
+ case UiPage::Settings:return settingsCustom?6:SettingsPresetCount+1;
  case UiPage::LicenseSettings:return 7;
  case UiPage::VSRules:return 7;
  case UiPage::BattleRules:return 6;
@@ -117,7 +117,7 @@ unsigned MenuState::count()const{
  case UiPage::Cup:return 8;
  case UiPage::Course:return 4;
  case UiPage::BattleStage:return 5;
- case UiPage::Ghost:return 3;
+ case UiPage::Ghost:return 4;
  case UiPage::OnlineMenu:return 2;
  case UiPage::OnlineCode:return 12;
  case UiPage::OnlineLobby:return onlineHost?2:1;
@@ -215,25 +215,37 @@ void MenuState::confirmRaceMii(unsigned weight,unsigned character){
 }
 
 void MenuState::toggleSetting(unsigned row){
- // Old 3DS: every setting is fixed (Texture Quality Low, Dynamic Shadows,
- // Bloom Off, Opponent Detail Low, 800px Mode Off, Minimap 30fps).
+ // Old 3DS: every setting is fixed (Texture Quality Low, Bloom Off, Opponent
+ // Detail Low, 800px Mode Off, Minimap 30fps, CRT Off).
  if(old3dsSettings){unavailable=true;return;}
  switch(row){
  case 0:settings.textureQuality=settings.textureQuality?0:1;break;
- case 1:settings.dynamicShadows=!settings.dynamicShadows;break;
- case 2:settings.bloom=!settings.bloom;break;
- case 3:settings.opponentDetail=settings.opponentDetail?0:1;break;
- case 4:settings.wide800=!settings.wide800;break;
- case 5:settings.minimap60=!settings.minimap60;break;
+ case 1:settings.bloom=!settings.bloom;break;
+ case 2:settings.opponentDetail=settings.opponentDetail?0:1;break;
+ // The CRT look needs 800px: 800px Mode Off turns it off, CRT On turns 800px on.
+ case 3:settings.wide800=!settings.wide800;if(!settings.wide800)settings.crt=false;break;
+ case 4:settings.minimap60=!settings.minimap60;break;
+ case 5:settings.crt=!settings.crt;if(settings.crt)settings.wide800=true;break;
  default:break;
  }
+}
+void MenuState::chooseSettingsPreset(unsigned row){
+ if(row>=SettingsPresetCount){
+  // Custom: every option on its own page, from its first row.
+  enter(UiPage::Settings);settingsCustom=true;cursor=0;uiFocusReset(*this);return;
+ }
+ // Old 3DS keeps its fixed values, which are Performance's.
+ if(old3dsSettings){unavailable=row!=0;return;}
+ settings=settingsPreset(row);
 }
 void MenuState::advance(unsigned ticks){age+=ticks;focusAge+=ticks;uiFocusAdvance(*this,ticks);}
 
 void MenuState::enter(UiPage next){
  if((next==UiPage::VSRules||next==UiPage::BattleRules)&&!rulePage())rulesEntry=selection;
  normalize(selection);
- page=next;age=focusAge=0;unavailable=false;cursor=0;
+ page=next;age=focusAge=0;unavailable=false;cursor=0;settingsCustom=false;
+ // Settings opens on the preset these values are (Custom when none).
+ if(page==UiPage::Settings)cursor=settingsPresetOf(settings);
  switch(page){
  case UiPage::Title:{
   // Retail 806098c0..9990: any occupied license's completion bit56
@@ -263,7 +275,7 @@ void MenuState::enter(UiPage next){
  case UiPage::Course:cursor=selection.course%4;break;
  case UiPage::BattleCup:cursor=selection.battleStage/5;break;
  case UiPage::BattleStage:cursor=selection.battleStage%5;break;
- case UiPage::Ghost:selection.ghostIndex=0;cursor=ghosts.empty()?2:std::min(selection.ghostChoice,2u);break;
+ case UiPage::Ghost:cursor=ghostChoice==1?0:ghostChoice==2?1:ghostChoice==3?2:3;break;
  case UiPage::OnlineMenu:cursor=onlineHost?0:1;break;
  case UiPage::OnlineCode:codeEntry[0]=0;codeWrong=false;break;
  case UiPage::EraseLicense:case UiPage::QuitConfirm:cursor=1;break;
@@ -292,7 +304,11 @@ UiAction MenuState::input(UiInput key){
   case UiPage::Intro:enter(UiPage::Title);break;
   case UiPage::License:titleLicense=cursor;enter(UiPage::Title);break;
   case UiPage::MainMenu:enter(UiPage::License);break;
-  case UiPage::Settings:enter(UiPage::License);cursor=auxiliarySlot();uiFocusReset(*this);break;
+  case UiPage::Settings:
+   // Custom's page goes back to the presets, with Custom (or the preset its
+   // values now make) chosen.
+   if(settingsCustom){enter(UiPage::Settings);uiFocusReset(*this);break;}
+   enter(UiPage::License);cursor=auxiliarySlot();uiFocusReset(*this);break;
   case UiPage::RecordsGeneral:case UiPage::RecordsFavorites:case UiPage::RecordsOther:enter(UiPage::LicenseSettings);break;
   case UiPage::EraseLicense:enter(UiPage::LicenseSettings);cursor=1;uiFocusReset(*this);break;
   case UiPage::LicenseSettings:enter(UiPage::MainMenu);cursor=7;uiFocusReset(*this);break;
@@ -347,8 +363,9 @@ UiAction MenuState::input(UiInput key){
   else selection.mapTurns=!selection.mapTurns;
   focusAge=0;return UiAction::None;
  }
- // Every Settings row is a two-way choice: left, right and A all switch it.
- if(page==UiPage::Settings&&(key.left||key.right)){toggleSetting(cursor);focusAge=0;return UiAction::None;}
+ // Custom's rows are two-way choices: left, right and A switch them. The
+ // preset rows take only A.
+ if(page==UiPage::Settings&&(key.left||key.right)){if(settingsCustom){toggleSetting(cursor);focusAge=0;}return UiAction::None;}
  if(rulePage()&&(key.left||key.right)&&cursor<ruleOkRow()){
   if(page==UiPage::BattleRules){
    if(cursor==4){unsigned i=0;while(i+1<std::size(UiBattleWinCounts)&&UiBattleWinCounts[i]!=selection.battleWins)++i;
@@ -405,7 +422,8 @@ UiAction MenuState::input(UiInput key){
  // a settings/help activation into a license choice or manual-drift selection.
  if(cursor==auxiliarySlot()){
   if(page==UiPage::MainMenu)enter(UiPage::LicenseSettings);
-  else if(page==UiPage::License)enter(UiPage::Settings);
+  // Old 3DS: every setting is fixed, so the page has nothing to change.
+  else if(page==UiPage::License){if(old3dsSettings)unavailable=true;else enter(UiPage::Settings);}
   else if(page==UiPage::Drift)enter(UiPage::DriftHelp);
   else if(page==UiPage::VSMode||page==UiPage::BattleMode){rulesReturn=page;enter(page==UiPage::BattleMode?UiPage::BattleRules:UiPage::VSRules);}
   else unavailable=true;
@@ -418,7 +436,7 @@ UiAction MenuState::input(UiInput key){
  case UiPage::License:selection.license=cursor;enter(UiPage::MainMenu);break;
  // The Wii's page held GameCube rumble, Wi-Fi and Channel installation;
  // this one holds the port's whole-game options instead.
- case UiPage::Settings:toggleSetting(cursor);break;
+ case UiPage::Settings:if(settingsCustom)toggleSetting(cursor);else chooseSettingsPreset(cursor);break;
  case UiPage::RecordsGeneral:enter(UiPage::RecordsFavorites);break;
  case UiPage::RecordsFavorites:enter(UiPage::RecordsOther);break;
  case UiPage::RecordsOther:enter(UiPage::RecordsGeneral);break;
@@ -499,10 +517,8 @@ UiAction MenuState::input(UiInput key){
   if(!onlineHost)break;
   if(cursor==0){if(onlineCanStart)onlineStartRequest=true;else unavailable=true;break;}
   enter(UiPage::OnlineCode);codeForPlayer=true;break;
- // Racing or watching a ghost needs one for the course.
- case UiPage::Ghost:
-  if(cursor<2&&ghosts.empty()){unavailable=true;break;}
-  selection.ghostChoice=cursor;enter(UiPage::Confirm);break;
+ case UiPage::Ghost:if(!choiceVisible(cursor)){unavailable=true;break;}
+  ghostChoice=cursor==0?1:cursor==1?2:cursor==2?3:0;watchGhost=false;enter(UiPage::Confirm);break;
  case UiPage::BattleCup:
   if(selection.battleStage/5!=cursor)selection.battleStage=cursor*5;
   enter(UiPage::BattleStage);break;
@@ -512,7 +528,11 @@ UiAction MenuState::input(UiInput key){
   if(cursor==0){enter(UiPage::Race);return UiAction::ResumeRace;}
   // GP, VS and Battle pause as on the Wii: Continue Game, Quit Game. Time
   // Trials adds Restart, Change Course and Change Character before Quit.
-  if(selection.mode==UiMode::TimeTrials){
+  if(watchingGhost()){
+   if(cursor==1)return UiAction::RestartRace;
+   // Start Race: race the ghost just watched, as "Race This Ghost" does.
+   if(cursor==2){watchGhost=false;return UiAction::RestartRace;}
+  }else if(selection.mode==UiMode::TimeTrials){
    // Online, a restart would restart this console's race alone.
    if(cursor==1){if(selection.online){unavailable=true;break;}return UiAction::RestartRace;}
    if(cursor==2){enter(UiPage::Cup);break;}

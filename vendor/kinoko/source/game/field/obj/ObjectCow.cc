@@ -105,6 +105,7 @@ ObjectCowLeader::~ObjectCowLeader() = default;
 
 /// @addr{0x806BD264}
 void ObjectCowLeader::init() {
+    resetStates();
     setup();
     m_railInterpolator->init(0.0f, 0);
     setPos(m_railInterpolator->curPos());
@@ -277,6 +278,7 @@ ObjectCowFollower::~ObjectCowFollower() = default;
 
 /// @addr{0x806BE060}
 void ObjectCowFollower::init() {
+    resetStates();
     setup();
     addPos(m_posOffset);
     EGG::Vector3f local_1c = m_posOffset;

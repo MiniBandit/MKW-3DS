@@ -13,7 +13,7 @@
 #include "mkw/retail_lighting.hpp"
 #include <mkw/render_metrics.hpp>
 #include <mkw/job_worker.hpp>
-#include <mkw/player_shadow.hpp>
+#include <mkw/asset_pack.hpp>
 #include <game/field/ObjectDirector.hh>
 #include <game/field/ObjectDrivableDirector.hh>
 #include <game/field/obj/ObjectEscalator.hh>
@@ -264,7 +264,19 @@ struct SharedTextures {
     }
 };
 }
+// models/<name><ext>, or with objectWeldOff its unwelded copy
+// models/<name>_pv<ext> when the pack (or SD) has one.
+static bool objectFile(char* out,size_t size,const char* name,const char* ext){
+    if(objectWeldOff){
+        std::snprintf(out,size,"models/%s_pv%s",name,ext);
+        if(pack::size(out)>=0)return true;
+        if(FILE* f=std::fopen(out,"rb")){std::fclose(f);return true;}
+    }
+    std::snprintf(out,size,"models/%s%s",name,ext);
+    return false;
+}
 bool ObjectAssets::load(int course){
+    unweldedObjectMeshes=unweldedObjectBanks=0;
     char path[64];std::snprintf(path,sizeof path,"models/course_%02d_visuals.list",course);
     FILE* list=std::fopen(path,"r");if(!list)return course>=32;
     const auto* race=Kinoko::System::RaceConfig::Instance();
@@ -280,7 +292,7 @@ bool ObjectAssets::load(int course){
         // GOBJ entry registers a spawn, not a permanently placed idle model.
         if(course>=32&&course<=41&&!std::strcmp(resource,"coin"))continue;
         auto m=std::make_unique<ObjModel>();m->resource=resource;m->name=name;m->model=std::make_unique<Model>();
-        char file[128];std::snprintf(file,sizeof file,"models/%s.gmdl",mesh);
+        char file[128];unweldedObjectMeshes+=objectFile(file,sizeof file,mesh,".gmdl");
         // Crowds and shadow volumes keep the whole bake (many vertices; no lit surface).
         const bool liveLight=diag::liveLight&&std::strncmp(resource,"group_",6)&&std::strncmp(resource,"monte_",6)&&!endsWith(name,"-shadow");
         if(!m->model->load(file,false,liveLight)){std::snprintf(objectLoadFailure,sizeof objectLoadFailure,"model %s",file);ok=false;break;}
@@ -308,7 +320,7 @@ bool ObjectAssets::load(int course){
             for(auto& row:m->model->samplers)if(row[0].valid)row[0].minFilter&=1;
         m->bounds={m->model->minimum,m->model->maximum};
         if(std::strcmp(bankName,"-")){
-            m->bank=std::make_unique<ObjectBank>();std::snprintf(file,sizeof file,"models/%s.dobj",bankName);
+            m->bank=std::make_unique<ObjectBank>();unweldedObjectBanks+=objectFile(file,sizeof file,bankName,".dobj");
             if(!m->bank->load(file)){std::snprintf(objectLoadFailure,sizeof objectLoadFailure,"bank %s",file);ok=false;break;}
             if(m->resource=="pakkun_f"&&!m->bank->hasJointCallbacks()){
                 std::fprintf(stderr,"pakkun_f bank missing original joint callbacks\n");ok=false;break;
@@ -430,7 +442,6 @@ struct CourseObjects::Impl {
     uint32_t lastTimer=0;
     std::vector<float> scratch;
     std::vector<Renderer::ShadowVolume> shadows,skyShadows;
-    std::vector<Renderer::ShadowReceiver> shadowReceivers;
     void link();
     // Re-links after a restarted race builds a new Kinoko scene.
     bool ready();
@@ -540,7 +551,9 @@ bool CourseObjects::loadCoconut(){
         Model strip,pieceA,pieceB;
         if(!strip.load("models/coconut_escalator_000.gmdl")){d.palm.reset();return false;}
         // Without its pieces the strip still draws (its landing steps just pop).
-        const bool a=pieceA.load("models/obj05_escalator__escalatora_000.gmdl"),b=pieceB.load("models/obj05_escalator__escalatorb_000.gmdl");
+        char fileA[96],fileB[96];
+        objectFile(fileA,sizeof fileA,"obj05_escalator__escalatora_000",".gmdl");objectFile(fileB,sizeof fileB,"obj05_escalator__escalatorb_000",".gmdl");
+        const bool a=pieceA.load(fileA),b=pieceB.load(fileB);
         auto built=buildEscalator(strip,a?&pieceA:nullptr,b?&pieceB:nullptr);
         if(!built.model){d.palm.reset();return false;}
         d.escalator=std::move(built.model);d.escalatorBones=built.bones;
@@ -825,94 +838,6 @@ void CourseObjects::draw(Renderer& renderer,unsigned tick,Vec3 camera){
     if(d.linkedReady)renderer.drawShadowVolumes(d.shadows.data(),unsigned(d.shadows.size()),.5f);
     d.replay(renderer,d.objects,1);
     d.recorded=false;
-}
-
-bool CourseObjects::suppressWheelContact(Vec3 center,float radius) const{
-    const auto* director=K::Field::ObjectDrivableDirector::Instance();
-    if(!director||radius<=0)return false;
-    const K::EGG::Vector3f p{center.x,center.y,center.z};
-    for(auto* object:director->objects()){
-        using K::Field::ObjectId;
-        // Original Turibashi/Ami are vertically deforming road surfaces.
-        // Keep VolcanoPiece, factory belts and all other supports unchanged.
-        if(object->id()!=ObjectId::Turibashi&&object->id()!=ObjectId::Ami)continue;
-        // Non-pushing query: no collision entries, status or physical motion
-        // are modified. Include the existing AO fade band so the policy does
-        // not flicker when wheel contact briefly clears during a small hop.
-        if(object->checkSpherePartial(radius+playerShadow::contactHeightTolerance()+2.f,
-            p,p,K::Field::KCLTypeMask(KCL_TYPE_FLOOR),nullptr,nullptr,0))return true;
-    }
-    return false;
-}
-
-const std::vector<Renderer::ShadowReceiver>& CourseObjects::shadowReceivers(Vec3 origin,float radius){
-    auto& d=*impl_;auto& out=d.shadowReceivers;out.clear();
-    // draw() joined the pose worker. Reuse exactly that frame's geometry,
-    // not KMP's initial placement or a guessed supporting quad.
-    float recordRows[12];
-    auto append=[&](const ObjectDrawRecord& record,const C3D_Mtx& transform,
-                    unsigned first,unsigned count,unsigned lighting,const Bounds& local,const float* palette=nullptr,unsigned bones=0){
-        // Static and GPU-skinned blocks share the record transform. Extract
-        // its rows once; rigid parts still use their current bone transform.
-        float partRows[12];const float* rows=recordRows;
-        if(&transform!=&record.transform){
-            for(unsigned i=0;i<3;++i)for(unsigned j=0;j<4;++j)partRows[i*4+j]=transform.r[i].c[3-j];
-            rows=partRows;
-        }
-        const Bounds bounds=transformBoundsPadded(local,rows);
-        if(!playerShadow::intersects(bounds.minimum,bounds.maximum,origin,radius))return;
-        if(!out.empty()){
-            auto& previous=out.back();
-            if(previous.model==record.target&&previous.first+previous.count==first&&
-               previous.lighting==lighting&&previous.palette==palette&&previous.bones==bones&&
-               std::memcmp(&previous.transform,&transform,sizeof transform)==0){
-                previous.count+=count;previous.bounds.include(bounds.minimum);previous.bounds.include(bounds.maximum);return;
-            }
-        }
-        out.push_back({record.target,transform,first,count,lighting,palette,bones,bounds});
-    };
-    for(const auto& record:d.objects.records){
-        if(record.backdrop||record.kind==ObjectDrawRecord::Explosion||!record.target)continue;
-        const auto& model=*record.target;
-        for(unsigned i=0;i<3;++i)for(unsigned j=0;j<4;++j)recordRows[i*4+j]=record.transform.r[i].c[3-j];
-        // Only immutable visibility geometry has a reliable model envelope.
-        // Posed/CPU-deformed objects keep their existing per-part path.
-        if(!record.pose&&!model.visibility.empty()){
-            const auto bounds=transformBoundsPadded({model.minimum,model.maximum},recordRows);
-            if(!playerShadow::intersects(bounds.minimum,bounds.maximum,origin,radius))continue;
-        }
-        for(unsigned j=0;j<model.submeshes.size();++j){
-            const auto& sub=model.submeshes[j];
-            // Transparent/cutout foliage is not a solid driving surface.
-            if(!sub.count||(sub.flags&1)||!playerShadow::receives(sub.flags))continue;
-            if(record.pose==1){
-                if(!record.parts||j>=record.parts->size())continue;
-                for(const auto& part:(*record.parts)[j]){
-                    const float* m=d.objects.palettes.data()+record.palette+part.matrix*12;
-                    C3D_Mtx bone;Mtx_Identity(&bone);
-                    for(unsigned row=0;row<3;++row)for(unsigned col=0;col<4;++col)bone.r[row].c[3-col]=m[row*4+col];
-                    C3D_Mtx world;Mtx_Multiply(&world,&record.transform,&bone);
-                    append(record,world,part.first,part.count,sub.lighting,part.bounds);
-                }
-            }else if(record.pose==2){
-                if(record.bones>Renderer::MaxSkinBones||j>=model.skinVisibility.size())continue;
-                const float* palette=d.objects.palettes.data()+record.palette;
-                for(const auto& block:model.skinVisibility[j])
-                    append(record,record.transform,block.indices.first,block.indices.count,sub.lighting,
-                           posedSkinBounds(block,palette,12),palette,record.bones);
-            }else if(j<model.visibility.size()){
-                for(const auto& block:model.visibility[j].blocks)
-                    append(record,record.transform,block.indices.first,block.indices.count,sub.lighting,block.bounds);
-            }else{
-                // Visibility blocks are optional, just as in drawNow(). Plain
-                // moving platforms still draw their complete submesh. Omitting
-                // them here leaves scene depth but no shadow receiver at all.
-                append(record,record.transform,sub.first,sub.count,sub.lighting,
-                       {model.minimum,model.maximum});
-            }
-        }
-    }
-    return out;
 }
 
 void CourseObjects::drawWater(Renderer& renderer){

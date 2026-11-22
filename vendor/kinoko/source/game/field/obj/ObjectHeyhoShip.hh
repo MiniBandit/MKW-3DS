@@ -12,6 +12,12 @@ public:
     ~ObjectHeyhoShip() override;
 
     void init() override;
+
+    /// Port: ObjectDirector::reinitForRace. The bob's frame counter is set only
+    /// by the constructor.
+    void prepareReinit() override {
+        m_frame = 0;
+    }
     void calc() override;
 
     /// @addr{0x806D2360}

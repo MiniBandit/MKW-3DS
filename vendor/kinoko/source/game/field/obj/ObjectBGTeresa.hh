@@ -4,6 +4,12 @@ namespace Kinoko::Field {
 class ObjectBGTeresa final : public ObjectCollidable {
 public:
     explicit ObjectBGTeresa(const System::MapdataGeoObj &params) : ObjectCollidable(params) {}
+
+    /// Port: ObjectDirector::reinitForRace. init() starts from the current
+    /// pose, which the course preview has moved.
+    void prepareReinit() override {
+        resetPoseToParams();
+    }
     void load() override;
     void init() override;
     void calc() override;

@@ -14,6 +14,18 @@ from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1];assets=ROOT/'sd-card/3ds/mkw-3ds';out=ROOT/'build/playable/3ds/mkw-3ds';out.mkdir(parents=True,exist_ok=True)
 paks=ROOT/'build/paks';paks.mkdir(parents=True,exist_ok=True)
 def tool(script,*args):subprocess.run([sys.executable,str(ROOT/'tools'/script),*map(str,args)],cwd=ROOT,check=True)
+# Course parts' vertex-cache triangle order (ethanseagull's 1.2.0), stored as
+# <part>.cord beside each part: the same code the game runs at course load,
+# which uses a file only when it matches its part (tools/course_cache_order.cpp).
+sys.path.insert(0,str(ROOT/'tools'))
+import host_tools
+order_tool=paks/('course_cache_order.exe' if sys.platform=='win32' else 'course_cache_order')
+subprocess.run([host_tools.compiler(),'-O2','-std=c++17','-ffp-contract=off','-I'+str(ROOT/'include'),'-o',str(order_tool),str(ROOT/'tools/course_cache_order.cpp')],cwd=ROOT,check=True)
+course_parts=[]
+for course in json.loads((assets/'models/course-catalog.json').read_text())['courses']:
+ track_list=assets/'models'/(course['prefix']+'.list')
+ if track_list.is_file():course_parts+=[str(assets/'models'/(name+'.gmdl')) for name in track_list.read_text().split()]
+subprocess.run([str(order_tool),*course_parts],cwd=ROOT,check=True)
 mapping=json.loads(subprocess.check_output([sys.executable,str(ROOT/'tools/resource_manifest.py')],cwd=ROOT,text=True))
 # pack_racer_lod.py refuses a base that already holds its models (pack_mii_racers.py
 # replaces its own, so those stay listed).
@@ -26,7 +38,9 @@ tool('pack_race_assets.py',paks/'runtime-files.json',paks/'race-base.pak','--exc
 tool('pack_racer_lod.py','--base',paks/'race-base.pak','--overlay',assets,'--output',paks/'race-lod.pak')
 tool('pack_mii_racers.py','--base',paks/'race-lod.pak','--overlay',ROOT/'build/mii-racers','--output',paks/'race-mii.pak')
 # Opponents' compact driver banks (.dsku, about 40% smaller), from ethanseagull's work.
-tool('pack_unlit_banks.py',paks/'race-mii.pak',paks/'race.pak')
+tool('pack_unlit_banks.py',paks/'race-mii.pak',paks/'race-unlit.pak')
+# Animated racer parts: welded, cache-ordered index buffers, the same picture (ethanseagull's 1.2.0).
+tool('pack_racer_weld.py',paks/'race-unlit.pak',paks/'race.pak','--report',paks/'race-weld.json')
 files={Path(src):Path(rel) for rel,src in base.items()}
 files[assets/'menu.pak']=Path('menu.pak');files[paks/'race.pak']=Path('race.pak')
 manifest={}

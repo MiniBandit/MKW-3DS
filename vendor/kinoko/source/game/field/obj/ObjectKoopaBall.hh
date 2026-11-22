@@ -9,6 +9,12 @@ namespace Kinoko::Field {
 class ObjectKoopaBall final : public ObjectCollidable {
 public:
     ObjectKoopaBall(const System::MapdataGeoObj &params);
+
+    /// Port: ObjectDirector::reinitForRace. init() starts from the current
+    /// pose, which the course preview has moved.
+    void prepareReinit() override {
+        resetPoseToParams();
+    }
     ~ObjectKoopaBall() override;
 
     void init() override;

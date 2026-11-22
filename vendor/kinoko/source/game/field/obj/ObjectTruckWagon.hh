@@ -15,6 +15,17 @@ public:
     /// @addr{0x806E0160}
     void init() override {}
 
+    /// Port: ObjectDirector::reinitForRace. A cart left inactive keeps the
+    /// preview's rotation (calc() stops); the spawner's init() then deactivates
+    /// or resets each cart as on a fresh scene.
+    void prepareReinit() override {
+        resetPoseToParams();
+        resetStates();
+        if (!m_active) {
+            reset(0);
+        }
+    }
+
     void calc() override;
 
     /// @addr{0x806E260C}

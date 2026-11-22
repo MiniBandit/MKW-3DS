@@ -7,7 +7,6 @@
 #include "mkw/vehicle_animation.hpp"
 #include "mkw/vehicle_lod_layout.hpp"
 #include "mkw/vehicle_visual_assets.hpp"
-#include "mkw/player_shadow.hpp"
 #include <mkw/course_bloom.hpp>
 #include <mkw/course_lighting.hpp>
 #include <array>
@@ -73,6 +72,16 @@ unsigned garageFor(const MenuState& state){
  const auto& s=state.selection;
  return s.driver<24&&s.vehicle<VehiclesPerDriver?s.driver*VehiclesPerDriver+s.vehicle:0u;
 }
+// The sample's row and values. Custom's rows show their own option; the
+// preset rows show the racer (the Bloom row's sample) with the highlighted
+// preset's values, Custom's row with the current ones.
+struct Sample {unsigned row;UiSettings o;bool preset;};
+Sample sampleFor(const MenuState& state){
+ // Custom's rows: Texture, Bloom, Opponents, 800px, Minimap, CRT.
+ static constexpr unsigned Rows[]={0,2,3,4,5,6};
+ if(state.settingsCustom)return {Rows[std::min(state.cursor,5u)],state.settings,false};
+ return {2,state.cursor<SettingsPresetCount?settingsPreset(state.cursor):state.settings,true};
+}
 using Quad=Renderer::MaterialQuad;
 constexpr float X=SettingsPreview::X,Y=SettingsPreview::Y,W=SettingsPreview::Width,H=SettingsPreview::Height;
 Quad rect(float x,float y,float w,float h,std::uint32_t top,std::uint32_t bottom){
@@ -127,7 +136,7 @@ constexpr float EyeDistance=1000.f,FovDegrees=45.f;
 constexpr float RacerZ=520.f,RacerY=-31.f,RacerPitch=.38f;
 // The 3D samples' world: the road is the plane y=0 and the chassis stands at
 // (0,-lift,0), lift being its tires' lowest point (initialSnapshot), so the
-// shadow passes see the racer on level ground as in a race. The camera is the
+// shadow volume sees the racer on level ground as in a race. The camera is the
 // menu camera moved with the racer, so the framing is the 2D road's.
 struct View {Vec3 eye,target,up;C3D_Mtx toWorld;};
 View viewFor(float lift){
@@ -148,7 +157,7 @@ float liftFor(const Racer& racer){
 // The road under the racer: the part of y=0 the window shows, as a grid whose
 // corners are where the rays through the window's pixels meet the plane. Its
 // image is exactly the window (a plane maps to the screen by a homography), so
-// no scissor is needed; it writes depth, so both kinds of shadow land on it.
+// no scissor is needed; it writes depth, so the shadow volume lands on it.
 // Texels are square, at the 2D road's scale; haze toward the top as there.
 std::unique_ptr<Model> groundFor(std::shared_ptr<Texture> texture,const View& view){
  constexpr unsigned N=8;
@@ -246,44 +255,6 @@ void drawRacer(Renderer& renderer,Racer& racer,VehicleAnimation& vehicle,bool lo
    draw(*a.extras[i],vehicle.accessory(GarageExtraNames[i],a.extraAnimation[i]&&a.extraAnimation[i]->handleDriveClip()>=0,n),a.extraAnimation[i].get());
  renderer.setSkinPalette(nullptr,0,12);
 }
-// Luigi Circuit's sun at its own height, turned so the shadow falls to the
-// front right of the racer, where the camera sees it.
-Vec3 previewLight(){
- Vec3 light=playerShadow::limitedDirection(playerShadow::direction(courseLighting("Race/Course/beginner_course.szs")));
- const float across=std::hypot(light.x,light.z);light.x=across*.894f;light.z=across*.447f;
- return light;
-}
-// The race's player shadow (main.cpp's casters): body, driver, wheels with
-// their contact patches on the level road, accessories. Call after drawRacer
-// posed the full models this frame.
-void drawDynamicShadow(Renderer& renderer,Racer& racer,VehicleAnimation& vehicle,const Model& ground,float lift){
- auto& a=racer.assets;const auto& choice=*racer.choice;
- std::array<Renderer::ShadowCaster,32> casters{};unsigned count=0;
- auto caster=[&](const Model* model,const C3D_Mtx& matrix,const DriverAnimation* bank=nullptr)->Renderer::ShadowCaster*{
-  if(!model||count==casters.size())return nullptr;
-  auto& c=casters[count++];c.model=model;c.transform=matrix;
-  if(bank&&bank->gpuSkinned()){c.palette=bank->palette();c.bones=bank->matrixCount();}
-  return &c;
- };
- const C3D_Mtx chassis=vehicle.body();caster(a.body.get(),chassis,a.bodyAnimation.get());
- C3D_Mtx seated=chassis;Mtx_Translate(&seated,0,choice.seatY,choice.seatZ,true);
- caster(a.driver.get(),seated,a.animation.get());
- const auto contact=vehicle.snapshot();
- for(unsigned w=0;w<vehicle.wheelCount();++w){
-  auto* part=caster(a.wheels[vehicle.modelIndex(w)].get(),vehicle.wheel(w));if(!part)continue;
-  part->wheelContact=true;part->contactCenter=contact.tirePositions[w];part->contactNormal={0,1,0};
-  part->contactRadius=contact.radius[w]*contact.scale.y;part->contactSpread=1.53f*.8f*1.2f;
-  const Vec3 axle{part->transform.r[0].x,part->transform.r[1].x,part->transform.r[2].x};
-  const float halfWidth=.5f*(part->model->maximum.x-part->model->minimum.x)*length(axle);
-  part->contactHalfWidth=(halfWidth*1.15f+1.f)*1.1f*1.15f*1.2f;
- }
- for(unsigned i=0;i<a.extras.size();++i)if(a.extras[i])
-  for(unsigned n=0;n<vehicle.accessoryCount(GarageExtraNames[i]);++n)
-   caster(a.extras[i].get(),vehicle.accessory(GarageExtraNames[i],a.extraAnimation[i]&&a.extraAnimation[i]->handleDriveClip()>=0,n),a.extraAnimation[i].get());
- const Model* receivers[]={&ground};
- const Renderer::ShadowVolume fallback{a.shadow.get(),chassis};
- renderer.drawPlayerShadow(casters.data(),count,receivers,1,{0,-lift,0},previewLight(),1.f,a.shadow?&fallback:nullptr);
-}
 const CourseBloom& previewBloom(){
  static const CourseBloom* bloom=courseBloom("Race/Course/beginner_course.szs");
  return bloom?*bloom:CourseBlooms[0];
@@ -299,9 +270,9 @@ struct SettingsPreview::Impl {
  std::unique_ptr<Model> groundHigh,groundStandard;
  const Racer* groundRacer=nullptr;float lift=0;
  bool roadFailed=false;unsigned racerFailed=~0u;
- // Targets this page created: the player shadow's, and bloom's (requested
+ // Targets this page created: bloom's (requested
  // this frame by begin(), composited by draw()).
- bool shadowOwned=false,shadowTried=false,bloomUsed=false,bloomFrame=false;
+ bool bloomUsed=false,bloomFrame=false;
  bool roadResident()const{return high&&standard;}
  bool racerResident(unsigned garage)const{return racer&&racer->choice==&GarageChoices[garage];}
  bool groundReady()const{return groundHigh&&groundStandard&&racer&&groundRacer==racer.get();}
@@ -349,9 +320,8 @@ struct SettingsPreview::Impl {
   roadFailed=false;racerFailed=~0u;
   // Their VRAM goes back to the menus and the next race (which allocates
   // its own as its settings say).
-  if(shadowOwned)renderer.configurePlayerShadow(false);
   if(bloomUsed)renderer.releaseBloom();
-  shadowOwned=shadowTried=bloomUsed=bloomFrame=false;
+  bloomUsed=bloomFrame=false;
  }
 };
 SettingsPreview::SettingsPreview():impl_(std::make_unique<Impl>()){}
@@ -372,14 +342,8 @@ void SettingsPreview::request(const MenuState& state,AssetPriority priority){
 }
 void SettingsPreview::update(Renderer& renderer,const MenuState& state){
  auto& m=*impl_;
- if(state.page!=UiPage::Settings){if(m.roadJob||m.racerJob||m.roadResident()||m.racer||m.roadFailed||m.racerFailed!=~0u||m.shadowOwned||m.bloomUsed)m.release(renderer);return;}
+ if(state.page!=UiPage::Settings){if(m.roadJob||m.racerJob||m.roadResident()||m.racer||m.roadFailed||m.racerFailed!=~0u||m.bloomUsed)m.release(renderer);return;}
  m.publish(renderer);
- // The player shadow's targets, created outside a frame (the render thread
- // idle) the first time the Dynamic Shadows row shows On. If VRAM is short
- // the row shows the native shadow, as a race would.
- if(state.cursor==1&&state.settings.dynamicShadows&&!m.shadowTried&&!renderer.playerShadowReady()){
-  m.shadowTried=true;m.shadowOwned=renderer.configurePlayerShadow(true);
- }
 }
 void SettingsPreview::prepare(Renderer& renderer,const MenuState& state){
  auto& m=*impl_;
@@ -405,8 +369,9 @@ void SettingsPreview::begin(Renderer& renderer,const MenuState& state){
  if(state.page!=UiPage::Settings||!m.groundReady()){renderer.begin({0,0,EyeDistance},{0,0,0},{0,1,0});return;}
  // The Bloom row: the race's bloom (Luigi Circuit's settings) over the
  // window only. The setting is what the next race uses anyway.
- renderer.bloomEnabled=state.settings.bloom;
- if(std::min(state.cursor,3u)==2&&state.settings.bloom){
+ const auto sample=sampleFor(state);
+ renderer.bloomEnabled=sample.o.bloom;
+ if(std::min(sample.row,3u)==2&&sample.o.bloom){
   static constexpr float Window[4]={X,Y,W,H};
   renderer.requestBloom(previewBloom(),Window);m.bloomUsed=m.bloomFrame=true;
  }
@@ -420,11 +385,11 @@ void SettingsPreview::begin(Renderer& renderer,const MenuState& state){
 }
 void SettingsPreview::draw(Renderer& renderer,const MenuState& state,const UiTransitionView&){
  if(state.page!=UiPage::Settings)return;
- auto& m=*impl_;const auto& o=state.settings;
+ auto& m=*impl_;const auto sample=sampleFor(state);const auto& o=sample.o;
  drawFrame(renderer);
- // 800px Mode (row 4) and Minimap (row 5, a race's lower screen) show the plain
- // racer: the whole top screen is the sample.
- const unsigned row=std::min(state.cursor,4u);
+ // 800px Mode (row 4), Minimap (row 5, a race's lower screen) and CRT (row 6)
+ // show the plain racer: the whole top screen is the sample.
+ const unsigned row=std::min(sample.row,4u);
  if(!m.roadResident())return;
  if(row==0){drawRoad(renderer,o.textureQuality?*m.standard:*m.high,state.age);return;}
  // The other samples: the racer on the road at the chosen quality.
@@ -438,14 +403,10 @@ void SettingsPreview::draw(Renderer& renderer,const MenuState& state,const UiTra
  renderer.setSkinPalette(nullptr,0,12);renderer.draw(ground,identity);
  auto& a=m.racer->assets;
  const C3D_Mtx chassis=chassisFor(m.lift,state.age);
- // Dynamic Shadows: On projects the racer onto the road after it is drawn
- // (main.cpp's order); Off, and the other rows, keep the native shadow
- // volume under the racer, drawn before it as in a race.
+ // The native shadow volume under the racer, drawn before it as in a race.
  if(!placeRacer(*m.racer,m.vehicle,chassis))return;
- const bool dynamic=row==1&&o.dynamicShadows&&renderer.playerShadowReady();
- if(!dynamic&&a.shadow){const Renderer::ShadowVolume volume{a.shadow.get(),m.vehicle.body()};renderer.drawShadowVolumes(&volume,1,.5f);}
- drawRacer(renderer,*m.racer,m.vehicle,row==3&&o.opponentDetail,state.age);
- if(dynamic)drawDynamicShadow(renderer,*m.racer,m.vehicle,ground,m.lift);
+ if(a.shadow){const Renderer::ShadowVolume volume{a.shadow.get(),m.vehicle.body()};renderer.drawShadowVolumes(&volume,1,.5f);}
+ drawRacer(renderer,*m.racer,m.vehicle,(row==3||sample.preset)&&o.opponentDetail,state.age);
  if(m.bloomFrame)renderer.applyBloom();
 }
 void SettingsPreview::reset(Renderer& renderer){impl_->release(renderer);}

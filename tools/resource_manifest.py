@@ -85,6 +85,9 @@ for course in catalog['courses']:
     if name!='-' and any(c not in 'abcdefghijklmnopqrstuvwxyz_0123456789' for c in name):raise ValueError('Invalid course object name')
    models.append(mesh)
    if bank!='-':files[assets/'models'/(bank+'.dobj')]=Path('models')/(bank+'.dobj')
+   # Unwelded copies for the DIAG A/B (cook_course_objects.py KEEP_UNWELDED).
+   if (assets/'models'/(mesh+'_pv.gmdl')).is_file():models.append(mesh+'_pv')
+   if bank!='-' and (assets/'models'/(bank+'_pv.dobj')).is_file():files[assets/'models'/(bank+'_pv.dobj')]=Path('models')/(bank+'_pv.dobj')
  for name in course['model_lists']:
   relative=Path(name)
   if relative.parent!=Path('models') or relative.suffix!='.list':raise ValueError('Invalid course model list')
@@ -94,6 +97,8 @@ for course in catalog['courses']:
   for model in (assets/relative).read_text().split():
    if not model or any(c not in 'abcdefghijklmnopqrstuvwxyz_0123456789' for c in model):raise ValueError('Invalid course model name')
    models.append(model)
+   # The part's cooked vertex-cache order (tools/course_cache_order.cpp).
+   if (assets/'models'/(model+'.cord')).is_file():files[assets/'models'/(model+'.cord')]=Path('models')/(model+'.cord')
 roster=json.loads(roster_asset('models/roster.json').read_text())
 if roster.get('version')!=1 or len(roster.get('characters',[]))!=24:raise ValueError('Supply the manually prepared 24-driver roster before listing resources')
 files[roster_asset('models/roster.json')]=Path('models/roster.json')
