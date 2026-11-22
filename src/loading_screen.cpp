@@ -28,7 +28,7 @@ struct Bytes{
 // DIAG: the loading picture's steps in runtime.log (main thread only: the timer
 // thread must not touch the SD card).
 void pictureLog(const char* format,...){
- FILE* f=std::fopen("sdmc:/3ds/MKWiiDS/runtime.log","a");if(!f)return;
+ FILE* f=std::fopen("sdmc:/3ds/mkw-3ds/runtime.log","a");if(!f)return;
  va_list args;va_start(args,format);std::vfprintf(f,format,args);va_end(args);std::fputc('\n',f);std::fclose(f);
 }
 #else
@@ -196,7 +196,7 @@ RaceLoadingPicture::RaceLoadingPicture(){
  if(!renderer_||pictureThread)return;
 #ifndef MKW_RELEASE
  // DIAG no-loading-picture.txt: races load behind the black screen, as before 1.2.0.
- if(FILE* off=std::fopen("sdmc:/3ds/MKWiiDS/no-loading-picture.txt","rb")){std::fclose(off);pictureLog("loading picture: off (no-loading-picture.txt)");return;}
+ if(FILE* off=std::fopen("sdmc:/3ds/mkw-3ds/no-loading-picture.txt","rb")){std::fclose(off);pictureLog("loading picture: off (no-loading-picture.txt)");return;}
 #endif
  // The display mode the menus left: 800px Mode shows 800 columns, 3D two eyes.
  const bool wide=gfxIsWide();
@@ -244,10 +244,10 @@ RaceLoadingPicture::~RaceLoadingPicture(){
  // DIAG loading-shot.txt: the picture as shown before its fade out, as
  // loading-shot-NN.ppm (3D: -NN-right.ppm too). The main thread may use the
  // SD card; the timer thread can't.
- if(FILE* probe=std::fopen("sdmc:/3ds/MKWiiDS/loading-shot.txt","rb")){
+ if(FILE* probe=std::fopen("sdmc:/3ds/mkw-3ds/loading-shot.txt","rb")){
   std::fclose(probe);static unsigned shot=0;
   for(unsigned eye=0;eye<pictureEyes();++eye){
-   char path[64];std::snprintf(path,sizeof path,"sdmc:/3ds/MKWiiDS/loading-shot-%02u%s.ppm",shot,eye?"-right":"");
+   char path[64];std::snprintf(path,sizeof path,"sdmc:/3ds/mkw-3ds/loading-shot-%02u%s.ppm",shot,eye?"-right":"");
    if(const uint8_t* fb=pictureShown[eye])if(FILE* f=std::fopen(path,"wb")){
     std::fprintf(f,"P6\n%u 240\n255\n",pictureWidth);std::vector<uint8_t> row(size_t(pictureWidth)*3);
     for(unsigned y=0;y<240;++y){for(unsigned x=0;x<pictureWidth;++x){const uint8_t* p=fb+3*(x*240+(239-y));row[3*x]=p[2];row[3*x+1]=p[1];row[3*x+2]=p[0];}std::fwrite(row.data(),1,row.size(),f);}

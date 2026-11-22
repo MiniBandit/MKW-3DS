@@ -188,7 +188,7 @@ private:
    }
    std::fclose(f);
   }
-  std::snprintf(path,sizeof path,"sdmc:/3ds/MKWiiDS/perf-race-%03d-present.csv",index_);
+  std::snprintf(path,sizeof path,"sdmc:/3ds/mkw-3ds/perf-race-%03d-present.csv",index_);
   if(FILE* f=std::fopen(path,"w")){
    std::fputs("race_time_s,frame,replaced_presents,repeated_vblanks,interval_ms,simulation_ms,gpu_ms,present_wait_ms\n",f);
    for(unsigned i=0;i<presentEvents_;++i){const auto& e=presentEvent_[i];
@@ -196,8 +196,8 @@ private:
    std::fclose(f);
   }
   if(final){
-   {bool header=true;if(FILE* f=std::fopen("sdmc:/3ds/MKWiiDS/perf-present.csv","r")){header=false;std::fclose(f);}
-    if(FILE* f=std::fopen("sdmc:/3ds/MKWiiDS/perf-present.csv","a")){
+   {bool header=true;if(FILE* f=std::fopen("sdmc:/3ds/mkw-3ds/perf-present.csv","r")){header=false;std::fclose(f);}
+    if(FILE* f=std::fopen("sdmc:/3ds/mkw-3ds/perf-present.csv","a")){
      if(header){std::fputs("race,course,present_pacing,catch_up,wide,stereo_pct,seconds,loops,rendered,vblanks,top_presents,top_replaced,bottom_presents,bottom_replaced,repeated_vblanks,caught_up,present_wait_ms,present_wait_max_ms",f);
       for(unsigned i=0;i<presentPacing::LatencyBins;++i)std::fprintf(f,",latency_%u%s",i+1,i+1==presentPacing::LatencyBins?"plus":"");
       for(unsigned i=0;i<presentPacing::PhaseBins;++i)std::fprintf(f,",swap_%ums%s",i,i+1==presentPacing::PhaseBins?"plus":"");
