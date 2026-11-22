@@ -23,7 +23,8 @@ order_tool=paks/('course_cache_order.exe' if sys.platform=='win32' else 'course_
 subprocess.run([host_tools.compiler(),'-O2','-std=c++17','-ffp-contract=off','-I'+str(ROOT/'include'),'-o',str(order_tool),str(ROOT/'tools/course_cache_order.cpp')],cwd=ROOT,check=True)
 course_parts=[]
 for course in json.loads((assets/'models/course-catalog.json').read_text())['courses']:
- track_list=assets/'models'/(course['prefix']+'.list')
+ # The track's own parts: its first model list (our catalog), or Ethan's prefix.
+ track_list=assets/'models'/(course['prefix']+'.list') if 'prefix' in course else assets/course['model_lists'][0]
  if track_list.is_file():course_parts+=[str(assets/'models'/(name+'.gmdl')) for name in track_list.read_text().split()]
 subprocess.run([str(order_tool),*course_parts],cwd=ROOT,check=True)
 mapping=json.loads(subprocess.check_output([sys.executable,str(ROOT/'tools/resource_manifest.py')],cwd=ROOT,text=True))
@@ -59,10 +60,12 @@ def pak_entries(path):
   rows=[struct.unpack('<III',f.read(12)) for _ in range(count)];names=f.read(size)
   for name_at,offset,length in rows:
    f.seek(offset);yield names[name_at:names.index(0,name_at)].decode(),f.read(length)
+# The racer weld (ethanseagull's 1.2) rewrites racer parts' index buffers on purpose.
+welded=set(json.loads((paks/'race-weld.json').read_text())['models'])
 for archive in ('menu.pak','race.pak'):
  for name,data in pak_entries(out/archive):
   if name.endswith(('.t3x','.gmdl','.dskm','.dobj')) and name in manifest:
-   rewritten=Path(name).name.startswith(('mii_','ui_mii_','award_unpacked_Award_')) or '_lod' in Path(name).name
+   rewritten=Path(name).name.startswith(('mii_','ui_mii_','award_unpacked_Award_')) or '_lod' in Path(name).name or name in welded
    if not rewritten and hashlib.sha256(data).hexdigest()!=manifest[name]:raise ValueError(f'{archive} is older than {name}: rebuild the archives')
    (out/name).unlink();del manifest[name]
 controls='''Mario Kart Wii 3DS - built from your own Mario Kart Wii disc.
@@ -70,7 +73,7 @@ Copy the 3ds folder to the SD card root.
 Race: Circle Pad steer; A accelerate; B brake; R hop/drift; L use item;
 Y or D-pad Up trick / wheelie; X or ZL look behind; START pause;
 SELECT speedometer. Touch the lower screen to switch the map view.
-Dynamic shadows and the notification LED are in License Settings.
+Settings has presets and the CRT look; the notification LED is in License Settings.
 Original local game assets are packaged privately for this user's device.
 Do not replace only the executable; use the complete package.
 '''
