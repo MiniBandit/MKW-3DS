@@ -1436,7 +1436,10 @@ int main() {
     auto onlineStep=[&](mkw::MenuTransition& transition)->bool{
         auto& net=mkw::net::session();
         if(net.fromFile())return false;
-        const bool flow=menu.selection.online&&(menu.page==mkw::UiPage::OnlineCode||menu.page==mkw::UiPage::OnlineLobby);
+        // The host's lobby also stays open while it chooses the course: the players' routers keep
+        // their way in open, and they're back in the lobby when the host gets there.
+        const bool flow=menu.selection.online&&(menu.page==mkw::UiPage::OnlineCode||menu.page==mkw::UiPage::OnlineLobby||
+            (menu.onlineHost&&(menu.page==mkw::UiPage::Cup||menu.page==mkw::UiPage::Course)));
         if(menu.onlineLeaveRequest||(!flow&&(menu.page==mkw::UiPage::MainMenu||menu.page==mkw::UiPage::OnlineMenu))){
             menu.onlineLeaveRequest=false;
             if(net.opened()){net.close();LOGF("online: left the lobby");}
@@ -1474,7 +1477,7 @@ int main() {
             if(!net.addCode(menu.codeEntry))LOGF("online: bad code %s",menu.codeEntry);
         }
         // Back in the lobby after a race (or the host's course choice): a new round.
-        if(menu.page==mkw::UiPage::OnlineLobby&&net.started())net.newRound();
+        if(net.started())net.newRound();
         const unsigned slot=std::min(menu.selection.license,3u);
         net.setName(licenseSaves[slot].name.data());
         const unsigned driver=menu.selection.driver,vehicle=menu.selection.vehicle;
@@ -1514,7 +1517,7 @@ int main() {
             menu.onlineCount=1;auto& player=menu.onlinePlayers[0];player.driver=driver<24?driver:~0u;player.name=licenseSaves[slot].name;player.you=true;
         }
         if(menu.onlineStartRequest){menu.onlineStartRequest=false;net.start();}
-        if(kQa&&qaOnlineHost&&net.canStart()&&net.lobbyCount()>=qaOnlineHost)net.start();
+        if(kQa&&qaOnlineHost&&menu.page==mkw::UiPage::OnlineLobby&&net.canStart()&&net.lobbyCount()>=qaOnlineHost)net.start();
         if(menu.page==mkw::UiPage::OnlineLobby&&net.started()){LOGF("online: race course=%u players=%u",net.course(),net.count());return true;}
         return false;
     };
