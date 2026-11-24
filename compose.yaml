@@ -1,5 +1,8 @@
 services:
   builder:
+    # The pinned CIA tools are x86-64 only: ARM computers (Apple Silicon,
+    # Windows on Snapdragon) run this image through Docker's emulation.
+    platform: linux/amd64
     build:
       context: .
     working_dir: /workspace

@@ -96,6 +96,7 @@ You can also generate your `.cia` file using [Docker Engine](https://docs.docker
   ```
 - Every dependency will be downloaded and installed and the build script will start automatically
 - If the build stops partway, run the above command again
+- On an ARM computer (Apple Silicon, Windows on Snapdragon) Docker runs the builder through its x86-64 emulation, which is slower. If you built Docker's image before 0.8.0 on one, remove it first (`docker compose down --rmi all -v`)
 - After the script is done running and you have copied `build/release/mkw-3ds.cia` somewhere safe (it is the only file you need), you can:
   - Remove containers/images/networks/volumes associated with this project:
     ```
