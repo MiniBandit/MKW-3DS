@@ -4,8 +4,7 @@ Online multiplayer: host, or join
   with the host's code.
 Time Trials: exact ghosts to race,
   watch and save.
-Ethan's WiiDS work merged in: faster
-  menus, races and loading.
+Faster menus, races and loading.
 Settings page (license screen):
   textures, shadows, bloom, 800px.
 License Settings: Timer and a map

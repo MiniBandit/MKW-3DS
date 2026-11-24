@@ -169,6 +169,7 @@ Keep game assets, saves and system files out of pull requests.
 - **dudewhat**: the original Mario Kart Wii 3DS port
 - **MiniBandit**: the continuation and the builder
 - **Epic (Epic0522)**: Redux, the game and interface this project now uses
+- **ethanseagull**: Mario Kart WiiDS
 - **DarthMDev**: Old 3DS drawing performance fix, race sound fixes and menu cadence
 - **Codiak540**: Old 3DS performance testing and optimisation research
 - **janedoemk3ds**: Old 3DS performance research with Codiak540
@@ -183,4 +184,4 @@ Keep game assets, saves and system files out of pull requests.
 
 From version 0.8.0 this project's own code is under the **MKW 3DS Licence** ([LICENSE](LICENSE)): you can read it, build it for yourself and send pull requests, but you can't publish it, publish changed versions or builds of it, or copy it into another port. Only official builds can race each other online. Versions up to 0.7.0 stay MIT. Other contributors' work and third-party parts keep their own terms: see [NOTICE](NOTICE).
 
-Version 0.8.0 also merges **ethanseagull's Mario Kart WiiDS** work (his loading, rendering, menu and Old 3DS improvements). His changes stay under his MIT licence, copyright ethanseagull ([licenses/MIT-ethanseagull.txt](licenses/MIT-ethanseagull.txt)). Thanks, Ethan.
+ethanseagull's work stays under his MIT licence ([licenses/MIT-ethanseagull.txt](licenses/MIT-ethanseagull.txt)).
