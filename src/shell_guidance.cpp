@@ -186,7 +186,7 @@ void RaceItems::shellTerrain(ItemActor& a,ItemWorldQuery query,bool blue,bool ro
     // 29a558 / 29b494: cannon KCL destroys ordinary shells; object ID 5
     // (Spiny) is explicitly exempt. It follows the authored airborne route.
     if(surface.cannon&&!blue){a.active=false;return;}
-    if(surface.kill&&!blue){a.active=false;return;}
+    // A fall boundary does not remove a shell (see straightShell): it falls until y < 0.
     if(blue){a.position.y+=std::max(0.f,surface.correction.y);}else a.position+=surface.correction+surface.floorMotion;
     bool floor=length(surface.floorNormal)>.1f;
     if(floor&&!blue)a.floorContact=true;
@@ -214,7 +214,7 @@ void RaceItems::shellTerrain(ItemActor& a,ItemWorldQuery query,bool blue,bool ro
     }
 }
 namespace {
-constexpr uint32_t KclSolidFall=1u<<0x0a,KclFallBoundary=1u<<0x10,KclHalfPipeRamp=1u<<0x13;
+constexpr uint32_t KclSolidFall=1u<<0x0a,KclHalfPipeRamp=1u<<0x13;
 constexpr uint32_t KclFloorNoSolidFall=0x20E80BFF;
 // Kinoko keeps a hit's push as bounding-box min + max; merging a second probe's push
 // keeps the extremes per axis (0x80085520 / 0x800854e0).
@@ -312,10 +312,14 @@ void RaceItems::straightShell(ItemActor& a,ItemWorldQuery query,float targetSpee
     else{a.velocity.y-=2.f;if(a.airborne)a.velocity.y=std::max(a.velocity.y,-100.f);}
     if(floor)a.floorContact=true;
     // Base calc 0x80796524..0x8079667c: solid-fall KCL is a floor that starts a 60-frame
-    // countdown; frames on any other floor pause it. A fall boundary removes the item.
+    // countdown; frames on any other floor pause it.
     if(floor&&(q.floorTypes&KclSolidFall)&&!a.reflected&&!a.solidFallTicks)a.solidFallTicks=60;
     if(a.solidFallTicks&&!(q.floorTypes&KclFloorNoSolidFall)&&--a.solidFallTicks==0){a.active=false;return;}
-    if(q.kill&&(!q.floorTypes||(q.floorTypes&KclFallBoundary))){a.active=false;return;}
+    // Touching a fall boundary does not remove a shell. Retail's checks after this
+    // (0x80796690 fall boundary, 0x807966ec special wall) take the closest such hit
+    // and compare its attribute & 0x1f (its own KCL type, 0x10 / 0x1e) with 4 / 6, so
+    // they never fire: a shell off the course falls until y < 0 (0x80796734). Removing
+    // it at the boundary made shells vanish beside the road, most often thrown back.
 }
 void RaceItems::moveShellRoute(ItemActor& a,ItemWorldQuery query,int target,bool blue){
     auto& s=a.guidance;const Vec3* targetPos=target>=0?&racers_[target].position:nullptr;
