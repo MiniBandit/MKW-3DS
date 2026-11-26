@@ -39,7 +39,7 @@ def save(name,img,p=None):
   # A bounded queue keeps memory flat; the same name waits for its last write.
   while len(queue)>=64:queue.popleft().result()
   job=pool.submit(write_sprite,name,img.copy(),padded);pending[name]=job;queue.append(job)
- if p:source(p);r.update(source=str(p.relative_to(ROOT)),source_sha256=evidence[str(p.relative_to(ROOT))])
+ if p:source(p);key=p.relative_to(ROOT).as_posix();r.update(source=key,source_sha256=evidence[key])
  if (native_width,native_height)!=(width,height):r.update(width=native_width,height=native_height,rasterWidth=width,rasterHeight=height)
  records[name]=r
  return r

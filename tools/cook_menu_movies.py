@@ -151,8 +151,8 @@ def pakpack():
 def to_gmv2(packer, raw, destination):
     """GMV1 (raw ETC1 frames) to GMV2 (LZ4 bands, lossless; pakpack checks every block)."""
     partial = destination.with_suffix('.gmv2.partial')
-    subprocess.run([str(packer), '--gmv', str(raw), str(partial)], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-    partial.replace(destination)
+    retry_locked(lambda: subprocess.run([str(packer), '--gmv', str(raw), str(partial)], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, errors='replace'))
+    retry_locked(lambda: partial.replace(destination))
 
 
 def reuse(spec, quality, packer):
@@ -198,6 +198,27 @@ def stacks(count, most):
         yield first, size;first += size
 
 
+def retry_locked(action, attempts=40):
+    """Runs action again while Windows reports a file locked (EACCES/EINVAL):
+    virus scanners briefly hold files just written, which failed this step at
+    random on Windows (#46)."""
+    for attempt in range(attempts):
+        try: return action()
+        except (OSError, subprocess.CalledProcessError) as error:
+            locked = isinstance(error, (PermissionError, subprocess.CalledProcessError)) or getattr(error, 'errno', None) in (13, 22)
+            if attempt == attempts-1 or not locked:
+                if isinstance(error, subprocess.CalledProcessError) and error.stderr:
+                    raise RuntimeError(f'{error.cmd[0]} failed with code {error.returncode}: {error.stderr.strip()}') from error
+                raise
+            time.sleep(0.05*(attempt+1))
+
+
+def unlink_quietly(path):
+    """Removes a scratch file; one a scanner still holds is left for cleanup."""
+    try: retry_locked(lambda: path.unlink(missing_ok=True), 10)
+    except OSError: pass
+
+
 def encode_stack(source, spans, size, texture_size, frame_bytes, quality, out):
     """Frames stacked vertically, one tex3ds call. ETC1 blocks are coded on their
     own, so the output is each frame's own payload, in order."""
@@ -214,10 +235,11 @@ def encode_stack(source, spans, size, texture_size, frame_bytes, quality, out):
             if h < atlas.height: atlas.paste(atlas.crop((0, h-1, atlas.width, h)).resize((atlas.width, atlas.height-h)), (0, h))
             stack.paste(atlas, (0, i*height))
     png, raw = out.with_suffix('.png'), out.with_suffix('.raw')
-    stack.save(png, compress_level=1)
-    subprocess.run([str(TEX3DS), '-f', 'etc1', '-q', quality, '-r', '-z', 'none', '-o', str(raw), str(png)], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-    out.write_bytes(strip_tex3ds_header(raw.read_bytes(), frame_bytes*len(spans)))
-    png.unlink();raw.unlink()
+    retry_locked(lambda: stack.save(png, compress_level=1))
+    retry_locked(lambda: subprocess.run([str(TEX3DS), '-f', 'etc1', '-q', quality, '-r', '-z', 'none', '-o', str(raw), str(png)], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, errors='replace'))
+    data = strip_tex3ds_header(retry_locked(raw.read_bytes), frame_bytes*len(spans))
+    retry_locked(lambda: out.write_bytes(data))
+    unlink_quietly(png);unlink_quietly(raw)
 
 
 def join(spec, order, chunks, quality, packer, start):
@@ -227,17 +249,17 @@ def join(spec, order, chunks, quality, packer, start):
     partial = destination.with_suffix('.gmv.partial')
     expected = 64+spec['frameBytes']*spec['frames']
     firsts, size = [first for first, _ in chunks], spec['frameBytes']
-    read = lru_cache(8)(lambda n: memoryview(chunks[n][1].read_bytes()))
+    read = lru_cache(8)(lambda n: memoryview(retry_locked(chunks[n][1].read_bytes)))
     with partial.open('wb') as output:
         output.write(HEADER.pack(b'GMV1', 1, *spec['textureSize'], spec['frames'], spec['fpsNumerator'], spec['fpsDenominator'], spec['frameBytes'], 64))
         for index in order:
             n = bisect_right(firsts, index)-1;at = (index-firsts[n])*size
             output.write(read(n)[at:at+size])
     read.cache_clear()
-    for _, path in chunks: path.unlink()
+    for _, path in chunks: unlink_quietly(path)
     if partial.stat().st_size != expected: raise ValueError('Wrong GMV output length')
     to_gmv2(packer, partial, destination)
-    partial.unlink()
+    unlink_quietly(partial)
     record = {**spec, 'quality': quality, 'format': 'GPU_ETC1', 'container': 'GMV2', 'everySourceFrame': spec.get('sourceFrameStep',1)==1,
               'sha256': digest_file(destination), 'bytes': destination.stat().st_size, 'rawBytes': expected, 'seconds': round(time.monotonic()-start, 2)}
     destination.with_suffix('.json').write_text(json.dumps(record, indent=2)+'\n')
@@ -258,7 +280,7 @@ def encode(specs, quality, force, jobs, packer=None):
         record = None if force else reuse(spec, quality, packer)
         if record: records[spec['name']] = record;ready(record)
     todo = [spec for spec in specs if spec['name'] not in records]
-    with tempfile.TemporaryDirectory(prefix='mkw-gmv-') as directory, ProcessPoolExecutor(max_workers=jobs, mp_context=SPAWN) as pool, ThreadPoolExecutor(max_workers=2) as joiner:
+    with tempfile.TemporaryDirectory(prefix='mkw-gmv-', ignore_cleanup_errors=True) as directory, ProcessPoolExecutor(max_workers=jobs, mp_context=SPAWN) as pool, ThreadPoolExecutor(max_workers=2) as joiner:
         try:
             owner, left, joins = {}, {}, []
             # Longest first, so its join overlaps the other streams' stacks.
