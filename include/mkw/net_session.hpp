@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <mkw/net_code.hpp>
+#include <mkw/net_upnp.hpp>
 
 namespace mkw::net {
 // Online and LAN racing, peer to peer: every console sends its kart straight
@@ -13,7 +14,7 @@ namespace mkw::net {
 // connection code (net_code.hpp); players swap codes to find each other.
 // docs/NET-PROTOCOL.md describes the packets so other ports can join.
 constexpr uint32_t Magic=0x314E4B4D; // "MKN1"
-constexpr uint16_t Version=4;
+constexpr uint16_t Version=5;
 constexpr uint16_t DefaultPort=41750;
 constexpr unsigned MaxPlayers=12;
 // A player's license name: up to 10 UTF-16 characters, 0 after the end.
@@ -69,13 +70,16 @@ constexpr unsigned EventsPerPacket=8;
 struct Events {Header h;uint8_t count,reserved;uint16_t round,oldest;RaceEvent events[EventsPerPacket];};
 struct Bye {Header h;};
 // Same Wi-Fi, no code: a joiner broadcasts Seek to DefaultPort on its network;
-// a host with an open lobby answers with Beacon (its license name and head count).
+// a host with an open lobby answers with Beacon (its license name and head count),
+// and also broadcasts it twice a second. version: the host's game version, shown
+// to a joiner whose build differs. code: the host's code (digits, empty until
+// known): a joiner that typed it on the same Wi-Fi calls the host directly.
 struct Seek {Header h;uint32_t id;char build[16];};
-struct Beacon {Header h;uint8_t count,started;uint16_t reserved;char build[16];uint16_t name[NameLength];};
+struct Beacon {Header h;uint8_t count,started;uint16_t reserved;char build[16];uint16_t name[NameLength];char version[12];char code[16];};
 // Host -> a console it can't take, with the reason for display.
 struct Refuse {Header h;uint32_t id;char message[44];};
 #pragma pack(pop)
-static_assert(sizeof(Seek)==36&&sizeof(Beacon)==56);
+static_assert(sizeof(Seek)==36&&sizeof(Beacon)==84);
 static_assert(sizeof(Header)==16&&sizeof(Hello)==76&&sizeof(LobbyPlayer)==34&&sizeof(Lobby)==448&&sizeof(Frame)==124&&sizeof(Refuse)==64&&sizeof(RaceEvent)==36&&sizeof(Events)==310&&sizeof(Ready)==24&&sizeof(Go)==32);
 
 // Finishing keys: lower finishes ahead. A finisher's key is its race time in
@@ -129,6 +133,12 @@ public:
     // few seconds (its host's name and head count), and joining it.
     bool nearby(unsigned& count,const uint16_t*& name) const{count=nearby_.count;name=nearby_.name;return nearby_.address&&nearby_.age<NearbyFor;}
     bool joinNearby();
+    // Joiner: a race heard on this Wi-Fi that runs another build of the game
+    // (its version text, for the code page). False when none.
+    bool otherVersionNearby(const char*& version) const{version=otherVersion_;return otherAge_<NearbyFor;}
+    // Host: the router passes the game's port (UPnP), so players over the
+    // internet get in with the host's code alone.
+    bool portOpen() const{return portOpen_;}
     // Each frame on the connection screen: the local player's choices
     // (the host's course, class and mirror are the race's).
     void lobbyStep(unsigned garage,bool autoDrift,unsigned course,unsigned engineClass,bool mirror);
@@ -212,6 +222,12 @@ private:
     static constexpr unsigned NearbyFor=180;
     Nearby nearby_{};uint32_t broadcast_=0;bool nearHost_=false,hostGone_=false;unsigned waitPolls_=0,byeCount_=0;
     void seekStep();
+    void beaconTo(uint32_t address,uint16_t port);
+    void portStep();
+    // The digits of the code this joiner typed (to spot its host on the same Wi-Fi).
+    char typedCode_[CodeDigits+1]{};
+    char otherVersion_[12]{};unsigned otherAge_=~0u;
+    PortOpener opener_{};bool portOpen_=false,portChecked_=false;uint64_t portOpenedAt_=0;
     Mode mode_=Mode::None;bool fromFile_=false,lanOnly_=false;
     int socket_=-1;uint32_t* socBuffer_=nullptr;uint16_t localPort_=0;
     uint32_t id_=0,session_=0,sequence_=0,polls_=0;

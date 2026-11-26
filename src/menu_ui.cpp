@@ -1390,13 +1390,13 @@ static void composeMenuImpl(const MenuState& s,const UiRaceView& race,std::vecto
   const char* variants[]={"ButtonWorld","ButtonRegion"};const char* names[]={"Host a Race","Join a Race"};
   for(unsigned i=0;i<2;++i){auto p=control("WifiMenuSingleTop",variants[i],i);c.group(UiMenuRole::Choice,i,p,"wifi_button_free");c.button("wifi_button",i,p,names[i]);}
   if(s.cursor==0){
-   c.screenWords("Choose the course, then send your code",200,84,18,0xffffffffu,false);
-   c.screenWords("to the other players. Up to 12 can race.",200,108,18,0xffffffffu,false);
-   c.screenWords("Players on your Wi-Fi need no code.",200,128,14,0xc0c0c0ffu,false);
+   c.screenWords("Pick the course. Up to 12 can race.",200,84,18,0xffffffffu,false);
+   c.screenWords("Same Wi-Fi: players just join, no code.",200,108,16,0xffffffffu,false);
+   c.screenWords("Other Wi-Fi: send them your code.",200,128,16,0xffffffffu,false);
   }else{
-   c.screenWords("Type the code the host sends you",200,84,18,0xffffffffu,false);
-   c.screenWords("and race on the host's course.",200,108,18,0xffffffffu,false);
-   c.screenWords("On the host's Wi-Fi? No code: press Y.",200,128,14,0xc0c0c0ffu,false);
+   c.screenWords("Same Wi-Fi as the host: the race shows",200,84,16,0xffffffffu,false);
+   c.screenWords("up by itself. Press Y to join it.",200,104,16,0xffffffffu,false);
+   c.screenWords("Other Wi-Fi: type the host's code.",200,128,16,0xffffffffu,false);
   }
   c.screenWords("Everyone needs the same version of the game.",200,150,14,0xc0c0c0ffu,false);
   c.chrome("Online");break;
@@ -1417,6 +1417,12 @@ static void composeMenuImpl(const MenuState& s,const UiRaceView& race,std::vecto
    c.screenWords(line,200,140,16,0x80ff80ffu,false);
    c.screenWords("Press Y to join it. No code needed.",200,160,16,0x80ff80ffu,false);
   }
+  else if(s.nearbyOtherVersion[0]&&!s.codeForPlayer){
+   // Only a race on another version here: say why it can't be joined.
+   char line[64];std::snprintf(line,sizeof line,"A race on this Wi-Fi uses version %s.",s.nearbyOtherVersion);
+   c.screenWords(line,200,140,16,0xffc060ffu,false);
+   c.screenWords("Both of you need the same version to race.",200,160,14,0xffc060ffu,false);
+  }
   else c.screenWords(s.codeForPlayer?"Only needed when a player can't get in.":"The host's code is shown in their lobby.",200,148,16,0xc0c0c0ffu,false);
   c.chrome("Enter Code");break;
  }
@@ -1433,14 +1439,17 @@ static void composeMenuImpl(const MenuState& s,const UiRaceView& race,std::vecto
    c.paneName(player.name.data(),10,"wifi_member","mii_name",p);
   }
   // Lower screen: this console's code, the head count and the host's buttons.
-  c.screenWords(s.onlineHost?"Your code: send it to the other players":"Your code",160,38,14,0xc0c0c0ffu,true,296);
+  c.screenWords(s.onlineHost?"Your code, for players on other Wi-Fi":"Your code, if the host asks for it",160,38,14,0xc0c0c0ffu,true,296);
   if(s.onlineCode[0]){char digits[17]{};unsigned n=0;for(const char* ch=s.onlineCode;*ch&&n<16;++ch)if(*ch>='0'&&*ch<='9')digits[n++]=*ch;c.screenCode(digits,160,56,22,true);}
   else c.screenWords("Connecting...",160,58,20,0xffffffffu,true,296);
   char count[40];std::snprintf(count,sizeof count,"Players: %u of 12",s.onlineCount);
-  c.screenWords(count,160,90,16,0xffffffffu,true,296);
+  c.screenWords(count,160,84,16,0xffffffffu,true,296);
   if(s.onlineHost){
    const char* variants[]={"ButtonWorld","ButtonRegion"};const char* names[]={"Start Race","Add a Player"};
    for(unsigned i=0;i<2;++i){auto p=control("WifiMenuSingleTop",variants[i],i);c.group(UiMenuRole::Choice,i,p,"wifi_button_free");c.button("wifi_button",i,p,names[i]);}
+   // Players on the host's Wi-Fi find it themselves; over the internet, a home
+   // router that doesn't let them in needs their code (Add a Player).
+   if(!s.onlineFailed)c.screenWords(s.onlinePortOpen?"Players on any Wi-Fi join with your code.":"Player stuck? Add a Player, type their code.",160,104,12,0xc0c0c0ffu,true,296);
   }else if(!s.onlineFailed)c.screenWords("Waiting for the host to start the race.",160,140,16,0xffffffffu,true,296);
   c.chrome("Lobby");
   // The newest step, in dark ink on the instruction bar (after the bar is drawn).

@@ -507,6 +507,8 @@ UiAction MenuState::input(UiInput key){
   const auto n=std::strlen(codeEntry);
   if(cursor==9){if(n){codeEntry[n-1]=0;codeWrong=false;}break;}
   if(cursor==11){
+   // OK with nothing typed joins the race on this Wi-Fi, as Y does.
+   if(!n&&!codeForPlayer&&onlineNearby){onlineNearbyRequest=true;enter(UiPage::OnlineLobby);break;}
    uint32_t address=0;uint16_t port=0;
    if(n<net::CodeDigits||!net::decodeCode(codeEntry,address,port)){codeWrong=true;unavailable=true;break;}
    onlineCodeRequest=true;const bool player=codeForPlayer;codeForPlayer=false;

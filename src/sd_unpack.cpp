@@ -22,6 +22,8 @@ namespace {
 struct Entry {std::string path;uint64_t size;};
 constexpr const char* Marker="unpack.txt";
 constexpr const char* Content="content.txt";
+// The player chose to play from the CIA for this content (one line: its stamp).
+constexpr const char* NoCopy="no-copy.txt";
 // Earlier versions' game folders are moved here before a copy (see below).
 constexpr const char* OldFiles="old-files";
 
@@ -173,9 +175,11 @@ void listCard(FS_Archive card,const std::string& folder,const std::string& relat
 }
 }
 
-UnpackResult unpackGameFiles(const char* romfs,const char* sd,const char* content,const char* version){
+UnpackResult unpackGameFiles(const char* romfs,const char* sd,const char* content,const char* version,bool ask){
     char found[80];readLine(join(sd,Content),found);
     if(!std::strcmp(found,content))return UnpackResult::NotNeeded;
+    char skipped[80];readLine(join(sd,NoCopy),skipped);
+    if(!ask&&!std::strcmp(skipped,content))return UnpackResult::Skipped;
     // The screen first: everything below reads the SD card.
     uint64_t phaseTick=svcGetSystemTick();
     consoleInit(GFX_TOP,nullptr);
@@ -226,6 +230,30 @@ UnpackResult unpackGameFiles(const char* romfs,const char* sd,const char* conten
         if(moved)std::printf("  Older game files were moved to\n  sd:/3ds/mkw-3ds/old-files: deleting\n  that folder on a computer frees space.\n\n");
         std::printf("  The game runs from the CIA for now.\n  Free some space and start it again\n  before installing a quick update.");
         FSUSER_CloseArchive(card);notice();restoreGraphics();return UnpackResult::NoSpace;
+    }
+    // A new copy: the player chooses (a copy resumed after an interruption was chosen already).
+    if(!resume){
+        std::printf("  First start: copy the game files to\n  the SD card? (%.2f GB, a few minutes,\n  only once)\n\n",gb(total));
+        std::printf("  A  Copy them. Quick updates (QR code)\n     then install in seconds.\n\n");
+        std::printf("  B  Don't copy: play from the CIA and\n     save the space. To update, install\n     a new full CIA from your builder.\n\n");
+        std::printf("  Changed your mind? Hold Y while the\n  game starts to be asked again.");
+        present();
+        bool copy=false;
+        while(aptMainLoop()){
+            hidScanInput();const u32 down=hidKeysDown();
+            if(down&KEY_A){copy=true;break;}
+            if(down&KEY_B)break;
+            present();
+        }
+        if(!copy){
+            FSUSER_CloseArchive(card);
+            if(!aptMainLoop()){restoreGraphics();return UnpackResult::Interrupted;}
+            writeLine(join(sd,NoCopy),content);copyLog("player chose to play from the CIA");
+            restoreGraphics();return UnpackResult::Skipped;
+        }
+        std::remove(join(sd,NoCopy).c_str());
+        consoleClear();
+        std::printf("\n  Mario Kart Wii 3DS v%s\n\n",version);
     }
     std::printf("  First start: copying the game files to\n  the SD card (sd:/3ds/mkw-3ds), once,\n  so quick updates can find them.\n\n");
     std::printf("  This takes a while, once. Keep the\n  console on and the SD card in.\n\n");

@@ -1,4 +1,4 @@
-# MKW 3DS network protocol (version 4)
+# MKW 3DS network protocol (version 5)
 
 How consoles race each other, peer to peer. Any port (3DS, PS Vita) that speaks
 this can join the same races. The source of truth is
@@ -13,7 +13,7 @@ Addresses inside packets are IPv4 in network byte order (as `sin_addr`).
 | Offset | Size | Field | |
 |---|---|---|---|
 | 0 | 4 | magic | `0x314E4B4D` ("MKN1") |
-| 4 | 2 | version | 4 |
+| 4 | 2 | version | 5 |
 | 6 | 1 | type | see below |
 | 7 | 1 | sender | the sender's lobby slot (0 = host), 255 before it has one |
 | 8 | 4 | session | chosen by the host; 0 until known |
@@ -31,14 +31,25 @@ bits (address << 16 | port) as 15 decimal digits, then a Luhn check digit (so
 any single mistyped digit or swapped neighbours are caught), grouped 4-4-4-4.
 See `net_code.hpp`.
 
-**Same network, no code.** A joiner that has no host yet broadcasts Seek; a
-host with an open lobby and the same build answers with Beacon (its license
-name and head count). The joiner offers that race, and joining it means
-sending Hello to the Beacon's sender address, as if its code had been typed.
+**Same network, no code.** A host with an open lobby broadcasts Beacon (its
+license name, head count, version and code) to its network's broadcast address
+and 255.255.255.255, port 41750, twice a second; a joiner not yet in a lobby
+also broadcasts Seek, and a host answers it with Beacon (whatever the build).
+The joiner offers a race with its own build, and joining it means sending
+Hello to the Beacon's sender address, as if its code had been typed. A Beacon
+with another build is only reported ("a race here uses version ...").
+A joiner that typed a code and then hears a Beacon carrying that same code
+calls the Beacon's sender instead: the host is on its own network, where the
+internet address often can't be reached (routers without hairpinning).
 
-The host prefers port 41750. A joiner sends Hello to the host's code; the host
-answers with Lobby. If the host's router drops the Hello, the host types the
-joiner's code (Add a Player) and sends Ping to it every half second, which opens its router.
+Every console prefers port 41750 (a joiner on it hears the hosts' Beacons) and
+otherwise picks one itself: a 3DS refuses bind() to port 0. A joiner sends
+Hello to the host's code; the host answers with Lobby. The host asks its
+router to forward its port (UPnP IGD AddPortMapping, UDP, one-hour lease
+renewed every half hour); when the router's own internet address matches the
+STUN answer, outside players get in with the code alone. Otherwise, if the
+host's router drops the Hello, the host types the joiner's code (Add a Player)
+and sends Ping to it every half second, which opens its router.
 
 ## Packets
 
@@ -53,8 +64,8 @@ joiner's code (Add a Player) and sends Ping to it every half second, which opens
 | 7 | Refuse | host → a joiner it can't take | `u32 id, char message[44]` |
 | 8 | Ping | all → all in the lobby, every 30 frames | `u32 id` |
 | 9 | Events | all → all, while the sender has race events not everyone has acknowledged | `u8 count, u8 0, u16 round, u16 oldest, RaceEvent[count]` (count ≤ 8) |
-| 11 | Seek | joiner without a host → its network's broadcast address and 255.255.255.255, port 41750, every 30 frames | `u32 id, char build[16]` |
-| 12 | Beacon | host with a lobby → a Seek's sender | `u8 count, u8 started, u16 0, char build[16], u16 name[10]` |
+| 11 | Seek | joiner not yet in a lobby → its network's broadcast address and 255.255.255.255, port 41750, every 30 frames | `u32 id, char build[16]` |
+| 12 | Beacon | host with a lobby → a Seek's sender, and → broadcast (as Seek) every 30 frames | `u8 count, u8 started, u16 0, char build[16], u16 name[10], char version[12], char code[16]` (code: the host's 16 digits, no hyphens, zeros until known) |
 
 **LobbyPlayer** (34 bytes): `u32 id, u32 address, u16 port, u16 garage, u8 autoDrift, u8 0, u16 name[10]`.
 Slot = position in the list; the host is slot 0 with address 0.

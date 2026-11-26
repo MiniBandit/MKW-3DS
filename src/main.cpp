@@ -681,7 +681,7 @@ static bool sdContentReady(){
     if(!found[0]){
         printf("  This is a code update, not the whole game.\n  It needs the game files you build\n  yourself, on your computer, from your\n  own Mario Kart Wii disc.\n\n");
         printf("  Builder and instructions:\n  %s\n\n",ProjectUrl);
-        printf("  Install the full CIA your builder made\n  (build/release/mkw-3ds.cia) and start it\n  once: it copies the game files to the\n  SD card. Then install this update.\n");
+        printf("  Install the full CIA your builder made\n  (build/release/mkw-3ds.cia), start it\n  once and choose A to copy the game files\n  to the SD card. Then install this update.\n");
     }else{
         printf("  Your game files are from a different\n  builder than this update needs.\n\n");
         printf("  Download the latest builder and build the\n  game again, then install its CIA\n  (build/release/mkw-3ds.cia) and start it\n  once before installing updates.\n\n");
@@ -758,9 +758,12 @@ int main() {
     const bool forceCopy=exists("sdmc:/3ds/mkw-3ds/force-sd-copy.txt");
     if(embedded&&!kQa&&(forceCopy||(R_SUCCEEDED(FSUSER_GetMediaType(&launchedFrom))&&launchedFrom==MEDIATYPE_SD))){
         bootStep("SD copy: checking");
-        const auto unpacked=mkw::unpackGameFiles("romfs:/",DATA,MKW_CONTENT,MKW_VERSION);
+        // Y held while the game starts: ask again about the copy (after choosing B once).
+        hidScanInput();
+        const auto unpacked=mkw::unpackGameFiles("romfs:/",DATA,MKW_CONTENT,MKW_VERSION,(hidKeysHeld()&KEY_Y)!=0);
         const char* result=unpacked==mkw::UnpackResult::Copied?"SD copy: made":unpacked==mkw::UnpackResult::NotNeeded?"SD copy: present":
-                 unpacked==mkw::UnpackResult::NoSpace?"SD copy: not enough space":unpacked==mkw::UnpackResult::Failed?"SD copy: failed":"SD copy: interrupted";
+                 unpacked==mkw::UnpackResult::NoSpace?"SD copy: not enough space":unpacked==mkw::UnpackResult::Failed?"SD copy: failed":
+                 unpacked==mkw::UnpackResult::Skipped?"SD copy: skipped, playing from the CIA":"SD copy: interrupted";
         bootStep(result);report(result);
         if(unpacked==mkw::UnpackResult::Interrupted){gfxExit();return 0;}
         // The copy wrote the packs and content.txt: list the game folder again.
@@ -1479,7 +1482,7 @@ int main() {
             if(!net.addCode(menu.codeEntry))LOGF("online: bad code %s",menu.codeEntry);
         }
         // Back in the lobby after a race (or the host's course choice): a new round.
-        if(net.started())net.newRound();
+        if(net.started()){net.newRound();menu.onlineStatus[0]=0;}
         const unsigned slot=std::min(menu.selection.license,3u);
         net.setName(licenseSaves[slot].name.data());
         const unsigned driver=menu.selection.driver,vehicle=menu.selection.vehicle;
@@ -1488,7 +1491,11 @@ int main() {
         net.lobbyStep(garage,menu.selection.automatic,menu.selection.course,std::min(cc,2u),cc==3);
         {unsigned nearbyCount=0;const uint16_t* nearbyName=nullptr;
          menu.onlineNearby=!menu.onlineHost&&net.nearby(nearbyCount,nearbyName);
-         if(menu.onlineNearby){menu.nearbyCount=nearbyCount;std::copy(nearbyName,nearbyName+mkw::net::NameLength,menu.nearbyName.begin());}}
+         if(menu.onlineNearby){menu.nearbyCount=nearbyCount;std::copy(nearbyName,nearbyName+mkw::net::NameLength,menu.nearbyName.begin());}
+         const char* other=nullptr;
+         if(!menu.onlineHost&&net.otherVersionNearby(other))std::snprintf(menu.nearbyOtherVersion,sizeof menu.nearbyOtherVersion,"%s",other);
+         else menu.nearbyOtherVersion[0]=0;
+         menu.onlinePortOpen=net.host()&&net.portOpen();}
         // What the lobby page shows.
         char step[64];
         while(net.takeEvent(step,sizeof step)){
@@ -1499,6 +1506,7 @@ int main() {
             if(!std::strncmp(text,"Wi-Fi ready",11)||!std::strncmp(text,"Finding this console",20))text="Connecting...";
             else if(!std::strncmp(text,"Internet address",16))text="Online. Your code is ready.";
             else if(!std::strncmp(text,"Calling the host",16))text="Calling the host...";
+            else if(!std::strncmp(text,"The host is on this Wi-Fi",25))text="The host is on this Wi-Fi. Calling it...";
             else if(!std::strncmp(text,"Opening the way",15))text="Letting the player in...";
             else if(const char* from=std::strstr(text," from ")){std::snprintf(plain,sizeof plain,"%.*s",int(from-text),text);text=plain;}
             if(step[0]==' '&&menu.onlineStatus[0]){const auto n=std::strlen(menu.onlineStatus);std::snprintf(menu.onlineStatus+n,sizeof menu.onlineStatus-n," %s",text);}
@@ -1507,7 +1515,7 @@ int main() {
         std::snprintf(menu.onlineCode,sizeof menu.onlineCode,"%s",net.code());
         menu.onlineFailed=net.failed();menu.onlineCanStart=net.canStart();
         // The host closed its lobby (Bye): nothing more will come from it.
-        if(!net.host()&&((net.lobbyCount()&&net.left(0))||net.hostGone())&&!net.started()){menu.onlineFailed=true;std::snprintf(menu.onlineStatus,sizeof menu.onlineStatus,"The host left the lobby. Press B to go back.");}
+        if(!net.host()&&((net.lobbyCount()&&net.left(0))||net.hostGone())&&!net.started()){menu.onlineFailed=true;std::snprintf(menu.onlineStatus,sizeof menu.onlineStatus,"The host has gone. Press B to go back.");}
         const unsigned count=std::min(net.lobbyCount(),12u);
         if(count){
             menu.onlineCount=count;

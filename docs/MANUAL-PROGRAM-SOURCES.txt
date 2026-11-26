@@ -281,6 +281,7 @@ src/staff_scene.cpp
 src/vehicle_animation.cpp
 src/vehicle_visual_assets.cpp
 src/net_session.cpp
+src/net_upnp.cpp
 src/lan_handshake.cpp
 src/sd_unpack.cpp
 src/item_net.cpp

@@ -6,30 +6,35 @@ Up to 12 players, VS races on the course the host chooses.
 
 ## What you need
 
-- The same MKW 3DS build as everyone else (the official release). Consoles
-  with a different build are turned away.
+- The same MKW 3DS version as everyone else (the official release). Consoles
+  with a different version are turned away; a race on the same Wi-Fi with
+  another version says so on the number pad.
 - Wi-Fi with internet.
 
 ## Race
 
 1. Choose **Online** on the main menu, then **Host a Race** or **Join a Race**.
 2. Choose your driver, vehicle and drift. The host then chooses the course.
-3. **Joining:** type the host's 16-digit code on the number pad (B deletes a
-   digit) and choose **OK**. **On the same Wi-Fi as the host**, no code is
-   needed: the number pad shows the host's race in green; press **Y**.
-4. The **lobby** shows everyone who is in, with their driver and license name,
-   and your own code, e.g. `1396-3797-6834-8383`.
-   - **Host:** send your code to the other players (Discord, a message...),
-     then choose **Start Race** when everyone is in.
+3. **Joining on the host's Wi-Fi:** no code. The host's race shows up on the
+   number pad in green by itself; press **Y** (or **OK** with nothing typed).
+4. **Joining over the internet:** type the host's 16-digit code on the number
+   pad (B deletes a digit) and choose **OK**.
+5. The **lobby** shows everyone who is in, with their driver and license name.
+   - **Host:** your code is at the top of the lower screen, e.g.
+     `1396-3797-6834-8383`: send it to players on other Wi-Fi (Discord, a
+     message...), then choose **Start Race** when everyone is in.
    - **Joining:** wait for the host to start.
 
-If a player can't get in after about ten seconds, the bottom line of their
-lobby says so: the host chooses **Add a Player** and types **that player's**
-code (shown in their lobby). Some home routers only let a console in once it
-has "called" it first.
+Most home routers let players in with the host's code alone: the host's
+console asks its router to (UPnP, as game consoles do), and the host's lobby
+then says "Players on any Wi-Fi join with your code." When it says "Player
+stuck? Add a Player, type their code." instead, a player who can't get in
+after about ten seconds is told so in their lobby: the host chooses
+**Add a Player** and types **that player's** code (shown in their lobby).
 
 After a race, **Next** takes the host to the course choice and everyone else
-back to the lobby: nobody types a code again.
+back to the lobby: nobody types a code again. If the host's console goes off
+during a race, the others finish it and their lobby says the host has gone.
 
 **B** in the lobby leaves it.
 

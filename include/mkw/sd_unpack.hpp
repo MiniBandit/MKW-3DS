@@ -20,10 +20,14 @@ enum class UnpackResult {
     NoSpace,      // not enough free space; the game runs from the CIA
     Failed,       // a file could not be read or written; runs from the CIA
     Interrupted,  // the system asked the game to close
+    Skipped,      // the player chose to play from the CIA (no-copy.txt)
 };
 // romfs: the mounted full-CIA RomFS root ("romfs:/"); sd: the SD folder;
 // content: the content stamp both must carry (MKW_CONTENT); version for the screen.
+// Before a new copy the player is asked: A copies, B plays from the CIA and is
+// not asked again for this content (sd/no-copy.txt); ask: ask even so (Y held
+// while the game starts).
 // Uses the top screen's text console and resets the 2D graphics afterwards
 // (gfxExit + gfxInitDefault), so call it before the renderer starts.
-UnpackResult unpackGameFiles(const char* romfs,const char* sd,const char* content,const char* version);
+UnpackResult unpackGameFiles(const char* romfs,const char* sd,const char* content,const char* version,bool ask=false);
 }

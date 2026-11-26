@@ -1,15 +1,12 @@
-New in 0.8.0:
-One CIA to install: nothing to copy.
-Online multiplayer: host, or join
-  with the host's code.
-Time Trials: exact ghosts to race,
-  watch and save.
-Faster menus, races and loading.
-Settings page (license screen):
-  textures, shadows, bloom, 800px.
-License Settings: Timer and a map
-  that turns with your kart.
-Sound: mono, stereo or surround.
-Controls: air dives, R tricks on
-  every ramp, no A+R hop.
-Pause as on the Wii.
+New in 0.8.1:
+Online works on real consoles: joining
+  no longer fails with network port
+  already in use.
+Same Wi-Fi: the race shows up by
+  itself. Press Y to join it.
+Over the internet, most routers now
+  let players in with the host's code.
+Clearer online screens, and a message
+  when the host has gone.
+First start asks before copying the
+  game files to the SD card.
