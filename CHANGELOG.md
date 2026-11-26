@@ -13,6 +13,7 @@ Needs a new build: the builder now copies the staff ghosts from your disc, and t
 - **Time Trials start as on the Wii:** no course preview, straight to the camera swinging round your kart.
 - **Controls:** Circle Pad up/down dives in the air, as the Wii's stick does; steering has a round dead zone and full lock at the rim and on diagonals; R tricks off boost ramps, half-pipes and zippers too.
 - **Blue Shells always launch forward**, whatever the stick or a CPU's throw says.
+- **Shells no longer vanish beside the road:** a Green or Red Shell (most often one thrown backwards) disappeared when it touched the invisible edge of the course. Now, as on the Wii, it only goes when it falls off the course.
 - **Grumble Volcano:** the falling ground uses its own 100cc and 50cc timings in those classes.
 - The speedometer (SELECT) is remembered per license.
 
