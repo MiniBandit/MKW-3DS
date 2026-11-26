@@ -4,11 +4,12 @@
 
 A quick update for 0.8.0: scan the QR code on the release page with FBI (this needs the game files that 0.8.0's first start copied to the SD card), or build again with the new builder. Everyone racing together needs 0.8.1.
 
-- **Online works on real consoles:** joining a race failed on every 3DS with "Can't go online: the network port is in use". The game asked the console for "any free port", which the emulator allows and a real 3DS refuses; it now picks the port itself.
+- **Joining on a real console:** joining a race failed on the 3DS with "Can't go online: the network port is in use". The game asked the console for any free port, which the emulator allows; it now picks the port itself.
 - **Same Wi-Fi, no code:** the host now announces its race on the Wi-Fi twice a second, so it shows up on the joiner's number pad by itself: press **Y** (or OK with nothing typed).
 - **A code typed on the host's own Wi-Fi works:** the joiner spots that the host is on the same Wi-Fi and calls it there, instead of going out to the internet and back, which many home routers don't allow.
 - **Over the internet, just the host's code:** the host asks its router to let players in (UPnP, as game consoles do), so most players get in with the host's code alone. When a router doesn't allow it, the lobby says so and **Add a Player** works as before.
 - **Clearer online screens:** shorter instructions; a race on the same Wi-Fi with another version of the game says so instead of not showing up; "no internet" when the console isn't connected; "The host has gone" when the host's console switches off during a race, instead of waiting in the lobby for ever.
+- A player who joins while the host is racing waits and joins the next race, instead of being turned away.
 - An Old 3DS has a minute (was 30 seconds) to load a course before an online race starts without it.
 - **First start asks before copying** the game files to the SD card (#136): **A** copies them, so quick updates install in seconds; **B** plays from the CIA and saves the 2.4 GB. Hold **Y** while the game starts to be asked again.
 

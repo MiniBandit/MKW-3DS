@@ -31,6 +31,8 @@ constexpr int32_t StartLead=500;
 constexpr unsigned HeardWithin=180,LobbyTimeout=300,ReadyTimeout=60*60,AskHostAfter=600;
 constexpr unsigned LostAfter=300,EventsEvery=4,SeekEvery=30;
 constexpr uint32_t StunCookie=0x2112A442;
+// The host's answer to a Hello while it races (the joiner then waits for the next race).
+constexpr const char* RacingNow="A race is on. Try again after it.";
 // Public STUN servers: they only tell a console the address the internet sees.
 // sd:/3ds/mkw-3ds/stun.txt ("host port" per line) replaces them, for testing.
 constexpr const char* StunHosts[2]={"stun.cloudflare.com","global.stun.twilio.com"};
@@ -499,7 +501,7 @@ void Session::receive(const uint8_t* data,size_t size,uint32_t address,uint16_t 
         if(!count_){count_=1;slot_=0;}
         unsigned s=1;while(s<count_&&players_[s].id!=hello.id)++s;
         if(s==count_){
-            if(started_){refuse("A race is on. Try again after it.");return;}
+            if(started_){refuse(RacingNow);return;}
             if(count_==MaxPlayers){refuse("The race is full (12 players).");return;}
             ++count_;note("> Player %u joined from %s",s+1,dotted(address,ip));
         }
@@ -511,7 +513,10 @@ void Session::receive(const uint8_t* data,size_t size,uint32_t address,uint16_t 
         if(h.type==Type::Refuse){
             if(size<sizeof(Refuse))return;
             Refuse r;std::memcpy(&r,data,sizeof r);if(r.id!=id_)return;
-            r.message[sizeof r.message-1]=0;std::snprintf(failure_,sizeof failure_,"%s",r.message);reason_=failure_;
+            r.message[sizeof r.message-1]=0;
+            // The host is mid-race: keep calling, and join its next race.
+            if(!std::strcmp(r.message,RacingNow)){if(!announcedWait_){announcedWait_=true;note("> The host is racing. You'll join the next race.");}return;}
+            std::snprintf(failure_,sizeof failure_,"%s",r.message);reason_=failure_;
             if(!failed_)note("> The host said: %s",r.message);
             failed_=true;return;
         }
