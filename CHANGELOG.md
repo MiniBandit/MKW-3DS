@@ -72,15 +72,23 @@ Known issues:
 
 Epic's Mario Kart Wii 3DS Redux is now the game, by her permission, on top of this project's builder and quick updates. Every player must build again in a new, empty folder.
 
+- **Every mode:** Grand Prix in 50cc, 100cc, 150cc and Mirror with award ceremonies and the staff credits; Time Trials; solo and team VS; Balloon Battle and Coin Runners on all ten arenas.
+- **All characters and vehicles**, including the unlockables, and your own 3DS Miis as drivers.
+- **Four licenses** with saved settings, records and unlocks.
+- **Epic's two-screen menus**, race results and maps, with the Wii's materials, animations, particles and audio.
+- **Dynamic shadows** and **notification LED** effects, set per license.
+- Wario Bike handlebar position; Swoopers' bodies in Dry Dry Ruins.
+- Old 3DS: Rainbow Road, Dry Dry Ruins, Bowser's Castle, Waluigi Stadium and Koopa Cape load again.
 - Builder: rebuilt around Redux's converted files; the CIA is small and the game reads its files from the SD card (`--embed-assets` keeps them in the CIA).
 - Builder: a fresh build no longer stops at the course material overlay; devkitPro is found on any drive; folder paths with non-English letters, out-of-date devkitPro and synced folders are explained; failed movie frames are retried; Python package errors are shown; long steps report that they are still running; a click no longer freezes a Windows console; Linux instructions.
 - Old 3DS: opponents use low-detail models when memory runs short, so races load instead of crashing; big file reads no longer split the heap; a 128 KiB main stack replaces the one that overflowed at start-up.
 - Staff credits still play without the console's Mii resource.
 - Builder update (same version): Windows packaging no longer stops at the last step with "Invalid menu movie path"; the builder checks for the C++ compiler at the start; Linux instructions cover devkitPro's install script (Intel or AMD computers only).
+- Builder update (same version, 14 November): Windows tries each C++ compiler it finds and uses one that works; a virus scanner holding a movie frame no longer stops the build; Python 3.11 gets a NumPy that supports it (Evan-H-Rosenthal, #127).
 
 Changes retained on top of the existing port, grouped by feature; withdrawn experiments, packaging-only revisions and unfinished investigations are excluded.
 
-# Interface and menus
+## Interface and menus
 
 - Updated HOME banner conversion tools while keeping source inputs external to the repository.
 - Bounded menu background residency, reclaimed retired models before replacement loads and retried failed backgrounds to prevent disappearing mode models.
@@ -124,7 +132,7 @@ Changes retained on top of the existing port, grouped by feature; withdrawn expe
 - Fixed missing text, borders or backgrounds after repeatedly opening the pause menu.
 - Prepared commonly used pause and quit-confirmation assets in advance.
 
-# Licenses, rules and records
+## Licenses, rules and records
 
 - Restored the omitted Mii Outfit B unlock-message entry so subsequent rewards display their correct text and models without changing saved unlock flags.
 - Added persistent loading and saving for four license slots.
@@ -146,7 +154,7 @@ Changes retained on top of the existing port, grouped by feature; withdrawn expe
 - Corrected Time Trials HUD placement, result descriptions and record digits.
 - Saved dynamic shadow settings, LED mode and LED brightness per license.
 
-# Miis and character models
+## Miis and character models
 
 - Preserved original color values in transparent face texels across race, menu and award expressions to prevent black facial patches.
 - Replaced the question-mark result icon with the selected Mii portrait on individual and team result boards.
@@ -175,7 +183,7 @@ Changes retained on top of the existing port, grouped by feature; withdrawn expe
 - Fixed Pokey's eyes appearing to have a white overlay.
 - Fixed Rosalina's Luma appearing gray during the award ceremony.
 
-# Race flow, cameras and CPU drivers
+## Race flow, cameras and CPU drivers
 
 - Corrected the paired hallway Thwomps' return path and final turn angle on N64 Bowser's Castle.
 
@@ -208,7 +216,7 @@ Changes retained on top of the existing port, grouped by feature; withdrawn expe
 - Fixed the wrong-way Lakitu retaining an abnormal floating trajectory after an uphill section.
 - Added terrain clipping prevention to lap-sign Lakitu movement on complex terrain.
 
-# Award ceremonies and staff credits
+## Award ceremonies and staff credits
 
 - Restored live diffuse lighting and rotating metal reflections for all nine award trophies while retaining their gold, silver and bronze material frames.
 - Moved the award trophy and its emitter left with the result-page exit transition before hiding them off-screen.
@@ -225,7 +233,7 @@ Changes retained on top of the existing port, grouped by feature; withdrawn expe
 - Reduced both staff movies to approximately 30 fps while preserving the original audio and subtitle clock.
 - Fixed crashes when entering a race after viewing the staff credits and returning to the title screen.
 
-# Offline Battle modes
+## Offline Battle modes
 
 - Added offline Balloon Battle and Coin Runners across all ten arenas.
 - Added the missing Battle mode, arena selection, team assignment and rules pages.
@@ -254,7 +262,7 @@ Changes retained on top of the existing port, grouped by feature; withdrawn expe
 - Fixed the Battle minimap to the full-arena view.
 - Fixed forward-thrown Fake Item Boxes immediately hitting their owner in Battle.
 
-# Items and course objects
+## Items and course objects
 
 - Destroyed Red Shells that remain locked onto a racer after that racer finishes.
 - Added missing animation banks and state transitions for course objects.
@@ -289,7 +297,7 @@ Changes retained on top of the existing port, grouped by feature; withdrawn expe
 - Fixed items remaining held during cannon flight when they should have been cleared.
 - Corrected dropped-item lifetimes, capacity-based recycling and landing states.
 
-# Scene materials and rendering
+## Scene materials and rendering
 
 - Restored the original white environment highlights in the Thunder Cloud's eyes.
 
@@ -329,7 +337,7 @@ Changes retained on top of the existing port, grouped by feature; withdrawn expe
 - Corrected inverted minimap item icons, explosion-ring orientation and portrait outlines.
 - Regenerated Bowser's Castle rotating-corridor minimap frames without the roof.
 
-# Particles and visual effects
+## Particles and visual effects
 
 - Restored the original large and small statue fire effects and proximity triggers on N64 Bowser's Castle.
 
@@ -353,7 +361,7 @@ Changes retained on top of the existing port, grouped by feature; withdrawn expe
 - Made boost panels and boost ramps clear ink from the screen.
 - Added fades to Blooper's screen-darkening effect.
 
-# Dynamic shadows and tire contact shadows
+## Dynamic shadows and tire contact shadows
 
 - Added dynamic silhouette shadows for the player's character, vehicle, tires and accessories.
 - Used the course sun or the corresponding fixed light source to determine shadow direction.
@@ -386,7 +394,7 @@ Changes retained on top of the existing port, grouped by feature; withdrawn expe
 - Fixed crashes when pressing START to open the pause menu after the shadow changes.
 - Added a per-license dynamic shadow option enabled by default.
 
-# Sound and music
+## Sound and music
 
 - Made menu music replacement atomic and retired detached music instances to prevent overlapping BGM after settings changes.
 - Kept audio automation on a continuous audio-thread clock during saves and loading while preserving game-controlled sound expiry.
@@ -413,7 +421,7 @@ Changes retained on top of the existing port, grouped by feature; withdrawn expe
 - Moved character voices and required sound resources to on-demand caching.
 - Retained audible events outside the camera view, including item warnings from behind.
 
-# Notification LED and settings
+## Notification LED and settings
 
 - Added item and key-event effects for the 3DS notification LED.
 - Added Off, Items, Items + Events and Items + Events + Drifts modes.
@@ -448,7 +456,7 @@ Changes retained on top of the existing port, grouped by feature; withdrawn expe
 - Applied the specified colors and ordering for King Boo, Toad, the Mario family, Yoshi and Toadette.
 - Replaced nearly red character theme colors with pure red.
 
-# Loading, memory and performance
+## Loading, memory and performance
 
 - Reorganized VRAM, ordinary heap and LINEAR memory use for course textures and models.
 - Reduced repeated character skinning, normal processing and rigid-part calculations.
@@ -487,3 +495,187 @@ Changes retained on top of the existing port, grouped by feature; withdrawn expe
 - Kept the static course loaded during pause while releasing reloadable drivers, vehicles and active-object resources.
 - Moved the oversized renderer object off the main-thread stack to fix a startup crash.
 - Prepared license portraits earlier to reduce loading stalls during the title transition across screens.
+
+# 0.6.0: two-screen menus and Epic's race overhaul
+
+Needs a new build: the converted game files changed.
+
+**Two-screen menus (MiniBandit)**
+- The Wii menu buttons and art are on the lower screen, with touch: tap a button to choose it.
+- The highlighted choice is shown large on the top screen (characters, vehicles, cups and courses).
+- The Wii menus' striped background, title bar and Back button.
+- Course tour: during the fly-over before a race, the lower screen shows the whole course with the camera moving along it.
+- The pause and end-of-race menus' buttons are on the lower screen (touch), with the frozen race behind the pause menu.
+- The main menu's group frames no longer flash.
+
+**Race overhaul (Epic0522)**
+- Course materials, texture filtering and mipmaps closer to the Wii; Mario Circuit's rainbow; scrolling water.
+- Driver and vehicle animation, look targets and attachments; the normal falling animation instead of the cannon one.
+- Rosalina's Luma.
+- Bike scrape sparks, standstill A+B smoke and charge sparks, cannon streaks, surface, water and creature effects.
+- Course objects: traffic, penguins, bats, Piranha Plants, falling rocks, crates, Chain Chomp, Lakitu.
+- Items: collision, lifetime and guidance; held items kept through cannons; item boxes follow moving road.
+- CPU drivers: steering, drifting, avoiding obstacles, recovering when stuck; the Wii's roster rules.
+- Save data with four licenses, checksums and backups; unlocks and best times carried over.
+- Race, object, item and voice sound fixes; faster drawing of opponents and course objects.
+- Mii statue portraits on five courses.
+
+**Fixes**
+- Circle Pad up/down tilts the kart in the air (#56).
+- The lightning-hit pose no longer plays for the whole time you're shrunk (#64).
+- The cannon launch pose no longer plays on every jump (#39); Toad's Factory conveyor boxes are drawn (#44); the driver's wheelie voice plays again.
+- Menu cadence (DarthMDev, #41); Balloon Battle and builder fixes (#47, #53).
+- Old 3DS: course objects switch to low detail sooner and fewer particles are drawn, after Codiak540's Old 3DS tests.
+
+**Builder**
+- Converts the credits movies, so the credits could come later as a quick update.
+- Building from an exFAT or FAT drive on macOS works (hidden `._` files were read as game files).
+- Fresh builds no longer stop at step 8 or 9 (missing Mii portrait files #80, and a Moo Moo Meadows cow export error).
+- The launchers reinstall the Python packages whenever the build environment can't import them (#79).
+
+**The race overhaul in detail (Epic0522's list)**
+
+**Rendering and course materials**
+- Preserve original texture filtering, LOD bias and complete mip chains in VRAM.
+- Correct alpha, depth and back-face culling behavior in world materials.
+- Keep selected driveable mesh surfaces at LOD0 to preserve fence and grating detail.
+- Apply the accepted LOD0 exception to Moonview Highway cutout materials.
+- Restore Mario Circuit's distant rainbow and correct sky texture bindings.
+- Preserve authored course UV animation and object material animation tracks.
+- Retain flat water geometry with scrolling textures.
+- Correct bloom edge handling and compositing while retaining the main project's existing intensity and tint.
+- Include offline default Mii textures for course billboards and vehicles, plus 30 statue portraits across five courses.
+
+**Drivers, vehicles and effects**
+- Correct in-race driver and vehicle animation, look targets, attachments and Toadette's braids.
+- Use the normal motorcycle falling animation for ordinary falls.
+- Apply Blooper darkening to both the driver and vehicle.
+- Adjust effect attachment points for giant and shrunken racers.
+- Include Rosalina's Luma companion behavior and required resources.
+- Restore inside-drifting motorcycle body scrape sparks, including Dolphin Dasher.
+- Restore stationary A+B wheel-spin smoke and charge sparks.
+- Restore cannon streaks and associated course effects.
+- Correct surface, landing, water, opponent and creature effect handling.
+- Resolve recursive effect and texture dependencies into course-specific banks.
+
+**Course objects, items and cameras**
+- Integrate targeted collision, damage and animation corrections for traffic, penguins, bats, Piranha Plants, falling rocks, iron balls and crates.
+- Keep Lakitu's lap-sign presentation above nearby ground during its motion.
+- Restore Chain Chomp mouth animation and wrong-way sign flashing.
+- Correct item collision, lifetime, guidance and discarded-item recovery behavior.
+- Preserve held items through cannon launches.
+- Make item boxes follow deforming driveable surfaces, including Bowser's Castle and Rainbow Road.
+- Correct Rainbow Road debris and stardust animation timing.
+- Correct race camera collision, sweep history and respawn camera reset.
+
+**CPU drivers and race data**
+- Integrate CPU steering, drift, obstacle avoidance and stuck-recovery corrections across difficulty levels and Grand Prix conditions.
+- Correct post-finish automatic driving behavior.
+- Use the original random algorithm and character/vehicle eligibility rules for CPU rosters.
+- Avoid duplicate CPU characters and respect weight-class and vehicle restrictions.
+- Keep the generated roster across restarts and subsequent races in a series.
+- Integrate race configuration, team scoring, race records, Grand Prix telemetry, rank calculation and cup-result data.
+- Persist earned unlock flags at the race-save boundary without adding notification pages.
+
+**Save data**
+- Add the RKSD0006/RKPD save backend with four license slots.
+- Validate checksums and support backup recovery and temporary-file publication.
+- Preserve unknown save fields, other license slots and existing ghost data.
+- Import legacy best-time data.
+- Skip unchanged writes, use 128 KiB I/O chunks and share the initial core save read across startup consumers.
+- Preserve an imported Wii Mii identity when no native Mii sidecar is available.
+- Keep save settings independent of menu presentation types.
+
+**Audio and resource management**
+- Integrate race, object, item, environment and character-voice corrections.
+- Load and release audio wave resources as needed and correct short-loop playback handling.
+- Carry results music through blocking Next and Next Race loads.
+- End carried results music when the existing menu music starts.
+- Integrate resource-load cleanup, retry and scene-release safety fixes.
+
+**Rendering performance**
+- Use fixed lighting for opponents while retaining their material shading.
+- Reuse skinning results and draw data where applicable.
+- Improve static-model culling, material submission and buffer reuse.
+- Cache course-screen capture and visibility work.
+
+epic
+# 0.5.2: Windows quick-update fix
+
+- Windows builds made with 0.5.0 or 0.5.1 are no longer refused by the quick update ("game files are from a different builder").
+- Everything from 0.5.1.
+
+# 0.5.1: crash fix and the first quick update
+
+- Fixed the crash every time the game is closed.
+- Fixed the race-start sound on OK, and no hop or drift sounds after finishing (DarthMDev).
+- After an update, the game shows what's new once, on the first launch.
+- Quick updates are a normal CIA update installed over the game: saves and SD files stay.
+
+# 0.5.0: one last rebuild
+
+Needs a new build.
+
+- New graphics by Epic0522: richer lighting, kart shadows, water, effects and menu highlights.
+- 50cc (karts only) and 100cc (bikes only) Grand Prix, with the original game's speeds.
+- Grand Prix: races 2 to 4 no longer run short of memory (freezes, missing Lakitu).
+- Lakitu: one screen wipe and one rescue after a fall, no second grab.
+- Old 3DS: smoother drawing (DarthMDev).
+- SD card: about 4,800 files instead of 24,900, much faster to copy, and no more "Error 0x80070052" when copying.
+- The first launch shows what's new on the lower screen (once per version).
+- Builder: works on Linux (#18); a clear message for modified or Wiimmfi discs (#16); less memory used on PCs with many cores.
+
+# 0.4.1: builder fixes
+
+- Windows: no more `FileNotFoundError ... build\host-tools\sprite-scales.json` at the menu archive step.
+- macOS with Python from python.org: no more `CERTIFICATE_VERIFY_FAILED` when downloading the packaging tools; it falls back to macOS's own `curl` (downloads are still checksum-checked).
+
+# 0.4.0: quick updates
+
+- Convert the disc once: after that, updates are a small update CIA (about 2 MB, no Nintendo files) installed from the 3DS with FBI's QR code, Universal-Updater or the release page.
+- The builder makes an SD card folder (`build/release/sd-card/3ds`) with the game files, which updates reuse.
+- If an update needs newer game files, the game says so at start-up.
+- The update CIA has its own simple icon.
+
+# 0.3.5: builder reliability
+
+- Windows no longer needs `clang++`: the menu step's helper ships with the builder.
+- Updating in the same folder works: each step remembers which version of the code made it, so steps that changed are redone (an update could skip them before, such as the 12-vehicle conversion).
+- Readable Windows logs: `build-cia-log.txt` is normal UTF-8 text, and progress shows as it happens.
+- Building on any drive: packaging copies files on drives without hard links (exFAT and FAT32 USB drives).
+- A clear message when the disc path doesn't exist.
+- Time Trials: best times save even when the `3ds/mkw-3ds` folder doesn't exist on the SD card.
+
+# 0.3.4: Windows build fix
+
+- Windows: the build no longer stops at packaging (`pack_race_assets.py` ... `ValueError: Invalid menu movie path`); the packaging steps handle Windows file paths throughout.
+
+# 0.3.3: Windows build fix
+
+- Windows: the build no longer stops at the menu step (`cook_menu_ui.py` ... `KeyError: 'assets/menu-ui/MenuSingle_U/message/Menu.bmg'`); file paths are recorded the same way on every system.
+- The builder says when it's unpacking the disc (a few silent minutes) and numbers each conversion step.
+
+# 0.3.2: Windows build fixes
+
+- The build no longer stops at `node tools/bundle_cooker.mjs` (Windows file paths broke the model-exporter bundling).
+- Text files are read and written as UTF-8 on Windows too.
+- Linking no longer risks Windows' command-line length limit.
+
+# 0.3.1: builder fixes
+
+- The Windows builder works, with clean, readable output.
+- A clear message for unsupported discs, such as Mario Kart Wii Europe (RMCP01): only the USA version (RMCE01) works.
+- Trying again with the right disc works: the next run replaces the old disc's extraction.
+- NKit images are detected, with instructions to convert them to a normal ISO in Dolphin.
+
+# 0.3.0: first release of this continuation
+
+**New since dudewhat's original port**
+- Grand Prix (150cc): the cup's four courses in order, with points and standings.
+- Time Trials: solo, a Triple Mushroom, best time per course saved to the SD card.
+- All 12 vehicles for every driver, including the unlockables.
+- Speedometer on the race HUD (SELECT toggles it).
+- Tricks on R off ramps (Mario Kart 7 style); X and Y also trick and wheelie.
+- Smoke and dust: start-boost smoke, burnout, drift smoke, off-road dust, landing puffs.
+- Model and HUD fixes, HOME Menu name and icon, the standard Nintendo 3DS start-up logo.
+- Windows build support.
